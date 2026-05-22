@@ -4,7 +4,7 @@
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Area = { id: number; nombre: string };
-	type Empleado = { id: number; nombre: string; telefono: string; rol_id: number; auth_user_id: string; roles?: { nombre: string } };
+	type Empleado = { id: number; nombre: string; telefono: string; correo?: string; rol_id: number; auth_user_id: string; roles?: { nombre: string } };
 
 	let empleados = $state<Empleado[]>([]);
 	let roles = $state<Rol[]>([]);
@@ -17,6 +17,7 @@
 	let isSaving = $state(false);
 	
 	let nuevoNombre = $state('');
+	let nuevoCorreo = $state('');
 	let nuevoTelefono = $state('');
 	let nuevoRolId = $state<number | null>(null);
 	let nuevoAreaId = $state<number | null>(null);
@@ -25,7 +26,6 @@
 	let nuevasHoras = $state(0);
 	let nuevoPeriodo = $state('Mensual');
 	let nuevoNivel = $state('');
-	let nuevoAuthUserId = $state('');
 
 	onMount(async () => {
 		try {
@@ -43,7 +43,7 @@
 			const { data: empData, error: empError } = await supabase
 				.from('empleados')
 				.select(`
-					id, nombre, telefono, rol_id, auth_user_id,
+					id, nombre, telefono, correo, rol_id, auth_user_id,
 					roles ( nombre )
 				`)
 				.order('id');
@@ -97,51 +97,55 @@
 			showStatus('error', 'El nombre es obligatorio');
 			return;
 		}
+		if (!nuevoCorreo.trim()) {
+			showStatus('error', 'El correo electrónico es obligatorio');
+			return;
+		}
+		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+		if (!emailRegex.test(nuevoCorreo.trim())) {
+			showStatus('error', 'Ingresa un correo electrónico válido');
+			return;
+		}
 		if (!nuevaFechaIngreso) {
 			showStatus('error', 'La fecha de ingreso es obligatoria');
 			return;
 		}
-		if (nuevoAuthUserId.trim()) {
-			const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-			if (!uuidRegex.test(nuevoAuthUserId.trim())) {
-				showStatus('error', 'El ID de Usuario de Auth debe ser un UUID válido');
-				return;
-			}
-		}
 
 		isSaving = true;
 		try {
-			const insertData = {
-				nombre: nuevoNombre.trim(),
-				telefono: nuevoTelefono.trim() || null,
-				rol_id: nuevoRolId || null,
-				area_id: nuevoAreaId || null,
-				fecha_ingreso: nuevaFechaIngreso,
-				salario: nuevoSalario,
-				horas: nuevasHoras,
-				periodo: nuevoPeriodo,
-				nivel: nuevoNivel.trim() || null,
-				auth_user_id: nuevoAuthUserId.trim() || null
-			};
+			// Llamamos al endpoint del servidor que usa el Service Role Key
+			// para crear el usuario en Supabase Auth y luego insertar el empleado
+			const response = await fetch('/api/create-employee-user', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					nombre: nuevoNombre.trim(),
+					correo: nuevoCorreo.trim(),
+					telefono: nuevoTelefono.trim() || null,
+					rol_id: nuevoRolId || null,
+					area_id: nuevoAreaId || null,
+					fecha_ingreso: nuevaFechaIngreso,
+					salario: nuevoSalario,
+					horas: nuevasHoras,
+					periodo: nuevoPeriodo,
+					nivel: nuevoNivel.trim() || null
+				})
+			});
 
-			const { data, error } = await supabase
-				.from('empleados')
-				.insert([insertData])
-				.select(`
-					id, nombre, telefono, rol_id, auth_user_id,
-					roles ( nombre )
-				`);
+			const result = await response.json();
 
-			if (error) throw error;
+			if (!result.success) {
+				throw new Error(result.error || 'Error desconocido del servidor');
+			}
 
-			if (data && data.length > 0) {
-				empleados = [...empleados, data[0]];
+			if (result.empleado) {
+				empleados = [...empleados, result.empleado];
 			} else {
-				// Recargar
+				// Recargar lista por si acaso
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, rol_id, auth_user_id,
+						id, nombre, telefono, correo, rol_id, auth_user_id,
 						roles ( nombre )
 					`)
 					.order('id');
@@ -149,12 +153,12 @@
 				empleados = reloadData || [];
 			}
 
-			showStatus('success', 'Empleado agregado correctamente');
+			showStatus('success', `Empleado registrado y usuario de acceso creado con el correo ${nuevoCorreo.trim()}`);
 			isModalOpen = false;
 			resetForm();
 		} catch (error: any) {
 			console.error("Error al agregar empleado:", error);
-			showStatus('error', 'Error al agregar empleado: ' + error.message);
+			showStatus('error', 'Error: ' + error.message);
 		} finally {
 			isSaving = false;
 		}
@@ -162,6 +166,7 @@
 
 	function resetForm() {
 		nuevoNombre = '';
+		nuevoCorreo = '';
 		nuevoTelefono = '';
 		nuevoRolId = null;
 		nuevoAreaId = null;
@@ -170,7 +175,6 @@
 		nuevasHoras = 0;
 		nuevoPeriodo = 'Mensual';
 		nuevoNivel = '';
-		nuevoAuthUserId = '';
 	}
 </script>
 
@@ -236,14 +240,23 @@
 								</div>
 							</td>
 							<td class="p-4">
-								{#if emp.telefono}
-									<div class="flex items-center gap-2 text-slate-600">
-										<i class="fas fa-phone-alt text-slate-400 text-xs"></i>
-										{emp.telefono}
-									</div>
-								{:else}
-									<span class="text-slate-400 italic text-xs">No registrado</span>
-								{/if}
+								<div class="flex flex-col gap-1">
+									{#if emp.telefono}
+										<div class="flex items-center gap-2 text-slate-600 text-sm">
+											<i class="fas fa-phone-alt text-slate-400 text-xs w-3"></i>
+											{emp.telefono}
+										</div>
+									{/if}
+									{#if emp.correo}
+										<div class="flex items-center gap-2 text-slate-500 text-xs">
+											<i class="fas fa-envelope text-slate-400 text-xs w-3"></i>
+											{emp.correo}
+										</div>
+									{/if}
+									{#if !emp.telefono && !emp.correo}
+										<span class="text-slate-400 italic text-xs">No registrado</span>
+									{/if}
+								</div>
 							</td>
 							<td class="p-4">
 								{#if emp.auth_user_id}
@@ -311,6 +324,13 @@
 							<input type="text" bind:value={nuevoTelefono} placeholder="987654321" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 					</div>
+					<div class="mt-4">
+						<label class="block text-xs font-semibold text-slate-600 mb-1">Correo Electrónico * <span class="font-normal text-slate-400">(se usará para el acceso al sistema)</span></label>
+						<div class="relative">
+							<i class="fas fa-envelope absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+							<input type="email" bind:value={nuevoCorreo} placeholder="empleado@empresa.com" required class="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
+						</div>
+					</div>
 				</div>
 				
 				<!-- Section 2: Roles and Areas -->
@@ -372,13 +392,16 @@
 					</div>
 				</div>
 
-				<!-- Section 4: Security and Auth Link -->
-				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Acceso y Autenticación (Opcional)</h4>
-					<div>
-						<label class="block text-xs font-semibold text-slate-600 mb-1">ID de Usuario en Auth (UUID)</label>
-						<input type="text" bind:value={nuevoAuthUserId} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm font-mono" />
-						<span class="text-[10px] text-slate-400 mt-1 block">Si el usuario ya se registró, ingresa su ID de Supabase Auth para vincular la cuenta.</span>
+				<!-- Section 4: Auto Auth Info -->
+				<div class="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+					<div class="flex items-start gap-3">
+						<div class="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+							<i class="fas fa-magic text-sm"></i>
+						</div>
+						<div>
+							<p class="text-sm font-semibold text-blue-800">Cuenta de acceso automática</p>
+							<p class="text-xs text-blue-600 mt-1">Al guardar, se creará automáticamente un usuario en Supabase Auth con el correo ingresado. El empleado podrá iniciar sesión con ese correo y establecer su contraseña.</p>
+						</div>
 					</div>
 				</div>
 				
