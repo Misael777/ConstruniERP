@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-marine: #1A2338;
+  --color-brand-orange: #FF4500;
+  --color-brand-gray: #F5F5F5;
+  --color-brand-success: #10b981;
+  --color-brand-danger: #ef4444;
+}
+
+body {
+  @apply bg-brand-gray text-slate-800 font-sans;
+}
