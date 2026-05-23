@@ -41,8 +41,8 @@
 				userRole = 'asesor'; // Rol más bajo por defecto
 			}
 			
-			// 3. Proteger rutas (IAM solo para administrador)
-			if (page.url.pathname.startsWith('/iam') && userRole !== 'administrador') {
+			// 3. Proteger rutas (IAM y Configuración solo para administrador)
+			if ((page.url.pathname.startsWith('/iam') || page.url.pathname.startsWith('/configuracion')) && userRole !== 'administrador') {
 				console.warn("Acceso denegado: Se requiere rol administrador");
 				goto('/dashboard');
 				return;

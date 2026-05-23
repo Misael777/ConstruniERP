@@ -41,4 +41,5 @@
 			</tr>
 		</tbody>
 	</table>
-</Card
+</Card>
+

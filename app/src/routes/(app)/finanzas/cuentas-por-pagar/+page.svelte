@@ -41,10 +41,10 @@
 		datasets: [{
 			label: 'Total',
 			data: [40700, 22200, 12500, 6600],
-			backgroundColor: ['#3b82f6', '#8b5cf6', '#f97316', '#cbd5e1'],
-			indexAxis: 'y'
+			backgroundColor: ['#3b82f6', '#8b5cf6', '#f97316', '#cbd5e1']
 		}]
 	};
+
 	
 	// Si la BD está vacía, usamos estos mocks de UI para el diseño
 	const mockGastos = [
