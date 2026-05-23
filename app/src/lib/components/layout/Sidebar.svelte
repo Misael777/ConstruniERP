@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 
 	// Navegación anidada
 	const navItems = [
@@ -24,7 +25,14 @@
 		},
 		{ path: '/recursos-humanos', label: 'Recursos Humanos', icon: 'fas fa-users' },
 		{ path: '/iam', label: 'Control Accesos (IAM)', icon: 'fas fa-users-cog' },
-		{ path: '/configuracion', label: 'Configuración', icon: 'fas fa-cog' },
+		{ 
+			path: '/configuracion', 
+			label: 'Configuración', 
+			icon: 'fas fa-cog',
+			subItems: [
+				{ path: '/configuracion/roles-permisos', label: 'Roles y Permisos' }
+			]
+		},
 	];
 
 	// Estado para abrir/cerrar menús anidados
@@ -37,11 +45,16 @@
 			goto(path);
 		}
 	}
+
+	async function logout() {
+		await supabase.auth.signOut();
+		goto('/login');
+	}
 </script>
 
-<aside class="w-[280px] bg-[#1a233a] text-slate-300 fixed top-0 left-0 bottom-0 overflow-y-auto z-10 hidden md:block">
+<aside class="w-[280px] bg-[#1a233a] text-slate-300 fixed top-0 left-0 bottom-0 z-10 hidden md:flex flex-col">
 	<!-- Logo -->
-	<div class="p-6 border-b border-white/5 mb-4 flex items-center gap-3 bg-white">
+	<div class="p-6 border-b border-white/5 mb-4 flex items-center gap-3 bg-white flex-shrink-0">
 		<div class="text-blue-600 text-2xl">
 			<i class="fas fa-cubes"></i>
 		</div>
@@ -51,8 +64,8 @@
 		</div>
 	</div>
 
-	<!-- Menu -->
-	<ul class="list-none px-3 m-0 pb-10">
+	<!-- Menu (scrollable) -->
+	<ul class="list-none px-3 m-0 pb-6 overflow-y-auto flex-1">
 		{#each navItems as item}
 			{@const active = page.url.pathname.startsWith(item.path)}
 			<li class="mb-1">
@@ -97,5 +110,19 @@
 				{/if}
 			</li>
 		{/each}
+
+		<!-- Separador -->
+		<li class="my-3 mx-1 border-t border-white/10"></li>
+
+		<!-- Cerrar Sesión -->
+		<li class="mb-1">
+			<button
+				onclick={logout}
+				class="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all text-sm text-slate-400 hover:bg-red-500/10 hover:text-red-400 group"
+			>
+				<i class="fas fa-sign-out-alt w-5 text-center group-hover:scale-110 transition-transform"></i>
+				Cerrar Sesión
+			</button>
+		</li>
 	</ul>
 </aside>
