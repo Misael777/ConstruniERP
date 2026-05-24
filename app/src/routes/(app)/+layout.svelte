@@ -4,6 +4,8 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
+	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
+	import { getRequiredPermiso } from '$lib/config/modules';
 	
 	let { children } = $props();
 	
@@ -11,17 +13,34 @@
 	let userRole = $state<string | null>(null);
 
 	onMount(async () => {
+		console.log('[Layout] onMount initiated for (app) layout. Path:', page.url.pathname);
 		try {
 			// 1. Verificar Sesión
+			console.log('[Layout] Fetching supabase session...');
 			const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 			
 			if (sessionError || !session) {
+				console.warn('[Layout] No active session found or session error occurred:', sessionError);
 				// No autenticado -> mandar a login
 				goto('/login');
 				return;
 			}
 			
+			console.log('[Layout] Session verified. User:', session.user.id, session.user.email);
+			
+			// Load permission store variables
+			console.log('[Layout] Triggering loadPermisos store loading...');
+			await loadPermisos(session.user.id);
+			console.log('[Layout] loadPermisos completed. Current state:', {
+				loaded: permisosState.loaded,
+				userName: permisosState.userName,
+				rolNombre: permisosState.rolNombre,
+				permisosCount: permisosState.permisos.length,
+				permisos: permisosState.permisos
+			});
+
 			// 2. Obtener rol del empleado desde base de datos
+			console.log('[Layout] Fetching employee role locally for layout checks...');
 			const { data: empleado, error: empleadoError } = await supabase
 				.from('empleados')
 				.select(`
@@ -36,22 +55,34 @@
 				// En supabase select con join simple, esto suele devolver roles: { nombre: 'admin' }
 				// @ts-ignore
 				userRole = empleado.roles.nombre || null;
+				console.log('[Layout] Local userRole assigned from db:', userRole);
 			} else {
 				// Fallback si no tiene empleado vinculado aún
+				console.warn('[Layout] Employee query failed or roles missing. Fallback to "asesor":', empleadoError);
 				userRole = 'asesor'; // Rol más bajo por defecto
 			}
 			
-			// 3. Proteger rutas (IAM y Configuración solo para administrador)
-			if ((page.url.pathname.startsWith('/iam') || page.url.pathname.startsWith('/configuracion')) && userRole !== 'administrador') {
-				console.warn("Acceso denegado: Se requiere rol administrador");
-				goto('/dashboard');
-				return;
+			// 3. Proteger rutas dinámicamente usando permisos
+			const requiredPermiso = getRequiredPermiso(page.url.pathname);
+			console.log('[Layout] Protecting route:', page.url.pathname, '| Required permission key:', requiredPermiso);
+			
+			if (requiredPermiso) {
+				const allowed = hasPermiso(requiredPermiso);
+				console.log(`[Layout] Permission Check -> Path: "${page.url.pathname}", Requires: "${requiredPermiso}", Allowed: ${allowed}`);
+				if (!allowed) {
+					console.warn(`[Layout] Access Denied: Missing permission "${requiredPermiso}" for path "${page.url.pathname}". Redirecting to /dashboard.`);
+					goto('/dashboard');
+					return;
+				}
+			} else {
+				console.log('[Layout] Path has no restricted permissions mapped. Allowing access.');
 			}
 			
+			console.log('[Layout] Layout loaded successfully. Disabling loading spinner.');
 			isLoading = false;
 			
 		} catch (e) {
-			console.error("Error en verificación de sesión:", e);
+			console.error("[Layout] Fatal error in session verification / loading:", e);
 			goto('/login');
 		}
 	});

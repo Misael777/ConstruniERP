@@ -2,38 +2,25 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
+	import { MODULE_REGISTRY } from '$lib/config/modules';
+	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 
-	// Navegación anidada
-	const navItems = [
-		{ path: '/dashboard', label: 'Dashboard', icon: 'fas fa-home' },
-		{ path: '/proyectos', label: 'Proyectos', icon: 'fas fa-city' },
-		{ path: '/compras', label: 'Compras', icon: 'fas fa-shopping-cart' },
-		{ path: '/almacen', label: 'Almacén', icon: 'fas fa-box' },
-		{ path: '/ventas', label: 'Ventas', icon: 'fas fa-chart-line' },
-		{ 
-			path: '/finanzas', 
-			label: 'Finanzas', 
-			icon: 'fas fa-wallet',
-			subItems: [
-				{ path: '/finanzas/resumen', label: 'Resumen' },
-				{ path: '/finanzas/cuentas-por-cobrar', label: 'Cuentas por Cobrar' },
-				{ path: '/finanzas/cuentas-por-pagar', label: 'Cuentas por Pagar' },
-				{ path: '/finanzas/pagos', label: 'Pagos' },
-				{ path: '/finanzas/egresos', label: 'Egresos' },
-				{ path: '/finanzas/reportes', label: 'Reportes' },
-			]
-		},
-		{ path: '/recursos-humanos', label: 'Recursos Humanos', icon: 'fas fa-users' },
-		{ path: '/iam', label: 'Control Accesos (IAM)', icon: 'fas fa-users-cog' },
-		{ 
-			path: '/configuracion', 
-			label: 'Configuración', 
-			icon: 'fas fa-cog',
-			subItems: [
-				{ path: '/configuracion/roles-permisos', label: 'Roles y Permisos' }
-			]
-		},
-	];
+	// Filter modules based on permissions with verbose logging
+	let visibleModules = $derived.by(() => {
+		console.log('[Sidebar] --- Calculating visibleModules ---');
+		console.log('[Sidebar] MODULE_REGISTRY length:', MODULE_REGISTRY.length);
+		console.log('[Sidebar] permisosState status:', { loaded: permisosState.loaded, rolNombre: permisosState.rolNombre, user: permisosState.userName, perms: permisosState.permisos });
+		
+		const filtered = MODULE_REGISTRY.filter(mod => {
+			const allowed = hasPermiso(mod.permiso);
+			console.log(`[Sidebar]   - Module "${mod.label}" (${mod.path}) | Requires: "${mod.permiso}" | Allowed: ${allowed}`);
+			return allowed;
+		});
+		
+		console.log('[Sidebar] Finished filtering. Visible modules count:', filtered.length, 'Modules:', filtered.map(m => m.label));
+		console.log('[Sidebar] ----------------------------------');
+		return filtered;
+	});
 
 	// Estado para abrir/cerrar menús anidados
 	let openMenus = $state<Record<string, boolean>>({ '/finanzas': true });
@@ -66,7 +53,7 @@
 
 	<!-- Menu (scrollable) -->
 	<ul class="list-none px-3 m-0 pb-6 overflow-y-auto flex-1">
-		{#each navItems as item}
+		{#each visibleModules as item}
 			{@const active = page.url.pathname.startsWith(item.path)}
 			<li class="mb-1">
 				<button 
@@ -125,4 +112,17 @@
 			</button>
 		</li>
 	</ul>
+
+	<!-- User info at bottom -->
+	{#if permisosState.loaded}
+		<div class="px-4 py-4 border-t border-white/10 flex items-center gap-3 flex-shrink-0">
+			<div class="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+				{permisosState.userInitial}
+			</div>
+			<div class="min-w-0 flex-1">
+				<p class="text-sm font-semibold text-white truncate leading-tight">{permisosState.userName}</p>
+				<p class="text-[10px] text-orange-400 capitalize font-semibold leading-tight mt-0.5">{permisosState.rolNombre}</p>
+			</div>
+		</div>
+	{/if}
 </aside>

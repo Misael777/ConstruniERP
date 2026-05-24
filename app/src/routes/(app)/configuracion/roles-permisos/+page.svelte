@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Permiso = { id: number; nombre: string; descripcion: string };
@@ -129,6 +130,54 @@
 	async function cargarDatos() {
 		try {
 			isLoading = true;
+			console.log('[Roles/Permisos UI] --- VERIFICACIÓN DE PERMISOS ---');
+			console.log('[Roles/Permisos UI] Permisos del usuario en el FrontEnd (Memory Store):', JSON.stringify(permisosState.permisos));
+			
+			// Obtener la sesión y consultar directamente los permisos guardados en la BD para este usuario
+			const sessionRes = await supabase.auth.getSession();
+			const userId = sessionRes.data.session?.user?.id;
+			if (userId) {
+				console.log('[Roles/Permisos UI] ID de Usuario de Auth:', userId);
+				const { data: empleado, error: empError } = await supabase
+					.from('empleados')
+					.select(`
+						nombre,
+						rol_id,
+						roles ( nombre )
+					`)
+					.eq('auth_user_id', userId)
+					.single();
+
+				if (empError) {
+					console.error('[Roles/Permisos UI] Error al consultar empleado en BD:', empError);
+				} else if (empleado) {
+					const rolesObj: any = Array.isArray(empleado.roles) ? empleado.roles[0] : empleado.roles;
+					console.log('[Roles/Permisos UI] Rol de Empleado en BD:', rolesObj?.nombre, '(ID:', empleado.rol_id, ')');
+					
+					if (empleado.rol_id) {
+						const { data: permsData, error: permsError } = await supabase
+							.from('roles_permisos')
+							.select('permisos(nombre)')
+							.eq('rol_id', empleado.rol_id);
+
+						if (permsError) {
+							console.error('[Roles/Permisos UI] Error al consultar permisos del rol en BD:', permsError);
+						} else {
+							const dbPerms = (permsData ?? [])
+								.map((p: any) => Array.isArray(p.permisos) ? p.permisos[0]?.nombre : p.permisos?.nombre)
+								.filter(Boolean);
+							console.log('[Roles/Permisos UI] Permisos del usuario en la BD (roles_permisos):', JSON.stringify(dbPerms));
+							console.log('[Roles/Permisos UI] Comparativa Front-End vs BD:', {
+								frontend: permisosState.permisos,
+								database: dbPerms,
+								match: JSON.stringify(permisosState.permisos.sort()) === JSON.stringify(dbPerms.sort()) || permisosState.permisos.includes('*')
+							});
+						}
+					}
+				}
+			}
+			console.log('[Roles/Permisos UI] --------------------------------');
+
 			// 1. Sembrar si es necesario
 			await checkAndSeedPermisos();
 
@@ -193,6 +242,12 @@
 
 	async function guardarRol() {
 		modalError = '';
+		if (!hasPermiso('configuracion:write')) {
+			modalError = 'No tienes permiso de escritura (configuracion:write) para guardar o modificar roles.';
+			console.warn('[Roles/Permisos UI] Blocked: Save role requested without configuracion:write permission');
+			return;
+		}
+
 		if (!nuevoNombre.trim()) {
 			modalError = 'El nombre del rol es obligatorio';
 			return;
@@ -277,6 +332,12 @@
 	}
 
 	async function eliminarRol(id: number, nombre: string) {
+		if (!hasPermiso('configuracion:write')) {
+			alert('No tienes permiso de escritura (configuracion:write) para eliminar roles.');
+			console.warn('[Roles/Permisos UI] Blocked: Delete role requested without configuracion:write permission');
+			return;
+		}
+
 		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar el rol "${nombre}"?\nEsta acción es irreversible y removerá los permisos asociados.`);
 		if (!confirmacion) return;
 
@@ -319,12 +380,14 @@
 			<h2 class="text-2xl font-semibold text-brand-marine">Roles y Permisos del Sistema (RBAC)</h2>
 			<p class="text-sm text-slate-500 mt-1">Define el nivel de acceso para cada tipo de empleado mediante asignación de permisos individuales.</p>
 		</div>
-		<button 
-			onclick={() => { resetForm(); isModalOpen = true; }}
-			class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2 cursor-pointer"
-		>
-			<i class="fas fa-plus-circle"></i> Nuevo Rol
-		</button>
+		{#if hasPermiso('configuracion:write')}
+			<button 
+				onclick={() => { resetForm(); isModalOpen = true; }}
+				class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2 cursor-pointer"
+			>
+				<i class="fas fa-plus-circle"></i> Nuevo Rol
+			</button>
+		{/if}
 	</div>
 </div>
 
@@ -332,6 +395,13 @@
 	<div class="p-3 mb-6 rounded-lg text-sm font-medium flex items-center gap-2 {statusMessage.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} transition-all">
 		<i class="fas {statusMessage.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>
 		{statusMessage.text}
+	</div>
+{/if}
+
+{#if !hasPermiso('configuracion:write')}
+	<div class="p-3 mb-4 rounded-xl text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200/50 flex items-center gap-2">
+		<i class="fas fa-info-circle text-amber-500"></i>
+		<span><strong>Modo de solo lectura:</strong> No tienes el permiso de escritura (<code>configuracion:write</code>) para agregar, editar o eliminar roles.</span>
 	</div>
 {/if}
 
@@ -348,7 +418,9 @@
 						<th class="p-4">Rol</th>
 						<th class="p-4">Descripción</th>
 						<th class="p-4 text-center">Permisos Habilitados</th>
-						<th class="p-4 text-center">Acciones</th>
+						{#if hasPermiso('configuracion:write')}
+							<th class="p-4 text-center">Acciones</th>
+						{/if}
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
@@ -366,26 +438,28 @@
 									{activePermsCount} {activePermsCount === 1 ? 'permiso activo' : 'permisos activos'}
 								</span>
 							</td>
-							<td class="p-4 text-center whitespace-nowrap">
-								<div class="flex items-center justify-center gap-2">
-									<button 
-										onclick={() => prepararEdicion(rol)} 
-										class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
-										title="Configurar permisos del rol"
-									>
-										<i class="fas fa-cog text-[10px]"></i>
-										<span>Configurar</span>
-									</button>
-									<button 
-										onclick={() => eliminarRol(rol.id, rol.nombre)} 
-										class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
-										title="Eliminar rol"
-									>
-										<i class="fas fa-trash-alt text-[10px]"></i>
-										<span>Eliminar</span>
-									</button>
-								</div>
-							</td>
+							{#if hasPermiso('configuracion:write')}
+								<td class="p-4 text-center whitespace-nowrap">
+									<div class="flex items-center justify-center gap-2">
+										<button 
+											onclick={() => prepararEdicion(rol)} 
+											class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
+											title="Configurar permisos del rol"
+										>
+											<i class="fas fa-cog text-[10px]"></i>
+											<span>Configurar</span>
+										</button>
+										<button 
+											onclick={() => eliminarRol(rol.id, rol.nombre)} 
+											class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
+											title="Eliminar rol"
+										>
+											<i class="fas fa-trash-alt text-[10px]"></i>
+											<span>Eliminar</span>
+										</button>
+									</div>
+								</td>
+							{/if}
 						</tr>
 					{/each}
 					{#if roles.length === 0}

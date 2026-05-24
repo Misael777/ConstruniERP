@@ -36,6 +36,7 @@
 		e.preventDefault();
 		isLoading = true;
 		errorMessage = '';
+		console.log('[Login] Attempting sign in with email:', email);
 		
 		try {
 			const { data, error } = await supabase.auth.signInWithPassword({
@@ -44,10 +45,14 @@
 			});
 			
 			if (error) {
+				console.error('[Login] Supabase Auth sign-in error:', error);
 				throw error;
 			}
 
+			console.log('[Login] Supabase Auth sign-in successful. User ID:', data.user?.id);
+
 			// Validar si el usuario está registrado en el módulo de IAM (tabla empleados)
+			console.log('[Login] Querying database for employee record linked to auth_user_id:', data.user?.id);
 			const { data: empleado, error: empleadoError } = await supabase
 				.from('empleados')
 				.select('id')
@@ -55,26 +60,34 @@
 				.maybeSingle();
 
 			if (empleadoError) {
+				console.error('[Login] Error fetching employee record:', empleadoError);
 				await supabase.auth.signOut();
 				throw new Error('Error de verificación: ' + empleadoError.message);
 			}
 
 			if (!empleado) {
+				console.warn('[Login] Employee record not found for auth_user_id:', data.user?.id);
 				await supabase.auth.signOut();
 				throw new Error('Tu correo electrónico no está registrado o no ha sido autorizado por el administrador.');
 			}
 			
+			console.log('[Login] Employee record verified. ID:', empleado.id);
+			
 			// Guardar o eliminar de localStorage
 			if (rememberEmail) {
+				console.log('[Login] Remembering email in localStorage');
 				localStorage.setItem('construni_saved_email', email);
 			} else {
+				console.log('[Login] Removing email from localStorage');
 				localStorage.removeItem('construni_saved_email');
 			}
 			
 			// Redirigir al sistema
+			console.log('[Login] Redirecting to /dashboard...');
 			goto('/dashboard');
 			
 		} catch (err: any) {
+			console.error('[Login] Login process exception:', err);
 			errorMessage = err.message || 'Error al iniciar sesión. Revisa tus credenciales.';
 		} finally {
 			isLoading = false;
@@ -85,8 +98,10 @@
 		e.preventDefault();
 		isLoading = true;
 		errorMessage = '';
+		console.log('[SetupPassword] Starting password configuration for:', setupEmail);
 
 		if (setupPassword !== setupConfirmPassword) {
+			console.warn('[SetupPassword] Password mismatch');
 			errorMessage = 'Las contraseñas no coinciden';
 			isLoading = false;
 			return;
@@ -94,6 +109,7 @@
 
 		try {
 			const type = mode === 'setup_password' ? 'setup' : 'reset';
+			console.log('[SetupPassword] Sending API request to /api/setup-password with type:', type);
 			const response = await fetch('/api/setup-password', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -101,22 +117,27 @@
 			});
 
 			const result = await response.json();
+			console.log('[SetupPassword] API response received:', result);
 			if (!result.success) {
 				throw new Error(result.error || 'Error al configurar la contraseña');
 			}
 
 			// Autologin
+			console.log('[SetupPassword] API success. Performing automatic sign-in...');
 			const { data, error: loginError } = await supabase.auth.signInWithPassword({
 				email: setupEmail,
 				password: setupPassword
 			});
 
 			if (loginError) {
+				console.error('[SetupPassword] Auto login error:', loginError);
 				throw loginError;
 			}
 
+			console.log('[SetupPassword] Auto login successful. Redirecting to /dashboard...');
 			goto('/dashboard');
 		} catch (err: any) {
+			console.error('[SetupPassword] Exception caught:', err);
 			errorMessage = err.message || 'Error al configurar la contraseña.';
 		} finally {
 			isLoading = false;
