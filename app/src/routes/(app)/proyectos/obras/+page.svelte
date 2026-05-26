@@ -34,6 +34,7 @@
 	let isLoading = $state(true);
 	let isSaving = $state(false);
 	let isModalOpen = $state(false);
+	let activeTab = $state('general');
 	let modalError = $state('');
 	let statusMessage = $state({ type: '', text: '' });
 
@@ -88,8 +89,8 @@
 		if (validItems.length === 0) return 0;
 		const totalMargin = validItems.reduce((acc, curr) => {
 			const price = Number(curr.precio);
-			const cost = Number(curr.costo_estimado || 0);
-			const profit = price - cost;
+			const text = Number(curr.costo_estimado || 0);
+			const profit = price - text;
 			return acc + (profit / price) * 100;
 		}, 0);
 		return totalMargin / validItems.length;
@@ -138,6 +139,7 @@
 
 	function resetForm() {
 		editingId = null;
+		activeTab = 'general';
 		formNombre = '';
 		formCodigo = '';
 		formAreaId = null;
@@ -162,6 +164,7 @@
 
 	function prepararEdicion(item: Obra) {
 		editingId = item.id;
+		activeTab = 'general';
 		formNombre = item.nombre;
 		formCodigo = item.codigo || '';
 		formAreaId = item.area_id;
@@ -258,6 +261,8 @@
 				throw error;
 			}
 			showStatus('success', `Obra "${nombre}" eliminada correctamente.`);
+			isModalOpen = false;
+			resetForm();
 			await cargarObras();
 		} catch (error: any) {
 			console.error('[Obras Error] Error al eliminar:', error);
@@ -474,213 +479,333 @@
 
 <!-- Modal CRUD (Crear/Editar) -->
 {#if isModalOpen}
-	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4 transition-all duration-300">
-		<div class="bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-4xl w-full overflow-hidden flex flex-col max-h-[90vh] scale-100 transition-transform duration-300">
-			<!-- Header -->
-			<div class="bg-slate-50 border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<div class="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
-						<i class="fas {editingId ? 'fa-edit' : 'fa-plus-circle'} text-sm"></i>
+	<div class="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 transition-all duration-300">
+		<div class="bg-white rounded-3xl shadow-2xl border border-slate-200/50 max-w-4xl w-full overflow-hidden flex flex-col max-h-[90vh] scale-100 transform transition-transform duration-300">
+			
+			<!-- Header Principal -->
+			<div class="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white px-6 py-5 flex items-center justify-between shadow-md">
+				<div class="flex items-center gap-3">
+					<div class="w-10 h-10 rounded-xl bg-white/10 text-white flex items-center justify-center backdrop-blur-xs shadow-inner">
+						<i class="fas {editingId ? 'fa-edit' : 'fa-plus-circle'} text-lg"></i>
 					</div>
-					<h3 class="font-bold text-slate-800 text-base">{editingId ? 'Editar Registro de Obra' : 'Registrar Nueva Obra'}</h3>
+					<div>
+						<h3 class="font-bold text-base leading-tight">{editingId ? 'Modificar Proyecto de Obra' : 'Registrar Nuevo Proyecto de Obra'}</h3>
+						<p class="text-[11px] text-blue-100/80 mt-0.5">Ingresa los datos técnicos y de inventario para controlar el avance y presupuesto</p>
+					</div>
 				</div>
-				<button onclick={() => { isModalOpen = false; resetForm(); }} class="text-slate-400 hover:text-slate-600 text-lg p-1 cursor-pointer">
-					<i class="fas fa-times"></i>
+				<button onclick={() => { isModalOpen = false; resetForm(); }} class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white hover:scale-105 active:scale-95 flex items-center justify-center transition-all cursor-pointer">
+					<i class="fas fa-times text-sm"></i>
+				</button>
+			</div>
+
+			<!-- Tabs de Navegación del Popup -->
+			<div class="flex border-b border-slate-100 px-6 bg-slate-50/50">
+				<button 
+					type="button" 
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'general' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					onclick={() => activeTab = 'general'}
+				>
+					<i class="fas fa-building text-[13px]"></i> Información General
+				</button>
+				<button 
+					type="button" 
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'finanzas' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					onclick={() => activeTab = 'finanzas'}
+				>
+					<i class="fas fa-coins text-[13px]"></i> Presupuesto e Inventario
+				</button>
+				<button 
+					type="button" 
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'tecnico' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					onclick={() => activeTab = 'tecnico'}
+				>
+					<i class="fas fa-tools text-[13px]"></i> Especificaciones Técnicas
 				</button>
 			</div>
 			
 			<!-- Contenido del Formulario -->
-			<form onsubmit={(e) => { e.preventDefault(); guardar(); }} class="flex-1 overflow-y-auto p-6 space-y-6">
+			<form onsubmit={(e) => { e.preventDefault(); guardar(); }} class="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/20">
 				{#if modalError}
-					<div class="p-3 bg-red-50 border border-red-100 text-red-600 text-xs rounded-xl font-medium text-center">
+					<div class="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl font-semibold text-center shadow-sm flex items-center justify-center gap-2 animate-pulse">
+						<i class="fas fa-exclamation-circle text-sm"></i>
 						{modalError}
 					</div>
 				{/if}
 
-				<!-- Sección: Datos Primarios -->
-				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-100 pb-1">Información General</h4>
-					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Nombre de la Obra *</label>
-							<input 
-								type="text" 
-								bind:value={formNombre} 
-								placeholder="Ej. Residencia Multifamiliar Los Cedros" 
-								required 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
+				<!-- TAB 1: INFORMACIÓN GENERAL -->
+				{#if activeTab === 'general'}
+					<div class="space-y-5">
+						<div class="bg-blue-50/40 p-4 rounded-2xl border border-blue-100/50 flex gap-3 mb-4">
+							<i class="fas fa-info-circle text-blue-600 text-base mt-0.5"></i>
+							<div class="text-[11px] text-blue-800/90 leading-relaxed">
+								<strong>Campos esenciales:</strong> Define el nombre descriptivo y el código único de referencia técnica de la obra para mantener consistencia con los contratos y facturación.
+							</div>
+						</div>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Nombre de la Obra *</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-building"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formNombre} 
+										placeholder="Ej. Residencia Multifamiliar Los Cedros" 
+										required 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Código de Referencia</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-tag"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formCodigo} 
+										placeholder="Ej. OBR-002" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Área o Ubicación de Obra</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-map-marker-alt"></i>
+									</span>
+									<select 
+										bind:value={formAreaId} 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs cursor-pointer"
+									>
+										<option value={null}>-- Seleccione Área --</option>
+										{#each areas as area}
+											<option value={area.id}>{area.nombre}</option>
+										{/each}
+									</select>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Unidad de Medida (Servicio/Materiales)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-balance-scale"></i>
+									</span>
+									<select 
+										bind:value={formUnidadId} 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs cursor-pointer"
+									>
+										<option value={null}>-- Seleccione Unidad --</option>
+										{#each unidades as unidad}
+											<option value={unidad.id}>{unidad.nombre}</option>
+										{/each}
+									</select>
+								</div>
+							</div>
 						</div>
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Código de Referencia</label>
-							<input 
-								type="text" 
-								bind:value={formCodigo} 
-								placeholder="Ej. OBR-002" 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Área o Ubicación de Obra</label>
-							<select 
-								bind:value={formAreaId} 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs text-slate-600"
-							>
-								<option value={null}>-- Seleccione Área --</option>
-								{#each areas as area}
-									<option value={area.id}>{area.nombre}</option>
-								{/each}
-							</select>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Unidad de Medida (Servicio/Materiales)</label>
-							<select 
-								bind:value={formUnidadId} 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs text-slate-600"
-							>
-								<option value={null}>-- Seleccione Unidad --</option>
-								{#each unidades as unidad}
-									<option value={unidad.id}>{unidad.nombre}</option>
-								{/each}
-							</select>
+							<label class="block text-xs font-semibold text-slate-700 mb-1.5">Descripción del Proyecto de Obra</label>
+							<div class="relative">
+								<span class="absolute top-3 left-3.5 text-slate-400">
+									<i class="fas fa-align-left"></i>
+								</span>
+								<textarea 
+									bind:value={formDescripcion} 
+									placeholder="Escribe detalles del expediente técnico, contratista principal u observaciones relevantes de la obra..." 
+									rows="4" 
+									class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs"
+								></textarea>
+							</div>
 						</div>
 					</div>
-				</div>
+				{/if}
 
-				<!-- Sección: Finanzas y Costos -->
-				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-100 pb-1">Presupuesto y Existencias</h4>
-					<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Precio Presupuestado (S/)</label>
-							<input 
-								type="number" 
-								step="0.01"
-								bind:value={formPrecio} 
-								placeholder="0.00"
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Costo Estimado (S/)</label>
-							<input 
-								type="number" 
-								step="0.01"
-								bind:value={formCostoEstimado} 
-								placeholder="0.00"
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Existencia / Avance Físico</label>
-							<input 
-								type="number" 
-								step="0.1"
-								bind:value={formExistenciaActual} 
-								placeholder="0"
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Valor Mínimo (Alerta stock/materiales)</label>
-							<input 
-								type="number" 
-								step="0.1"
-								bind:value={formValorMin} 
-								placeholder="Sin mínimo"
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Valor Máximo (Límite acopio)</label>
-							<input 
-								type="number" 
-								step="0.1"
-								bind:value={formValorMax} 
-								placeholder="Sin máximo"
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Link a Carpeta / Proforma de Obra</label>
-							<input 
-								type="text" 
-								bind:value={formLinkProforma} 
-								placeholder="https://drive.google.com/..."
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
+				<!-- TAB 2: PRESUPUESTO E INVENTARIO -->
+				{#if activeTab === 'finanzas'}
+					<div class="space-y-5">
+						<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Precio Presupuestado (S/)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+										S/
+									</span>
+									<input 
+										type="number" 
+										step="0.01"
+										bind:value={formPrecio} 
+										placeholder="0.00"
+										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Costo Estimado (S/)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+										S/
+									</span>
+									<input 
+										type="number" 
+										step="0.01"
+										bind:value={formCostoEstimado} 
+										placeholder="0.00"
+										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Existencia / Avance Físico</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-boxes"></i>
+									</span>
+									<input 
+										type="number" 
+										step="0.1"
+										bind:value={formExistenciaActual} 
+										placeholder="0"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-semibold shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Mínimo (Alerta de stock)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-compress-arrows-alt"></i>
+									</span>
+									<input 
+										type="number" 
+										step="0.1"
+										bind:value={formValorMin} 
+										placeholder="Sin mínimo"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Máximo (Límite acopio)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-expand-arrows-alt"></i>
+									</span>
+									<input 
+										type="number" 
+										step="0.1"
+										bind:value={formValorMax} 
+										placeholder="Sin máximo"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Carpeta / Proforma (Google Drive)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-link"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formLinkProforma} 
+										placeholder="https://drive.google.com/..."
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-850 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
 						</div>
 					</div>
-				</div>
+				{/if}
 
-				<!-- Sección: Características Técnicas -->
-				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-100 pb-1">Características Técnicas</h4>
-					<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Tipo de Obra (Caract. 1)</label>
-							<input 
-								type="text" 
-								bind:value={formCaract1} 
-								placeholder="Ej. Residencial, Comercial, Industrial" 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Ubicación / Ciudad (Caract. 2)</label>
-							<input 
-								type="text" 
-								bind:value={formCaract2} 
-								placeholder="Ej. Lima, Arequipa, Cusco" 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Duración Estimada (Caract. 3)</label>
-							<input 
-								type="text" 
-								bind:value={formCaract3} 
-								placeholder="Ej. 12 meses, 18 meses" 
-								class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs" 
-							/>
+				<!-- TAB 3: CARACTERÍSTICAS TÉCNICAS -->
+				{#if activeTab === 'tecnico'}
+					<div class="space-y-5">
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Tipo de Obra (Caract. 1)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-tools"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formCaract1} 
+										placeholder="Ej. Residencial, Comercial" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Ubicación / Ciudad (Caract. 2)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-city"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formCaract2} 
+										placeholder="Ej. Lima, Arequipa" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Duración Estimada (Caract. 3)</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-calendar-alt"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formCaract3} 
+										placeholder="Ej. 12 meses, 18 meses" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
 						</div>
 					</div>
-				</div>
-
-				<!-- Sección: Descripción Adicional -->
-				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-100 pb-1">Detalles Adicionales</h4>
-					<div>
-						<label class="block text-xs font-semibold text-slate-600 mb-1">Descripción del Proyecto de Obra</label>
-						<textarea 
-							bind:value={formDescripcion} 
-							placeholder="Escribe detalles del expediente técnico, contratista principal u observaciones relevantes de la obra..." 
-							rows="3" 
-							class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-xs"
-						></textarea>
-					</div>
-				</div>
+				{/if}
 
 				<!-- Footer del Formulario -->
-				<div class="pt-4 border-t border-slate-100 flex justify-end gap-3">
-					<button 
-						type="button" 
-						onclick={() => { isModalOpen = false; resetForm(); }} 
-						class="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 text-xs font-semibold transition-colors cursor-pointer"
-					>
-						Cancelar
-					</button>
-					<button 
-						type="submit" 
-						disabled={isSaving} 
-						class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-xs font-semibold shadow-md shadow-blue-600/10 disabled:opacity-70 flex items-center gap-2 transition-colors cursor-pointer"
-					>
-						{#if isSaving}
-							<i class="fas fa-spinner fa-spin"></i> Guardando...
-						{:else}
-							<i class="fas fa-save"></i> Guardar Cambios
+				<div class="pt-5 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-3">
+					
+					<!-- CRUD Action: Eliminar (Solo al editar) -->
+					<div>
+						{#if editingId && hasPermiso('proyectos:write')}
+							<button 
+								type="button" 
+								onclick={() => eliminar(editingId, formNombre)} 
+								class="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all hover:scale-[1.02] active:scale-98 cursor-pointer flex items-center gap-1.5 shadow-sm"
+							>
+								<i class="fas fa-trash-alt"></i> Eliminar Registro
+							</button>
 						{/if}
-					</button>
+					</div>
+
+					<div class="flex items-center gap-3 w-full sm:w-auto justify-end">
+						<button 
+							type="button" 
+							onclick={() => { isModalOpen = false; resetForm(); }} 
+							class="px-5 py-2.5 bg-slate-150 text-slate-700 rounded-xl hover:bg-slate-200 text-xs font-bold transition-all cursor-pointer hover:scale-[1.02] active:scale-98"
+						>
+							Cancelar
+						</button>
+						<button 
+							type="submit" 
+							disabled={isSaving} 
+							class="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 text-xs font-bold shadow-md shadow-blue-600/15 disabled:opacity-70 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-98 cursor-pointer"
+						>
+							{#if isSaving}
+								<i class="fas fa-spinner fa-spin"></i> Guardando...
+							{:else}
+								<i class="fas fa-save"></i> Guardar Cambios
+							{/if}
+						</button>
+					</div>
 				</div>
 			</form>
 		</div>
