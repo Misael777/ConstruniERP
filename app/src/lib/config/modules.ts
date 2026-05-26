@@ -25,7 +25,16 @@ export const MODULE_REGISTRY: ModuleItem[] = [
   },
   { path: '/compras', label: 'Compras', icon: 'fas fa-shopping-cart', permiso: 'ver_compras' },
   { path: '/almacen', label: 'Almacén', icon: 'fas fa-box', permiso: 'ver_almacen' },
-  { path: '/ventas', label: 'Ventas', icon: 'fas fa-chart-line', permiso: 'ver_ventas' },
+  {
+    path: '/ventas',
+    label: 'Ventas',
+    icon: 'fas fa-chart-line',
+    permiso: 'ver_ventas',
+    subItems: [
+      { path: '/ventas', label: 'Registro de Ventas' },
+      { path: '/ventas/clientes', label: 'Clientes' }
+    ]
+  },
   {
     path: '/finanzas',
     label: 'Finanzas',
