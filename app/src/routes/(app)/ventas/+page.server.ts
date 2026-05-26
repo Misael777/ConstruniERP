@@ -2,6 +2,8 @@ import { supabase } from '$lib/server/supabase';
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 
+export const prerender = false;
+
 export const load: PageServerLoad = async () => {
 	try {
 		// Cargar Ventas junto con el nombre del cliente

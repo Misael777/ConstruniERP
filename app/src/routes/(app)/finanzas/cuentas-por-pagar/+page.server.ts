@@ -1,6 +1,8 @@
 import { supabase } from '$lib/server/supabase';
 import type { Actions, PageServerLoad } from './$types';
 
+export const prerender = false;
+
 export const load: PageServerLoad = async () => {
 	try {
 		// Mock data if Supabase fails (for UI visualization purposes)
