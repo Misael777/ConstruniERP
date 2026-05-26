@@ -92,7 +92,7 @@
 <!-- KPIs Grid -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
 	<!-- KPI 1: Facturación -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300">
+	<a href="/ventas" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
 		<div class="absolute -right-4 -bottom-4 text-blue-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
 			<i class="fas fa-file-invoice-dollar"></i>
 		</div>
@@ -106,10 +106,10 @@
 		<div class="text-[11px] text-slate-400 font-medium">
 			Valor total acumulado en contratos
 		</div>
-	</div>
+	</a>
 
 	<!-- KPI 2: Cobros -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300">
+	<a href="/finanzas/cuentas-por-cobrar" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
 		<div class="absolute -right-4 -bottom-4 text-emerald-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
 			<i class="fas fa-hand-holding-dollar"></i>
 		</div>
@@ -125,10 +125,10 @@
 		<div class="text-[11px] text-slate-400 font-medium flex justify-between">
 			<span>Pendiente: S/ {kpis.cuentasPorCobrar.toLocaleString('es-PE')}</span>
 		</div>
-	</div>
+	</a>
 
 	<!-- KPI 3: Egresos -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300">
+	<a href="/finanzas/cuentas-por-pagar" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
 		<div class="absolute -right-4 -bottom-4 text-red-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
 			<i class="fas fa-receipt"></i>
 		</div>
@@ -143,10 +143,10 @@
 			<span>Pagado: S/ {kpis.totalGastosPagados.toLocaleString('es-PE')}</span>
 			<span class="text-red-500 font-bold">Por pagar: S/ {kpis.cuentasPorPagar.toLocaleString('es-PE')}</span>
 		</div>
-	</div>
+	</a>
 
 	<!-- KPI 4: Utilidad Estimada -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300">
+	<a href="/finanzas/reportes" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
 		<div class="absolute -right-4 -bottom-4 text-orange-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
 			<i class="fas fa-piggy-bank"></i>
 		</div>
@@ -160,27 +160,27 @@
 		<div class="text-[11px] text-slate-400 font-medium">
 			Diferencia entre contratos facturados y costos
 		</div>
-	</div>
+	</a>
 </div>
 
 <!-- Secondary Metrics Bar -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-	<div class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50">
+	<a href="/iam" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
 		<span class="text-xs font-semibold text-slate-600">Personal Activo:</span>
 		<span class="text-sm font-bold text-brand-marine">{kpis.empleadosCount} empleados</span>
-	</div>
-	<div class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50">
+	</a>
+	<a href="/proyectos/obras" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
 		<span class="text-xs font-semibold text-slate-600">Obras en Catálogo:</span>
 		<span class="text-sm font-bold text-brand-marine">{kpis.obrasCount} registradas</span>
-	</div>
-	<div class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50">
+	</a>
+	<a href="/proyectos/consultorias" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
 		<span class="text-xs font-semibold text-slate-600">Servicios Consultoría:</span>
 		<span class="text-sm font-bold text-brand-marine">{kpis.consultoriasCount} activos</span>
-	</div>
-	<div class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50">
+	</a>
+	<a href="/ventas" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
 		<span class="text-xs font-semibold text-slate-600">Proyectos Activos:</span>
 		<span class="text-sm font-bold text-blue-600">{kpis.ventasCount} en ejecución</span>
-	</div>
+	</a>
 </div>
 
 <!-- Charts Section -->
@@ -280,10 +280,10 @@
 					<span class="text-xs font-bold">Control Accesos</span>
 				</a>
 				
-				<div class="p-3 bg-orange-50 text-orange-700 rounded-xl cursor-not-allowed text-center flex flex-col items-center justify-center gap-2">
-					<i class="fas fa-city text-lg opacity-70"></i>
-					<span class="text-xs font-bold">Proyectos (Obra)</span>
-				</div>
+				<a href="/proyectos" class="p-3 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition text-center flex flex-col items-center justify-center gap-2 group cursor-pointer">
+					<i class="fas fa-city text-lg group-hover:scale-110 transition"></i>
+					<span class="text-xs font-bold">Proyectos (Catálogos)</span>
+				</a>
 			</div>
 		</div>
 

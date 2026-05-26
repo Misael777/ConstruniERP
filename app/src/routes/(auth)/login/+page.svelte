@@ -122,20 +122,29 @@
 				throw new Error(result.error || 'Error al configurar la contraseña');
 			}
 
-			// Autologin
-			console.log('[SetupPassword] API success. Performing automatic sign-in...');
-			const { data, error: loginError } = await supabase.auth.signInWithPassword({
-				email: setupEmail,
-				password: setupPassword
-			});
+			if (type === 'reset') {
+				console.log('[SetupPassword] Password reset successful. Going back to login screen.');
+				errorMessage = '';
+				email = setupEmail;
+				password = '';
+				mode = 'login';
+				alert('Tu contraseña ha sido restablecida con éxito. Por favor, inicia sesión con tus nuevas credenciales.');
+			} else {
+				// Autologin para primera configuración
+				console.log('[SetupPassword] API success. Performing automatic sign-in...');
+				const { data, error: loginError } = await supabase.auth.signInWithPassword({
+					email: setupEmail,
+					password: setupPassword
+				});
 
-			if (loginError) {
-				console.error('[SetupPassword] Auto login error:', loginError);
-				throw loginError;
+				if (loginError) {
+					console.error('[SetupPassword] Auto login error:', loginError);
+					throw loginError;
+				}
+
+				console.log('[SetupPassword] Auto login successful. Redirecting to /dashboard...');
+				goto('/dashboard');
 			}
-
-			console.log('[SetupPassword] Auto login successful. Redirecting to /dashboard...');
-			goto('/dashboard');
 		} catch (err: any) {
 			console.error('[SetupPassword] Exception caught:', err);
 			errorMessage = err.message || 'Error al configurar la contraseña.';
@@ -215,7 +224,7 @@
 						<button 
 							type="button" 
 							onclick={togglePassword}
-							class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+							class="absolute z-10 inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
 						>
 							<i class="fas {showPassword ? 'fa-eye-slash' : 'fa-eye'}"></i>
 						</button>
@@ -297,7 +306,7 @@
 						<button 
 							type="button" 
 							onclick={() => setupShowPassword = !setupShowPassword}
-							class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+							class="absolute z-10 inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
 						>
 							<i class="fas {setupShowPassword ? 'fa-eye-slash' : 'fa-eye'}"></i>
 						</button>
@@ -318,6 +327,13 @@
 							class="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
 							required
 						/>
+						<button 
+							type="button" 
+							onclick={() => setupShowPassword = !setupShowPassword}
+							class="absolute z-10 inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+						>
+							<i class="fas {setupShowPassword ? 'fa-eye-slash' : 'fa-eye'}"></i>
+						</button>
 					</div>
 				</div>
 				
@@ -387,7 +403,7 @@
 						<button 
 							type="button" 
 							onclick={() => setupShowPassword = !setupShowPassword}
-							class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+							class="absolute z-10 inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
 						>
 							<i class="fas {setupShowPassword ? 'fa-eye-slash' : 'fa-eye'}"></i>
 						</button>
@@ -408,6 +424,13 @@
 							class="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
 							required
 						/>
+						<button 
+							type="button" 
+							onclick={() => setupShowPassword = !setupShowPassword}
+							class="absolute z-10 inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+						>
+							<i class="fas {setupShowPassword ? 'fa-eye-slash' : 'fa-eye'}"></i>
+						</button>
 					</div>
 				</div>
 				
