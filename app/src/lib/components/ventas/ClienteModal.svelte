@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { supabase } from '$lib/supabaseClient';
 
-	let { isOpen = false, onClose, clienteToEdit = null } = $props<{
+	let { isOpen = false, onClose, onSave, clienteToEdit = null } = $props<{
 		isOpen: boolean;
 		onClose: () => void;
+		onSave: () => void;
 		clienteToEdit?: any;
 	}>();
 
@@ -35,8 +36,64 @@
 		}
 	});
 
+	let isSaving = $state(false);
+	let modalError = $state('');
+
 	function handleClose() {
+		modalError = '';
 		onClose();
+	}
+
+	async function handleSubmit() {
+		modalError = '';
+		if (!nombre || !nombre.trim()) {
+			modalError = 'El nombre es obligatorio.';
+			return;
+		}
+
+		isSaving = true;
+		try {
+			const payload = {
+				nombre: nombre.trim(),
+				telefono: telefono.trim() || null,
+				correo: correo.trim() || null,
+				empresa: empresa.trim() || null,
+				dni: dni.trim() || null,
+				ubicacion: ubicacion.trim() || null
+			};
+
+			if (clienteToEdit) {
+				console.log('[ClienteModal] Actualizando cliente id:', clienteToEdit.id, payload);
+				const { error: updateError } = await supabase
+					.from('clientes')
+					.update(payload)
+					.eq('id', clienteToEdit.id);
+
+				if (updateError) {
+					console.error('[ClienteModal] Error al actualizar cliente:', updateError);
+					throw updateError;
+				}
+			} else {
+				console.log('[ClienteModal] Creando cliente:', payload);
+				const { error: insertError } = await supabase
+					.from('clientes')
+					.insert([payload]);
+
+				if (insertError) {
+					console.error('[ClienteModal] Error al insertar cliente:', insertError);
+					throw insertError;
+				}
+			}
+
+			console.log('[ClienteModal] Operación exitosa. Invocando onSave y cerrando.');
+			if (onSave) onSave();
+			handleClose();
+		} catch (err: any) {
+			console.error('[ClienteModal] Error en handleSubmit:', err);
+			modalError = err.message || 'Error al procesar el cliente en la base de datos.';
+		} finally {
+			isSaving = false;
+		}
 	}
 </script>
 
@@ -58,18 +115,14 @@
 
 		<!-- Body Form -->
 		<form 
-			method="POST" 
-			action={clienteToEdit ? '?/update' : '?/create'} 
-			use:enhance={() => {
-				return async ({ update }) => {
-					await update();
-					handleClose();
-				};
-			}}
+			onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
 			class="p-8 space-y-6 flex-1"
 		>
-			{#if clienteToEdit}
-				<input type="hidden" name="id" value={clienteToEdit.id} />
+			{#if modalError}
+				<div class="p-4 rounded-2xl bg-rose-50 border border-rose-100 text-rose-800 text-sm font-medium flex items-center gap-2.5 transition-all">
+					<i class="fas fa-exclamation-triangle text-rose-600 text-base"></i>
+					{modalError}
+				</div>
 			{/if}
 
 			<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -188,10 +241,16 @@
 				</button>
 				<button 
 					type="submit" 
-					class="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm transition-all shadow-md shadow-blue-600/10 hover:shadow-lg active:scale-[0.98] flex items-center gap-2 cursor-pointer"
+					disabled={isSaving}
+					class="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm transition-all shadow-md shadow-blue-600/10 hover:shadow-lg active:scale-[0.98] flex items-center gap-2 cursor-pointer disabled:opacity-75"
 				>
-					<i class="fas fa-save"></i>
-					<span>{clienteToEdit ? 'Guardar Cambios' : 'Registrar Cliente'}</span>
+					{#if isSaving}
+						<i class="fas fa-spinner fa-spin"></i>
+						<span>Guardando...</span>
+					{:else}
+						<i class="fas fa-save"></i>
+						<span>{clienteToEdit ? 'Guardar Cambios' : 'Registrar Cliente'}</span>
+					{/if}
 				</button>
 			</div>
 		</form>

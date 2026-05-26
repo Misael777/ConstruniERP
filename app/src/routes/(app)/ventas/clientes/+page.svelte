@@ -1,9 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { enhance } from '$app/forms';
+	import { supabase } from '$lib/supabaseClient';
 	import ClienteModal from '$lib/components/ventas/ClienteModal.svelte';
-
-	let { data, form } = $props();
 
 	// Modal states
 	let isModalOpen = $state(false);
@@ -15,6 +13,64 @@
 	// Dropdown state (id of active row options menu)
 	let activeMenuId = $state<number | null>(null);
 
+	// Estados locales de base de datos
+	let clientes = $state<any[]>([]);
+	let isLoading = $state(true);
+	let formSuccess = $state('');
+	let formError = $state('');
+
+	async function cargarClientes() {
+		try {
+			isLoading = true;
+			formError = '';
+			console.log('[Clientes] Cargando clientes de Supabase client-side...');
+			const { data: clientesData, error: clientesError } = await supabase
+				.from('clientes')
+				.select('*')
+				.order('nombre', { ascending: true });
+
+			if (clientesError) throw clientesError;
+			clientes = clientesData || [];
+			console.log('[Clientes] Clientes cargados con éxito. Registros:', clientes.length);
+		} catch (err: any) {
+			console.error('[Clientes Error] Error al cargar clientes:', err);
+			formError = err.message || 'Error al conectar con la base de datos.';
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	async function eliminarCliente(id: number) {
+		formSuccess = '';
+		formError = '';
+		activeMenuId = null;
+		
+		const confirmacion = confirm('¿Estás seguro de que deseas eliminar este cliente de la base de datos?\nEsta acción no se puede deshacer.');
+		if (!confirmacion) return;
+
+		try {
+			console.log('[Clientes] Eliminando cliente id:', id);
+			const { error: deleteError } = await supabase
+				.from('clientes')
+				.delete()
+				.eq('id', id);
+
+			if (deleteError) {
+				if (deleteError.code === '23503') {
+					throw new Error('No se puede eliminar el cliente porque tiene ventas o registros asociados en el sistema.');
+				}
+				throw deleteError;
+			}
+
+			formSuccess = 'Cliente eliminado con éxito';
+			console.log('[Clientes] Cliente eliminado con éxito. Recargando...');
+			await cargarClientes();
+		} catch (err: any) {
+			console.error('[Clientes Error] Error al eliminar cliente:', err);
+			formError = err.message || 'Error al eliminar el cliente.';
+		}
+	}
+
 	function toggleRowMenu(id: number, e: Event) {
 		e.stopPropagation();
 		if (activeMenuId === id) {
@@ -24,17 +80,18 @@
 		}
 	}
 
-	onMount(() => {
+	onMount(async () => {
 		const closeAll = () => {
 			activeMenuId = null;
 		};
 		window.addEventListener('click', closeAll);
+		await cargarClientes();
 		return () => window.removeEventListener('click', closeAll);
 	});
 
 	// Filtrar clientes usando runas derived
 	const clientesFiltrados = $derived(
-		data.clientes.filter((c: any) => {
+		clientes.filter((c: any) => {
 			const query = filtroBusqueda.toLowerCase().trim();
 			if (!query) return true;
 
@@ -99,16 +156,16 @@
 </div>
 
 <!-- Status Form Notification -->
-{#if form?.success}
+{#if formSuccess}
 	<div class="p-4 mb-6 rounded-2xl bg-green-50 border border-green-100 text-green-800 text-sm font-medium flex items-center gap-2.5 transition-all">
 		<i class="fas fa-check-circle text-green-600 text-base"></i>
-		{form.message || 'Operación realizada correctamente.'}
+		{formSuccess}
 	</div>
 {/if}
-{#if form && !form.success}
+{#if formError}
 	<div class="p-4 mb-6 rounded-2xl bg-rose-50 border border-rose-100 text-rose-800 text-sm font-medium flex items-center gap-2.5 transition-all">
 		<i class="fas fa-exclamation-triangle text-rose-600 text-base"></i>
-		{form.error || 'Ocurrió un error al procesar el formulario.'}
+		{formError}
 	</div>
 {/if}
 
@@ -200,109 +257,101 @@
 	</div>
 
 	<!-- Table -->
-	<div class="overflow-x-auto">
-		<table class="w-full text-sm text-left">
-			<thead class="text-xs text-slate-500 font-bold uppercase border-b border-slate-100 bg-slate-50/50">
-				<tr>
-					<th class="p-3">Cliente / Razón Social</th>
-					<th class="p-3">DNI / RUC</th>
-					<th class="p-3">Empresa</th>
-					<th class="p-3">Teléfono</th>
-					<th class="p-3">Correo</th>
-					<th class="p-3">Ubicación / Dirección</th>
-					<th class="p-3 text-center"></th>
-				</tr>
-			</thead>
-			<tbody class="divide-y divide-slate-100">
-				{#each clientesFiltrados as cliente (cliente.id)}
-					<tr class="hover:bg-slate-50/70 transition-colors">
-						<td class="p-3 font-semibold text-slate-800">
-							<div class="flex items-center gap-2">
-								<div class="w-7 h-7 rounded-full bg-slate-100 text-slate-600 text-xs flex items-center justify-center font-bold">
-									{(cliente.nombre || 'C').charAt(0).toUpperCase()}
+	{#if isLoading}
+		<div class="py-12 flex justify-center text-blue-600 text-2xl">
+			<i class="fas fa-spinner fa-spin"></i>
+		</div>
+	{:else}
+		<div class="overflow-x-auto">
+			<table class="w-full text-sm text-left">
+				<thead class="text-xs text-slate-500 font-bold uppercase border-b border-slate-100 bg-slate-50/50">
+					<tr>
+						<th class="p-3">Cliente / Razón Social</th>
+						<th class="p-3">DNI / RUC</th>
+						<th class="p-3">Empresa</th>
+						<th class="p-3">Teléfono</th>
+						<th class="p-3">Correo</th>
+						<th class="p-3">Ubicación / Dirección</th>
+						<th class="p-3 text-center"></th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-slate-100">
+					{#each clientesFiltrados as cliente (cliente.id)}
+						<tr class="hover:bg-slate-50/70 transition-colors">
+							<td class="p-3 font-semibold text-slate-800">
+								<div class="flex items-center gap-2">
+									<div class="w-7 h-7 rounded-full bg-slate-100 text-slate-600 text-xs flex items-center justify-center font-bold">
+										{(cliente.nombre || 'C').charAt(0).toUpperCase()}
+									</div>
+									<span>{cliente.nombre || 'Sin nombre'}</span>
 								</div>
-								<span>{cliente.nombre || 'Sin nombre'}</span>
-							</div>
-						</td>
-						<td class="p-3 text-slate-600 text-xs font-mono">
-							{cliente.dni || '—'}
-						</td>
-						<td class="p-3 text-xs text-slate-600 font-semibold">
-							{#if cliente.empresa}
-								<span class="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-lg border border-blue-100">
-									{cliente.empresa}
-								</span>
-							{:else}
-								<span class="text-slate-400 font-normal">Particular</span>
-							{/if}
-						</td>
-						<td class="p-3 text-slate-600 text-xs whitespace-nowrap">
-							{cliente.telefono || '—'}
-						</td>
-						<td class="p-3 text-slate-600 text-xs">
-							{cliente.correo || '—'}
-						</td>
-						<td class="p-3 text-slate-500 text-xs max-w-xs truncate" title={cliente.ubicacion}>
-							{cliente.ubicacion || '—'}
-						</td>
-						<td class="p-3 text-center relative whitespace-nowrap">
-							<button 
-								onclick={(e) => toggleRowMenu(cliente.id, e)} 
-								class="text-slate-400 hover:text-slate-700 p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer transition-all"
-								title="Acciones"
-							>
-								<i class="fas fa-ellipsis-v"></i>
-							</button>
-							
-							<!-- Dropdown Menu -->
-							{#if activeMenuId === cliente.id}
-								<div class="absolute right-3 top-10 bg-white border border-slate-100 rounded-xl shadow-lg py-1.5 min-w-[120px] z-30 flex flex-col text-left">
-									<button 
-										type="button" 
-										onclick={() => prepararEdicion(cliente)} 
-										class="px-4 py-2 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer"
-									>
-										<i class="fas fa-edit text-blue-500"></i> Editar
-									</button>
-									<form 
-										method="POST" 
-										action="?/delete" 
-										use:enhance={() => {
-											return async ({ update }) => {
-												await update();
-											};
-										}}
-										onsubmit={(e) => {
-											if (!confirm('¿Estás seguro de que deseas eliminar este cliente de la base de datos?\nEsta acción no se puede deshacer.')) {
-												e.preventDefault();
-											}
-										}}
-									>
-										<input type="hidden" name="id" value={cliente.id} />
+							</td>
+							<td class="p-3 text-slate-600 text-xs font-mono">
+								{cliente.dni || '—'}
+							</td>
+							<td class="p-3 text-xs text-slate-600 font-semibold">
+								{#if cliente.empresa}
+									<span class="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-lg border border-blue-100">
+										{cliente.empresa}
+									</span>
+								{:else}
+									<span class="text-slate-400 font-normal">Particular</span>
+								{/if}
+							</td>
+							<td class="p-3 text-slate-600 text-xs whitespace-nowrap">
+								{cliente.telefono || '—'}
+							</td>
+							<td class="p-3 text-slate-600 text-xs">
+								{cliente.correo || '—'}
+							</td>
+							<td class="p-3 text-slate-500 text-xs max-w-xs truncate" title={cliente.ubicacion}>
+								{cliente.ubicacion || '—'}
+							</td>
+							<td class="p-3 text-center relative whitespace-nowrap">
+								<button 
+									onclick={(e) => toggleRowMenu(cliente.id, e)} 
+									class="text-slate-400 hover:text-slate-700 p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer transition-all"
+									title="Acciones"
+								>
+									<i class="fas fa-ellipsis-v"></i>
+								</button>
+								
+								<!-- Dropdown Menu -->
+								{#if activeMenuId === cliente.id}
+									<div class="absolute right-3 top-10 bg-white border border-slate-100 rounded-xl shadow-lg py-1.5 min-w-[120px] z-30 flex flex-col text-left">
 										<button 
-											type="submit" 
-											class="w-full px-4 py-2 hover:bg-rose-50 text-xs font-semibold text-rose-600 flex items-center gap-2 cursor-pointer"
+											type="button" 
+											onclick={() => prepararEdicion(cliente)} 
+											class="px-4 py-2 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer"
+										>
+											<i class="fas fa-edit text-blue-500"></i> Editar
+										</button>
+										<button 
+											type="button" 
+											onclick={() => eliminarCliente(cliente.id)}
+											class="w-full px-4 py-2 hover:bg-rose-50 text-xs font-semibold text-rose-600 flex items-center gap-2 cursor-pointer text-left"
 										>
 											<i class="fas fa-trash-alt text-rose-500"></i> Eliminar
 										</button>
-									</form>
-								</div>
-							{/if}
-						</td>
-					</tr>
-				{:else}
-					<tr>
-						<td colspan="7" class="p-8 text-center text-slate-400 text-xs font-semibold">No se encontraron clientes que coincidan con la búsqueda.</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	</div>
+									</div>
+								{/if}
+							</td>
+						</tr>
+					{:else}
+						<tr>
+							<td colspan="7" class="p-8 text-center text-slate-400 text-xs font-semibold">No se encontraron clientes que coincidan con la búsqueda.</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
 </div>
 
 <!-- Modal Form Component -->
 <ClienteModal 
 	isOpen={isModalOpen} 
 	onClose={() => isModalOpen = false} 
+	onSave={cargarClientes}
 	clienteToEdit={clienteToEdit} 
 />

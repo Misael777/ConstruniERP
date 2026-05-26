@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { enhance } from '$app/forms';
+	import { supabase } from '$lib/supabaseClient';
 
-	let { isOpen = false, onClose, ventaToEdit = null, empleados = [], obras = [], consultorias = [] } = $props<{
+	let { isOpen = false, onClose, onSave, ventaToEdit = null, empleados = [], obras = [], consultorias = [] } = $props<{
 		isOpen: boolean;
 		onClose: () => void;
+		onSave: () => void;
 		ventaToEdit?: any;
 		empleados?: any[];
 		obras?: any[];
@@ -196,13 +197,152 @@
 	// Contadores
 	let obsCharCount = $derived(observaciones.length);
 
+	let isSaving = $state(false);
+	let modalError = $state('');
+
 	function handleClose() {
+		modalError = '';
 		onClose();
 	}
 
 	function copyToClipboard() {
 		navigator.clipboard.writeText(codigoGenerado);
 		alert('¡Código de proyecto copiado al portapapeles!');
+	}
+
+	async function handleSubmit() {
+		modalError = '';
+		if (!proyectoId) {
+			modalError = 'Debe seleccionar un proyecto válido de la lista.';
+			return;
+		}
+		if (!fechaVenta) {
+			modalError = 'La fecha de venta es obligatoria.';
+			return;
+		}
+		if (!asesor) {
+			modalError = 'Debe seleccionar un asesor.';
+			return;
+		}
+		if (!cliente || !cliente.trim()) {
+			modalError = 'El nombre del cliente es obligatorio.';
+			return;
+		}
+
+		isSaving = true;
+		try {
+			console.log('[NuevaVentaModal] Guardando venta. Modo:', ventaToEdit ? 'Edición' : 'Creación');
+			
+			// 1. Obtener o crear el cliente en la tabla maestras
+			let clienteId: number;
+			const { data: existingCliente, error: findError } = await supabase
+				.from('clientes')
+				.select('id')
+				.eq('nombre', cliente.trim())
+				.maybeSingle();
+
+			if (findError) {
+				console.error('[NuevaVentaModal] Error buscando cliente:', findError);
+				throw findError;
+			}
+
+			if (existingCliente) {
+				clienteId = existingCliente.id;
+			} else {
+				console.log('[NuevaVentaModal] Cliente no existe, creando:', cliente.trim());
+				const { data: newCliente, error: createError } = await supabase
+					.from('clientes')
+					.insert({ nombre: cliente.trim() })
+					.select('id')
+					.single();
+				if (createError) {
+					console.error('[NuevaVentaModal] Error creando cliente:', createError);
+					throw createError;
+				}
+				clienteId = newCliente.id;
+			}
+
+			// 2. Asociar Obra o Consultoría según tipoProyecto y obtener su nombre
+			let obraId: number | null = null;
+			let consultoriaId: number | null = null;
+			let proyectoNombre = '';
+
+			if (tipoProyecto === 'O') {
+				obraId = proyectoId;
+				const { data: obra, error: obraError } = await supabase
+					.from('obras')
+					.select('nombre')
+					.eq('id', obraId)
+					.single();
+				if (obraError || !obra) {
+					console.error('[NuevaVentaModal] Error buscando obra:', obraError);
+					throw new Error('El proyecto de obra seleccionado no existe.');
+				}
+				proyectoNombre = obra.nombre;
+			} else {
+				consultoriaId = proyectoId;
+				const { data: consultoria, error: consultoriaError } = await supabase
+					.from('consultorias')
+					.select('nombre')
+					.eq('id', consultoriaId)
+					.single();
+				if (consultoriaError || !consultoria) {
+					console.error('[NuevaVentaModal] Error buscando consultoría:', consultoriaError);
+					throw new Error('El proyecto de consultoría seleccionado no existe.');
+				}
+				proyectoNombre = consultoria.nombre;
+			}
+
+			const payload: any = {
+				concepto: proyectoNombre,
+				codigo: codigoGenerado,
+				codigo_generado: codigoGenerado,
+				fecha_venta: fechaVenta,
+				precio_final: valorVenta,
+				valor_unitario: valorVenta,
+				comision_porcentaje: comisionPorcentaje,
+				comision_monto: comisionMonto,
+				tipo_proyecto: tipoProyecto,
+				cliente_id: clienteId,
+				obra_id: obraId,
+				consultoria_id: consultoriaId,
+				comentarios: `Asesor: ${asesor} | Obs: ${observaciones}`
+			};
+
+			if (ventaToEdit) {
+				console.log('[NuevaVentaModal] Actualizando venta id:', ventaToEdit.id, payload);
+				const { error: updateError } = await supabase
+					.from('ventas')
+					.update(payload)
+					.eq('id', ventaToEdit.id);
+
+				if (updateError) {
+					console.error('[NuevaVentaModal] Error actualizando venta:', updateError);
+					throw updateError;
+				}
+			} else {
+				payload.status = 'En Ejecución';
+				payload.status_pago = 'Pendiente';
+				console.log('[NuevaVentaModal] Creando nueva venta:', payload);
+				const { error: insertError } = await supabase
+					.from('ventas')
+					.insert([payload]);
+
+				if (insertError) {
+					console.error('[NuevaVentaModal] Error insertando venta:', insertError);
+					throw insertError;
+				}
+			}
+
+			console.log('[NuevaVentaModal] Operación exitosa. Invocando onSave y cerrando.');
+			if (onSave) onSave();
+			handleClose();
+		} catch (err: any) {
+			console.error('[NuevaVentaModal] Error en handleSubmit:', err);
+			modalError = err.message || 'Error al procesar la venta en la base de datos.';
+		} finally {
+			isSaving = false;
+		}
 	}
 </script>
 
@@ -224,26 +364,39 @@
 
 		<!-- Body Form -->
 		<form 
-			method="POST" 
-			action={ventaToEdit ? '?/update' : '?/create'} 
-			use:enhance={() => {
-				return async ({ update }) => {
-					await update();
-					handleClose();
-				};
-			}}
+			onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
 			class="p-8 space-y-8 flex-1"
 		>
-			{#if ventaToEdit}
-				<input type="hidden" name="id" value={ventaToEdit.id} />
+			{#if modalError}
+				<div class="p-4 rounded-2xl bg-rose-50 border border-rose-100 text-rose-800 text-sm font-medium flex items-center gap-2.5 transition-all">
+					<i class="fas fa-exclamation-triangle text-rose-600 text-base"></i>
+					{modalError}
+				</div>
 			{/if}
 
 			<!-- Bloque 1: Información General -->
 			<div>
 				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Información general</h3>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+
+					<!-- 1. Tipo de proyecto — must come FIRST so it filters the project list below -->
 					<div class="col-span-1">
-						<label class="block text-xs font-semibold text-slate-600 mb-1">Proyecto *</label>
+						<label class="block text-xs font-semibold text-slate-600 mb-1">Tipo de proyecto *</label>
+						<select name="tipo_proyecto_info" bind:value={tipoProyecto} onchange={() => { proyectoId = 0; proyecto = ''; }} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
+							{#each tiposProyecto as t}
+								<option value={t.value}>{t.label}</option>
+							{/each}
+						</select>
+					</div>
+
+					<!-- 2. Proyecto — filtered by Tipo de proyecto -->
+					<div class="col-span-1">
+						<label class="block text-xs font-semibold text-slate-600 mb-1">
+							Proyecto *
+							<span class="ml-1 text-[10px] font-normal text-slate-400">
+								({(tipoProyecto === 'O' ? obras : consultorias).length} disponibles)
+							</span>
+						</label>
 						<select name="proyecto_id" bind:value={proyectoId} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all cursor-pointer" required>
 							<option value={0}>Seleccione proyecto</option>
 							{#each (tipoProyecto === 'O' ? obras : consultorias) as proj}
@@ -251,7 +404,14 @@
 							{/each}
 						</select>
 						<input type="hidden" name="proyecto_nombre" value={proyecto} />
+						{#if (tipoProyecto === 'O' ? obras : consultorias).length === 0}
+							<p class="text-[10px] text-amber-600 font-semibold mt-1 flex items-center gap-1">
+								<i class="fas fa-exclamation-triangle"></i>
+								No hay {tipoProyecto === 'O' ? 'obras' : 'consultorías'} registradas. Ve al módulo de Proyectos para agregar una.
+							</p>
+						{/if}
 					</div>
+
 					<div class="col-span-1">
 						<label class="block text-xs font-semibold text-slate-600 mb-1">Código de proyecto</label>
 						<div class="relative">
@@ -320,18 +480,16 @@
 
 			<!-- Bloque 2: Características del Proyecto Nuevo -->
 			<div>
-				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Características del proyecto nuevo</h3>
+				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+					Características del proyecto nuevo
+					<span class="ml-2 normal-case font-normal text-blue-500">
+						— tipo: {tipoProyecto === 'O' ? 'Obra' : 'Consultoría'}
+					</span>
+				</h3>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 					<div>
-						<label class="block text-xs font-semibold text-slate-600 mb-1">Tipo de proyecto *</label>
-						<select name="caract_tipo" bind:value={tipoProyecto} onchange={() => { proyectoId = 0; proyecto = ''; }} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
-							{#each tiposProyecto as t}
-								<option value={t.value}>{t.label}</option>
-							{/each}
-						</select>
-					</div>
-					<div>
 						<label class="block text-xs font-semibold text-slate-600 mb-1">Estado del predio *</label>
+
 						<select bind:value={estadoPredio} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
 							{#each estadosPredio as est}
 								<option value={est.value}>{est.label}</option>
@@ -496,10 +654,16 @@
 				</button>
 				<button 
 					type="submit" 
-					class="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm transition-all shadow-md shadow-blue-600/10 hover:shadow-lg active:scale-[0.98] flex items-center gap-2 cursor-pointer"
+					disabled={isSaving}
+					class="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm transition-all shadow-md shadow-blue-600/10 hover:shadow-lg active:scale-[0.98] flex items-center gap-2 cursor-pointer disabled:opacity-75"
 				>
-					<i class="fas fa-save"></i>
-					<span>{ventaToEdit ? 'Guardar Cambios' : 'Guardar venta'}</span>
+					{#if isSaving}
+						<i class="fas fa-spinner fa-spin"></i>
+						<span>Guardando...</span>
+					{:else}
+						<i class="fas fa-save"></i>
+						<span>{ventaToEdit ? 'Guardar Cambios' : 'Guardar venta'}</span>
+					{/if}
 				</button>
 			</div>
 		</form>

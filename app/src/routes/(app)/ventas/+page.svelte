@@ -22,7 +22,7 @@
 		Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement
 	);
 
-	let { data, form } = $props();
+	import { supabase } from '$lib/supabaseClient';
 
 	// Modal states
 	let isModalOpen = $state(false);
@@ -37,6 +37,104 @@
 	// Dropdown states (id de la fila que tiene abierto el menú de opciones)
 	let activeMenuId = $state<number | null>(null);
 
+	// Estados locales de base de datos
+	let ventas = $state<any[]>([]);
+	let empleados = $state<any[]>([]);
+	let clientes = $state<any[]>([]);
+	let obras = $state<any[]>([]);
+	let consultorias = $state<any[]>([]);
+	let isLoading = $state(true);
+	let formSuccess = $state('');
+	let formError = $state('');
+
+	async function cargarDatos() {
+		try {
+			isLoading = true;
+			formError = '';
+			console.log('[Ventas] Cargando datos de Supabase client-side...');
+			
+			// Cargar Ventas junto con el nombre del cliente
+			const { data: ventasData, error: ventasError } = await supabase
+				.from('ventas')
+				.select(`
+					*,
+					clientes (
+						id,
+						nombre
+					)
+				`)
+				.order('fecha_venta', { ascending: false });
+				
+			if (ventasError) throw ventasError;
+			ventas = ventasData || [];
+			
+			// Cargar Empleados (para desplegar en dropdown de asesores)
+			const { data: empleadosData, error: empError } = await supabase
+				.from('empleados')
+				.select('id, nombre')
+				.order('nombre');
+			if (empError) throw empError;
+			empleados = empleadosData || [];
+
+			// Cargar Clientes
+			const { data: clientesData, error: clError } = await supabase
+				.from('clientes')
+				.select('id, nombre')
+				.order('nombre');
+			if (clError) throw clError;
+			clientes = clientesData || [];
+
+			// Cargar Obras (Proyectos Obra)
+			const { data: obrasData, error: obrasError } = await supabase
+				.from('obras')
+				.select('id, nombre, codigo')
+				.order('nombre');
+			if (obrasError) throw obrasError;
+			obras = obrasData || [];
+
+			// Cargar Consultorías (Proyectos Consultoría)
+			const { data: consultoriasData, error: consError } = await supabase
+				.from('consultorias')
+				.select('id, nombre, codigo')
+				.order('nombre');
+			if (consError) throw consError;
+			consultorias = consultoriasData || [];
+
+			console.log('[Ventas] Datos cargados con éxito. Registros:', ventas.length);
+		} catch (err: any) {
+			console.error('[Ventas Error] Error al cargar datos:', err);
+			formError = err.message || 'Error al conectar con la base de datos.';
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	async function eliminarVenta(id: number) {
+		formSuccess = '';
+		formError = '';
+		activeMenuId = null;
+		
+		const confirmacion = confirm('¿Estás seguro de que deseas eliminar esta venta de la base de datos?\nEsta acción no se puede deshacer.');
+		if (!confirmacion) return;
+
+		try {
+			console.log('[Ventas] Eliminando venta id:', id);
+			const { error: deleteError } = await supabase
+				.from('ventas')
+				.delete()
+				.eq('id', id);
+
+			if (deleteError) throw deleteError;
+
+			formSuccess = 'Venta eliminada con éxito';
+			console.log('[Ventas] Venta eliminada con éxito. Recargando datos...');
+			await cargarDatos();
+		} catch (err: any) {
+			console.error('[Ventas Error] Error al eliminar venta:', err);
+			formError = err.message || 'Error al eliminar la venta.';
+		}
+	}
+
 	function toggleRowMenu(id: number, e: Event) {
 		e.stopPropagation();
 		if (activeMenuId === id) {
@@ -47,17 +145,18 @@
 	}
 
 	// Cerrar menús al hacer click en cualquier parte
-	onMount(() => {
+	onMount(async () => {
 		const closeAll = () => {
 			activeMenuId = null;
 		};
 		window.addEventListener('click', closeAll);
+		await cargarDatos();
 		return () => window.removeEventListener('click', closeAll);
 	});
 
 	// Filtrar las ventas dinámicamente en el cliente usando runas derived
 	const ventasFiltradas = $derived(
-		data.ventas.filter((v: any) => {
+		ventas.filter((v: any) => {
 			// Filtro de búsqueda por nombre de proyecto o cliente
 			const matchBusqueda = 
 				!filtroBusqueda.trim() || 
@@ -129,14 +228,14 @@
 
 	// Listar asesores únicos en base a los registros cargados para el dropdown del filtro
 	const asesoresUnicos = $derived(
-		Array.from(new Set(data.ventas.map((v: any) => getAsesorName(v.comentarios)))).sort()
+		Array.from(new Set(ventas.map((v: any) => getAsesorName(v.comentarios)))).sort()
 	);
 
 	// Mapeo dinámico para Gráficos
 	// 1. Tipos de proyecto distribución
 	const doughnutData = $derived(() => {
 		const counts: Record<string, number> = { 'Obra (O)': 0, 'Consultoría (C)': 0 };
-		data.ventas.forEach((v: any) => {
+		ventas.forEach((v: any) => {
 			if (v.tipo_proyecto === 'O') counts['Obra (O)']++;
 			else if (v.tipo_proyecto === 'C') counts['Consultoría (C)']++;
 		});
@@ -154,7 +253,7 @@
 	const lineData = $derived(() => {
 		const mesesMap = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 		const montos = Array(12).fill(0);
-		data.ventas.forEach((v: any) => {
+		ventas.forEach((v: any) => {
 			if (v.fecha_venta) {
 				const mesIdx = new Date(v.fecha_venta).getMonth();
 				montos[mesIdx] += (v.precio_final || 0) / 1000; // En miles de soles
@@ -177,7 +276,7 @@
 	const comisionData = $derived(() => {
 		const mesesMap = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 		const montos = Array(12).fill(0);
-		data.ventas.forEach((v: any) => {
+		ventas.forEach((v: any) => {
 			if (v.fecha_venta) {
 				const mesIdx = new Date(v.fecha_venta).getMonth();
 				montos[mesIdx] += (v.comision_monto || 0) / 1000; // En miles de soles
@@ -221,16 +320,16 @@
 </div>
 
 <!-- Status Form Notification -->
-{#if form?.success}
+{#if formSuccess}
 	<div class="p-4 mb-6 rounded-2xl bg-green-50 border border-green-100 text-green-800 text-sm font-medium flex items-center gap-2.5 transition-all">
 		<i class="fas fa-check-circle text-green-600 text-base"></i>
-		{form.message || 'Operación realizada correctamente.'}
+		{formSuccess}
 	</div>
 {/if}
-{#if form && !form.success}
+{#if formError}
 	<div class="p-4 mb-6 rounded-2xl bg-rose-50 border border-rose-100 text-rose-800 text-sm font-medium flex items-center gap-2.5 transition-all">
 		<i class="fas fa-exclamation-triangle text-rose-600 text-base"></i>
-		{form.error || 'Ocurrió un error al procesar el formulario.'}
+		{formError}
 	</div>
 {/if}
 
@@ -344,119 +443,110 @@
 		</div>
 
 		<!-- Table -->
-		<div class="overflow-x-auto">
-			<table class="w-full text-sm text-left">
-				<thead class="text-xs text-slate-500 font-bold uppercase border-b border-slate-100 bg-slate-50/50">
-					<tr>
-						<th class="p-3">Proyecto</th>
-						<th class="p-3">Valor venta</th>
-						<th class="p-3 text-center">Tipo</th>
-						<th class="p-3">Fecha</th>
-						<th class="p-3">Asesor</th>
-						<th class="p-3">Comisión</th>
-						<th class="p-3 text-center">Proforma</th>
-						<th class="p-3 text-center">Contrato</th>
-						<th class="p-3 text-center"></th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-100">
-					{#each ventasFiltradas as venta (venta.id)}
-						{@const advisor = getAsesorName(venta.comentarios)}
-						<tr class="hover:bg-slate-50/70 transition-colors">
-							<td class="p-3 font-semibold text-brand-marine">
-								<div class="font-bold text-slate-800 text-xs">{venta.concepto || 'Sin nombre'}</div>
-								<div class="text-[10px] text-slate-400 font-mono mt-0.5">{venta.codigo || 'S/C'}</div>
-							</td>
-							<td class="p-3 font-black text-slate-900">
-								S/ {(venta.precio_final || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}
-							</td>
-							<td class="p-3 text-center">
-								<span class="px-2 py-0.5 font-bold rounded-lg text-[9px] border {venta.tipo_proyecto === 'O' ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-green-50 text-green-600 border-green-100'}">
-									{venta.tipo_proyecto === 'O' ? 'Obra (O)' : 'Consultoría (C)'}
-								</span>
-							</td>
-							<td class="p-3 text-slate-500 text-xs whitespace-nowrap">
-								{venta.fecha_venta || 'Sin fecha'}
-							</td>
-							<td class="p-3 whitespace-nowrap">
-								<div class="flex items-center gap-1.5">
-									<div class="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[9px] flex items-center justify-center font-black">
-										{advisor.charAt(0).toUpperCase()}
+		{#if isLoading}
+			<div class="py-12 flex justify-center text-blue-600 text-2xl">
+				<i class="fas fa-spinner fa-spin"></i>
+			</div>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm text-left">
+					<thead class="text-xs text-slate-500 font-bold uppercase border-b border-slate-100 bg-slate-50/50">
+						<tr>
+							<th class="p-3">Proyecto</th>
+							<th class="p-3">Valor venta</th>
+							<th class="p-3 text-center">Tipo</th>
+							<th class="p-3">Fecha</th>
+							<th class="p-3">Asesor</th>
+							<th class="p-3">Comisión</th>
+							<th class="p-3 text-center">Proforma</th>
+							<th class="p-3 text-center">Contrato</th>
+							<th class="p-3 text-center"></th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-slate-100">
+						{#each ventasFiltradas as venta (venta.id)}
+							{@const advisor = getAsesorName(venta.comentarios)}
+							<tr class="hover:bg-slate-50/70 transition-colors">
+								<td class="p-3 font-semibold text-brand-marine">
+									<div class="font-bold text-slate-800 text-xs">{venta.concepto || 'Sin nombre'}</div>
+									<div class="text-[10px] text-slate-400 font-mono mt-0.5">{venta.codigo || 'S/C'}</div>
+								</td>
+								<td class="p-3 font-black text-slate-900">
+									S/ {(venta.precio_final || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })}
+								</td>
+								<td class="p-3 text-center">
+									<span class="px-2 py-0.5 font-bold rounded-lg text-[9px] border {venta.tipo_proyecto === 'O' ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-green-50 text-green-600 border-green-100'}">
+										{venta.tipo_proyecto === 'O' ? 'Obra (O)' : 'Consultoría (C)'}
+									</span>
+								</td>
+								<td class="p-3 text-slate-500 text-xs whitespace-nowrap">
+									{venta.fecha_venta || 'Sin fecha'}
+								</td>
+								<td class="p-3 whitespace-nowrap">
+									<div class="flex items-center gap-1.5">
+										<div class="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[9px] flex items-center justify-center font-black">
+											{advisor.charAt(0).toUpperCase()}
+										</div>
+										<span class="text-slate-700 text-xs font-semibold">{advisor}</span>
 									</div>
-									<span class="text-slate-700 text-xs font-semibold">{advisor}</span>
-								</div>
-							</td>
-							<td class="p-3 text-xs">
-								<div class="font-bold text-slate-800">S/ {(venta.comision_monto || 0).toLocaleString()}</div>
-								<div class="text-[9px] text-slate-400">({venta.comision_porcentaje || 0}%)</div>
-							</td>
-							<td class="p-3 text-center">
-								{#if venta.url_proforma}
-									<a href={venta.url_proforma} target="_blank" class="text-red-500 hover:text-red-700 transition" title="Ver proforma"><i class="fas fa-file-pdf text-base"></i></a>
-								{:else}
-									<span class="text-slate-300" title="Sin archivo adjunto"><i class="fas fa-file-pdf text-base"></i></span>
-								{/if}
-							</td>
-							<td class="p-3 text-center">
-								{#if venta.url_contrato}
-									<a href={venta.url_contrato} target="_blank" class="text-red-500 hover:text-red-700 transition" title="Ver contrato"><i class="fas fa-file-pdf text-base"></i></a>
-								{:else}
-									<span class="text-slate-300" title="Sin archivo adjunto"><i class="fas fa-file-pdf text-base"></i></span>
-								{/if}
-							</td>
-							<td class="p-3 text-center relative whitespace-nowrap">
-								<button 
-									onclick={(e) => toggleRowMenu(venta.id, e)} 
-									class="text-slate-400 hover:text-slate-700 p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer transition-all"
-									title="Acciones"
-								>
-									<i class="fas fa-ellipsis-v"></i>
-								</button>
-								
-								<!-- Dropdown Menu -->
-								{#if activeMenuId === venta.id}
-									<div class="absolute right-3 top-10 bg-white border border-slate-100 rounded-xl shadow-lg py-1.5 min-w-[120px] z-30 flex flex-col text-left">
-										<button 
-											type="button" 
-											onclick={() => prepararEdicion(venta)} 
-											class="px-4 py-2 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer"
-										>
-											<i class="fas fa-edit text-blue-500"></i> Editar
-										</button>
-										<form 
-											method="POST" 
-											action="?/delete" 
-											use:enhance={() => {
-												return async ({ update }) => {
-													await update();
-												};
-											}}
-											onsubmit={(e) => {
-												if (!confirm('¿Estás seguro de que deseas eliminar esta venta de la base de datos?\nEsta acción no se puede deshacer.')) {
-													e.preventDefault();
-												}
-											}}
-										>
-											<input type="hidden" name="id" value={venta.id} />
+								</td>
+								<td class="p-3 text-xs">
+									<div class="font-bold text-slate-800">S/ {(venta.comision_monto || 0).toLocaleString()}</div>
+									<div class="text-[9px] text-slate-400">({venta.comision_porcentaje || 0}%)</div>
+								</td>
+								<td class="p-3 text-center">
+									{#if venta.url_proforma}
+										<a href={venta.url_proforma} target="_blank" class="text-red-500 hover:text-red-700 transition" title="Ver proforma"><i class="fas fa-file-pdf text-base"></i></a>
+									{:else}
+										<span class="text-slate-300" title="Sin archivo adjunto"><i class="fas fa-file-pdf text-base"></i></span>
+									{/if}
+								</td>
+								<td class="p-3 text-center">
+									{#if venta.url_contrato}
+										<a href={venta.url_contrato} target="_blank" class="text-red-500 hover:text-red-700 transition" title="Ver contrato"><i class="fas fa-file-pdf text-base"></i></a>
+									{:else}
+										<span class="text-slate-300" title="Sin archivo adjunto"><i class="fas fa-file-pdf text-base"></i></span>
+									{/if}
+								</td>
+								<td class="p-3 text-center relative whitespace-nowrap">
+									<button 
+										onclick={(e) => toggleRowMenu(venta.id, e)} 
+										class="text-slate-400 hover:text-slate-700 p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer transition-all"
+										title="Acciones"
+									>
+										<i class="fas fa-ellipsis-v"></i>
+									</button>
+									
+									<!-- Dropdown Menu -->
+									{#if activeMenuId === venta.id}
+										<div class="absolute right-3 top-10 bg-white border border-slate-100 rounded-xl shadow-lg py-1.5 min-w-[120px] z-30 flex flex-col text-left">
 											<button 
-												type="submit" 
-												class="w-full px-4 py-2 hover:bg-rose-50 text-xs font-semibold text-rose-600 flex items-center gap-2 cursor-pointer"
+												type="button" 
+												onclick={() => prepararEdicion(venta)} 
+												class="px-4 py-2 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-2 cursor-pointer"
+											>
+												<i class="fas fa-edit text-blue-500"></i> Editar
+											</button>
+											<button 
+												type="button" 
+												onclick={() => eliminarVenta(venta.id)} 
+												class="w-full px-4 py-2 hover:bg-rose-50 text-xs font-semibold text-rose-600 flex items-center gap-2 cursor-pointer text-left"
 											>
 												<i class="fas fa-trash-alt text-rose-500"></i> Eliminar
 											</button>
-										</form>
-									</div>
-								{/if}
-							</td>
-						</tr>
-					{:else}
-						<tr>
-							<td colspan="9" class="p-8 text-center text-slate-400 text-xs font-semibold">No se encontraron ventas que coincidan con los filtros aplicados.</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+										</div>
+									{/if}
+								</td>
+							</tr>
+						{:else}
+							<tr>
+								<td colspan="9" class="p-8 text-center text-slate-400 text-xs font-semibold">No se encontraron ventas que coincidan con los filtros aplicados.</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Sidebar Resumen y Gráficos -->
@@ -582,8 +672,9 @@
 <NuevaVentaModal 
 	isOpen={isModalOpen} 
 	onClose={() => isModalOpen = false} 
+	onSave={cargarDatos}
 	ventaToEdit={ventaToEdit} 
-	empleados={data.empleados} 
-	obras={data.obras || []}
-	consultorias={data.consultorias || []}
+	empleados={empleados} 
+	obras={obras}
+	consultorias={consultorias}
 />
