@@ -4,19 +4,25 @@ import tailwindcss from '@tailwindcss/vite';
 
 const host = process.env.TAURI_DEV_HOST;
 
+console.log('[vite.config] TAURI_DEV_HOST =', host ?? '(not set)');
+console.log('[vite.config] Binding Vite server to 0.0.0.0:5173 (IPv4 + IPv6)');
+
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	clearScreen: false,
 	server: {
 		port: 5173,
 		strictPort: true,
-		host: host ? '0.0.0.0' : false,
+		// Always bind on 0.0.0.0 so both 127.0.0.1 (IPv4) and [::1] (IPv6) are
+		// reachable. On Windows, Vite defaults to [::1] only, which breaks the
+		// adb-reverse tunnel that Tauri sets up on the IPv4 loopback.
+		host: '0.0.0.0',
 		hmr: host
 			? {
 					protocol: 'ws',
 					host,
 					port: 5174,
-				}
+			  }
 			: undefined,
 	}
 });

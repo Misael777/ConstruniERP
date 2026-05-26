@@ -378,8 +378,25 @@
 			<div>
 				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Información general</h3>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+
+					<!-- 1. Tipo de proyecto — must come FIRST so it filters the project list below -->
 					<div class="col-span-1">
-						<label class="block text-xs font-semibold text-slate-600 mb-1">Proyecto *</label>
+						<label class="block text-xs font-semibold text-slate-600 mb-1">Tipo de proyecto *</label>
+						<select name="tipo_proyecto_info" bind:value={tipoProyecto} onchange={() => { proyectoId = 0; proyecto = ''; }} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
+							{#each tiposProyecto as t}
+								<option value={t.value}>{t.label}</option>
+							{/each}
+						</select>
+					</div>
+
+					<!-- 2. Proyecto — filtered by Tipo de proyecto -->
+					<div class="col-span-1">
+						<label class="block text-xs font-semibold text-slate-600 mb-1">
+							Proyecto *
+							<span class="ml-1 text-[10px] font-normal text-slate-400">
+								({(tipoProyecto === 'O' ? obras : consultorias).length} disponibles)
+							</span>
+						</label>
 						<select name="proyecto_id" bind:value={proyectoId} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all cursor-pointer" required>
 							<option value={0}>Seleccione proyecto</option>
 							{#each (tipoProyecto === 'O' ? obras : consultorias) as proj}
@@ -387,7 +404,14 @@
 							{/each}
 						</select>
 						<input type="hidden" name="proyecto_nombre" value={proyecto} />
+						{#if (tipoProyecto === 'O' ? obras : consultorias).length === 0}
+							<p class="text-[10px] text-amber-600 font-semibold mt-1 flex items-center gap-1">
+								<i class="fas fa-exclamation-triangle"></i>
+								No hay {tipoProyecto === 'O' ? 'obras' : 'consultorías'} registradas. Ve al módulo de Proyectos para agregar una.
+							</p>
+						{/if}
 					</div>
+
 					<div class="col-span-1">
 						<label class="block text-xs font-semibold text-slate-600 mb-1">Código de proyecto</label>
 						<div class="relative">
@@ -456,18 +480,16 @@
 
 			<!-- Bloque 2: Características del Proyecto Nuevo -->
 			<div>
-				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Características del proyecto nuevo</h3>
+				<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+					Características del proyecto nuevo
+					<span class="ml-2 normal-case font-normal text-blue-500">
+						— tipo: {tipoProyecto === 'O' ? 'Obra' : 'Consultoría'}
+					</span>
+				</h3>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 					<div>
-						<label class="block text-xs font-semibold text-slate-600 mb-1">Tipo de proyecto *</label>
-						<select name="caract_tipo" bind:value={tipoProyecto} onchange={() => { proyectoId = 0; proyecto = ''; }} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
-							{#each tiposProyecto as t}
-								<option value={t.value}>{t.label}</option>
-							{/each}
-						</select>
-					</div>
-					<div>
 						<label class="block text-xs font-semibold text-slate-600 mb-1">Estado del predio *</label>
+
 						<select bind:value={estadoPredio} class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer">
 							{#each estadosPredio as est}
 								<option value={est.value}>{est.label}</option>
