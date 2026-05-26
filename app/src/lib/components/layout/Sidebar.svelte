@@ -25,6 +25,15 @@
 	// Estado para abrir/cerrar menús anidados
 	let openMenus = $state<Record<string, boolean>>({ '/finanzas': true });
 
+	$effect(() => {
+		const currentPath = page.url.pathname;
+		for (const mod of MODULE_REGISTRY) {
+			if (mod.subItems && currentPath.startsWith(mod.path)) {
+				openMenus[mod.path] = true;
+			}
+		}
+	});
+
 	function toggleMenu(path: string, hasSubItems: boolean) {
 		if (hasSubItems) {
 			openMenus[path] = !openMenus[path];
