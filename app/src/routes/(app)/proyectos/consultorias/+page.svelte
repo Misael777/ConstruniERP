@@ -3,33 +3,35 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 
-	type Area = { id: number; nombre: string };
-	type Unidad = { id: number; nombre: string };
-	type Consultoria = {
+	type Cliente = { id: number; nombre: string };
+	type Proyecto = {
 		id: number;
 		nombre: string;
 		codigo: string;
-		area_id: number | null;
-		caract_1: string;
-		caract_2: string;
-		caract_3: string;
+		responsable: string;
+		direccion: string;
+		tiem_estimado: string;
 		precio: number;
 		costo_estimado: number;
 		descripcion: string;
 		link_proforma: string;
-		existencia_actual: number;
+		car_tecnica: number;
 		valor_min: number | null;
 		valor_max: number | null;
-		unidad_id: number | null;
-		created_at: string;
-		// Joined fields
-		areas?: Area;
-		unidades?: Unidad;
+		num_piso: number | null;
+		cod_cliente: number | null;
+		ususario: string;
+		est_predio: string;
+		tip_proyecto: string;
+		area: number;
+		Cod_venta: string;
+		fec_crea: string;
+		// Joined field
+		clientes?: Cliente;
 	};
 
-	let consultorias = $state<Consultoria[]>([]);
-	let areas = $state<Area[]>([]);
-	let unidades = $state<Unidad[]>([]);
+	let proyectos = $state<Proyecto[]>([]);
+	let clientes = $state<Cliente[]>([]);
 	
 	let isLoading = $state(true);
 	let isSaving = $state(false);
@@ -40,52 +42,64 @@
 
 	// Filter and search states
 	let searchQuery = $state('');
-	let filterArea = $state<string>('all');
+	let filterCliente = $state<string>('all');
 
-	// Form states
+	// Form states (21 fields of table 'proyecto')
 	let editingId = $state<number | null>(null);
 	let formNombre = $state('');
 	let formCodigo = $state('');
-	let formAreaId = $state<number | null>(null);
-	let formUnidadId = $state<number | null>(null);
+	let formResponsable = $state('');
+	let formDireccion = $state('');
+	let formTiemEstimado = $state('');
 	let formPrecio = $state<number>(0);
 	let formCostoEstimado = $state<number>(0);
-	let formExistenciaActual = $state<number>(0);
-	let formValorMin = $state<number | null>(null);
-	let formValorMax = $state<number | null>(null);
-	let formCaract1 = $state('');
-	let formCaract2 = $state('');
-	let formCaract3 = $state('');
 	let formDescripcion = $state('');
 	let formLinkProforma = $state('');
+	let formCarTecnica = $state<number>(0);
+	let formValorMin = $state<number | null>(null);
+	let formValorMax = $state<number | null>(null);
+	let formNumPiso = $state<number | null>(null);
+	let formCodCliente = $state<number | null>(null);
+	let formUsusario = $state('');
+	let formEstPredio = $state('');
+	let formTipProyecto = $state('');
+	let formArea = $state<number>(0);
+	let formCodVenta = $state('');
+	let formFecCrea = $state('');
 
 	// Client-side filtered list
-	let filteredConsultorias = $derived.by(() => {
-		return consultorias.filter(item => {
+	let filteredProyectos = $derived.by(() => {
+		return proyectos.filter(item => {
+			const nameMatch = item.nombre ? item.nombre.toLowerCase() : '';
+			const codeMatch = item.codigo ? item.codigo.toLowerCase() : '';
+			const respMatch = item.responsable ? item.responsable.toLowerCase() : '';
+			const query = searchQuery.toLowerCase();
+
 			const matchesSearch = 
-				item.nombre.toLowerCase().includes(searchQuery.toLowerCase()) || 
-				(item.codigo && item.codigo.toLowerCase().includes(searchQuery.toLowerCase()));
+				nameMatch.includes(query) || 
+				codeMatch.includes(query) || 
+				respMatch.includes(query);
 			
-			const matchesArea = 
-				filterArea === 'all' || 
-				(item.area_id !== null && item.area_id.toString() === filterArea);
+			const matchesCliente = 
+				filterCliente === 'all' || 
+				(item.cod_cliente !== null && item.cod_cliente.toString() === filterCliente);
 				
-			return matchesSearch && matchesArea;
+			return matchesSearch && matchesCliente;
 		});
 	});
 
 	// Dynamic KPIs
-	let kpiTotalCount = $derived(consultorias.length);
+	let kpiTotalCount = $derived(proyectos.length);
 	let kpiAveragePrice = $derived.by(() => {
-		if (consultorias.length === 0) return 0;
-		const sum = consultorias.reduce((acc, curr) => acc + Number(curr.precio || 0), 0);
-		return sum / consultorias.length;
+		if (proyectos.length === 0) return 0;
+		const sum = proyectos.reduce((acc, curr) => acc + Number(curr.precio || 0), 0);
+		return sum / proyectos.length;
 	});
-	let kpiTotalStock = $derived.by(() => {
-		return consultorias.reduce((acc, curr) => acc + Number(curr.existencia_actual || 0), 0);
+	let kpiTotalArea = $derived.by(() => {
+		return proyectos.reduce((acc, curr) => acc + Number(curr.area || 0), 0);
 	});
 	let kpiAverageMargin = $derived.by(() => {
-		const validItems = consultorias.filter(c => Number(c.precio) > 0);
+		const validItems = proyectos.filter(p => Number(p.precio) > 0);
 		if (validItems.length === 0) return 0;
 		const totalMargin = validItems.reduce((acc, curr) => {
 			const price = Number(curr.precio);
@@ -98,33 +112,29 @@
 
 	async function cargarCatalogos() {
 		try {
-			const { data: areasData } = await supabase.from('areas').select('id, nombre').order('nombre');
-			areas = areasData || [];
-
-			const { data: unidadesData } = await supabase.from('unidades').select('id, nombre').order('nombre');
-			unidades = unidadesData || [];
+			const { data: clientesData } = await supabase.from('clientes').select('id, nombre').order('nombre');
+			clientes = clientesData || [];
 		} catch (e) {
-			console.error('[Consultorias] Error al cargar áreas/unidades:', e);
+			console.error('[Proyectos] Error al cargar clientes:', e);
 		}
 	}
 
-	async function cargarConsultorias() {
+	async function cargarProyectos() {
 		try {
 			isLoading = true;
 			const { data, error } = await supabase
-				.from('consultorias')
+				.from('proyecto')
 				.select(`
 					*,
-					areas:area_id (id, nombre),
-					unidades:unidad_id (id, nombre)
+					clientes:cod_cliente (id, nombre)
 				`)
-				.order('created_at', { ascending: false });
+				.order('fec_crea', { ascending: false });
 
 			if (error) throw error;
-			consultorias = (data as any) || [];
+			proyectos = (data as any) || [];
 		} catch (error: any) {
-			console.error('[Consultorias] Error al cargar consultorías:', error);
-			showStatus('error', 'Error al consultar consultorías de la base de datos.');
+			console.error('[Proyectos] Error al cargar proyectos:', error);
+			showStatus('error', 'Error al consultar proyectos de la base de datos.');
 		} finally {
 			isLoading = false;
 		}
@@ -142,18 +152,24 @@
 		activeTab = 'general';
 		formNombre = '';
 		formCodigo = '';
-		formAreaId = null;
-		formUnidadId = null;
+		formResponsable = '';
+		formDireccion = '';
+		formTiemEstimado = '';
 		formPrecio = 0;
 		formCostoEstimado = 0;
-		formExistenciaActual = 0;
-		formValorMin = null;
-		formValorMax = null;
-		formCaract1 = '';
-		formCaract2 = '';
-		formCaract3 = '';
 		formDescripcion = '';
 		formLinkProforma = '';
+		formCarTecnica = 0;
+		formValorMin = null;
+		formValorMax = null;
+		formNumPiso = null;
+		formCodCliente = null;
+		formUsusario = '';
+		formEstPredio = '';
+		formTipProyecto = '';
+		formArea = 0;
+		formCodVenta = '';
+		formFecCrea = new Date().toISOString().split('T')[0];
 		modalError = '';
 	}
 
@@ -162,23 +178,29 @@
 		isModalOpen = true;
 	}
 
-	function prepararEdicion(item: Consultoria) {
+	function prepararEdicion(item: Proyecto) {
 		editingId = item.id;
 		activeTab = 'general';
-		formNombre = item.nombre;
+		formNombre = item.nombre || '';
 		formCodigo = item.codigo || '';
-		formAreaId = item.area_id;
-		formUnidadId = item.unidad_id;
+		formResponsable = item.responsable || '';
+		formDireccion = item.direccion || '';
+		formTiemEstimado = item.tiem_estimado || '';
 		formPrecio = item.precio || 0;
 		formCostoEstimado = item.costo_estimado || 0;
-		formExistenciaActual = item.existencia_actual || 0;
-		formValorMin = item.valor_min;
-		formValorMax = item.valor_max;
-		formCaract1 = item.caract_1 || '';
-		formCaract2 = item.caract_2 || '';
-		formCaract3 = item.caract_3 || '';
 		formDescripcion = item.descripcion || '';
 		formLinkProforma = item.link_proforma || '';
+		formCarTecnica = item.car_tecnica || 0;
+		formValorMin = item.valor_min;
+		formValorMax = item.valor_max;
+		formNumPiso = item.num_piso;
+		formCodCliente = item.cod_cliente;
+		formUsusario = item.ususario || '';
+		formEstPredio = item.est_predio || '';
+		formTipProyecto = item.tip_proyecto || '';
+		formArea = item.area || 0;
+		formCodVenta = item.Cod_venta || '';
+		formFecCrea = item.fec_crea ? item.fec_crea.split('T')[0] : new Date().toISOString().split('T')[0];
 		modalError = '';
 		isModalOpen = true;
 	}
@@ -191,7 +213,7 @@
 		}
 
 		if (!formNombre.trim()) {
-			modalError = 'El nombre de la consultoría es obligatorio.';
+			modalError = 'El nombre del proyecto es obligatorio.';
 			return;
 		}
 
@@ -200,46 +222,52 @@
 			const payload = {
 				nombre: formNombre.trim(),
 				codigo: formCodigo.trim() || null,
-				area_id: formAreaId,
-				unidad_id: formUnidadId,
+				responsable: formResponsable.trim() || null,
+				direccion: formDireccion.trim() || null,
+				tiem_estimado: formTiemEstimado.trim() || null,
 				precio: formPrecio,
 				costo_estimado: formCostoEstimado,
-				existencia_actual: formExistenciaActual,
+				descripcion: formDescripcion.trim() || null,
+				link_proforma: formLinkProforma.trim() || null,
+				car_tecnica: formCarTecnica,
 				valor_min: formValorMin,
 				valor_max: formValorMax,
-				caract_1: formCaract1.trim() || null,
-				caract_2: formCaract2.trim() || null,
-				caract_3: formCaract3.trim() || null,
-				descripcion: formDescripcion.trim() || null,
-				link_proforma: formLinkProforma.trim() || null
+				num_piso: formNumPiso,
+				cod_cliente: formCodCliente,
+				ususario: formUsusario.trim() || null,
+				est_predio: formEstPredio.trim() || null,
+				tip_proyecto: formTipProyecto.trim() || null,
+				area: formArea,
+				Cod_venta: formCodVenta.trim() || null,
+				fec_crea: formFecCrea || new Date().toISOString().split('T')[0]
 			};
 
 			if (editingId) {
 				const { error } = await supabase
-					.from('consultorias')
+					.from('proyecto')
 					.update(payload)
 					.eq('id', editingId);
 
 				if (error) throw error;
-				showStatus('success', `Consultoría "${formNombre}" actualizada correctamente.`);
+				showStatus('success', `Proyecto "${formNombre}" actualizado correctamente.`);
 			} else {
 				const { error } = await supabase
-					.from('consultorias')
+					.from('proyecto')
 					.insert([payload]);
 
 				if (error) {
-					if (error.code === '23505') throw new Error('Ya existe una consultoría con ese código único.');
+					if (error.code === '23505') throw new Error('Ya existe un proyecto con ese código único.');
 					throw error;
 				}
-				showStatus('success', `Consultoría "${formNombre}" registrada con éxito.`);
+				showStatus('success', `Proyecto "${formNombre}" registrado con éxito.`);
 			}
 
 			isModalOpen = false;
 			resetForm();
-			await cargarConsultorias();
+			await cargarProyectos();
 		} catch (error: any) {
-			console.error('[Consultorias Error] Error al guardar:', error);
-			modalError = error.message || 'Error al guardar el registro de consultoría.';
+			console.error('[Proyectos Error] Error al guardar:', error);
+			modalError = error.message || 'Error al guardar el registro de proyecto.';
 		} finally {
 			isSaving = false;
 		}
@@ -247,53 +275,53 @@
 
 	async function eliminar(id: number, nombre: string) {
 		if (!hasPermiso('proyectos:write')) {
-			alert('No tienes permiso de escritura (proyectos:write) para eliminar consultorías.');
+			alert('No tienes permiso de escritura (proyectos:write) para eliminar proyectos.');
 			return;
 		}
 
-		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar la consultoría "${nombre}"?\nEsta acción no se puede deshacer.`);
+		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar el proyecto "${nombre}"?\nEsta acción no se puede deshacer.`);
 		if (!confirmacion) return;
 
 		try {
-			const { error } = await supabase.from('consultorias').delete().eq('id', id);
+			const { error } = await supabase.from('proyecto').delete().eq('id', id);
 			if (error) {
-				if (error.code === '23503') throw new Error('No se puede eliminar esta consultoría porque tiene ventas asociadas en el sistema.');
+				if (error.code === '23503') throw new Error('No se puede eliminar este proyecto porque tiene registros asociados en el sistema.');
 				throw error;
 			}
-			showStatus('success', `Consultoría "${nombre}" eliminada correctamente.`);
+			showStatus('success', `Proyecto "${nombre}" eliminado correctamente.`);
 			isModalOpen = false;
 			resetForm();
-			await cargarConsultorias();
+			await cargarProyectos();
 		} catch (error: any) {
-			console.error('[Consultorias Error] Error al eliminar:', error);
-			alert(error.message || 'Error al intentar eliminar la consultoría.');
+			console.error('[Proyectos Error] Error al eliminar:', error);
+			alert(error.message || 'Error al intentar eliminar el proyecto.');
 		}
 	}
 
 	onMount(async () => {
 		await cargarCatalogos();
-		await cargarConsultorias();
+		await cargarProyectos();
 	});
 </script>
 
 <svelte:head>
-	<title>Catálogo de Consultorías | Construni ERP</title>
+	<title>Catálogo de Proyectos | Construni ERP</title>
 </svelte:head>
 
 <!-- Header Principal -->
 <div class="mb-6">
-	<div class="text-xs text-slate-500 mb-2">Proyectos &nbsp;>&nbsp; Consultorías</div>
+	<div class="text-xs text-slate-500 mb-2">Proyectos &nbsp;>&nbsp; Consultoría</div>
 	<div class="flex justify-between items-center">
 		<div>
-			<h2 class="text-2xl font-semibold text-brand-marine">Catálogo de Servicios de Consultoría</h2>
-			<p class="text-sm text-slate-500 mt-1">Administra y cotiza los servicios de consultoría profesional y técnica ofrecidos por la empresa.</p>
+			<h2 class="text-2xl font-semibold text-brand-marine">Catálogo de Proyectos</h2>
+			<p class="text-sm text-slate-500 mt-1">Administra y cotiza los proyectos profesionales, técnicos y de consultoría del sistema.</p>
 		</div>
 		{#if hasPermiso('proyectos:write')}
 			<button 
 				onclick={prepararCrear}
-				class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2 cursor-pointer"
+				class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium shadow-md shadow-indigo-600/10 active:scale-[0.98] transition-all flex items-center gap-2 cursor-pointer"
 			>
-				<i class="fas fa-plus-circle"></i> Nueva Consultoría
+				<i class="fas fa-plus-circle"></i> Nuevo Proyecto
 			</button>
 		{/if}
 	</div>
@@ -311,18 +339,18 @@
 {#if !hasPermiso('proyectos:write')}
 	<div class="p-3 mb-6 rounded-xl text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200/50 flex items-center gap-2">
 		<i class="fas fa-info-circle text-amber-500"></i>
-		<span><strong>Modo de solo lectura:</strong> No dispones del permiso de escritura (<code>proyectos:write</code>) para agregar, editar o eliminar consultorías.</span>
+		<span><strong>Modo de solo lectura:</strong> No dispones del permiso de escritura (<code>proyectos:write</code>) para agregar, editar o eliminar proyectos.</span>
 	</div>
 {/if}
 
 <!-- KPI Cards Grid -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-		<div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl">
-			<i class="fas fa-brain"></i>
+		<div class="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">
+			<i class="fas fa-folder-open"></i>
 		</div>
 		<div>
-			<div class="text-xs text-slate-400 font-medium">Servicios Registrados</div>
+			<div class="text-xs text-slate-400 font-medium">Proyectos Registrados</div>
 			<div class="text-xl font-bold text-brand-marine mt-0.5">{kpiTotalCount}</div>
 		</div>
 	</div>
@@ -337,20 +365,20 @@
 	</div>
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
 		<div class="w-12 h-12 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl">
-			<i class="fas fa-percentage"></i>
+			<i class="fas fa-ruler-combined"></i>
 		</div>
 		<div>
-			<div class="text-xs text-slate-400 font-medium">Margen Promedio</div>
-			<div class="text-xl font-bold text-brand-marine mt-0.5">{kpiAverageMargin.toFixed(1)}%</div>
+			<div class="text-xs text-slate-400 font-medium">Área Total</div>
+			<div class="text-xl font-bold text-brand-marine mt-0.5">{kpiTotalArea.toLocaleString()} m²</div>
 		</div>
 	</div>
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
 		<div class="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center text-xl">
-			<i class="fas fa-layer-group"></i>
+			<i class="fas fa-percent"></i>
 		</div>
 		<div>
-			<div class="text-xs text-slate-400 font-medium">Existencia Acumulada</div>
-			<div class="text-xl font-bold text-brand-marine mt-0.5">{kpiTotalStock}</div>
+			<div class="text-xs text-slate-400 font-medium">Margen Promedio</div>
+			<div class="text-xl font-bold text-brand-marine mt-0.5">{kpiAverageMargin.toFixed(1)}%</div>
 		</div>
 	</div>
 </div>
@@ -366,29 +394,29 @@
 			<input 
 				type="text" 
 				bind:value={searchQuery}
-				placeholder="Buscar por nombre o código..."
+				placeholder="Buscar por nombre, código o responsable..."
 				class="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
 			/>
 		</div>
 		<div>
 			<select 
-				bind:value={filterArea}
+				bind:value={filterCliente}
 				class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-slate-600"
 			>
-				<option value="all">Todas las Áreas</option>
-				{#each areas as area}
-					<option value={area.id.toString()}>{area.nombre}</option>
+				<option value="all">Todos los Clientes</option>
+				{#each clientes as cli}
+					<option value={cli.id.toString()}>{cli.nombre}</option>
 				{/each}
 			</select>
 		</div>
 		<div class="flex items-center justify-end text-xs text-slate-400 font-medium">
-			Mostrando {filteredConsultorias.length} de {consultorias.length} registros
+			Mostrando {filteredProyectos.length} de {proyectos.length} registros
 		</div>
 	</div>
 
 	<!-- Tabla principal -->
 	{#if isLoading}
-		<div class="py-12 flex justify-center text-blue-600 text-2xl">
+		<div class="py-12 flex justify-center text-indigo-600 text-2xl">
 			<i class="fas fa-spinner fa-spin"></i>
 		</div>
 	{:else}
@@ -397,28 +425,28 @@
 				<thead class="text-xs text-slate-500 bg-slate-50 font-semibold uppercase border-b border-slate-100">
 					<tr>
 						<th class="p-4">Código / Nombre</th>
-						<th class="p-4">Área / Desc.</th>
+						<th class="p-4">Cliente / Responsable</th>
 						<th class="p-4 text-right">Precio de Venta</th>
 						<th class="p-4 text-right">Costo Estimado</th>
-						<th class="p-4 text-center">Inventario</th>
-						<th class="p-4 text-center">Unidad</th>
+						<th class="p-4 text-center">Fec. Creación / Pisos</th>
+						<th class="p-4 text-center">Área (m²)</th>
 						{#if hasPermiso('proyectos:write')}
 							<th class="p-4 text-center">Acciones</th>
 						{/if}
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
-					{#each filteredConsultorias as item}
+					{#each filteredProyectos as item}
 						<tr class="hover:bg-slate-50 transition-colors">
 							<!-- Nombre & Codigo -->
 							<td class="p-4">
-								<div class="text-[10px] font-bold text-blue-600 bg-blue-50 rounded px-1.5 py-0.5 inline-block mb-1">{item.codigo || 'SIN CÓDIGO'}</div>
+								<div class="text-[10px] font-bold text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5 inline-block mb-1">{item.codigo || 'SIN CÓDIGO'}</div>
 								<div class="font-bold text-slate-800">{item.nombre}</div>
 							</td>
-							<!-- Area & Descripcion -->
-							<td class="p-4 max-w-[240px]">
-								<div class="text-xs font-semibold text-slate-600 capitalize mb-0.5">{item.areas?.nombre || 'Sin área asignada'}</div>
-								<p class="text-[10px] text-slate-400 line-clamp-2">{item.descripcion || 'Sin descripción descriptiva.'}</p>
+							<!-- Cliente & Responsable -->
+							<td class="p-4">
+								<div class="text-xs font-semibold text-slate-600">{item.clientes?.nombre || 'Sin cliente asignado'}</div>
+								<div class="text-[10px] text-slate-400 mt-0.5">Resp: {item.responsable || 'No especificado'}</div>
 							</td>
 							<!-- Precio -->
 							<td class="p-4 text-right font-bold text-brand-marine">
@@ -428,19 +456,19 @@
 							<td class="p-4 text-right font-semibold text-slate-500">
 								S/ {item.costo_estimado?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 							</td>
-							<!-- Inventario / Stock -->
+							<!-- Fec Crea & Pisos -->
 							<td class="p-4 text-center">
-								<div class="font-bold text-slate-700">{item.existencia_actual}</div>
-								{#if item.valor_min !== null || item.valor_max !== null}
+								<div class="font-bold text-slate-700">{item.fec_crea || 'N/A'}</div>
+								{#if item.num_piso !== null}
 									<div class="text-[9px] text-slate-400 mt-0.5">
-										Mín: {item.valor_min ?? 'N/A'} | Máx: {item.valor_max ?? 'N/A'}
+										Pisos: {item.num_piso}
 									</div>
 								{/if}
 							</td>
-							<!-- Unidad -->
+							<!-- Area -->
 							<td class="p-4 text-center whitespace-nowrap">
 								<span class="px-2 py-0.5 bg-slate-100 border border-slate-200/50 rounded-md text-[10px] font-semibold text-slate-500">
-									{item.unidades?.nombre || 'Unidades'}
+									{item.area || 0} m²
 								</span>
 							</td>
 							<!-- Acciones (CRUD) -->
@@ -464,10 +492,10 @@
 							{/if}
 						</tr>
 					{/each}
-					{#if filteredConsultorias.length === 0}
+					{#if filteredProyectos.length === 0}
 						<tr>
 							<td colspan={hasPermiso('proyectos:write') ? 7 : 6} class="p-8 text-center text-slate-500 text-xs">
-								No se encontraron consultorías registradas con los filtros aplicados.
+								No se encontraron proyectos registrados con los filtros aplicados.
 							</td>
 						</tr>
 					{/if}
@@ -483,14 +511,14 @@
 		<div class="bg-white rounded-3xl shadow-2xl border border-slate-200/50 max-w-4xl w-full overflow-hidden flex flex-col max-h-[90vh] scale-100 transform transition-transform duration-300">
 			
 			<!-- Header Principal -->
-			<div class="bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white px-6 py-5 flex items-center justify-between shadow-md">
+			<div class="bg-gradient-to-r from-indigo-700 via-indigo-800 to-slate-900 text-white px-6 py-5 flex items-center justify-between shadow-md">
 				<div class="flex items-center gap-3">
 					<div class="w-10 h-10 rounded-xl bg-white/10 text-white flex items-center justify-center backdrop-blur-xs shadow-inner">
 						<i class="fas {editingId ? 'fa-edit' : 'fa-plus-circle'} text-lg"></i>
 					</div>
 					<div>
-						<h3 class="font-bold text-base leading-tight">{editingId ? 'Modificar Servicio de Consultoría' : 'Registrar Nuevo Servicio de Consultoría'}</h3>
-						<p class="text-[11px] text-blue-100/80 mt-0.5">Ingresa los datos técnicos y de inventario del servicio para controlar el avance y presupuesto</p>
+						<h3 class="font-bold text-base leading-tight">{editingId ? 'Modificar Proyecto' : 'Registrar Nuevo Proyecto'}</h3>
+						<p class="text-[11px] text-indigo-100/80 mt-0.5">Ingresa toda la información técnica, de terreno y financiera del proyecto</p>
 					</div>
 				</div>
 				<button onclick={() => { isModalOpen = false; resetForm(); }} class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white hover:scale-105 active:scale-95 flex items-center justify-center transition-all cursor-pointer">
@@ -502,24 +530,24 @@
 			<div class="flex border-b border-slate-100 px-6 bg-slate-50/50">
 				<button 
 					type="button" 
-					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'general' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'general' ? 'border-indigo-600 text-indigo-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
 					onclick={() => activeTab = 'general'}
 				>
-					<i class="fas fa-building text-[13px]"></i> Información General
+					<i class="fas fa-info-circle text-[13px]"></i> Información General
 				</button>
 				<button 
 					type="button" 
-					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'finanzas' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'finanzas' ? 'border-indigo-600 text-indigo-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
 					onclick={() => activeTab = 'finanzas'}
 				>
-					<i class="fas fa-coins text-[13px]"></i> Presupuesto e Inventario
+					<i class="fas fa-calculator text-[13px]"></i> Finanzas y Medidas
 				</button>
 				<button 
 					type="button" 
-					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'tecnico' ? 'border-blue-600 text-blue-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
-					onclick={() => activeTab = 'tecnico'}
+					class="px-5 py-3 text-xs font-bold border-b-2 transition-all flex items-center gap-2 cursor-pointer {activeTab === 'terreno' ? 'border-indigo-600 text-indigo-600 bg-white/50' : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'}" 
+					onclick={() => activeTab = 'terreno'}
 				>
-					<i class="fas fa-tools text-[13px]"></i> Características Técnicas
+					<i class="fas fa-map-marked-alt text-[13px]"></i> Terreno y Detalles
 				</button>
 			</div>
 			
@@ -535,30 +563,32 @@
 				<!-- TAB 1: INFORMACIÓN GENERAL -->
 				{#if activeTab === 'general'}
 					<div class="space-y-5">
-						<div class="bg-blue-50/40 p-4 rounded-2xl border border-blue-100/50 flex gap-3 mb-4">
-							<i class="fas fa-info-circle text-blue-600 text-base mt-0.5"></i>
-							<div class="text-[11px] text-blue-800/90 leading-relaxed">
-								<strong>Campos esenciales:</strong> Define el nombre descriptivo y el código único de referencia técnica de la consultoría para mantener consistencia con los contratos y facturación.
+						<div class="bg-indigo-50/40 p-4 rounded-2xl border border-indigo-100/50 flex gap-3 mb-4">
+							<i class="fas fa-info-circle text-indigo-600 text-base mt-0.5"></i>
+							<div class="text-[11px] text-indigo-800/90 leading-relaxed">
+								<strong>Datos Identificativos:</strong> Configura el nombre del proyecto, código técnico, cliente asociado y responsable del expediente.
 							</div>
 						</div>
+						
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Nombre de la Consultoría *</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Nombre del Proyecto *</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-brain"></i>
+										<i class="fas fa-project-diagram"></i>
 									</span>
 									<input 
 										type="text" 
 										bind:value={formNombre} 
-										placeholder="Ej. Consultoría de Diseño Estructural Complejo" 
+										placeholder="Ej. Residencia Multifamiliar Los Cedros" 
 										required 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Código de Referencia</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Código Técnico</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
 										<i class="fas fa-tag"></i>
@@ -566,54 +596,115 @@
 									<input 
 										type="text" 
 										bind:value={formCodigo} 
-										placeholder="Ej. CNS-002" 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+										placeholder="Ej. PROY-001" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
-							<div class="md:col-span-2">
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Área de la Consultoría</label>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Responsable</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-map-marker-alt"></i>
+										<i class="fas fa-user-tie"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formResponsable} 
+										placeholder="Ej. Ing. Guillermo Casallo" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Cliente del Proyecto</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-handshake"></i>
 									</span>
 									<select 
-										bind:value={formAreaId} 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs cursor-pointer"
+										bind:value={formCodCliente} 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs cursor-pointer"
 									>
-										<option value={null}>-- Seleccione Área --</option>
-										{#each areas as area}
-											<option value={area.id}>{area.nombre}</option>
+										<option value={null}>-- Seleccione Cliente --</option>
+										{#each clientes as cli}
+											<option value={cli.id}>{cli.nombre}</option>
 										{/each}
 									</select>
 								</div>
 							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Usuario del Registro</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-user-edit"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formUsusario} 
+										placeholder="Ej. Admin, Misael" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Código Venta Relacionada</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-file-invoice-dollar"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formCodVenta} 
+										placeholder="Ej. VNT-5021" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Fecha Creación del Proyecto</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-calendar-day"></i>
+									</span>
+									<input 
+										type="date" 
+										bind:value={formFecCrea} 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
 						</div>
+
 						<div>
-							<label class="block text-xs font-semibold text-slate-700 mb-1.5">Descripción de la Consultoría</label>
+							<label class="block text-xs font-semibold text-slate-700 mb-1.5">Descripción Amplia del Proyecto</label>
 							<div class="relative">
 								<span class="absolute top-3 left-3.5 text-slate-400">
 									<i class="fas fa-align-left"></i>
 								</span>
 								<textarea 
 									bind:value={formDescripcion} 
-									placeholder="Escribe detalles del expediente técnico, consultor principal u observaciones relevantes de la consultoría..." 
+									placeholder="Detalla los pormenores del proyecto, requerimientos especiales..." 
 									rows="4" 
-									class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs"
+									class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 placeholder-slate-400 font-medium shadow-xs"
 								></textarea>
 							</div>
 						</div>
 					</div>
 				{/if}
 
-				<!-- TAB 2: PRESUPUESTO E INVENTARIO -->
+				<!-- TAB 2: FINANZAS Y MEDIDAS -->
 				{#if activeTab === 'finanzas'}
 					<div class="space-y-5">
 						<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
 							<div>
 								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Precio Presupuestado (S/)</label>
 								<div class="relative">
-									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs font-mono">
 										S/
 									</span>
 									<input 
@@ -621,14 +712,15 @@
 										step="0.01"
 										bind:value={formPrecio} 
 										placeholder="0.00"
-										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
+										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
 								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Costo Estimado (S/)</label>
 								<div class="relative">
-									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs font-mono">
 										S/
 									</span>
 									<input 
@@ -636,74 +728,92 @@
 										step="0.01"
 										bind:value={formCostoEstimado} 
 										placeholder="0.00"
-										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
+										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Existencia / Avance Físico</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Característica Técnica Valorada (S/)</label>
 								<div class="relative">
-									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-boxes"></i>
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400 font-bold text-xs font-mono">
+										S/
 									</span>
 									<input 
 										type="number" 
-										step="0.1"
-										bind:value={formExistenciaActual} 
-										placeholder="0"
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-semibold shadow-xs" 
+										step="0.01"
+										bind:value={formCarTecnica} 
+										placeholder="0.00"
+										class="w-full pl-9 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-bold shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Unidad de Medida</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Área de Trabajo (m²)</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-ruler"></i>
+										<i class="fas fa-ruler-combined"></i>
 									</span>
-									<select 
-										bind:value={formUnidadId} 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs cursor-pointer"
-									>
-										<option value={null}>-- Seleccione Unidad --</option>
-										{#each unidades as uni}
-											<option value={uni.id}>{uni.nombre}</option>
-										{/each}
-									</select>
+									<input 
+										type="number" 
+										step="0.01"
+										bind:value={formArea} 
+										placeholder="Ej. 120.50"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-semibold shadow-xs" 
+									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Mínimo (Alerta stock/materiales)</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Número de Pisos</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-layer-group"></i>
+									</span>
+									<input 
+										type="number" 
+										bind:value={formNumPiso} 
+										placeholder="Ej. 3"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-semibold shadow-xs" 
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Mínimo Admisible</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
 										<i class="fas fa-compress-arrows-alt"></i>
 									</span>
 									<input 
 										type="number" 
-										step="0.1"
+										step="0.01"
 										bind:value={formValorMin} 
-										placeholder="Sin mínimo"
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+										placeholder="Ej. 1000.00"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Máximo (Límite acopio)</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Valor Máximo Admisible</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
 										<i class="fas fa-expand-arrows-alt"></i>
 									</span>
 									<input 
 										type="number" 
-										step="0.1"
+										step="0.01"
 										bind:value={formValorMax} 
-										placeholder="Sin máximo"
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+										placeholder="Ej. 99000.00"
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
-							<div class="md:col-span-3">
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Link a Carpeta / Proforma de Consultoría</label>
+
+							<div class="md:col-span-2">
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Carpeta / Proforma (Google Drive)</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
 										<i class="fas fa-link"></i>
@@ -712,7 +822,7 @@
 										type="text" 
 										bind:value={formLinkProforma} 
 										placeholder="https://drive.google.com/..."
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-850 placeholder-slate-400 font-medium shadow-xs" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-850 placeholder-slate-400 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
@@ -720,49 +830,66 @@
 					</div>
 				{/if}
 
-				<!-- TAB 3: CARACTERÍSTICAS TÉCNICAS -->
-				{#if activeTab === 'tecnico'}
+				<!-- TAB 3: TERRENO Y DETALLES -->
+				{#if activeTab === 'terreno'}
 					<div class="space-y-5">
-						<div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Tipo de Consultoría (Caract. 1)</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Dirección del Proyecto / Terreno</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-brain"></i>
+										<i class="fas fa-map-marker-alt"></i>
 									</span>
 									<input 
 										type="text" 
-										bind:value={formCaract1} 
-										placeholder="Ej. Diseño, Supervisión, Auditoría" 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+										bind:value={formDireccion} 
+										placeholder="Ej. Av. Los Próceres 452" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Ubicación / Modalidad (Caract. 2)</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Tiempo Estimado (Meses/Días)</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-laptop-house"></i>
+										<i class="fas fa-clock"></i>
 									</span>
 									<input 
 										type="text" 
-										bind:value={formCaract2} 
-										placeholder="Ej. Remoto, Presencial, Híbrido" 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+										bind:value={formTiemEstimado} 
+										placeholder="Ej. 6 meses, 90 días" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
+
 							<div>
-								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Plazo Estimado (Caract. 3)</label>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Tipo de Proyecto</label>
 								<div class="relative">
 									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-										<i class="fas fa-hourglass-half"></i>
+										<i class="fas fa-drafting-compass"></i>
 									</span>
 									<input 
 										type="text" 
-										bind:value={formCaract3} 
-										placeholder="Ej. 3 meses, 6 meses" 
-										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+										bind:value={formTipProyecto} 
+										placeholder="Ej. Diseño Estructural, Vivienda Familiar" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
+									/>
+								</div>
+							</div>
+
+							<div>
+								<label class="block text-xs font-semibold text-slate-700 mb-1.5">Estado del Predio / Terreno</label>
+								<div class="relative">
+									<span class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+										<i class="fas fa-home"></i>
+									</span>
+									<input 
+										type="text" 
+										bind:value={formEstPredio} 
+										placeholder="Ej. Saneado, En Proceso de Regularización" 
+										class="w-full pl-10 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all text-xs text-slate-800 font-medium shadow-xs" 
 									/>
 								</div>
 							</div>
@@ -781,7 +908,7 @@
 								onclick={() => eliminar(editingId, formNombre)} 
 								class="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all hover:scale-[1.02] active:scale-98 cursor-pointer flex items-center gap-1.5 shadow-sm"
 							>
-								<i class="fas fa-trash-alt"></i> Eliminar Registro
+								<i class="fas fa-trash-alt"></i> Eliminar Proyecto
 							</button>
 						{/if}
 					</div>
@@ -797,7 +924,7 @@
 						<button 
 							type="submit" 
 							disabled={isSaving} 
-							class="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 text-xs font-bold shadow-md shadow-blue-600/15 disabled:opacity-70 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-98 cursor-pointer"
+							class="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-slate-800 text-white rounded-xl hover:from-indigo-700 hover:to-slate-900 text-xs font-bold shadow-md shadow-indigo-600/15 disabled:opacity-70 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-98 cursor-pointer"
 						>
 							{#if isSaving}
 								<i class="fas fa-spinner fa-spin"></i> Guardando...
