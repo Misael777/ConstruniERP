@@ -145,13 +145,19 @@
 	}
 
 	// Cerrar menús al hacer click en cualquier parte
-	onMount(async () => {
+	onMount(() => {
 		const closeAll = () => {
 			activeMenuId = null;
 		};
-		window.addEventListener('click', closeAll);
-		await cargarDatos();
-		return () => window.removeEventListener('click', closeAll);
+		if (typeof window !== 'undefined') {
+			window.addEventListener('click', closeAll);
+		}
+		cargarDatos();
+		return () => {
+			if (typeof window !== 'undefined') {
+				window.removeEventListener('click', closeAll);
+			}
+		};
 	});
 
 	// Filtrar las ventas dinámicamente en el cliente usando runas derived

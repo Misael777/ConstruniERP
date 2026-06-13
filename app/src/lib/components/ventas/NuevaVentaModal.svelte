@@ -205,10 +205,19 @@
 		onClose();
 	}
 
-	function copyToClipboard() {
-		navigator.clipboard.writeText(codigoGenerado);
-		alert('¡Código de proyecto copiado al portapapeles!');
-	}
+	async function copyToClipboard() {
+		if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+			try {
+				await navigator.clipboard.writeText(codigoGenerado);
+				alert('¡Código de proyecto copiado al portapapeles!');
+			} catch (err: any) {
+				console.error('[NuevaVentaModal] No se pudo copiar al portapapeles:', err);
+				modalError = 'No se pudo copiar el código en este dispositivo.';
+			}
+		} else {
+			modalError = 'La funcionalidad de portapapeles no está disponible en este dispositivo.';
+		}
+}
 
 	async function handleSubmit() {
 		modalError = '';

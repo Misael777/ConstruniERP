@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { supabase } from '$lib/server/supabase';
+import { safeEndpoint } from '$lib/server/safeEndpoint';
 
-export const POST: RequestHandler = async ({ request }) => {
+const handler: RequestHandler = async ({ request }) => {
 	try {
 		const { email, password, type = 'setup' } = await request.json();
 		console.log('[setup-password] Intentando configurar contraseña para:', email, 'Tipo:', type);
@@ -27,8 +28,12 @@ export const POST: RequestHandler = async ({ request }) => {
 			.maybeSingle();
 
 		if (firstAttempt.error) {
-			// Si falla por la columna password_creada (problema de schema caché), reintentamos sin ella
-			if (firstAttempt.error.message.includes('password_creada') || firstAttempt.error.code === '42703') {
+			const schemaError = firstAttempt.error.message?.includes('password_creada')
+				|| firstAttempt.error.message?.includes('Database error querying schema')
+				|| firstAttempt.error.code === '42703';
+
+			// Si falla por la columna password_creada o por error de esquema, reintentamos sin ella
+			if (schemaError) {
 				console.log('[setup-password] Reintentando buscar empleado sin seleccionar password_creada...');
 				const secondAttempt = await supabase
 					.from('empleados')
@@ -161,3 +166,5 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ success: false, error: 'Error inesperado: ' + err.message }, { status: 500 });
 	}
 };
+
+export const POST = safeEndpoint(handler);

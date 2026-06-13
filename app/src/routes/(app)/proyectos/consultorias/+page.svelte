@@ -905,7 +905,7 @@
 						{#if editingId && hasPermiso('proyectos:write')}
 							<button 
 								type="button" 
-								onclick={() => eliminar(editingId, formNombre)} 
+								onclick={() => { if (editingId !== null) eliminar(editingId, formNombre); }} 
 								class="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all hover:scale-[1.02] active:scale-98 cursor-pointer flex items-center gap-1.5 shadow-sm"
 							>
 								<i class="fas fa-trash-alt"></i> Eliminar Proyecto

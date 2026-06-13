@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { supabase } from '$lib/server/supabase';
+import { safeEndpoint } from '$lib/server/safeEndpoint';
 
-export const POST: RequestHandler = async ({ request }) => {
+const handler: RequestHandler = async ({ request }) => {
 	try {
 		const body = await request.json();
 		console.log('[update-employee-user] Iniciando actualización de empleado. Payload recibido:', body);
@@ -85,3 +86,5 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ success: false, error: 'Error inesperado: ' + err.message }, { status: 500 });
 	}
 };
+
+export const POST = safeEndpoint(handler);

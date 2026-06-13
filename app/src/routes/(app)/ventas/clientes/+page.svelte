@@ -80,13 +80,19 @@
 		}
 	}
 
-	onMount(async () => {
+	onMount(() => {
 		const closeAll = () => {
 			activeMenuId = null;
 		};
-		window.addEventListener('click', closeAll);
-		await cargarClientes();
-		return () => window.removeEventListener('click', closeAll);
+		if (typeof window !== 'undefined') {
+			window.addEventListener('click', closeAll);
+		}
+		cargarClientes();
+		return () => {
+			if (typeof window !== 'undefined') {
+				window.removeEventListener('click', closeAll);
+			}
+		};
 	});
 
 	// Filtrar clientes usando runas derived

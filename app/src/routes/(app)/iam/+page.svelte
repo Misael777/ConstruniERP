@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { createUser, updateUser, deleteUser } from '$lib/edgeFunctionClient';
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Area = { id: number; nombre: string };
@@ -52,6 +53,7 @@
 
 	function formatEmpleado(emp: any): Empleado {
 		const rolesObj = Array.isArray(emp.roles) ? emp.roles[0] : emp.roles;
+		const roleFromList = rolesObj || roles.find((r) => r.id === Number(emp.rol_id));
 		return {
 			id: emp.id,
 			nombre: emp.nombre,
@@ -65,7 +67,7 @@
 			horas: emp.horas ? Number(emp.horas) : 0,
 			periodo: emp.periodo || 'Mensual',
 			nivel: emp.nivel || '',
-			roles: rolesObj ? { nombre: String(rolesObj.nombre) } : undefined
+			roles: roleFromList ? { nombre: String(roleFromList.nombre) } : undefined
 		};
 	}
 
@@ -177,23 +179,26 @@
 		isSaving = true;
 
 		try {
-			console.log("[IAM UI] Realizando petición POST a /api/create-employee-user...");
-			// Llamamos al endpoint del servidor que usa el Service Role Key
-			// para crear el usuario en Supabase Auth y luego insertar el empleado
-			const response = await fetch('/api/create-employee-user', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
+			console.log("[IAM UI] Creando empleado mediante Supabase Edge Function...");
+			const result = await createUser({
+				email: payload.correo,
+				nombre: payload.nombre,
+				telefono: payload.telefono,
+				rol_id: payload.rol_id,
+				area_id: payload.area_id,
+				fecha_ingreso: payload.fecha_ingreso,
+				salario: payload.salario,
+				horas: payload.horas,
+				periodo: payload.periodo,
+				nivel: payload.nivel
 			});
 
-			console.log(`[IAM UI] HTTP Status recibido de la petición POST: ${response.status} (${response.statusText})`);
-			const result = await response.json();
-			console.log("[IAM UI] Respuesta del servidor decodificada:", result);
-
 			if (!result.success) {
-				console.error("[IAM UI Error] El servidor retornó success: false:", result.error);
-				throw new Error(result.error || 'Error desconocido del servidor');
+				console.error("[IAM UI Error] Error en Supabase Edge Function createUser:", result);
+				throw new Error(result?.error || 'Error desconocido al crear el empleado');
 			}
+
+			console.log("[IAM UI] Respuesta de Edge Function:", result);
 
 			if (result.empleado) {
 				const formatted = formatEmpleado(result.empleado);
@@ -288,21 +293,27 @@
 				nivel: nuevoNivel.trim() || null
 			};
 
-			console.log("[IAM UI] Realizando actualización remota mediante API para ID:", editingEmpleadoId, payload);
-			const response = await fetch('/api/update-employee-user', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					id: editingEmpleadoId,
-					auth_user_id: currentEmp?.auth_user_id || null,
-					...payload
-				})
+			console.log("[IAM UI] Actualizando empleado mediante Supabase Edge Function para ID:", editingEmpleadoId);
+			const result = await updateUser({
+				auth_user_id: currentEmp?.auth_user_id || '',
+				email: payload.correo,
+				nombre: payload.nombre,
+				telefono: payload.telefono,
+				rol_id: payload.rol_id,
+				area_id: payload.area_id,
+				fecha_ingreso: payload.fecha_ingreso,
+				salario: payload.salario,
+				horas: payload.horas,
+				periodo: payload.periodo,
+				nivel: payload.nivel
 			});
 
-			const result = await response.json();
 			if (!result.success) {
-				throw new Error(result.error || 'Error al actualizar el empleado');
+				console.error("[IAM UI Error] Error en Supabase Edge Function updateUser:", result);
+				throw new Error(result?.error || 'Error al actualizar el empleado');
 			}
+
+			console.log("[IAM UI] Respuesta de Edge Function:", result);
 
 			if (result.empleado) {
 				const formatted = formatEmpleado(result.empleado);
@@ -333,22 +344,21 @@
 	}
 
 	async function eliminarEmpleado(id: number, nombre: string) {
-		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar al empleado "${nombre}"?\nEsta acción eliminará su registro de forma permanente.`);
+		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar al empleado "${nombre}"?\nEsta acción eliminará su registro y el usuario de autenticación.`);
 		if (!confirmacion) return;
 
-		console.log(`[IAM UI] Solicitando eliminación del empleado ID: ${id} ("${nombre}")...`);
+		console.log(`[IAM UI] Solicitando eliminación remota del empleado ID: ${id} ("${nombre}") via Supabase Edge Function...`);
 		try {
-			const { error } = await supabase
-				.from('empleados')
-				.delete()
-				.eq('id', id);
+			const currentEmp = empleados.find(emp => emp.id === id);
+			if (!currentEmp?.auth_user_id) {
+				throw new Error('No se encontró auth_user_id para este empleado');
+			}
 
-			if (error) {
-				console.error("[IAM UI Error] Error al intentar eliminar el empleado de la base de datos:", error);
-				if (error.code === '23503') {
-					throw new Error("No se puede eliminar el empleado porque está asociado a proyectos o gastos del sistema.");
-				}
-				throw error;
+			const data = await deleteUser(currentEmp.auth_user_id);
+
+			if (!data?.success) {
+				console.error('[IAM UI Error] Error en Supabase Edge Function deleteUser:', data);
+				throw new Error(data?.error || 'Error al eliminar el empleado');
 			}
 
 			// Actualizar UI localmente
@@ -356,7 +366,7 @@
 			console.log(`[IAM UI] Empleado ID ${id} eliminado correctamente del estado local.`);
 			showStatus('success', `Empleado '${nombre}' eliminado correctamente.`);
 		} catch (error: any) {
-			console.error("[IAM UI Error] Excepción en eliminarEmpleado():", error);
+			console.error('[IAM UI Error] Excepción en eliminarEmpleado():', error);
 			showStatus('error', 'Error al eliminar: ' + error.message);
 		}
 	}
