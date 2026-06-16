@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS centro_costo (
     id_centro_costo    BIGSERIAL PRIMARY KEY,
     codigo             VARCHAR(50) NOT NULL,
     nombre             VARCHAR(200) NOT NULL,
-    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('proyecto', 'area')),
+    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('proyecto', 'area', 'proveedor', 'cliente', 'otro')),
     id_referencia      BIGINT NOT NULL, -- FK a proyecto.id_proyecto o area.id_area
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
@@ -349,7 +349,8 @@ CREATE TABLE IF NOT EXISTS pagos (
 
 CREATE TABLE IF NOT EXISTS transaccion (
     id_transaccion     BIGSERIAL PRIMARY KEY,
-    id_centro_costo    BIGINT NOT NULL REFERENCES centro_costo(id_centro_costo),
+    id_centro_costo_origen    BIGINT NOT NULL REFERENCES centro_costo(id_centro_costo),
+    id_centro_costo_destino   BIGINT NOT NULL REFERENCES centro_costo(id_centro_costo),
     fecha              DATE NOT NULL,
     descripcion        TEXT,
     tipo               VARCHAR(20) CHECK (tipo IN ('ingreso', 'egreso')),
