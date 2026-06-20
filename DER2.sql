@@ -227,15 +227,33 @@ CREATE TABLE centro_costo (
 -- 3. PROYECTO (hereda de centro_costo)
 -- ------------------------------------------------------------
 
-CREATE TABLE proyecto (
+CREATE TABLE IF NOT EXISTS proyecto (
     id_proyecto        BIGSERIAL PRIMARY KEY,
     id_cliente         BIGINT NOT NULL REFERENCES cliente(id_cliente),
-    nombre             VARCHAR(200) NOT NULL,
+    tip_proyecto       VARCHAR(4),
+    id_cliente         VARCHAR(4),
+    nombre_proyecto    VARCHAR(200) NOT NULL,
     ubicacion          TEXT,
     fecha_inicio_plan  DATE,
     fecha_fin_plan     DATE,
+    estado_predio      VARCHAR(4),
+    tipo_edifica       VARCHAR(4),
+    Nro_pisos          INTEGER,
+    distrito           VARCHAR(4),
+    provincia          VARCHAR(4),
+    departamento       VARCHAR(4),
+    costo_estima       FLOAT,
+    precio_venta       FLOAT,
+    descripcion        VARCHAR(200),
+    responsable        VARCHAR(200),
     duracion_semanas   INTEGER,
-    estado             VARCHAR(20) DEFAULT 'activo',
+    usuario_registro   VARCHAR(200),
+    contrato           VARCHAR(200),
+    estado_proyecto    VARCHAR(20) DEFAULT 'activo',
+    id_pres_inicial    BIGINT REFERENCES presupuesto(id_presupuesto),
+    id_pres_final      BIGINT REFERENCES presupuesto(id_presupuesto),
+    area_terreno       NUMERIC(12,2),
+    area-construida    NUMERIC(12,2),
     created_at         TIMESTAMPTZ DEFAULT NOW(),
     updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
@@ -250,16 +268,18 @@ ON CONFLICT DO NOTHING;  -- se puede manejar con trigger, pero para el script se
 -- 4. CATÃLOGO DE PARTIDAS (JERÃRQUICO)
 -- ------------------------------------------------------------
 
-CREATE TABLE partida (
+CREATE TABLE IF NOT EXISTS partida (
     id_partida         BIGSERIAL PRIMARY KEY,
-    codigo             VARCHAR(20) NOT NULL UNIQUE, -- ej: '01.01.01.00'
+    codigo             VARCHAR(20) NOT NULL UNIQUE, -- ej: 'O01.01.01.00  o C01.01.01.01.00'
     descripcion        TEXT NOT NULL,
     unidad             VARCHAR(10), -- glb, m2, m3, und, ml, mes, etc.
+    cuadrilla          INTEGER,
+    precio_unitario    NUMERIC(12,2),
+    precio_parcial     NUMERIC(12,2),
     nivel              INTEGER NOT NULL, -- 1,2,3...
     id_partida_padre   BIGINT REFERENCES partida(id_partida),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
-
 -- ------------------------------------------------------------
 -- 5. PRESUPUESTO Y DETALLE
 -- ------------------------------------------------------------
