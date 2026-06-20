@@ -265,7 +265,9 @@ CREATE TABLE IF NOT EXISTS proyecto (
     area_terreno       NUMERIC(12,2),
     area_construida    NUMERIC(12,2),
     created_at         TIMESTAMPTZ DEFAULT NOW(),
-    updated_at         TIMESTAMPTZ DEFAULT NOW()
+    updated_at         TIMESTAMPTZ DEFAULT NOW(),
+    asesor_comercial_id VARCHAR(200),
+    comision_asesor DECIMAL(5,2),
 );
 
 -- VÃ­nculo obligatorio: cada proyecto es tambiÃ©n un centro de costo
