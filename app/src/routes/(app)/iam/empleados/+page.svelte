@@ -11,8 +11,8 @@
 		telefono: string; 
 		correo?: string; 
 		rol_id: number; 
-		auth_user_id: string; 
 		area_id?: number | null;
+		auth_user_id: string; 
 		fecha_ingreso?: string;
 		salario?: number;
 		horas?: number;
@@ -46,22 +46,22 @@
 
 	function onInputChange() {
 		if (modalError) {
-			console.log("[IAM UI] Limpiando modalError por nueva acción de modificación del formulario.");
+			console.log("[IAM UI] Limpiando modalError por nueva accion de modificacion del formulario.");
 			modalError = '';
 		}
 	}
 
 	function formatEmpleado(emp: any): Empleado {
 		const rolesObj = Array.isArray(emp.roles) ? emp.roles[0] : emp.roles;
-		const roleFromList = rolesObj || roles.find((r) => r.id === Number(emp.rol_id));
+		const roleFromList = rolesObj || roles.find((r: any) => r.id === Number(emp.rol_id));
 		return {
 			id: emp.id,
 			nombre: emp.nombre,
 			telefono: emp.telefono || '',
 			correo: emp.correo,
 			rol_id: emp.rol_id,
-			auth_user_id: emp.auth_user_id,
 			area_id: emp.area_id || null,
+			auth_user_id: emp.auth_user_id,
 			fecha_ingreso: emp.fecha_ingreso,
 			salario: emp.salario ? Number(emp.salario) : 0,
 			horas: emp.horas ? Number(emp.horas) : 0,
@@ -89,14 +89,8 @@
 			console.log("[IAM UI] Roles cargados exitosamente:", roles);
 
 			// Cargar áreas
-			console.log("[IAM UI] 2. Solicitando áreas a Supabase...");
-			const { data: areasData, error: areasError } = await supabase.from('areas').select('*').order('nombre');
-			if (areasError) {
-				console.error("[IAM UI Error] Error al obtener áreas de Supabase:", areasError);
-				throw areasError;
-			}
-			areas = areasData || [];
-			console.log("[IAM UI] Áreas cargadas exitosamente:", areas);
+			const { data: areasData } = await supabase.from('area').select('*').order('nombre');
+			if (areasData) areas = areasData;
 
 			// Cargar empleados con sus roles
 			console.log("[IAM UI] 3. Solicitando lista de empleados con roles a Supabase...");
@@ -104,7 +98,7 @@
 				.from('empleados')
 				.select(`
 					id, nombre, telefono, correo, rol_id, auth_user_id,
-					area_id, fecha_ingreso, salario, horas, periodo, nivel,
+					fecha_ingreso, salario, horas, periodo, nivel, area_id,
 					roles ( nombre )
 				`)
 				.order('id');
@@ -118,7 +112,7 @@
 			console.log("[IAM UI] Carga de datos iniciales completada con éxito.");
 
 		} catch (error: any) {
-			console.error("[IAM UI Error] Excepción capturada durante la carga inicial de datos (onMount):", error);
+			console.error("[IAM UI Error] Excepcion capturada durante la carga inicial de datos (onMount):", error);
 			showStatus('error', 'Error al cargar usuarios. Asegúrate de tener permisos.');
 		} finally {
 			isLoading = false;
@@ -133,31 +127,29 @@
 		}, 3000);
 	}
 
-
-
 	async function agregarEmpleado() {
 		console.log("[IAM UI] Iniciando proceso de agregar nuevo empleado...");
 		modalError = ''; // Limpiamos cualquier error previo
 		
 		// Validaciones de frontend
 		if (!nuevoNombre.trim()) {
-			console.warn("[IAM UI Validation] Falló validación: El nombre está vacío");
+			console.warn("[IAM UI Validation] Fallo validacion: El nombre está vacío");
 			modalError = 'El nombre es obligatorio';
 			return;
 		}
 		if (!nuevoCorreo.trim()) {
-			console.warn("[IAM UI Validation] Falló validación: El correo está vacío");
-			modalError = 'El correo electrónico es obligatorio';
+			console.warn("[IAM UI Validation] Fallo validacion: El correo está vacío");
+			modalError = 'El correo electronico es obligatorio';
 			return;
 		}
 		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 		if (!emailRegex.test(nuevoCorreo.trim())) {
-			console.warn(`[IAM UI Validation] Falló validación: Formato de correo inválido (${nuevoCorreo})`);
-			modalError = 'Ingresa un correo electrónico válido';
+			console.warn(`[IAM UI Validation] Fallo validacion: Formato de correo inválido (${nuevoCorreo})`);
+			modalError = 'Ingresa un correo electronico válido';
 			return;
 		}
 		if (!nuevaFechaIngreso) {
-			console.warn("[IAM UI Validation] Falló validación: Fecha de ingreso no seleccionada");
+			console.warn("[IAM UI Validation] Fallo validacion: Fecha de ingreso no seleccionada");
 			modalError = 'La fecha de ingreso es obligatoria';
 			return;
 		}
@@ -211,7 +203,7 @@
 					.from('empleados')
 					.select(`
 						id, nombre, telefono, correo, rol_id, auth_user_id,
-						area_id, fecha_ingreso, salario, horas, periodo, nivel,
+						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
 					.order('id');
@@ -227,16 +219,16 @@
 			isModalOpen = false;
 			resetForm();
 		} catch (error: any) {
-			console.error("[IAM UI Error] Excepción capturada en agregarEmpleado():", error);
+			console.error("[IAM UI Error] Excepcion capturada en agregarEmpleado():", error);
 			modalError = error.message; // El error se muestra dentro del popup
 		} finally {
 			isSaving = false;
-			console.log("[IAM UI] Finalizó ejecución de agregarEmpleado()");
+			console.log("[IAM UI] Finalizo ejecucion de agregarEmpleado()");
 		}
 	}
 
 	function prepararEdicion(emp: Empleado) {
-		console.log(`[IAM UI] Preparando edición de empleado ID: ${emp.id} ("${emp.nombre}")...`);
+		console.log(`[IAM UI] Preparando edicion de empleado ID: ${emp.id} ("${emp.nombre}")...`);
 		editingEmpleadoId = emp.id;
 		nuevoNombre = emp.nombre;
 		nuevoCorreo = emp.correo || '';
@@ -254,7 +246,7 @@
 
 	async function actualizarEmpleado() {
 		if (!editingEmpleadoId) return;
-		console.log(`[IAM UI] Iniciando actualización de empleado ID: ${editingEmpleadoId}...`);
+		console.log(`[IAM UI] Iniciando actualizacion de empleado ID: ${editingEmpleadoId}...`);
 		modalError = '';
 		
 		// Validaciones de frontend
@@ -263,12 +255,12 @@
 			return;
 		}
 		if (!nuevoCorreo.trim()) {
-			modalError = 'El correo electrónico es obligatorio';
+			modalError = 'El correo electronico es obligatorio';
 			return;
 		}
 		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 		if (!emailRegex.test(nuevoCorreo.trim())) {
-			modalError = 'Ingresa un correo electrónico válido';
+			modalError = 'Ingresa un correo electronico válido';
 			return;
 		}
 		if (!nuevaFechaIngreso) {
@@ -324,7 +316,7 @@
 					.from('empleados')
 					.select(`
 						id, nombre, telefono, correo, rol_id, auth_user_id,
-						area_id, fecha_ingreso, salario, horas, periodo, nivel,
+						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
 					.order('id');
@@ -336,7 +328,7 @@
 			isModalOpen = false;
 			resetForm();
 		} catch (error: any) {
-			console.error("[IAM UI Error] Excepción en actualizarEmpleado():", error);
+			console.error("[IAM UI Error] Excepcion en actualizarEmpleado():", error);
 			modalError = error.message;
 		} finally {
 			isSaving = false;
@@ -344,14 +336,14 @@
 	}
 
 	async function eliminarEmpleado(id: number, nombre: string) {
-		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar al empleado "${nombre}"?\nEsta acción eliminará su registro y el usuario de autenticación.`);
+		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar al empleado "${nombre}"?\nEsta accion eliminará su registro y el usuario de autenticacion.`);
 		if (!confirmacion) return;
 
-		console.log(`[IAM UI] Solicitando eliminación remota del empleado ID: ${id} ("${nombre}") via Supabase Edge Function...`);
+		console.log(`[IAM UI] Solicitando eliminacion remota del empleado ID: ${id} ("${nombre}") via Supabase Edge Function...`);
 		try {
 			const currentEmp = empleados.find(emp => emp.id === id);
 			if (!currentEmp?.auth_user_id) {
-				throw new Error('No se encontró auth_user_id para este empleado');
+				throw new Error('No se encontro auth_user_id para este empleado');
 			}
 
 			const data = await deleteUser(currentEmp.auth_user_id);
@@ -366,7 +358,7 @@
 			console.log(`[IAM UI] Empleado ID ${id} eliminado correctamente del estado local.`);
 			showStatus('success', `Empleado '${nombre}' eliminado correctamente.`);
 		} catch (error: any) {
-			console.error('[IAM UI Error] Excepción en eliminarEmpleado():', error);
+			console.error('[IAM UI Error] Excepcion en eliminarEmpleado():', error);
 			showStatus('error', 'Error al eliminar: ' + error.message);
 		}
 	}
@@ -392,10 +384,10 @@
 </svelte:head>
 
 <div class="mb-6">
-	<div class="text-xs text-slate-500 mb-2">Configuración &nbsp;>&nbsp; Control de Accesos (IAM)</div>
+	<div class="text-xs text-slate-500 mb-2">Configuracion &nbsp;>&nbsp; Control de Accesos (IAM)</div>
 	<div class="flex justify-between items-center">
 		<div>
-			<h2 class="text-2xl font-semibold text-brand-marine">Gestión de Personal y Roles</h2>
+			<h2 class="text-2xl font-semibold text-brand-marine">Gestion de Personal y Roles</h2>
 			<p class="text-sm text-slate-500 mt-1">Administra los accesos, roles y números de contacto del equipo de trabajo.</p>
 		</div>
 		<button 
@@ -497,7 +489,7 @@
 									</button>
 									<button 
 										onclick={() => eliminarEmpleado(emp.id, emp.nombre)} 
-										class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
+										class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:bg-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
 										title="Eliminar empleado"
 									>
 										<i class="fas fa-trash-alt text-[10px]"></i>
@@ -551,7 +543,7 @@
 
 				<!-- Section 1: Personal Info -->
 				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Información Personal</h4>
+					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Informacion Personal</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
 							<label class="block text-xs font-semibold text-slate-600 mb-1">Nombre Completo *</label>
@@ -564,7 +556,7 @@
 					</div>
 					<div class="mt-4">
 						<label class="block text-xs font-semibold text-slate-600 mb-1">
-							Correo Electrónico * 
+							Correo Electronico * 
 							{#if editingEmpleadoId}
 								<span class="font-normal text-slate-400">(se actualizará el acceso del empleado)</span>
 							{:else}
@@ -578,9 +570,9 @@
 					</div>
 				</div>
 				
-				<!-- Section 2: Roles and Areas -->
+				<!-- Section 2: Roles -->
 				<div>
-					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Asignación de Roles y Áreas</h4>
+					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Asignacion de Roles</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
 							<label class="block text-xs font-semibold text-slate-600 mb-1">Rol de Acceso</label>
@@ -627,7 +619,7 @@
 							</div>
 							<div>
 								<p class="text-sm font-semibold text-blue-800">Cuenta de acceso automática</p>
-								<p class="text-xs text-blue-600 mt-1">Al guardar, se creará automáticamente un usuario en Supabase Auth con el correo ingresado. El empleado podrá iniciar sesión con ese correo y establecer su contraseña.</p>
+								<p class="text-xs text-blue-600 mt-1">Al guardar, se creará automáticamente un usuario en Supabase Auth con el correo ingresado. El empleado podrá iniciar sesion con ese correo y establecer su contraseña.</p>
 							</div>
 						</div>
 					</div>

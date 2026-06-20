@@ -7,51 +7,24 @@ export type ModuleItem = {
   path: string;
   label: string;
   icon: string;
-  permiso: string; // permission key like 'ver_ventas'
+  permiso: string; // permission key like 'ver_iam'
   subItems?: { path: string; label: string }[];
 };
 
 export const MODULE_REGISTRY: ModuleItem[] = [
   { path: '/dashboard', label: 'Dashboard', icon: 'fas fa-home', permiso: 'ver_dashboard' },
-  {
-    path: '/proyectos',
-    label: 'Proyectos',
-    icon: 'fas fa-city',
-    permiso: 'ver_proyectos',
+  { 
+    path: '/iam', 
+    label: 'Control Accesos (IAM)', 
+    icon: 'fas fa-users-cog', 
+    permiso: 'ver_iam',
     subItems: [
-      { path: '/proyectos/consultorias', label: 'Consultorías' },
-      { path: '/proyectos/obras', label: 'Obras' }
+      { path: '/iam/empleados', label: 'Empleados' },
+      { path: '/iam/roles-permisos', label: 'Roles y Permisos' }
     ]
   },
-  { path: '/compras', label: 'Compras', icon: 'fas fa-shopping-cart', permiso: 'ver_compras' },
-  { path: '/almacen', label: 'Almacén', icon: 'fas fa-box', permiso: 'ver_almacen' },
-  {
-    path: '/ventas',
-    label: 'Ventas',
-    icon: 'fas fa-chart-line',
-    permiso: 'ver_ventas',
-    subItems: [
-      { path: '/ventas', label: 'Registro de Ventas' },
-      { path: '/ventas/clientes', label: 'Clientes' }
-    ]
-  },
-  {
-    path: '/finanzas',
-    label: 'Finanzas',
-    icon: 'fas fa-wallet',
-    permiso: 'ver_finanzas',
-    subItems: [
-      { path: '/finanzas/resumen', label: 'Resumen' },
-      { path: '/finanzas/cuentas-por-cobrar', label: 'Cuentas por Cobrar' },
-      { path: '/finanzas/cuentas-por-pagar', label: 'Cuentas por Pagar' },
-      { path: '/finanzas/pagos', label: 'Pagos' },
-      { path: '/finanzas/egresos', label: 'Egresos' },
-      { path: '/finanzas/reportes', label: 'Reportes' },
-    ]
-  },
-  { path: '/recursos-humanos', label: 'Recursos Humanos', icon: 'fas fa-users', permiso: 'ver_rrhh' },
-  { path: '/iam', label: 'Control Accesos (IAM)', icon: 'fas fa-users-cog', permiso: 'ver_iam' },
-  { path: '/configuracion', label: 'Configuración', icon: 'fas fa-cog', permiso: 'ver_configuracion' },
+  // Para agregar un nuevo módulo, simplemente añade un nuevo objeto aquí. 
+  // Ejemplo: { path: '/nuevo-modulo', label: 'Nuevo Módulo', icon: 'fas fa-star', permiso: 'ver_nuevo_modulo' }
 ];
 
 /**
