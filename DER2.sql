@@ -105,7 +105,18 @@ INSERT INTO permisos (nombre, descripcion) VALUES
   ('ver_dashboard',         'Ver Dashboard'),
   ('ver_iam',               'Ver Control de Accesos (IAM)'),
   ('ver_empleados',         'Ver módulo de Empleados'),
-  ('ver_roles_permisos',    'Ver módulo de Roles y Permisos')
+  ('ver_roles_permisos',    'Ver módulo de Roles y Permisos'),
+  ('ver_comercial',         'Ver módulo Comercial'),
+  ('ver_comercial_ventas',  'Ver módulo Ventas'),
+  ('ver_comercial_clientes','Ver módulo Clientes'),
+  ('ver_comercial_proveedores','Ver módulo Proveedores'),
+  ('ver_proyectos',         'Ver módulo de Proyectos'),
+  ('ver_proyectos_dashboard','Ver Dashboard de Proyectos'),
+  ('ver_proyectos_gestion', 'Ver Gestión de Proyectos'),
+  ('ver_finanzas',          'Ver módulo de Finanzas'),
+  ('ver_finanzas_centros_costos', 'Ver Centros de Costos'),
+  ('ver_finanzas_cuentas_pendientes', 'Ver Cuentas Pendientes'),
+  ('ver_finanzas_transacciones', 'Ver Transacciones')
 ON CONFLICT (nombre) DO NOTHING;
 
 INSERT INTO area (nombre) VALUES ('Gerencia'), ('Operaciones'), ('Oficina Técnica') ON CONFLICT (nombre) DO NOTHING;
@@ -231,7 +242,6 @@ CREATE TABLE IF NOT EXISTS proyecto (
     id_proyecto        BIGSERIAL PRIMARY KEY,
     id_cliente         BIGINT NOT NULL REFERENCES cliente(id_cliente),
     tip_proyecto       VARCHAR(4),
-    id_cliente         VARCHAR(4),
     nombre_proyecto    VARCHAR(200) NOT NULL,
     ubicacion          TEXT,
     fecha_inicio_plan  DATE,
@@ -250,17 +260,17 @@ CREATE TABLE IF NOT EXISTS proyecto (
     usuario_registro   VARCHAR(200),
     contrato           VARCHAR(200),
     estado_proyecto    VARCHAR(20) DEFAULT 'activo',
-    id_pres_inicial    BIGINT REFERENCES presupuesto(id_presupuesto),
-    id_pres_final      BIGINT REFERENCES presupuesto(id_presupuesto),
+    id_pres_inicial    BIGINT,
+    id_pres_final      BIGINT,
     area_terreno       NUMERIC(12,2),
-    area-construida    NUMERIC(12,2),
+    area_construida    NUMERIC(12,2),
     created_at         TIMESTAMPTZ DEFAULT NOW(),
     updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- VÃ­nculo obligatorio: cada proyecto es tambiÃ©n un centro de costo
 INSERT INTO centro_costo (codigo, nombre, tipo, id_referencia)
-SELECT CONCAT('PROY-', p.id_proyecto), p.nombre, 'proyecto', p.id_proyecto
+SELECT CONCAT('PROY-', p.id_proyecto), p.nombre_proyecto, 'proyecto', p.id_proyecto
 FROM proyecto p
 ON CONFLICT DO NOTHING;  -- se puede manejar con trigger, pero para el script se asume insercion manual o trigger
 

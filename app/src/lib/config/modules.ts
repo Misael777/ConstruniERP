@@ -8,7 +8,7 @@ export type ModuleItem = {
   label: string;
   icon: string;
   permiso: string; // permission key like 'ver_iam'
-  subItems?: { path: string; label: string }[];
+  subItems?: { path: string; label: string; permiso?: string }[];
 };
 
 export const MODULE_REGISTRY: ModuleItem[] = [
@@ -19,12 +19,42 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     icon: 'fas fa-users-cog', 
     permiso: 'ver_iam',
     subItems: [
-      { path: '/iam/empleados', label: 'Empleados' },
-      { path: '/iam/roles-permisos', label: 'Roles y Permisos' }
+      { path: '/iam/empleados', label: 'Empleados', permiso: 'ver_empleados' },
+      { path: '/iam/roles-permisos', label: 'Roles y Permisos', permiso: 'ver_roles_permisos' }
     ]
   },
-  // Para agregar un nuevo módulo, simplemente añade un nuevo objeto aquí. 
-  // Ejemplo: { path: '/nuevo-modulo', label: 'Nuevo Módulo', icon: 'fas fa-star', permiso: 'ver_nuevo_modulo' }
+  { 
+    path: '/comercial', 
+    label: 'Comercial', 
+    icon: 'fas fa-store', 
+    permiso: 'ver_comercial',
+    subItems: [
+      { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' },
+      { path: '/comercial/clientes', label: 'Clientes', permiso: 'ver_comercial_clientes' },
+      { path: '/comercial/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }
+    ]
+  },
+  { 
+    path: '/proyectos', 
+    label: 'Proyectos', 
+    icon: 'fas fa-hard-hat', 
+    permiso: 'ver_proyectos',
+    subItems: [
+      { path: '/proyectos/dashboard', label: 'Dashboard', permiso: 'ver_proyectos_dashboard' },
+      { path: '/proyectos/gestion', label: 'Gestion', permiso: 'ver_proyectos_gestion' }
+    ]
+  },
+  { 
+    path: '/finanzas', 
+    label: 'Finanzas', 
+    icon: 'fas fa-chart-line', 
+    permiso: 'ver_finanzas',
+    subItems: [
+      { path: '/finanzas/centros-de-costos', label: 'Centros de Costos', permiso: 'ver_finanzas_centros_costos' },
+      { path: '/finanzas/cuentas-pendientes', label: 'Cuentas pendientes', permiso: 'ver_finanzas_cuentas_pendientes' },
+      { path: '/finanzas/tranzacciones', label: 'Tranzacciones', permiso: 'ver_finanzas_transacciones' }
+    ]
+  }
 ];
 
 /**
@@ -33,7 +63,16 @@ export const MODULE_REGISTRY: ModuleItem[] = [
  */
 export function getRequiredPermiso(pathname: string): string | null {
   for (const mod of MODULE_REGISTRY) {
-    if (pathname.startsWith(mod.path)) return mod.permiso;
+    if (pathname.startsWith(mod.path)) {
+      if (mod.subItems) {
+        for (const sub of mod.subItems) {
+          if (pathname.startsWith(sub.path) && sub.permiso) {
+            return sub.permiso;
+          }
+        }
+      }
+      return mod.permiso;
+    }
   }
   return null;
 }
