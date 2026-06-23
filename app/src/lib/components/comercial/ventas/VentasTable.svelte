@@ -125,10 +125,10 @@
 						</td>
 						<td class="px-5 py-4 text-center">
 							<div class="inline-flex gap-2 items-center justify-center">
-								<button on:click={() => dispatch('edit', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
+								<button on:click={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
 									<i class="fas fa-pen"></i>
 								</button>
-								<button on:click={() => dispatch('delete', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
+								<button on:click={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
 									<i class="fas fa-trash"></i>
 								</button>
 							</div>
