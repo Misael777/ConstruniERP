@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS proyecto (
     created_at         TIMESTAMPTZ DEFAULT NOW(),
     updated_at         TIMESTAMPTZ DEFAULT NOW(),
     asesor_comercial_id VARCHAR(200),
-    comision_asesor DECIMAL(5,2),
+    comision_asesor DECIMAL(5,2)
 );
 
 -- VÃ­nculo obligatorio: cada proyecto es tambiÃ©n un centro de costo

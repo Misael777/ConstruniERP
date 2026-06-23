@@ -1,16 +1,24 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
+	import { onMount } from 'svelte';
+	import { supabase } from '$lib/supabaseClient';
+	import { resolveApiUrl } from '$lib/apiClient';
 
-	let { isOpen = false, onClose = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void }>();
+	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
 
 	// Form State
 	let proyectoNombre = $state('');
 	let fechaVenta = $state('2026-05-20');
 	let asesor = $state('Andrea Martínez');
 	let cliente = $state('Maria Jhong');
+	let clientes = $state<any[]>([]);
+	let selectedClienteId = $state<string>('');
+	let nuevoClienteNombre = $state('');
 	let valorVenta = $state('15000.00');
 	let comisionPorcentaje = $state('10');
-	let comisionMonto = $state('1500.00');
+
+	let contratoFile = $state<File | null>(null);
+	let proformaFile = $state<File | null>(null);
 
 	// Generation fields
 	let tipoProyecto = $state('O'); // Proyecto de Obra (O)
@@ -23,13 +31,296 @@
 	let clienteNombreGen = $state('Maria Jhong');
 	
 	let observaciones = $state('');
+	let isSaving = $state(false);
+	let saveError = $state('');
 
 	// Auto-calculated code
 	let codigoGenerado = $derived(`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mes}${anio.substring(2)} - ${distrito} - ${clienteNombreGen}`);
 
-	function handleGuardar() {
-		// Logica de guardado aquí
+	let comisionMonto = $derived(() => (Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
+
+
+	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number) {
+		console.log(`[NuevaVentaModal] uploadDocument() iniciado - type: ${type}, file: ${file.name}, projectId: ${projectId}`);
+		console.log(`[NuevaVentaModal] Tamaño del archivo: ${file.size} bytes, tipo MIME: ${file.type}`);
+
+		const formData = new FormData();
+		formData.append('file', file);
+		formData.append('type', type);
+		formData.append('projectId', String(projectId));
+
+		console.log(`[NuevaVentaModal] FormData construido, llamando a /api/upload-document...`);
+
+		const response = await fetch(resolveApiUrl('/api/upload-document'), {
+			method: 'POST',
+			body: formData
+		});
+
+		console.log(`[NuevaVentaModal] Respuesta del servidor recibida. Status: ${response.status}`);
+
+		const result = await response.json();
+		console.log(`[NuevaVentaModal] Resultado JSON parseado:`, result);
+
+		if (!response.ok || !result.success) {
+			console.error(`[NuevaVentaModal] ❌ ERROR en uploadDocument: status=${response.status}, success=${result.success}`);
+			throw new Error(result.error || 'Error al subir documento.');
+		}
+
+		console.log(`[NuevaVentaModal] ✓ uploadDocument completado exitosamente. URL: ${result.url}`);
+		return result.url as string;
+	}
+
+	async function ensureCliente(nombre: string) {
+		console.log('[NuevaVentaModal] ensureCliente() iniciado con nombre:', nombre);
+		const trimmed = String(nombre || '').trim();
+		if (!trimmed) {
+			console.log('[NuevaVentaModal] Nombre vacío, retornando null');
+			return null;
+		}
+
+		console.log('[NuevaVentaModal] Buscando cliente existente con nombre ILIKE:', trimmed);
+		const { data: existing, error: selectError } = await supabase
+			.from('cliente')
+			.select('id_cliente')
+			.ilike('nombre', trimmed)
+			.limit(1)
+			.maybeSingle();
+
+		if (selectError) {
+			console.error('[NuevaVentaModal] ❌ Error consultando cliente:', selectError);
+			return null;
+		}
+
+		if (existing?.id_cliente) {
+			console.log('[NuevaVentaModal] ✓ Cliente existente encontrado con ID:', existing.id_cliente);
+			return existing.id_cliente;
+		}
+
+		console.log('[NuevaVentaModal] Cliente no existe, creando nuevo...');
+		const { data: inserted, error: insertError } = await supabase
+			.from('cliente')
+			.insert([{ nombre: trimmed }])
+			.select('id_cliente')
+			.single();
+
+		if (insertError) {
+			console.error('[NuevaVentaModal] ❌ Error creando cliente:', insertError);
+			return null;
+		}
+
+		console.log('[NuevaVentaModal] ✓ Nuevo cliente creado con ID:', inserted?.id_cliente);
+		return inserted?.id_cliente ?? null;
+	}
+
+	async function loadClientes() {
+		console.log('[NuevaVentaModal] loadClientes() iniciado');
+		try {
+			console.log('[NuevaVentaModal] Consultando supabase.from("cliente")...');
+			const { data, error } = await supabase.from('cliente').select('id_cliente,nombre').order('nombre', { ascending: true }).limit(200);
+			if (error) throw error;
+			clientes = data || [];
+			console.log(`[NuevaVentaModal] ✓ ${clientes.length} clientes cargados`);
+			console.log('[NuevaVentaModal] Lista de clientes:', clientes.map(c => ({ id: c.id_cliente, nombre: c.nombre })));
+		} catch (err) {
+			console.error('[NuevaVentaModal] ❌ Error cargando clientes:', err);
+			clientes = [];
+		}
+	}
+
+	onMount(() => {
+		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes...');
+		loadClientes();
+	});
+
+	async function handleGuardar() {
+		console.log('[NuevaVentaModal] === INICIO handleGuardar ===');
+		console.log('[NuevaVentaModal] Estado inicial:', {
+			proyectoNombre,
+			fechaVenta,
+			asesor,
+			selectedClienteId,
+			nuevoClienteNombre,
+			valorVenta,
+			comisionPorcentaje,
+			contratoFile: contratoFile?.name || null,
+			proformaFile: proformaFile?.name || null
+		});
+
+		saveError = '';
+
+		// === Validación 1: Nombre del proyecto ===
+		console.log('[NuevaVentaModal] Validando nombre del proyecto...');
+		if (!proyectoNombre.trim()) {
+			saveError = 'Debes ingresar un nombre de proyecto.';
+			console.warn('[NuevaVentaModal] ❌ ERROR: Nombre del proyecto vacío');
+			return;
+		}
+		console.log('[NuevaVentaModal] ✓ Nombre del proyecto OK:', proyectoNombre);
+
+		// === Validación 2: Fecha de venta ===
+		console.log('[NuevaVentaModal] Validando fecha de venta...');
+		if (!fechaVenta) {
+			saveError = 'Debes seleccionar la fecha de venta.';
+			console.warn('[NuevaVentaModal] ❌ ERROR: Fecha de venta vacía');
+			return;
+		}
+		console.log('[NuevaVentaModal] ✓ Fecha de venta OK:', fechaVenta);
+
+		// === Determinación del Cliente ID ===
+		console.log('[NuevaVentaModal] Determinando cliente ID...');
+		console.log('[NuevaVentaModal]   selectedClienteId:', selectedClienteId);
+		console.log('[NuevaVentaModal]   nuevoClienteNombre:', nuevoClienteNombre);
+		console.log('[NuevaVentaModal]   cliente (fallback):', cliente);
+
+		let clienteId: number | null = null;
+
+		if (selectedClienteId && selectedClienteId !== '__new__') {
+			// Cliente seleccionado del dropdown
+			clienteId = Number(selectedClienteId);
+			console.log('[NuevaVentaModal] ✓ Cliente seleccionado del dropdown, ID:', clienteId);
+		} else if (selectedClienteId === '__new__') {
+			// Crear nuevo cliente
+			console.log('[NuevaVentaModal] Opción "Nuevo cliente" seleccionada');
+			if (!nuevoClienteNombre.trim()) {
+				saveError = 'Debes ingresar el nombre del cliente.';
+				console.warn('[NuevaVentaModal] ❌ ERROR: Nombre del nuevo cliente vacío');
+				return;
+			}
+			console.log('[NuevaVentaModal] Creando nuevo cliente:', nuevoClienteNombre);
+			clienteId = await ensureCliente(nuevoClienteNombre);
+			console.log('[NuevaVentaModal] Nuevo cliente creado con ID:', clienteId);
+		} else {
+			// Fallback a texto libre (legacy)
+			console.log('[NuevaVentaModal] Usando modo fallback (sin dropdown seleccionado)');
+			if (!cliente.trim()) {
+				saveError = 'Debes ingresar el nombre del cliente.';
+				console.warn('[NuevaVentaModal] ❌ ERROR: Cliente fallback vacío');
+				return;
+			}
+			console.log('[NuevaVentaModal] Buscando o creando cliente:', cliente);
+			clienteId = await ensureCliente(cliente);
+			console.log('[NuevaVentaModal] Cliente obtenido/creado con ID:', clienteId);
+		}
+
+		if (!clienteId) {
+			saveError = 'No se pudo obtener o crear el cliente.';
+			console.error('[NuevaVentaModal] ❌ ERROR: No se pudo obtener clienteId');
+			return;
+		}
+		console.log('[NuevaVentaModal] ✓ clienteId final:', clienteId);
+
+		// === Preparación de datos ===
+		console.log('[NuevaVentaModal] Preparando datos para inserción...');
+		const precioVenta = Number(valorVenta) || 0;
+		const comision = Number(comisionPorcentaje) || 0;
+		const numeroPisosValue = Number(numeroPisos) || null;
+		const fechaInicio = fechaVenta;
+
+		console.log('[NuevaVentaModal] Datos calculados:', {
+			precioVenta,
+			comision,
+			numeroPisosValue,
+			fechaInicio
+		});
+
+		isSaving = true;
+		console.log('[NuevaVentaModal] isSaving = true');
+
+		// === Construcción del Payload ===
+		const proyectoPayload = {
+			id_cliente: clienteId,
+			nombre_proyecto: proyectoNombre,
+			fecha_inicio_plan: fechaInicio,
+			precio_venta: precioVenta,
+			comision_asesor: comision,
+			responsable: asesor
+		};
+
+		console.log('[NuevaVentaModal] Payload para proyecto:', proyectoPayload);
+
+		// === INSERT proyecto ===
+		console.log('[NuevaVentaModal] Insertando proyecto en Supabase...');
+		console.log('[NuevaVentaModal] Llamando a supabase.from("proyecto").insert()...');
+
+		const { data, error } = await supabase
+			.from('proyecto')
+			.insert([proyectoPayload])
+			.select('id_proyecto')
+			.single();
+
+		if (error) {
+			console.error('[NuevaVentaModal] ❌ ERROR al insertar proyecto:', error);
+			console.error('[NuevaVentaModal] Error code:', error.code);
+			console.error('[NuevaVentaModal] Error message:', error.message);
+			console.error('[NuevaVentaModal] Error details:', error.details);
+			saveError = 'Error guardando la venta en Proyectos. Revisa los datos e intenta de nuevo.';
+			isSaving = false;
+			return;
+		}
+
+		console.log('[NuevaVentaModal] ✓ Proyecto insertado exitosamente');
+		console.log('[NuevaVentaModal] Datos retornados:', data);
+
+		if (data?.id_proyecto) {
+			const nuevoProyectoId = data.id_proyecto;
+			console.log('[NuevaVentaModal] Nuevo ID_PROYECTO:', nuevoProyectoId);
+
+			// === UPSERT centro_costo ===
+			const centroCostoPayload = {
+				codigo: `PROY-${nuevoProyectoId}`,
+				nombre: proyectoNombre,
+				tipo: 'proyecto',
+				id_referencia: nuevoProyectoId
+			};
+
+			console.log('[NuevaVentaModal] Payload para centro_costo:', centroCostoPayload);
+			console.log('[NuevaVentaModal] Insertando/actualizando centro_costo...');
+
+			const ccResult = await supabase.from('centro_costo').upsert([centroCostoPayload], { onConflict: 'id_referencia', ignoreDuplicates: true });
+
+			console.log('[NuevaVentaModal] ✓ Centro de costo actualizado');
+			console.log('[NuevaVentaModal] Resultado centro_costo:', ccResult);
+
+			// === UPLOAD documentos ===
+			try {
+				console.log('[NuevaVentaModal] Verificando documentos para subir...');
+				console.log('[NuevaVentaModal]   contratoFile:', contratoFile ? `${contratoFile.name} (${contratoFile.size} bytes)` : 'null');
+				console.log('[NuevaVentaModal]   proformaFile:', proformaFile ? `${proformaFile.name} (${proformaFile.size} bytes)` : 'null');
+
+				if (contratoFile) {
+					console.log('[NuevaVentaModal] Subiendo contrato...');
+					const contratoResult = await uploadDocument('contrato', contratoFile, nuevoProyectoId);
+					console.log('[NuevaVentaModal] ✓ Contrato subido exitosamente. URL:', contratoResult);
+				}
+
+				if (proformaFile) {
+					console.log('[NuevaVentaModal] Subiendo proforma...');
+					const proformaResult = await uploadDocument('proforma', proformaFile, nuevoProyectoId);
+					console.log('[NuevaVentaModal] ✓ Proforma subida exitosamente. URL:', proformaResult);
+				}
+
+				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
+			} catch (uploadError) {
+				console.error('[NuevaVentaModal] ❌ ERROR al subir documentos:', uploadError);
+				console.error('[NuevaVentaModal] Error tipo:', typeof uploadError);
+				console.error('[NuevaVentaModal] Error stack:', uploadError instanceof Error ? uploadError.stack : 'N/A');
+
+				saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
+				isSaving = false;
+				return;
+			}
+		} else {
+			console.warn('[NuevaVentaModal] ⚠️ Advertencia: data no contiene id_proyecto');
+		}
+
+		// === Finalización ===
+		isSaving = false;
+		console.log('[NuevaVentaModal] isSaving = false');
+		console.log('[NuevaVentaModal] Llamando onSaved()...');
+		onSaved();
+		console.log('[NuevaVentaModal] Llamando onClose()...');
 		onClose();
+		console.log('[NuevaVentaModal] === FIN handleGuardar (exitoso) ===');
 	}
 </script>
 
@@ -79,7 +370,16 @@
 
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-slate-600">Cliente *</label>
-								<input type="text" bind:value={cliente} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
+									<option value="">-- Selecciona cliente --</option>
+									{#each clientes as c}
+										<option value={c.id_cliente}>{c.nombre}</option>
+									{/each}
+									<option value="__new__">+ Nuevo cliente</option>
+								</select>
+								{#if selectedClienteId === '__new__'}
+									<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+								{/if}
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-slate-600">Valor venta (S/) *</label>
@@ -98,15 +398,27 @@
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-slate-600">Proforma</label>
-									<button class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
-										<i class="fas fa-file-pdf text-rose-500"></i> Adjuntar PDF
-									</button>
+									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
+										<i class="fas fa-file-pdf text-rose-500"></i>
+										<input type="file" accept="application/pdf" on:change={(event) => proformaFile = event.currentTarget.files?.[0] ?? null} class="hidden" />
+										{#if proformaFile}
+											<span class="text-xs text-slate-500 truncate max-w-[120px]">{proformaFile.name}</span>
+										{:else}
+											<span>Adjuntar PDF</span>
+										{/if}
+									</label>
 								</div>
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-slate-600">Contrato</label>
-									<button class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
-										<i class="fas fa-file-pdf text-rose-500"></i> Adjuntar PDF
-									</button>
+									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
+										<i class="fas fa-file-pdf text-rose-500"></i>
+										<input type="file" accept="application/pdf" on:change={(event) => contratoFile = event.currentTarget.files?.[0] ?? null} class="hidden" />
+										{#if contratoFile}
+											<span class="text-xs text-slate-500 truncate max-w-[120px]">{contratoFile.name}</span>
+										{:else}
+											<span>Adjuntar PDF</span>
+										{/if}
+									</label>
 								</div>
 							</div>
 						</div>
@@ -263,8 +575,12 @@
 				<button on:click={onClose} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-slate-800 font-medium text-sm transition-colors shadow-sm">
 					Cancelar
 				</button>
-				<button on:click={handleGuardar} class="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2">
-					<i class="fas fa-save"></i> Guardar venta
+				<button on:click={() => !isSaving && handleGuardar()} disabled={isSaving} aria-busy={isSaving} class="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+					{#if isSaving}
+						<i class="fas fa-spinner fa-spin"></i> Guardando...
+					{:else}
+						<i class="fas fa-save"></i> Guardar venta
+					{/if}
 				</button>
 			</div>
 		</div>

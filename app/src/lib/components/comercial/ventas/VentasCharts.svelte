@@ -17,6 +17,19 @@
 		Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, BarElement, Filler
 	);
 
+	let {
+		ventasPorMes = [100, 250, 450, 200, 800, 450, 300, 750, 600, 1050, 700, 950],
+		ventasVsPropuestas = {
+			ventas: [150, 300, 400, 250, 500, 450, 300, 600, 550, 700, 500, 650],
+			propuestas: [300, 450, 700, 500, 800, 600, 450, 850, 750, 950, 700, 850]
+		},
+		comisionesPorMes = [10, 25, 45, 20, 80, 45, 30, 75, 60, 105, 70, 95]
+	} = $props<{
+		ventasPorMes?: number[];
+		ventasVsPropuestas?: { ventas: number[]; propuestas: number[] };
+		comisionesPorMes?: number[];
+	}>();
+
 	const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
 	// 1. Ventas por mes (Line Chart with Area)
@@ -25,7 +38,7 @@
 		datasets: [
 			{
 				label: 'Ventas',
-				data: [100, 250, 450, 200, 800, 450, 300, 750, 600, 1050, 700, 950],
+				data: ventasPorMes,
 				fill: true,
 				backgroundColor: 'rgba(59, 130, 246, 0.1)', // blue-500 with opacity
 				borderColor: '#3b82f6',
@@ -69,13 +82,13 @@
 		datasets: [
 			{
 				label: 'Ventas',
-				data: [150, 300, 400, 250, 500, 450, 300, 600, 550, 700, 500, 650],
+				data: ventasVsPropuestas.ventas,
 				backgroundColor: '#3b82f6', // blue-500
 				borderRadius: 2
 			},
 			{
 				label: 'Propuestas',
-				data: [300, 450, 700, 500, 800, 600, 450, 850, 750, 950, 700, 850],
+				data: ventasVsPropuestas.propuestas,
 				backgroundColor: '#94a3b8', // slate-400
 				borderRadius: 2
 			}
@@ -111,7 +124,7 @@
 		datasets: [
 			{
 				label: 'Comisiones',
-				data: [10, 25, 45, 20, 80, 45, 30, 75, 60, 105, 70, 95],
+				data: comisionesPorMes,
 				fill: true,
 				backgroundColor: 'rgba(16, 185, 129, 0.1)', // emerald-500
 				borderColor: '#10b981',

@@ -11,29 +11,39 @@
 
 	ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale);
 
+	let {
+		labels = ['Residencial', 'Comercial', 'Corporativo', 'Industrial', 'Otros'],
+		tipoData = [45, 25, 15, 10, 5],
+		topAsesores = [
+			{ nombre: 'Andrea Martínez', ventas: 1050000, max: 1200000, color: 'bg-blue-500' },
+			{ nombre: 'Juan López', ventas: 950000, max: 1200000, color: 'bg-purple-500' },
+			{ nombre: 'Maria Condori', ventas: 570000, max: 1200000, color: 'bg-emerald-500' },
+			{ nombre: 'Carlos Torres', ventas: 180000, max: 1200000, color: 'bg-orange-500' },
+			{ nombre: 'Luis Ramirez', ventas: 100000, max: 1200000, color: 'bg-rose-500' }
+		],
+		valorTotal = 2850000,
+		comisionTotal = 285000,
+		ventasCount = 48,
+		asesorCount = 5
+	} = $props<{
+		labels?: string[];
+		tipoData?: number[];
+		topAsesores?: Array<{ nombre: string; ventas: number; max: number; color: string }>;
+		valorTotal?: number;
+		comisionTotal?: number;
+		ventasCount?: number;
+		asesorCount?: number;
+	}>();
+
 	function formatMoney(amount: number) {
 		return new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(amount);
 	}
 
-	// Chart Data
-	const chartData = {
-		labels: ['Residencial', 'Comercial', 'Corporativo', 'Industrial', 'Otros'],
-		datasets: [
-			{
-				data: [45, 25, 15, 10, 5],
-				backgroundColor: [
-					'#3b82f6', // blue-500
-					'#10b981', // emerald-500
-					'#8b5cf6', // purple-500
-					'#f59e0b', // amber-500
-					'#94a3b8'  // slate-400
-				],
-				borderWidth: 2,
-				borderColor: '#ffffff',
-				hoverOffset: 4
-			}
-		]
-	};
+	const chartColors = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#94a3b8'];
+
+	function maxAsesorVentas() {
+		return Math.max(...topAsesores.map((asesor: { max: number }) => asesor.max), 1);
+	}
 
 	const chartOptions = {
 		responsive: true,
@@ -52,14 +62,6 @@
 			}
 		}
 	};
-
-	const topAsesores = [
-		{ nombre: 'Andrea Martínez', ventas: 1050000, max: 1200000, color: 'bg-blue-500' },
-		{ nombre: 'Juan López', ventas: 950000, max: 1200000, color: 'bg-purple-500' },
-		{ nombre: 'Maria Condori', ventas: 570000, max: 1200000, color: 'bg-emerald-500' },
-		{ nombre: 'Carlos Torres', ventas: 180000, max: 1200000, color: 'bg-orange-500' },
-		{ nombre: 'Luis Ramirez', ventas: 100000, max: 1200000, color: 'bg-rose-500' }
-	];
 </script>
 
 <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 h-full flex flex-col gap-8">
@@ -117,18 +119,18 @@
 		
 		<div class="flex items-center gap-4">
 			<div class="w-32 h-32 relative flex-shrink-0">
-				<Doughnut data={chartData} options={chartOptions} />
+				<Doughnut data={{ labels, datasets: [{ data: tipoData, backgroundColor: chartColors, borderWidth: 2, borderColor: '#ffffff', hoverOffset: 4 }] }} options={chartOptions} />
 			</div>
 			
 			<div class="flex-1 space-y-2">
-				{#each chartData.labels as label, i}
+				{#each labels as label, i}
 					<div class="flex items-center justify-between text-[10px]">
 						<div class="flex items-center gap-1.5">
-							<div class="w-2 h-2 rounded-full" style="background-color: {chartData.datasets[0].backgroundColor[i]}"></div>
+							<div class="w-2 h-2 rounded-full" style="background-color: {chartColors[i]}"></div>
 							<span class="text-slate-600">{label}</span>
 						</div>
 						<div class="flex items-center gap-2">
-							<span class="font-medium text-slate-500">{chartData.datasets[0].data[i]}%</span>
+							<span class="font-medium text-slate-500">{tipoData[i]}%</span>
 						</div>
 					</div>
 				{/each}
@@ -152,7 +154,7 @@
 						<span class="text-xs font-bold text-slate-800">{formatMoney(asesor.ventas)}</span>
 					</div>
 					<div class="w-full bg-slate-100 rounded-full h-1.5 ml-6 relative overflow-hidden">
-						<div class={`absolute top-0 left-0 h-full rounded-full ${asesor.color}`} style={`width: ${(asesor.ventas / asesor.max) * 100}%`}></div>
+						<div class={`absolute top-0 left-0 h-full rounded-full ${asesor.color}`} style={`width: ${(asesor.ventas / maxAsesorVentas()) * 100}%`}></div>
 					</div>
 				</div>
 			{/each}

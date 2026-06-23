@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { createEventDispatcher } from 'svelte';
+
+	const dispatch = createEventDispatcher();
+
 	let { data = [
 		{ proyecto: 'Edificio Residencial Los Olivos', valor: 350000, tipo: 'Residencial', fecha: '05/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 35000, comisionPct: 10 },
 		{ proyecto: 'Centro Comercial San Isidro', valor: 820000, tipo: 'Comercial', fecha: '10/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 82000, comisionPct: 10 },
@@ -110,19 +114,24 @@
 							</div>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Proforma">
+							<button on:click={() => dispatch('viewProforma', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Proforma" aria-label="Ver Proforma">
 								<i class="far fa-file-pdf"></i>
 							</button>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Contrato">
+							<button on:click={() => dispatch('viewContrato', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Contrato" aria-label="Ver Contrato">
 								<i class="far fa-file-pdf"></i>
 							</button>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button class="text-slate-400 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center">
-								<i class="fas fa-ellipsis-v"></i>
-							</button>
+							<div class="inline-flex gap-2 items-center justify-center">
+								<button on:click={() => dispatch('edit', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
+									<i class="fas fa-pen"></i>
+								</button>
+								<button on:click={() => dispatch('delete', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
+									<i class="fas fa-trash"></i>
+								</button>
+							</div>
 						</td>
 					</tr>
 				{/each}
@@ -145,10 +154,10 @@
 			</div>
 			
 			<div class="flex items-center gap-1">
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled>
+				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled aria-label="Primera página">
 					<i class="fas fa-step-backward text-[10px]"></i>
 				</button>
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled>
+				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled aria-label="Página anterior">
 					<i class="fas fa-chevron-left text-[10px]"></i>
 				</button>
 				
@@ -156,10 +165,10 @@
 				<button class="w-7 h-7 rounded hover:bg-slate-100 text-slate-600 font-medium text-xs flex items-center justify-center transition-colors">2</button>
 				<button class="w-7 h-7 rounded hover:bg-slate-100 text-slate-600 font-medium text-xs flex items-center justify-center transition-colors">3</button>
 				
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors">
+				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors" aria-label="Página siguiente">
 					<i class="fas fa-chevron-right text-[10px]"></i>
 				</button>
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors">
+				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors" aria-label="Última página">
 					<i class="fas fa-step-forward text-[10px]"></i>
 				</button>
 			</div>
