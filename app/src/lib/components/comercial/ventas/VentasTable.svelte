@@ -114,12 +114,22 @@
 							</div>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button on:click={() => dispatch('viewProforma', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Proforma" aria-label="Ver Proforma">
+							<button on:click={() => {
+								console.log('[VentasTable] Click en Proforma');
+								console.log('[VentasTable] Row data:', row);
+								console.log('[VentasTable] Descripción:', row?.descripcion);
+								dispatch('viewProforma', { row });
+							}} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Proforma" aria-label="Ver Proforma">
 								<i class="far fa-file-pdf"></i>
 							</button>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button on:click={() => dispatch('viewContrato', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Contrato" aria-label="Ver Contrato">
+							<button on:click={() => {
+								console.log('[VentasTable] Click en Contrato');
+								console.log('[VentasTable] Row data:', row);
+								console.log('[VentasTable] Contrato URL:', row?.contrato);
+								dispatch('viewContrato', { row });
+							}} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Contrato" aria-label="Ver Contrato">
 								<i class="far fa-file-pdf"></i>
 							</button>
 						</td>

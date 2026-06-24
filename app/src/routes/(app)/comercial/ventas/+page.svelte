@@ -64,7 +64,7 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 		try {
 			const { data, error } = await supabase
 				.from('proyecto')
-				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable')
+				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,descripcion,contrato')
 				.order('fecha_inicio_plan', { ascending: false })
 				.limit(100);
 
@@ -106,7 +106,9 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 					asesor,
 					asesorInitials: getInitials(asesor),
 					comisionPct,
-					comision: Math.round(valor * (comisionPct / 100))
+					comision: Math.round(valor * (comisionPct / 100)),
+					descripcion: project.descripcion || '',
+					contrato: project.contrato || ''
 				};
 			});
 
@@ -201,6 +203,122 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 			isDeleting = false;
 		}
 	}
+
+	// PDF preview state and helpers
+	let isPdfPreviewOpen = $state(false);
+	let pdfPreviewUrl = $state('');
+	let pdfPreviewTitle = $state('');
+
+	function ensurePreviewUrl(url: string) {
+		console.log('[ensurePreviewUrl] URL original:', url);
+		if (!url) {
+			console.log('[ensurePreviewUrl] URL vacía');
+			return '';
+		}
+		try {
+			const u = new URL(url);
+			console.log('[ensurePreviewUrl] URL parseada correctamente');
+			console.log('[ensurePreviewUrl] Hostname:', u.hostname);
+			if (u.hostname.includes('drive.google.com')) {
+				console.log('[ensurePreviewUrl] Detectado Google Drive');
+				const id = u.searchParams.get('id');
+				if (id) {
+					const previewUrl = `https://drive.google.com/file/d/${id}/preview`;
+					console.log('[ensurePreviewUrl] ID encontrado en searchParams:', id);
+					console.log('[ensurePreviewUrl] URL de preview:', previewUrl);
+					return previewUrl;
+				}
+				const m = u.pathname.match(/\/file\/d\/([^\/]+)/);
+				if (m) {
+					const previewUrl = `https://drive.google.com/file/d/${m[1]}/preview`;
+					console.log('[ensurePreviewUrl] ID encontrado en pathname:', m[1]);
+					console.log('[ensurePreviewUrl] URL de preview:', previewUrl);
+					return previewUrl;
+				}
+			}
+			console.log('[ensurePreviewUrl] Devolviendo URL sin cambios');
+			return url;
+		} catch (err) {
+			console.error('[ensurePreviewUrl] Error parseando URL:', err);
+			console.log('[ensurePreviewUrl] URL problemática:', url);
+			return url;
+		}
+	}
+
+	function extractProformaUrl(description: string) {
+		console.log('[extractProformaUrl] Description recibida:', description);
+		if (!description) {
+			console.log('[extractProformaUrl] Description vacía');
+			return null;
+		}
+		const match = description.match(/https?:\/\/[\w\-._%~:\/\?#[\]@!$&'()*+,;=%]+/);
+		if (match) {
+			console.log('[extractProformaUrl] URL encontrada:', match[0]);
+			return match[0];
+		}
+		console.log('[extractProformaUrl] No se encontró URL en la descripción');
+		return null;
+	}
+
+	function closePdfPreview() {
+		isPdfPreviewOpen = false;
+		pdfPreviewUrl = '';
+		pdfPreviewTitle = '';
+	}
+
+	function handleViewContrato(e: CustomEvent) {
+		console.log('[handleViewContrato] Evento recibido');
+		const row = e.detail.row;
+		console.log('[handleViewContrato] Row:', row);
+		console.log('[handleViewContrato] Contrato URL:', row?.contrato);
+		
+		if (!row?.contrato) {
+			console.error('[handleViewContrato] No hay contrato para este proyecto');
+			alert('No se encontró el contrato para este proyecto.');
+			return;
+		}
+		
+		console.log('[handleViewContrato] Procesando URL del contrato');
+		const urlProcessada = ensurePreviewUrl(String(row.contrato));
+		console.log('[handleViewContrato] URL procesada:', urlProcessada);
+		
+		pdfPreviewUrl = urlProcessada;
+		pdfPreviewTitle = `Contrato - ${row.proyecto}`;
+		isPdfPreviewOpen = true;
+		
+		console.log('[handleViewContrato] Preview abierto');
+		console.log('[handleViewContrato] pdfPreviewUrl:', pdfPreviewUrl);
+		console.log('[handleViewContrato] pdfPreviewTitle:', pdfPreviewTitle);
+	}
+
+	function handleViewProforma(e: CustomEvent) {
+		console.log('[handleViewProforma] Evento recibido');
+		const row = e.detail.row;
+		console.log('[handleViewProforma] Row:', row);
+		console.log('[handleViewProforma] Descripción:', row?.descripcion);
+		
+		const url = extractProformaUrl(String(row?.descripcion || ''));
+		console.log('[handleViewProforma] URL extraída:', url);
+		
+		if (!url) {
+			console.error('[handleViewProforma] No se encontró URL en la descripción');
+			alert('No se encontró la proforma para este proyecto.');
+			return;
+		}
+		
+		console.log('[handleViewProforma] Procesando URL');
+		const urlProcessada = ensurePreviewUrl(url);
+		console.log('[handleViewProforma] URL procesada:', urlProcessada);
+		
+		pdfPreviewUrl = urlProcessada;
+		pdfPreviewTitle = `Proforma - ${row.proyecto}`;
+		isPdfPreviewOpen = true;
+		
+		console.log('[handleViewProforma] Preview abierto');
+		console.log('[handleViewProforma] pdfPreviewUrl:', pdfPreviewUrl);
+		console.log('[handleViewProforma] pdfPreviewTitle:', pdfPreviewTitle);
+	}
+
 </script>
 
 <svelte:head>
@@ -250,7 +368,7 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 					{:else}
 						<!-- Data Table -->
 						<div class="h-[500px]">
-						<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} />					</div>
+						<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:viewProforma={handleViewProforma} on:viewContrato={handleViewContrato} />					</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
 					{/if}
@@ -267,3 +385,42 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 
 <!-- Modal Overlay -->
 <NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} />
+
+<!-- PDF Preview Modal -->
+{#if isPdfPreviewOpen}
+	<div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[90vh] flex flex-col overflow-hidden">
+			<!-- Modal Header -->
+			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
+				<h2 class="text-lg font-semibold text-slate-800">{pdfPreviewTitle}</h2>
+				<button 
+					onclick={closePdfPreview}
+					class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
+					aria-label="Cerrar"
+				>
+					<i class="fas fa-times text-lg"></i>
+				</button>
+			</div>
+
+			<!-- Modal Content with iframe -->
+			<div class="flex-1 overflow-hidden bg-slate-100">
+				{#if pdfPreviewUrl}
+					<iframe 
+						src={pdfPreviewUrl}
+						title={pdfPreviewTitle}
+						class="w-full h-full border-none"
+						allowfullscreen
+					></iframe>
+				{:else}
+					<div class="w-full h-full flex items-center justify-center">
+						<div class="text-center text-slate-500">
+							<i class="fas fa-exclamation-circle text-4xl mb-3"></i>
+							<p class="font-medium">No se pudo cargar la vista previa</p>
+							<p class="text-sm mt-1">URL no disponible</p>
+						</div>
+					</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+{/if}
