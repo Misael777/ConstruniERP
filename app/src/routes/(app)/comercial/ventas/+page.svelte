@@ -266,6 +266,37 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 		pdfPreviewTitle = '';
 	}
 
+	function sanitizeFilename(name: string) {
+		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
+	}
+
+	async function downloadPdf() {
+		if (!pdfPreviewUrl) {
+			alert('URL no disponible para descargar');
+			return;
+		}
+
+		const filename = sanitizeFilename(pdfPreviewTitle) + '.pdf';
+		try {
+			const res = await fetch(pdfPreviewUrl, { mode: 'cors' });
+			if (!res.ok) throw new Error('Fetch failed');
+			const blob = await res.blob();
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = filename;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(url);
+			return;
+		} catch (err) {
+			console.warn('[downloadPdf] descarga por fetch falló, abriendo en nueva pestaña', err);
+			// Fallback: open in new tab (user can download from there)
+			window.open(pdfPreviewUrl, '_blank', 'noopener');
+		}
+	}
+
 	function handleViewContrato(e: CustomEvent) {
 		console.log('[handleViewContrato] Evento recibido');
 		const row = e.detail.row;
@@ -384,7 +415,7 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 </div>
 
 <!-- Modal Overlay -->
-<NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} />
+<NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} onSaved={fetchVentas} />
 
 <!-- PDF Preview Modal -->
 {#if isPdfPreviewOpen}
@@ -393,16 +424,25 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 			<!-- Modal Header -->
 			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
 				<h2 class="text-lg font-semibold text-slate-800">{pdfPreviewTitle}</h2>
-				<button 
-					onclick={closePdfPreview}
-					class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
-					aria-label="Cerrar"
-				>
-					<i class="fas fa-times text-lg"></i>
-				</button>
+				<div class="flex items-center gap-2">
+					<button
+						onclick={downloadPdf}
+						class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
+						aria-label="Descargar PDF"
+						title="Descargar"
+					>
+						<i class="fas fa-download text-lg"></i>
+					</button>
+					<button 
+						onclick={closePdfPreview}
+						class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
+						aria-label="Cerrar"
+					>
+						<i class="fas fa-times text-lg"></i>
+					</button>
+				</div>
 			</div>
 
-			<!-- Modal Content with iframe -->
 			<div class="flex-1 overflow-hidden bg-slate-100">
 				{#if pdfPreviewUrl}
 					<iframe 

@@ -9,7 +9,7 @@
 	// Form State
 	let proyectoNombre = $state('');
 	let fechaVenta = $state('2026-05-20');
-	let asesor = $state('Andrea Martínez');
+	let asesor = $state('');
 	let cliente = $state('Maria Jhong');
 	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
@@ -39,6 +39,45 @@
 
 	let comisionMonto = $derived(() => (Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
 
+	async function resolveCurrentAsesorName(): Promise<string> {
+		try {
+			const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+			if (sessionError) {
+				console.warn('[NuevaVentaModal] No se pudo recuperar la sesión para asignar asesor:', sessionError);
+			}
+
+			if (!session?.user?.id) {
+				return 'Usuario';
+			}
+
+			const { data: empleado, error: empleadoError } = await supabase
+				.from('empleados')
+				.select('nombre')
+				.eq('auth_user_id', session.user.id)
+				.maybeSingle();
+
+			if (empleadoError) {
+				console.warn('[NuevaVentaModal] No se pudo obtener el nombre del empleado para asignar asesor:', empleadoError);
+			}
+
+			const nombreEmpleado = empleado?.nombre?.trim();
+			if (nombreEmpleado) {
+				return nombreEmpleado;
+			}
+
+			return session.user.email?.trim() || 'Usuario';
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error resolviendo el asesor actual:', err);
+			return 'Usuario';
+		}
+	}
+
+	async function loadCurrentAsesor() {
+		const resolvedAsesor = await resolveCurrentAsesorName();
+		asesor = resolvedAsesor;
+		console.log('[NuevaVentaModal] Asesor inicial cargado:', asesor);
+	}
 
 	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number) {
 		console.log(`[NuevaVentaModal] uploadDocument() iniciado - type: ${type}, file: ${file.name}, projectId: ${projectId}`);
@@ -128,8 +167,9 @@
 	}
 
 	onMount(() => {
-		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes...');
+		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes y asesor...');
 		loadClientes();
+		loadCurrentAsesor();
 	});
 
 	async function handleGuardar() {
@@ -215,6 +255,8 @@
 		const comision = Number(comisionPorcentaje) || 0;
 		const numeroPisosValue = Number(numeroPisos) || null;
 		const fechaInicio = fechaVenta;
+		const asesorFinal = (asesor || '').trim() || await resolveCurrentAsesorName();
+		asesor = asesorFinal;
 
 		console.log('[NuevaVentaModal] Datos calculados:', {
 			precioVenta,
@@ -233,7 +275,7 @@
 			fecha_inicio_plan: fechaInicio,
 			precio_venta: precioVenta,
 			comision_asesor: comision,
-			responsable: asesor
+			responsable: asesorFinal
 		};
 
 		console.log('[NuevaVentaModal] Payload para proyecto:', proyectoPayload);
@@ -362,12 +404,9 @@
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-slate-600">Asesor *</label>
-								<select bind:value={asesor} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
-									<option value="Andrea Martínez">Andrea Martínez</option>
-									<option value="Juan López">Juan López</option>
-								</select>
+								<input type="text" readonly value={asesor || 'Cargando asesor...'} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none text-slate-700">
+								<span class="text-[10px] text-slate-400 mt-0.5">Se asigna automáticamente con el usuario activo</span>
 							</div>
-
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-slate-600">Cliente *</label>
 								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">

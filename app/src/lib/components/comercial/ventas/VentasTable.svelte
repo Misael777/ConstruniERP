@@ -13,6 +13,24 @@
 		{ proyecto: 'Local Comercial La Molina', valor: 250000, tipo: 'Comercial', fecha: '22/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 25000, comisionPct: 10 }
 	] } = $props<{ data?: any[] }>();
 
+	let filtroProyecto = 'Todos';
+	let filtroTipo = 'Todos';
+	let filtroAsesor = 'Todos';
+	let fechaDesde = '';
+	let fechaHasta = '';
+
+	function getProyectosDisponibles() {
+		return Array.from(new Set(data.map(row => row.proyecto))).sort();
+	}
+
+	function getTiposDisponibles() {
+		return Array.from(new Set(data.map(row => row.tipo))).sort();
+	}
+
+	function getAsesoresDisponibles() {
+		return Array.from(new Set(data.map(row => row.asesor))).sort();
+	}
+
 	function formatMoney(amount: number) {
 		return new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(amount);
 	}
@@ -26,6 +44,44 @@
 			default: return 'bg-slate-50 text-slate-600 border-slate-200';
 		}
 	}
+
+	function parseFechaRow(fecha: string) {
+		const [day, month, year] = fecha.split('/').map(part => Number(part));
+		if (!day || !month || !year) return null;
+		return new Date(year, month - 1, day);
+	}
+
+	function parseFechaInput(value: string) {
+		if (!value) return null;
+		const [year, month, day] = value.split('-').map(part => Number(part));
+		if (!year || !month || !day) return null;
+		return new Date(year, month - 1, day);
+	}
+
+	function getFilteredData() {
+		return data.filter(row => {
+			const proyectoMatch = filtroProyecto === 'Todos' || row.proyecto === filtroProyecto;
+			const tipoMatch = filtroTipo === 'Todos' || row.tipo === filtroTipo;
+			const asesorMatch = filtroAsesor === 'Todos' || row.asesor === filtroAsesor;
+
+			const rowDate = parseFechaRow(row.fecha);
+			const desdeDate = parseFechaInput(fechaDesde);
+			const hastaDate = parseFechaInput(fechaHasta);
+
+			const desdeMatch = !desdeDate || (rowDate && rowDate >= desdeDate);
+			const hastaMatch = !hastaDate || (rowDate && rowDate <= hastaDate);
+
+			return proyectoMatch && tipoMatch && asesorMatch && desdeMatch && hastaMatch;
+		});
+	}
+
+	function limpiarFiltros() {
+		filtroProyecto = 'Todos';
+		filtroTipo = 'Todos';
+		filtroAsesor = 'Todos';
+		fechaDesde = '';
+		fechaHasta = '';
+	}
 </script>
 
 <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col h-full">
@@ -33,38 +89,41 @@
 	<div class="p-4 border-b border-slate-100 flex flex-wrap items-center gap-4">
 		<div class="flex flex-col gap-1 min-w-[140px] flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Proyecto</label>
-			<select class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
-				<option>Todos los proyectos</option>
+			<select bind:value={filtroProyecto} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
+				<option value="Todos">Todos los proyectos</option>
+				{#each getProyectosDisponibles() as proyecto}
+					<option value={proyecto}>{proyecto}</option>
+				{/each}
 			</select>
 		</div>
 		<div class="flex flex-col gap-1 min-w-[120px] flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Tipo proyecto</label>
-			<select class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
-				<option>Todos</option>
+			<select bind:value={filtroTipo} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
+				<option value="Todos">Todos</option>
+				{#each getTiposDisponibles() as tipo}
+					<option value={tipo}>{tipo}</option>
+				{/each}
 			</select>
 		</div>
 		<div class="flex flex-col gap-1 min-w-[140px] flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Asesor</label>
-			<select class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
-				<option>Todos</option>
+			<select bind:value={filtroAsesor} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
+				<option value="Todos">Todos</option>
+				{#each getAsesoresDisponibles() as asesorOption}
+					<option value={asesorOption}>{asesorOption}</option>
+				{/each}
 			</select>
 		</div>
 		<div class="flex flex-col gap-1 min-w-[130px] flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Fecha desde</label>
-			<div class="relative">
-				<input type="text" value="01/01/2026" class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-3 pr-8">
-				<i class="far fa-calendar-alt absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
-			</div>
+			<input type="date" bind:value={fechaDesde} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full" />
 		</div>
 		<div class="flex flex-col gap-1 min-w-[130px] flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Fecha hasta</label>
-			<div class="relative">
-				<input type="text" value="31/01/2026" class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-3 pr-8">
-				<i class="far fa-calendar-alt absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
-			</div>
+			<input type="date" bind:value={fechaHasta} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full" />
 		</div>
 		<div class="flex items-end flex-1 md:flex-none mt-5 md:mt-0 ml-auto">
-			<button class="text-sm font-semibold text-blue-600 flex items-center gap-2 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors">
+			<button onclick={limpiarFiltros} class="text-sm font-semibold text-blue-600 flex items-center gap-2 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors">
 				<i class="fas fa-undo"></i> Limpiar filtros
 			</button>
 		</div>
@@ -87,8 +146,15 @@
 				</tr>
 			</thead>
 			<tbody class="divide-y divide-slate-100">
-				{#each data as row}
-					<tr class="hover:bg-slate-50/80 transition-colors group">
+				{#if getFilteredData().length === 0}
+					<tr>
+						<td colspan="9" class="px-5 py-10 text-center text-slate-500">
+							No se encontraron ventas con esos filtros.
+						</td>
+					</tr>
+				{:else}
+					{#each getFilteredData() as row}
+						<tr class="hover:bg-slate-50/80 transition-colors group">
 						<td class="px-5 py-4 font-medium text-slate-800">
 							<div class="max-w-[200px] truncate">{row.proyecto}</div>
 						</td>
@@ -114,7 +180,7 @@
 							</div>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button on:click={() => {
+							<button onclick={() => {
 								console.log('[VentasTable] Click en Proforma');
 								console.log('[VentasTable] Row data:', row);
 								console.log('[VentasTable] Descripción:', row?.descripcion);
@@ -124,7 +190,7 @@
 							</button>
 						</td>
 						<td class="px-5 py-4 text-center">
-							<button on:click={() => {
+							<button onclick={() => {
 								console.log('[VentasTable] Click en Contrato');
 								console.log('[VentasTable] Row data:', row);
 								console.log('[VentasTable] Contrato URL:', row?.contrato);
@@ -135,23 +201,24 @@
 						</td>
 						<td class="px-5 py-4 text-center">
 							<div class="inline-flex gap-2 items-center justify-center">
-								<button on:click={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
+								<button onclick={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
 									<i class="fas fa-pen"></i>
 								</button>
-								<button on:click={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
+								<button onclick={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
 									<i class="fas fa-trash"></i>
 								</button>
 							</div>
 						</td>
 					</tr>
 				{/each}
+				{/if}
 			</tbody>
 		</table>
 	</div>
 
 	<!-- Pagination Footer -->
 	<div class="p-4 border-t border-slate-100 flex items-center justify-between mt-auto bg-slate-50/30">
-		<span class="text-xs text-slate-500 font-medium">Mostrando 1 a 7 de 48 registros</span>
+		<span class="text-xs text-slate-500 font-medium">Mostrando {getFilteredData().length} de {data.length} registros</span>
 		
 		<div class="flex items-center gap-4">
 			<div class="flex items-center gap-2">
