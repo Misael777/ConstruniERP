@@ -30,7 +30,8 @@
 			submodules: [
 				{ key: 'ver_proyectos', label: 'General Proyectos' },
 				{ key: 'ver_proyectos_dashboard', label: 'Dashboard Proyectos' },
-				{ key: 'ver_proyectos_gestion', label: 'Gestión de Proyectos' }
+				{ key: 'ver_proyectos_gestion', label: 'Gestión de Proyectos' },
+				{ key: 'ver_proyectos', label: 'Partidas y Plantillas' }
 			]
 		},
 		{
