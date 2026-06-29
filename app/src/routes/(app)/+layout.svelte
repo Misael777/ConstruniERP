@@ -11,6 +11,7 @@
 	
 	let isLoading = $state(true);
 	let userRole = $state<string | null>(null);
+	let sidebarCollapsed = $state(false);
 
 	onMount(async () => {
 		console.log('[Layout] onMount initiated for (app) layout. Path:', page.url.pathname);
@@ -96,10 +97,10 @@
 {:else}
 	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Sidebar Global -->
-		<Sidebar />
+		<Sidebar bind:collapsed={sidebarCollapsed} />
 		
 		<!-- Main Content -->
-		<main class="flex-1 overflow-y-auto md:ml-[280px]">
+		<main class={`flex-1 overflow-y-auto transition-all duration-200 ${sidebarCollapsed ? 'md:ml-[76px]' : 'md:ml-[280px]'}`}>
 			<!-- Placeholder Topbar para Layout General -->
 			<header class="bg-white border-b border-slate-100 h-16 px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
 				<div class="flex items-center gap-4">

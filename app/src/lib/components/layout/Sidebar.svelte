@@ -5,6 +5,8 @@
 	import { MODULE_REGISTRY } from '$lib/config/modules';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 
+	let { collapsed = $bindable(false) } = $props();
+
 	// Filter modules based on permissions with verbose logging
 	let visibleModules = $derived.by(() => {
 		console.log('[Sidebar] --- Calculating visibleModules ---');
@@ -54,16 +56,27 @@
 	}
 </script>
 
-<aside class="w-[280px] bg-[#1a233a] text-slate-300 fixed top-0 left-0 bottom-0 z-10 hidden md:flex flex-col">
+<aside class={`bg-[#1a233a] text-slate-300 fixed top-0 left-0 bottom-0 z-10 hidden md:flex flex-col transition-all duration-200 ${collapsed ? 'w-[76px]' : 'w-[280px]'}`}>
 	<!-- Logo -->
-	<div class="p-6 border-b border-white/5 mb-4 flex items-center gap-3 bg-white flex-shrink-0">
-		<div class="text-blue-600 text-2xl">
+	<div class="p-4 border-b border-white/5 mb-4 flex items-center gap-3 bg-white flex-shrink-0">
+		<div class="text-blue-600 text-2xl flex-shrink-0">
 			<i class="fas fa-cubes"></i>
 		</div>
-		<div class="flex flex-col text-brand-marine">
-			<h1 class="font-bold text-xl leading-tight">CONSTRUNI</h1>
-			<span class="text-[10px] font-bold text-orange-500 uppercase tracking-widest">ERP</span>
-		</div>
+		{#if !collapsed}
+			<div class="flex flex-col text-brand-marine min-w-0">
+				<h1 class="font-bold text-xl leading-tight">CONSTRUNI</h1>
+				<span class="text-[10px] font-bold text-orange-500 uppercase tracking-widest">ERP</span>
+			</div>
+		{/if}
+		<button
+			type="button"
+			onclick={() => (collapsed = !collapsed)}
+			class="ml-auto flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100 hover:text-brand-marine"
+			title={collapsed ? 'Expandir menú' : 'Colapsar menú'}
+			aria-label={collapsed ? 'Expandir menú' : 'Colapsar menú'}
+		>
+			<i class={`fas fa-chevron-${collapsed ? 'right' : 'left'} text-sm`}></i>
+		</button>
 	</div>
 
 	<!-- Menu (scrollable) -->
@@ -73,25 +86,28 @@
 			<li class="mb-1">
 				<button 
 					onclick={() => toggleMenu(item.path, !!item.subItems)}
-					class={`w-full flex items-center justify-between px-4 py-3 rounded-xl font-medium transition-colors text-sm ${
+					class={`w-full flex items-center ${collapsed ? 'justify-center px-3' : 'justify-between px-4'} py-3 rounded-xl font-medium transition-colors text-sm ${
 						active && !item.subItems
 							? 'bg-blue-600 text-white shadow-md' 
 							: active && item.subItems 
 								? 'bg-blue-600 text-white'
 								: 'hover:bg-white/5 hover:text-white'
 					}`}
+					title={collapsed ? item.label : undefined}
 				>
-					<div class="flex items-center gap-3">
+					<div class={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'}`}>
 						<i class={`w-5 text-center ${item.icon}`}></i>
-						{item.label}
+						{#if !collapsed}
+							<span>{item.label}</span>
+						{/if}
 					</div>
-					{#if item.subItems}
+					{#if item.subItems && !collapsed}
 						<i class={`fas fa-chevron-${openMenus[item.path] ? 'up' : 'down'} text-xs opacity-50`}></i>
 					{/if}
 				</button>
 
 				<!-- Submenu -->
-				{#if item.subItems && openMenus[item.path]}
+				{#if item.subItems && openMenus[item.path] && !collapsed}
 					<ul class="mt-1 mb-2 relative before:content-[''] before:absolute before:left-6 before:top-0 before:bottom-0 before:w-px before:bg-white/10">
 						{#each item.subItems as sub}
 							{@const subActive = page.url.pathname === sub.path}
@@ -120,24 +136,29 @@
 		<li class="mb-1">
 			<button
 				onclick={logout}
-				class="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all text-sm text-slate-400 hover:bg-red-500/10 hover:text-red-400 group"
+				class={`w-full flex items-center ${collapsed ? 'justify-center px-3' : 'gap-3 px-4'} py-3 rounded-xl font-medium transition-all text-sm text-slate-400 hover:bg-red-500/10 hover:text-red-400 group`}
+				title={collapsed ? 'Cerrar sesión' : undefined}
 			>
 				<i class="fas fa-sign-out-alt w-5 text-center group-hover:scale-110 transition-transform"></i>
-				Cerrar Sesión
+				{#if !collapsed}
+					<span>Cerrar Sesión</span>
+				{/if}
 			</button>
 		</li>
 	</ul>
 
 	<!-- User info at bottom -->
 	{#if permisosState.loaded}
-		<div class="px-4 py-4 border-t border-white/10 flex items-center gap-3 flex-shrink-0">
+		<div class={`px-4 py-4 border-t border-white/10 flex items-center ${collapsed ? 'justify-center' : 'gap-3'} flex-shrink-0`}>
 			<div class="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
 				{permisosState.userInitial}
 			</div>
-			<div class="min-w-0 flex-1">
-				<p class="text-sm font-semibold text-white truncate leading-tight">{permisosState.userName}</p>
-				<p class="text-[10px] text-orange-400 capitalize font-semibold leading-tight mt-0.5">{permisosState.rolNombre}</p>
-			</div>
+			{#if !collapsed}
+				<div class="min-w-0 flex-1">
+					<p class="text-sm font-semibold text-white truncate leading-tight">{permisosState.userName}</p>
+					<p class="text-[10px] text-orange-400 capitalize font-semibold leading-tight mt-0.5">{permisosState.rolNombre}</p>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </aside>
