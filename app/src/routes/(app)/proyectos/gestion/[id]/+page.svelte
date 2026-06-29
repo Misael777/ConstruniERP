@@ -1,45 +1,130 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 
-	const projectId = $page.params.id;
-
+	let projectId = $state<string | undefined>(undefined);
+	let lastLoadedProjectId = $state<string | undefined>(undefined);
 	type Proyecto = {
 		id_proyecto: number;
-		nombre_proyecto: string;
-		ubicacion: string;
-		fecha_inicio_plan: string;
-		fecha_fin_plan: string;
-		estado_proyecto: string;
-		costo_estima: number;
-		descripcion: string;
-		responsable: string;
-	};
+	id_cliente: number;
+	tip_proyecto: string;
+	nombre_proyecto: string;
+	ubicacion: string;
+	fecha_inicio_plan: string;
+	fecha_fin_plan: string;
+	estado_predio: string;
+	tipo_edifica: string;
+	Nro_pisos: number;
+	distrito: string;
+	provincia: string;
+	departamento: string;
+	costo_estima: number;
+	precio_venta: number;
+	descripcion: string;
+	responsable: string;
+	duracion_semanas: number;
+	usuario_registro: string;
+	contrato: string;
+	estado_proyecto: string;
+	id_pres_inicial: number | null;
+	id_pres_final: number | null;
+	area_terreno: number;
+	area_construida: number;
+	created_at: string;
+	updated_at: string;
+	asesor_comercial_id: string;
+	comision_asesor: number;
+};
 
-	let proyecto = $state<Proyecto | null>(null);
-	let isLoading = $state(true);
-	let activeTab = $state('definicion');
+let proyecto = $state<Proyecto | null>(null);
+let initialRow = $state<Partial<Proyecto> | null>(null);
+let isLoading = $state(true);
+let activeTab = $state('definicion');
+let hasLoadedProject = $state(false);
 
-	onMount(async () => {
-		try {
-			const { data, error } = await supabase
-				.from('proyecto')
-				.select('*')
-				.eq('id_proyecto', projectId)
-				.single();
+async function loadProject(id: string) {
+	console.log('[Gestión] loadProject called with', id);
+	isLoading = true;
+	try {
+		const { data, error } = await supabase
+			.from('proyecto')
+			.select('*')
+			.eq('id_proyecto', id)
+			.single();
 
-			if (error) throw error;
-			proyecto = data;
-		} catch (error) {
-			console.error("Error cargando el proyecto:", error);
-		} finally {
-			isLoading = false;
+			console.log("Proyecto cargado:", data);
+
+		console.log('[Gestión] supabase response', { data, error });
+		if (error) throw error;
+		proyecto = data;
+		console.log('[Gestión] proyecto assigned', {
+			nombre_proyecto: proyecto?.nombre_proyecto,
+			ubicacion: proyecto?.ubicacion,
+			descripcion: proyecto?.descripcion,
+			estado_proyecto: proyecto?.estado_proyecto,
+			id_cliente: proyecto?.id_cliente,
+			full: proyecto
+		});
+		lastLoadedProjectId = id;
+	} catch (error) {
+		console.error('Error cargando el proyecto:', error);
+	} finally {
+		isLoading = false;
+		hasLoadedProject = true;
+		console.log('[Gestión] loadProject finished, isLoading =', isLoading, 'hasLoadedProject =', hasLoadedProject, 'proyecto =', proyecto);
+	}
+}
+
+const unsubscribe = page.subscribe(($page) => {
+	projectId = $page?.params?.id;
+	console.log('[Gestión] page store updated, projectId =', projectId);
+	if (projectId && projectId !== lastLoadedProjectId) {
+		console.log('[Gestión] store callback loading project', projectId);
+		loadProject(projectId);
+	}
+});
+
+onDestroy(() => unsubscribe());
+
+$effect(() => {
+	console.log('[Gestión] render state', {
+		projectId,
+		isLoading,
+		hasLoadedProject,
+		proyecto,
+		proyectoFields: {
+			nombre_proyecto: proyecto?.nombre_proyecto,
+			ubicacion: proyecto?.ubicacion,
+			descripcion: proyecto?.descripcion,
+			estado_proyecto: proyecto?.estado_proyecto,
 		}
 	});
+});
 
-	function goBack() {
+onMount(() => {
+	console.log('[Gestión] onMount start, projectId =', projectId);
+	if (typeof window !== 'undefined') {
+		console.log('[Gestión] window.history.state =', window.history.state);
+	}
+
+	if (typeof window !== 'undefined' && window.history.state?.row) {
+		initialRow = window.history.state.row;
+		proyecto = { ...window.history.state.row } as Proyecto;
+		console.log('[Gestión] initialRow from history state =', initialRow);
+	}
+
+	if (projectId && projectId !== lastLoadedProjectId) {
+		console.log('[Gestión] onMount loading project', projectId);
+		loadProject(projectId);
+	} else if (!projectId) {
+		console.warn('Gestión: no se encontró projectId en la ruta');
+		isLoading = false;
+	}
+});
+
+function goBack() {
 		goto('/proyectos/gestion');
 	}
 
@@ -48,6 +133,20 @@
 <svelte:head>
 	<title>{proyecto ? `${proyecto.nombre_proyecto} | Gestión` : 'Cargando Proyecto...'}</title>
 </svelte:head>
+
+<div class="mb-4 p-4 rounded-2xl border border-orange-200 bg-orange-50 text-slate-800 text-sm">
+	<strong>Debug:</strong>
+	<div>projectId: {projectId}</div>
+	<div>isLoading: {isLoading ? 'true' : 'false'}</div>
+	<div>hasLoadedProject: {hasLoadedProject ? 'true' : 'false'}</div>
+	<div>proyecto: {proyecto ? proyecto.nombre_proyecto ?? JSON.stringify(proyecto) : 'null'}</div>
+	<div>proyecto raw: {proyecto ? JSON.stringify({
+		nombre_proyecto: proyecto.nombre_proyecto,
+		ubicacion: proyecto.ubicacion,
+		descripcion: proyecto.descripcion,
+		estado_proyecto: proyecto.estado_proyecto
+	}) : 'null'}</div>
+</div>
 
 {#if isLoading}
 	<div class="flex justify-center text-orange-600 text-3xl py-12">
@@ -138,6 +237,38 @@
 						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Descripción</label>
 						<textarea rows="3" class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800 resize-none">{proyecto.descripcion || ''}</textarea>
 					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Cliente ID</label>
+						<input type="text" value={proyecto.id_cliente || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Tipo de Proyecto</label>
+						<input type="text" value={proyecto.tip_proyecto || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Estado Predio</label>
+						<input type="text" value={proyecto.estado_predio || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Tipo Edificación</label>
+						<input type="text" value={proyecto.tipo_edifica || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Nro pisos</label>
+						<input type="number" value={proyecto.Nro_pisos ?? ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Distrito</label>
+						<input type="text" value={proyecto.distrito || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Provincia</label>
+						<input type="text" value={proyecto.provincia || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Departamento</label>
+						<input type="text" value={proyecto.departamento || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
 				</div>
 
 				<h3 class="text-lg font-bold text-slate-800 mb-4 mt-8 border-b border-slate-100 pb-2">Planificación y Costos</h3>
@@ -153,6 +284,66 @@
 					<div>
 						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Costo Estimado (S/)</label>
 						<input type="number" value={proyecto.costo_estima || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Precio Venta (S/)</label>
+						<input type="number" value={proyecto.precio_venta || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Duración Semanas</label>
+						<input type="number" value={proyecto.duracion_semanas || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Área Terreno (m2)</label>
+						<input type="number" value={proyecto.area_terreno || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Área Construida (m2)</label>
+						<input type="number" value={proyecto.area_construida || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+				</div>
+
+				<h3 class="text-lg font-bold text-slate-800 mb-4 mt-8 border-b border-slate-100 pb-2">Contrato y Referencias</h3>
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Contrato URL</label>
+						<input type="text" value={proyecto.contrato || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Asesor Comercial ID</label>
+						<input type="text" value={proyecto.asesor_comercial_id || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Comisión Asesor (%)</label>
+						<input type="number" value={proyecto.comision_asesor || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Presupuesto Inicial</label>
+						<input type="text" value={proyecto.id_pres_inicial ?? ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Presupuesto Final</label>
+						<input type="text" value={proyecto.id_pres_final ?? ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div class="md:col-span-2">
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Usuario Registro</label>
+						<input type="text" value={proyecto.usuario_registro || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+				</div>
+
+				<h3 class="text-lg font-bold text-slate-800 mb-4 mt-8 border-b border-slate-100 pb-2">Estado y Metadatos</h3>
+				<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Estado Proyecto</label>
+						<input type="text" value={proyecto.estado_proyecto || ''} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Creado</label>
+						<input type="text" value={proyecto.created_at || ''} disabled class="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 text-sm" />
+					</div>
+					<div>
+						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Actualizado</label>
+						<input type="text" value={proyecto.updated_at || ''} disabled class="w-full px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 text-sm" />
 					</div>
 				</div>
 			</div>

@@ -170,9 +170,26 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 	}
 
 	function handleEditEvent(e: CustomEvent) {
-		const id = e.detail.row?.id;
-		if (!id) return;
-		goto(`/proyectos/gestion?id=${id}`);
+		const row = e.detail.row;
+		const id = row?.id ?? row?.id_proyecto;
+		const url = `/proyectos/gestion/${id}`;
+		console.log('[Ventas] Editar proyecto', { row, id, url });
+		if (!id) {
+			console.warn('[Ventas] Editar falló: id no encontrado en row', row);
+			return;
+		}
+		const serializableRow = {
+			id: row?.id ?? row?.id_proyecto ?? null,
+			id_proyecto: row?.id_proyecto ?? row?.id ?? null,
+			nombre_proyecto: row?.proyecto ?? row?.nombre_proyecto ?? '',
+			precio_venta: row?.valor ?? row?.precio_venta ?? null,
+			tip_proyecto: row?.tipo ?? row?.tip_proyecto ?? '',
+			fecha_inicio_plan: row?.fecha ?? null,
+			responsable: row?.asesor ?? row?.responsable ?? '',
+			descripcion: row?.descripcion ?? '',
+			contrato: row?.contrato ?? ''
+		};
+		goto(url, { state: { row: serializableRow } });
 	}
 
 	function handleDeleteEvent(e: CustomEvent) {

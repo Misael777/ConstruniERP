@@ -10,7 +10,6 @@
 	let proyectoNombre = $state('');
 	let fechaVenta = $state('2026-05-20');
 	let asesor = $state('');
-	let cliente = $state('Maria Jhong');
 	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
 	let nuevoClienteNombre = $state('');
@@ -25,17 +24,43 @@
 	let estadoPredio = $state('A'); // Ampliación (A)
 	let tipoEdificacion = $state('M'); // Viv. Multifamiliar (M)
 	let numeroPisos = $state('4');
-	let mes = $state('02'); // 02 - Febrero
-	let anio = $state('2026');
 	let distrito = $state('ATE Salamanca');
-	let clienteNombreGen = $state('Maria Jhong');
+	let clienteNombreGen = $state('');
+
+	function getMesFromFecha() {
+		const parsedDate = new Date(fechaVenta);
+		return Number.isNaN(parsedDate.getTime()) ? '02' : String(parsedDate.getMonth() + 1).padStart(2, '0');
+	}
+
+	function getAnioFromFecha() {
+		const parsedDate = new Date(fechaVenta);
+		return Number.isNaN(parsedDate.getTime()) ? '2026' : String(parsedDate.getFullYear());
+	}
 	
+	let mes = $derived(getMesFromFecha());
+	let anio = $derived(getAnioFromFecha());
+
 	let observaciones = $state('');
 	let isSaving = $state(false);
 	let saveError = $state('');
 
 	// Auto-calculated code
-	let codigoGenerado = $derived(`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mes}${anio.substring(2)} - ${distrito} - ${clienteNombreGen}`);
+	function getClienteNombreActual() {
+		if (selectedClienteId && selectedClienteId !== '__new__') {
+			const selected = clientes.find((c) => String(c.id_cliente) === String(selectedClienteId));
+			return selected?.nombre?.trim() || '';
+		}
+		if (selectedClienteId === '__new__') {
+			return nuevoClienteNombre.trim();
+		}
+		return clienteNombreGen.trim();
+	}
+
+let codigoGenerado = $derived(() => {
+	const anioFull = getAnioFromFecha();
+	const mesValue = getMesFromFecha();
+	return `${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mesValue}${anioFull.substring(2)} - ${distrito} - ${getClienteNombreActual() || 'Cliente'}`;
+});
 
 	let comisionMonto = $derived(() => (Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
 
@@ -210,7 +235,7 @@
 		console.log('[NuevaVentaModal] Determinando cliente ID...');
 		console.log('[NuevaVentaModal]   selectedClienteId:', selectedClienteId);
 		console.log('[NuevaVentaModal]   nuevoClienteNombre:', nuevoClienteNombre);
-		console.log('[NuevaVentaModal]   cliente (fallback):', cliente);
+		console.log('[NuevaVentaModal]   clienteNombreGen:', clienteNombreGen);
 
 		let clienteId: number | null = null;
 
@@ -230,15 +255,14 @@
 			clienteId = await ensureCliente(nuevoClienteNombre);
 			console.log('[NuevaVentaModal] Nuevo cliente creado con ID:', clienteId);
 		} else {
-			// Fallback a texto libre (legacy)
-			console.log('[NuevaVentaModal] Usando modo fallback (sin dropdown seleccionado)');
-			if (!cliente.trim()) {
-				saveError = 'Debes ingresar el nombre del cliente.';
+			const nombreClienteFallback = getClienteNombreActual().trim();
+			if (!nombreClienteFallback) {
+				saveError = 'Debes seleccionar o ingresar el nombre del cliente.';
 				console.warn('[NuevaVentaModal] ❌ ERROR: Cliente fallback vacío');
 				return;
 			}
-			console.log('[NuevaVentaModal] Buscando o creando cliente:', cliente);
-			clienteId = await ensureCliente(cliente);
+			console.log('[NuevaVentaModal] Buscando o creando cliente:', nombreClienteFallback);
+			clienteId = await ensureCliente(nombreClienteFallback);
 			console.log('[NuevaVentaModal] Cliente obtenido/creado con ID:', clienteId);
 		}
 
@@ -256,13 +280,17 @@
 		const numeroPisosValue = Number(numeroPisos) || null;
 		const fechaInicio = fechaVenta;
 		const asesorFinal = (asesor || '').trim() || await resolveCurrentAsesorName();
+		const clienteNombreFinal = getClienteNombreActual().trim();
+		const { data: { session } } = await supabase.auth.getSession();
+		const asesorUserId = session?.user?.id ?? null;
 		asesor = asesorFinal;
 
 		console.log('[NuevaVentaModal] Datos calculados:', {
 			precioVenta,
 			comision,
 			numeroPisosValue,
-			fechaInicio
+			fechaInicio,
+			clienteNombreFinal
 		});
 
 		isSaving = true;
@@ -275,7 +303,18 @@
 			fecha_inicio_plan: fechaInicio,
 			precio_venta: precioVenta,
 			comision_asesor: comision,
-			responsable: asesorFinal
+			responsable: asesorFinal,
+			asesor_comercial_id: asesorUserId,
+			tip_proyecto: tipoProyecto === 'O' ? 'Proyecto de Obra' : 'Mantenimiento',
+			estado_predio: estadoPredio === 'A' ? 'Ampliación' : 'Nuevo',
+			tipo_edifica: tipoEdificacion === 'M' ? 'Viv. Multifamiliar' : tipoEdificacion === 'U' ? 'Viv. Unifamiliar' : 'Comercial',
+			Nro_pisos: numeroPisosValue,
+			distrito,
+			costo_estima: precioVenta,
+			estado_proyecto: 'activo',
+			ubicacion: distrito,
+			usuario_registro: asesorUserId,
+			descripcion: observaciones?.trim() ? observaciones.trim() : null
 		};
 
 		console.log('[NuevaVentaModal] Payload para proyecto:', proyectoPayload);
@@ -329,16 +368,28 @@
 				console.log('[NuevaVentaModal]   contratoFile:', contratoFile ? `${contratoFile.name} (${contratoFile.size} bytes)` : 'null');
 				console.log('[NuevaVentaModal]   proformaFile:', proformaFile ? `${proformaFile.name} (${proformaFile.size} bytes)` : 'null');
 
+				let contratoUrl: string | null = null;
+				let proformaUrl: string | null = null;
+
 				if (contratoFile) {
 					console.log('[NuevaVentaModal] Subiendo contrato...');
-					const contratoResult = await uploadDocument('contrato', contratoFile, nuevoProyectoId);
-					console.log('[NuevaVentaModal] ✓ Contrato subido exitosamente. URL:', contratoResult);
+					contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId);
+					console.log('[NuevaVentaModal] ✓ Contrato subido exitosamente. URL:', contratoUrl);
 				}
 
 				if (proformaFile) {
 					console.log('[NuevaVentaModal] Subiendo proforma...');
-					const proformaResult = await uploadDocument('proforma', proformaFile, nuevoProyectoId);
-					console.log('[NuevaVentaModal] ✓ Proforma subida exitosamente. URL:', proformaResult);
+					proformaUrl = await uploadDocument('proforma', proformaFile, nuevoProyectoId);
+					console.log('[NuevaVentaModal] ✓ Proforma subida exitosamente. URL:', proformaUrl);
+				}
+
+				const updatePayload: Record<string, unknown> = {};
+				if (contratoUrl) updatePayload.contrato = contratoUrl;
+				if (proformaUrl) {
+					updatePayload.descripcion = [observaciones?.trim(), `Proforma: ${proformaUrl}`].filter(Boolean).join('\n');
+				}
+				if (Object.keys(updatePayload).length > 0) {
+					await supabase.from('proyecto').update(updatePayload).eq('id_proyecto', nuevoProyectoId);
 				}
 
 				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
@@ -364,6 +415,8 @@
 		onClose();
 		console.log('[NuevaVentaModal] === FIN handleGuardar (exitoso) ===');
 	}
+
+
 </script>
 
 {#if isOpen}
@@ -373,7 +426,7 @@
 			<!-- Header -->
 			<div class="flex items-center justify-between p-6 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
 				<h2 class="text-xl font-bold text-slate-800">Nueva venta</h2>
-				<button on:click={onClose} class="text-slate-400 hover:text-slate-600 transition-colors p-2 rounded-full hover:bg-slate-100">
+				<button on:click={onClose} aria-label="Cerrar modal" class="text-slate-400 hover:text-slate-600 transition-colors p-2 rounded-full hover:bg-slate-100">
 					<i class="fas fa-times text-lg"></i>
 				</button>
 			</div>
@@ -498,30 +551,12 @@
 							</div>
 
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Mes *</label>
-								<select bind:value={mes} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-									<option value="02">02 - Febrero</option>
-									<option value="03">03 - Marzo</option>
-								</select>
-							</div>
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Año *</label>
-								<select bind:value={anio} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-									<option value="2026">2026</option>
-									<option value="2027">2027</option>
-								</select>
-							</div>
-							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-slate-600">Distrito *</label>
 								<select bind:value={distrito} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="ATE Salamanca">Ate</option>
 									<option value="Miraflores">Miraflores</option>
 									<option value="San Isidro">San Isidro</option>
 								</select>
-							</div>
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Nombre del cliente *</label>
-								<input type="text" bind:value={clienteNombreGen} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 							</div>
 						</div>
 
