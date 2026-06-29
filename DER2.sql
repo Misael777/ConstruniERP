@@ -294,6 +294,36 @@ CREATE TABLE IF NOT EXISTS partida (
     id_partida_padre   BIGINT REFERENCES partida(id_partida),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX idx_partida_padre ON partida(id_partida_padre);
+
+ALTER TABLE partida ADD CONSTRAINT chk_partida_no_auto FOREIGN KEY (id_partida_padre) REFERENCES partida(id_partida) ON DELETE NO ACTION;
+-- Pero necesitas un trigger para evitar ciclos. Ejemplo:
+CREATE OR REPLACE FUNCTION check_partida_cycle() RETURNS TRIGGER AS $$
+DECLARE
+    v_parent BIGINT := NEW.id_partida_padre;
+BEGIN
+    IF NEW.id_partida = NEW.id_partida_padre THEN
+        RAISE EXCEPTION 'Una partida no puede ser su propio padre';
+    END IF;
+    -- Recorrer hacia arriba para detectar ciclo
+    WHILE v_parent IS NOT NULL LOOP
+        IF v_parent = NEW.id_partida THEN
+            RAISE EXCEPTION 'Ciclo detectado en jerarquía de partidas';
+        END IF;
+        SELECT id_partida_padre INTO v_parent FROM partida WHERE id_partida = v_parent;
+    END LOOP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_check_partida_cycle
+BEFORE INSERT OR UPDATE ON partida
+FOR EACH ROW EXECUTE FUNCTION check_partida_cycle();
+
+CREATE MATERIALIZED VIEW mv_partida_tree AS
+WITH RECURSIVE arbol AS (...)
+SELECT ...;
 -- ------------------------------------------------------------
 -- 5. PRESUPUESTO Y DETALLE
 -- ------------------------------------------------------------
@@ -321,6 +351,128 @@ CREATE TABLE presupuesto_detalle (
     usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ============================================================
+-- PLANTILLAS DE PRESUPUESTO (Clases compuestas)
+-- ============================================================
+
+CREATE TABLE plantilla_presupuesto (
+    id_plantilla      BIGSERIAL PRIMARY KEY,
+    nombre            VARCHAR(200) NOT NULL,
+    descripcion       TEXT,
+    tipo              VARCHAR(50),   -- ej: 'vivienda', 'local', 'oficina'
+    usuario_registro  VARCHAR(100),
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE plantilla_detalle (
+    id_plantilla_detalle BIGSERIAL PRIMARY KEY,
+    id_plantilla      BIGINT NOT NULL REFERENCES plantilla_presupuesto(id_plantilla) ON DELETE CASCADE,
+    id_partida        BIGINT NOT NULL REFERENCES partida(id_partida),
+    cantidad_sugerida DECIMAL(12,4),   -- cantidad típica para esta plantilla
+    orden             INTEGER,          -- orden de ejecución dentro del flujo
+    usuario_registro  VARCHAR(100),
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(id_plantilla, id_partida)   -- una partida no se repite en la misma plantilla
+);
+
+-- ============================================================
+-- AUDITORÍA DE INSTANCIAS (SOLO DATOS DE PROYECTOS)
+-- ============================================================
+
+CREATE TABLE instance_audit_log (
+    id_audit          BIGSERIAL PRIMARY KEY,
+    project_id        BIGINT NOT NULL REFERENCES proyecto(id_proyecto) ON DELETE CASCADE,
+    table_name        TEXT NOT NULL,          -- 'presupuesto_detalle', 'metrado', etc.
+    record_id         BIGINT NOT NULL,        -- ID del registro instanciado
+    action            TEXT NOT NULL,          -- 'INSERT', 'UPDATE', 'DELETE'
+    old_data          JSONB,                  -- snapshot completo ANTES
+    new_data          JSONB,                  -- snapshot completo DESPUÉS
+    changed_by        UUID,                   -- auth_user_id (NULL si es sistema)
+    changed_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Índices para búsquedas rápidas
+CREATE INDEX idx_audit_project_table ON instance_audit_log(project_id, table_name, changed_at DESC);
+CREATE INDEX idx_audit_record ON instance_audit_log(record_id, table_name);
+CREATE INDEX idx_audit_changed_at ON instance_audit_log(changed_at DESC);
+
+
+
+
+-- ============================================================
+-- FUNCIÓN DE AUDITORÍA POLIMÓRFICA
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION capture_instance_audit()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_project_id BIGINT;
+    v_table_name TEXT := TG_TABLE_NAME;
+    v_old_json   JSONB;
+    v_new_json   JSONB;
+    v_record_id  BIGINT;
+    v_actor      UUID;
+BEGIN
+    v_actor := auth.uid();
+
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        v_new_json := to_jsonb(NEW);
+    END IF;
+    IF TG_OP IN ('DELETE', 'UPDATE') THEN
+        v_old_json := to_jsonb(OLD);
+    END IF;
+
+    -- Obtener project_id según la tabla
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        IF jsonb_exists(v_new_json, 'id_proyecto') THEN
+            v_project_id := (v_new_json ->> 'id_proyecto')::BIGINT;
+        ELSIF v_table_name = 'presupuesto_detalle' THEN
+            SELECT p.id_proyecto INTO v_project_id
+            FROM presupuesto p WHERE p.id_presupuesto = NEW.id_presupuesto;
+        ELSIF v_table_name = 'valorizacion_partida' THEN
+            SELECT vs.id_proyecto INTO v_project_id
+            FROM valorizacion_semanal vs WHERE vs.id_valorizacion = NEW.id_valorizacion;
+        ELSIF v_table_name = 'cronograma_detalle_semanal' THEN
+            SELECT ca.id_proyecto INTO v_project_id
+            FROM cronograma_actividad ca WHERE ca.id_cronograma_actividad = NEW.id_cronograma_actividad;
+        END IF;
+    END IF;
+
+    IF v_project_id IS NULL AND TG_OP IN ('UPDATE', 'DELETE') THEN
+        IF jsonb_exists(v_old_json, 'id_proyecto') THEN
+            v_project_id := (v_old_json ->> 'id_proyecto')::BIGINT;
+        ELSIF v_table_name = 'presupuesto_detalle' THEN
+            SELECT p.id_proyecto INTO v_project_id
+            FROM presupuesto p WHERE p.id_presupuesto = OLD.id_presupuesto;
+        ELSIF v_table_name = 'valorizacion_partida' THEN
+            SELECT vs.id_proyecto INTO v_project_id
+            FROM valorizacion_semanal vs WHERE vs.id_valorizacion = OLD.id_valorizacion;
+        ELSIF v_table_name = 'cronograma_detalle_semanal' THEN
+            SELECT ca.id_proyecto INTO v_project_id
+            FROM cronograma_actividad ca WHERE ca.id_cronograma_actividad = OLD.id_cronograma_actividad;
+        END IF;
+    END IF;
+
+    -- Si no se pudo determinar, no registramos
+    IF v_project_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- ID del registro
+    IF v_new_json IS NOT NULL THEN
+        v_record_id := (v_new_json ->> 'id')::BIGINT;
+    ELSE
+        v_record_id := (v_old_json ->> 'id')::BIGINT;
+    END IF;
+
+    INSERT INTO instance_audit_log (project_id, table_name, record_id, action, old_data, new_data, changed_by)
+    VALUES (v_project_id, v_table_name, v_record_id, TG_OP, v_old_json, v_new_json, v_actor);
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ------------------------------------------------------------
 -- 6. CONTRATO Y ADELANTOS
@@ -680,5 +832,61 @@ COMMENT ON TABLE transaccion IS 'Movimientos economicos por centro de costo';
 -- ------------------------------------------------------------
 
 
+-- ============================================================
+-- TRIGGERS DE AUDITORÍA (SOLO INSTANCIAS)
+-- ============================================================
+
+CREATE TRIGGER trg_audit_presupuesto_detalle
+AFTER INSERT OR UPDATE OR DELETE ON presupuesto_detalle
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_metrado
+AFTER INSERT OR UPDATE OR DELETE ON metrado
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_cronograma_actividad
+AFTER INSERT OR UPDATE OR DELETE ON cronograma_actividad
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_cronograma_detalle_semanal
+AFTER INSERT OR UPDATE OR DELETE ON cronograma_detalle_semanal
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_lookahead
+AFTER INSERT OR UPDATE OR DELETE ON lookahead
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_valorizacion_partida
+AFTER INSERT OR UPDATE OR DELETE ON valorizacion_partida
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_restriccion
+AFTER INSERT OR UPDATE OR DELETE ON restriccion
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_egreso_semanal
+AFTER INSERT OR UPDATE OR DELETE ON egreso_semanal
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_seguimiento_proyecto
+AFTER INSERT OR UPDATE OR DELETE ON seguimiento_proyecto
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_cuentas_cobrar
+AFTER INSERT OR UPDATE OR DELETE ON cuentas_cobrar
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_cuentas_pagar
+AFTER INSERT OR UPDATE OR DELETE ON cuentas_pagar
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+-- (Opcional) si quieres auditar cobros/pagos también
+CREATE TRIGGER trg_audit_cobros
+AFTER INSERT OR UPDATE OR DELETE ON cobros
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+
+CREATE TRIGGER trg_audit_pagos
+AFTER INSERT OR UPDATE OR DELETE ON pagos
+FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
 
 
