@@ -285,6 +285,7 @@ ON CONFLICT DO NOTHING;  -- se puede manejar con trigger, pero para el script se
 CREATE TABLE IF NOT EXISTS partida (
     id_partida         BIGSERIAL PRIMARY KEY,
     codigo             VARCHAR(20) NOT NULL UNIQUE, -- ej: 'O01.01.01.00  o C01.01.01.01.00'
+    tipo_partida       VARCHAR(2),
     descripcion        TEXT NOT NULL,
     unidad             VARCHAR(10), -- glb, m2, m3, und, ml, mes, etc.
     cuadrilla          INTEGER,
