@@ -195,6 +195,7 @@ CREATE TABLE cliente (
     telefono           VARCHAR(20),
     email              VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW(),
+    usuario_registro   VARCHAR(100),
     updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -207,6 +208,7 @@ CREATE TABLE proveedor (
     email              VARCHAR(100),
     vendedor           VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW(),
+    usuario_registro   VARCHAR(100),
     updated_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -291,6 +293,7 @@ CREATE TABLE presupuesto (
     fecha_creacion     DATE DEFAULT CURRENT_DATE,
     moneda             VARCHAR(3) DEFAULT 'PEN',
     tipo               VARCHAR(20) DEFAULT 'obra', -- obra, mantenimiento, etc.
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -303,6 +306,7 @@ CREATE TABLE presupuesto_detalle (
     precio_mat         DECIMAL(12,2) DEFAULT 0,   -- material unitario
     precio_unitario    DECIMAL(12,2) GENERATED ALWAYS AS (COALESCE(precio_mo,0) + COALESCE(precio_mat,0)) STORED,
     total              DECIMAL(12,2) GENERATED ALWAYS AS (cantidad * (COALESCE(precio_mo,0) + COALESCE(precio_mat,0))) STORED,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -317,6 +321,7 @@ CREATE TABLE contrato_proyecto (
     tipo_contrato      VARCHAR(50) DEFAULT 'a suma alzada', -- a suma alzada, unitario
     fecha_inicio       DATE,
     fecha_fin          DATE,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -344,6 +349,7 @@ CREATE TABLE restriccion (
     es_of_tecnica      BOOLEAN DEFAULT FALSE,
     es_mobra           BOOLEAN DEFAULT FALSE,
     responsable        VARCHAR(200),
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -382,6 +388,7 @@ CREATE TABLE cronograma_actividad (
     fecha_fin_real     DATE,
     porcentaje_avance_real DECIMAL(5,2) DEFAULT 0,
     orden              INTEGER,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -393,6 +400,7 @@ CREATE TABLE cronograma_detalle_semanal (
     avance_planificado_semanal DECIMAL(5,2) DEFAULT 0,
     avance_real_semanal DECIMAL(5,2) DEFAULT 0,
     observaciones      TEXT,
+    usuario_registro   VARCHAR(100),
     UNIQUE(id_cronograma_actividad, semana_numero)
 );
 
@@ -404,9 +412,11 @@ CREATE TABLE lookahead (
     id_lookahead       BIGSERIAL PRIMARY KEY,
     id_proyecto        BIGINT NOT NULL REFERENCES proyecto(id_proyecto) ON DELETE CASCADE,
     id_partida         BIGINT REFERENCES partida(id_partida),
-    fecha_plan         DATE NOT NULL,  -- dÃ­a especÃ­fico
+    fecha_plan         DATE NOT NULL,  -- dí­a especÃ­fico
     cantidad_plan      DECIMAL(12,4),
     recurso_asignado   VARCHAR(200),   -- ej. "ROMBO 1"
+    restriccion        VARCHAR(200), 
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -426,6 +436,7 @@ CREATE TABLE metrado (
     alto               DECIMAL(10,2),
     formula            TEXT,  -- expresion textual del cÃ¡lculo
     total              DECIMAL(12,4) GENERATED ALWAYS AS (cantidad * COALESCE(largo,1) * COALESCE(ancho,1) * COALESCE(alto,1)) STORED,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -436,11 +447,13 @@ CREATE TABLE metrado (
 CREATE TABLE acero_detalle (
     id_acero           BIGSERIAL PRIMARY KEY,
     id_proyecto        BIGINT NOT NULL REFERENCES proyecto(id_proyecto) ON DELETE CASCADE,
+    id_partida         BIGINT REFERENCES partida(id_partida),
     elemento           VARCHAR(100),   -- Z-1, Viga, Placa, etc.
     diametro           VARCHAR(10),    -- 3/8, 1/2, 5/8, etc.
     longitud_m         DECIMAL(10,2),
     cantidad_varillas  INTEGER,
-    peso_total_kg      DECIMAL(12,2),
+    precio_total_kg    DECIMAL(12,2),
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -456,6 +469,7 @@ CREATE TABLE valorizacion_semanal (
     fecha_fin          DATE,
     monto_total        DECIMAL(12,2) NOT NULL,
     porcentaje_acumulado DECIMAL(5,2),  -- % avance acumulado del proyecto
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -466,6 +480,7 @@ CREATE TABLE valorizacion_partida (
     id_partida         BIGINT NOT NULL REFERENCES partida(id_partida),
     monto              DECIMAL(12,2) NOT NULL,
     porcentaje_avance  DECIMAL(5,2),  -- avance de esa partida en la semana
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -479,6 +494,7 @@ CREATE TABLE egreso_semanal (
     semana_numero      INTEGER NOT NULL,
     concepto           VARCHAR(100) NOT NULL,  -- 'Costo Materiales', 'Seguridad', etc.
     monto              DECIMAL(12,2) NOT NULL,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -490,10 +506,20 @@ CREATE TABLE cuentas_cobrar (
     id_cuenta_cobrar   BIGSERIAL PRIMARY KEY,
     id_cliente         BIGINT NOT NULL REFERENCES cliente(id_cliente),
     id_proyecto        BIGINT REFERENCES proyecto(id_proyecto),  -- opcional
+    tipo_documento     INTEGER(2),
+    num_documento      VARCHAR(50),
     monto              DECIMAL(12,2) NOT NULL,
+    monto_cobrado      DECIMAL(12,2) NOT NULL,
+    saldo_pendiente    DECIMAL(12,2) NOT NULL,
+    forma_pago         INTEGER(2),
+    condición_pago     INTEGER(2),
+    responsable        VARCHAR(20),
     fecha_emision      DATE NOT NULL,
     fecha_vencimiento  DATE,
+    moneda             VARCHAR(3),
+    observaciones      VARCHAR(200),
     estado             VARCHAR(20) DEFAULT 'pendiente', -- pendiente, pagado, vencido
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -502,7 +528,11 @@ CREATE TABLE cobros (
     id_cuenta_cobrar   BIGINT NOT NULL REFERENCES cuentas_cobrar(id_cuenta_cobrar) ON DELETE CASCADE,
     monto              DECIMAL(12,2) NOT NULL,
     fecha_cobro        DATE NOT NULL,
-    medio_pago         VARCHAR(50),
+    medio_cobro        INTEGER(2),
+    num_operacion      VARCHAR(20),
+    cuenta_banco       INTEGER(2),
+    numero_opracion    VARCHAR(20),
+    usuario_registro   VARCHAR(100),
     referencia         VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
@@ -516,10 +546,25 @@ CREATE TABLE cuentas_pagar (
     id_proveedor       BIGINT NOT NULL REFERENCES proveedor(id_proveedor),
     id_presupuesto     BIGINT REFERENCES presupuesto(id_presupuesto),  -- relacion clave
     id_partida         BIGINT REFERENCES partida(id_partida),  -- opcional
+    tipo_documento     INTEGER(2),
+    num_documento      VARCHAR(20),
     monto_comprometido DECIMAL(12,2) NOT NULL,
+    monto_pagado       DECIMAL(12,2) NOT NULL,
+    saldo_pendiente    DECIMAL(12,2) NOT NULL,
+    fotma_pago         INTEGER(2),
+    categoria_gasto    INTEGER(2),
+    condicion_pago     VARCHAR(100),
+    responsable        VARCHAR(100),
     fecha_emision      DATE NOT NULL,
     fecha_vencimiento  DATE,
+    fecha_pago_programada DATE,
+    monto_imponible    DECIMAL(12,2) NOT NULL,
+    monto_igv          DECIMAL(12,2) NOT NULL,
+    detraccion         DECIMAL(12,2),
+    monto_retencion    DECIMAL(12,2),
     estado             VARCHAR(20) DEFAULT 'pendiente',
+    observacion        VARCHAR(200),
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -529,8 +574,11 @@ CREATE TABLE pagos (
     monto              DECIMAL(12,2) NOT NULL,
     fecha_pago         DATE NOT NULL,
     medio_pago         VARCHAR(50),
+    num_operacion      VARCHAR(20),
+    usuario_registro   VARCHAR(100),
     referencia         VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
+
 );
 
 -- ------------------------------------------------------------
@@ -538,13 +586,23 @@ CREATE TABLE pagos (
 -- ------------------------------------------------------------
 
 CREATE TABLE transaccion (
-    id_transaccion     BIGSERIAL PRIMARY KEY,
+    id_transaccion            BIGSERIAL PRIMARY KEY,
     id_centro_costo_origen    BIGINT NOT NULL,
     id_centro_costo_destino   BIGINT NOT NULL,
     fecha              DATE NOT NULL,
+    Id_nombre          VARCHAR(20),
+    tipo_documento     VARCHAR(2),
+    num_documento      VARCHAR(20),
+    tipo_transaccion   VARCHAR(2),
+    forma_pago         VARCHAR(2),
     descripcion        TEXT,
     tipo               VARCHAR(20) CHECK (tipo IN ('ingreso', 'egreso')),
     monto_total        DECIMAL(12,2) NOT NULL,
+    medio_pago         VARCHAR(2),
+    cuente_origen      VARCHAR(20),
+    cuente_destino     VARCHAR(20),
+    estado             VARCHAR(10),
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -554,7 +612,11 @@ CREATE TABLE trans_detalle (
     id_partida         BIGINT REFERENCES partida(id_partida),
     cantidad           DECIMAL(12,4),
     precio_unitario    DECIMAL(12,2),
+    monto_igv          DECIMAL(12,2),
+    porc_detraccion    DECIMAL(5,2),
+    monto_detraccion   DECIMAL(12,2),
     subtotal           DECIMAL(12,2) GENERATED ALWAYS AS (cantidad * precio_unitario) STORED,
+    usuario_registro   VARCHAR(100),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
