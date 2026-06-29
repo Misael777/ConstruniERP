@@ -8,14 +8,20 @@
 	// Filter modules based on permissions with verbose logging
 	let visibleModules = $derived.by(() => {
 		console.log('[Sidebar] --- Calculating visibleModules ---');
-		console.log('[Sidebar] MODULE_REGISTRY length:', MODULE_REGISTRY.length);
-		console.log('[Sidebar] permisosState status:', { loaded: permisosState.loaded, rolNombre: permisosState.rolNombre, user: permisosState.userName, perms: permisosState.permisos });
 		
-		const filtered = MODULE_REGISTRY.filter(mod => {
+		const filtered = MODULE_REGISTRY.map(mod => {
 			const allowed = hasPermiso(mod.permiso);
-			console.log(`[Sidebar]   - Module "${mod.label}" (${mod.path}) | Requires: "${mod.permiso}" | Allowed: ${allowed}`);
-			return allowed;
-		});
+			if (!allowed) return null;
+
+			// Filter subItems if they have granular permissions
+			let subItems = mod.subItems;
+			if (subItems) {
+				subItems = subItems.filter(sub => !sub.permiso || hasPermiso(sub.permiso));
+			}
+
+			// Return module with filtered subItems (if any remain)
+			return { ...mod, subItems: subItems && subItems.length > 0 ? subItems : undefined };
+		}).filter(Boolean) as typeof MODULE_REGISTRY;
 		
 		console.log('[Sidebar] Finished filtering. Visible modules count:', filtered.length, 'Modules:', filtered.map(m => m.label));
 		console.log('[Sidebar] ----------------------------------');

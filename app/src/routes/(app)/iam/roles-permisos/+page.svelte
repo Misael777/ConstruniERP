@@ -10,6 +10,68 @@
 	let rolesPermisos = $state<{ rol_id: number; permiso_id: number }[]>([]);
 	let isLoading = $state(true);
 
+	// Configuración de la matriz agrupada
+	const modulesConfig = [
+		{
+			id: 'dashboard', name: 'Dashboard', icon: 'fas fa-home', colorClass: 'text-purple-600 bg-purple-50 border-purple-100',
+			submodules: [{ key: 'ver_dashboard', label: 'Panel Principal' }]
+		},
+		{
+			id: 'comercial', name: 'Comercial', icon: 'fas fa-shopping-cart', colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-100',
+			submodules: [
+				{ key: 'ver_comercial', label: 'General Comercial' },
+				{ key: 'ver_comercial_ventas', label: 'Ventas' },
+				{ key: 'ver_comercial_clientes', label: 'Clientes' },
+				{ key: 'ver_comercial_proveedores', label: 'Proveedores' }
+			]
+		},
+		{
+			id: 'proyectos', name: 'Proyectos', icon: 'fas fa-hard-hat', colorClass: 'text-orange-600 bg-orange-50 border-orange-100',
+			submodules: [
+				{ key: 'ver_proyectos', label: 'General Proyectos' },
+				{ key: 'ver_proyectos_dashboard', label: 'Dashboard Proyectos' },
+				{ key: 'ver_proyectos_gestion', label: 'Gestión de Proyectos' },
+				{ key: 'ver_proyectos', label: 'Partidas y Plantillas' }
+			]
+		},
+		{
+			id: 'finanzas', name: 'Finanzas', icon: 'fas fa-dollar-sign', colorClass: 'text-blue-600 bg-blue-50 border-blue-100',
+			submodules: [
+				{ key: 'ver_finanzas', label: 'General Finanzas' },
+				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
+				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
+				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' }
+			]
+		},
+		{
+			id: 'recursos_humanos', name: 'Recursos Humanos', icon: 'fas fa-users', colorClass: 'text-pink-600 bg-pink-50 border-pink-100',
+			submodules: [{ key: 'ver_empleados', label: 'Empleados' }]
+		},
+		{
+			id: 'configuracion', name: 'Configuración', icon: 'fas fa-cog', colorClass: 'text-slate-600 bg-slate-50 border-slate-200',
+			submodules: [
+				{ key: 'ver_iam', label: 'Control de Accesos' },
+				{ key: 'ver_roles_permisos', label: 'Roles y Permisos' }
+			]
+		}
+	];
+
+	let structuredModules = $derived(
+		modulesConfig.map(mod => {
+			return {
+				...mod,
+				submodules: mod.submodules.map(sub => {
+					const dbPermiso = permisos.find(p => p.nombre === sub.key);
+					return {
+						...sub,
+						dbId: dbPermiso ? dbPermiso.id : null,
+						descripcion: dbPermiso ? dbPermiso.descripcion : ''
+					};
+				}).filter(sub => sub.dbId !== null)
+			};
+		}).filter(mod => mod.submodules.length > 0)
+	);
+
 	// Estado para modal de Roles
 	let isRoleModalOpen = $state(false);
 	let isSavingRole = $state(false);
@@ -171,20 +233,22 @@
 			<table class="w-full text-sm text-left border-collapse min-w-[600px]">
 				<thead class="text-xs text-slate-500 bg-slate-50 font-medium uppercase border-b border-slate-200">
 					<tr>
-						<th class="p-4 border-r border-slate-100 bg-slate-100 sticky left-0 z-10 w-64">Módulos \ Roles</th>
+						<th class="p-4 border-r border-slate-100 bg-slate-100 sticky left-0 z-10 min-w-[140px]">Módulo</th>
+						<th class="p-4 border-r border-slate-100 bg-slate-100 sticky left-[140px] z-10 min-w-[160px]">Submódulo</th>
+						<th class="p-4 border-r border-slate-100 bg-slate-100 sticky left-[300px] z-10 min-w-[200px]">Descripción</th>
 						{#each roles as rol}
-							<th class="p-4 text-center border-r border-slate-100 min-w-[160px] relative group">
-								<div class="font-bold text-slate-800 capitalize">{rol.nombre}</div>
-								<div class="text-[10px] text-slate-400 font-normal truncate mt-1 max-w-[140px] mx-auto" title={rol.descripcion}>{rol.descripcion || 'Sin descripción'}</div>
+							<th class="p-4 text-center border-r border-slate-100 min-w-[180px] group">
+								<div class="font-bold text-slate-800 capitalize text-sm">{rol.nombre}</div>
+								<div class="text-[10px] text-slate-400 font-normal truncate mt-0.5 max-w-[140px] mx-auto" title={rol.descripcion}>{rol.descripcion || 'Sin descripción'}</div>
 								
-								<!-- Hover Acciones de Rol -->
-								<div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-									<button onclick={() => abrirModalEditarRol(rol)} class="w-6 h-6 rounded bg-slate-200 hover:bg-blue-100 text-slate-500 hover:text-blue-600 flex items-center justify-center transition-colors shadow-xs" title="Editar Rol">
-										<i class="fas fa-edit text-[10px]"></i>
+								<!-- Botones CRUD explícitos (siempre visibles) -->
+								<div class="flex justify-center gap-2 mt-3 opacity-100 transition-opacity">
+									<button onclick={() => abrirModalEditarRol(rol)} class="px-2 py-1 text-[11px] rounded bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 font-medium transition-colors border border-slate-200 hover:border-blue-200 flex items-center gap-1" title="Editar Rol">
+										<i class="fas fa-edit"></i> Editar
 									</button>
 									{#if rol.nombre !== 'administrador'}
-										<button onclick={() => eliminarRol(rol.id, rol.nombre)} class="w-6 h-6 rounded bg-slate-200 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center transition-colors shadow-xs" title="Eliminar Rol">
-											<i class="fas fa-trash-alt text-[10px]"></i>
+										<button onclick={() => eliminarRol(rol.id, rol.nombre)} class="px-2 py-1 text-[11px] rounded bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 font-medium transition-colors border border-slate-200 hover:border-rose-200 flex items-center gap-1" title="Eliminar Rol">
+											<i class="fas fa-trash-alt"></i> Borrar
 										</button>
 									{/if}
 								</div>
@@ -193,26 +257,47 @@
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
-					{#each permisos as permiso}
-						<tr class="hover:bg-slate-50 transition-colors">
-							<td class="p-4 border-r border-slate-100 sticky left-0 bg-white group-hover:bg-slate-50 z-10">
-								<div class="font-bold text-slate-700">{permiso.nombre}</div>
-								<div class="text-xs text-slate-400 mt-0.5 max-w-xs">{permiso.descripcion}</div>
-							</td>
-							{#each roles as rol}
-								{@const isChecked = hasPermiso(rol.id, permiso.id)}
-								<td class="p-4 text-center border-r border-slate-100 align-middle">
-									<label class="flex items-center justify-center cursor-pointer w-full h-full">
-										<input 
-											type="checkbox" 
-											checked={isChecked}
-											onchange={() => togglePermiso(rol.id, permiso.id, isChecked)}
-											class="w-5 h-5 text-blue-600 bg-slate-100 border-slate-300 rounded focus:ring-blue-500 focus:ring-2 cursor-pointer transition-all"
-										/>
-									</label>
+					{#each structuredModules as mod}
+						{#each mod.submodules as sub, index}
+							<tr class="hover:bg-slate-50 transition-colors">
+								{#if index === 0}
+									<td class="p-4 border-r border-slate-100 align-top sticky left-0 bg-white z-10" rowspan={mod.submodules.length}>
+										<div class={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border ${mod.colorClass} font-semibold text-sm`}>
+											<i class={mod.icon}></i> {mod.name}
+										</div>
+									</td>
+								{/if}
+								<td class="p-4 border-r border-slate-100 sticky left-[140px] bg-white z-10">
+									<div class="font-bold text-slate-700">{sub.label}</div>
 								</td>
-							{/each}
-						</tr>
+								<td class="p-4 border-r border-slate-100 sticky left-[300px] bg-white z-10">
+									<div class="text-xs text-slate-500">{sub.descripcion}</div>
+								</td>
+								{#each roles as rol}
+									{@const isChecked = hasPermiso(rol.id, sub.dbId!)}
+									<td class="p-4 text-center border-r border-slate-100 align-middle">
+										<label class="flex items-center justify-center cursor-pointer w-full h-full group/chk">
+											<div class="relative flex items-center justify-center">
+												<input 
+													type="checkbox" 
+													checked={isChecked}
+													onchange={() => togglePermiso(rol.id, sub.dbId!, isChecked)}
+													disabled={rol.nombre === 'administrador'}
+													class={`w-5 h-5 rounded cursor-pointer appearance-none outline-none ring-offset-1 transition-all ${
+														isChecked 
+															? 'bg-blue-600 ring-2 ring-blue-600 border-transparent' 
+															: 'bg-white border-2 border-slate-300 group-hover/chk:border-blue-400 group-hover/chk:bg-blue-50'
+													} ${rol.nombre === 'administrador' ? 'opacity-70 cursor-not-allowed' : ''}`}
+												/>
+												{#if isChecked}
+													<i class="fas fa-check absolute text-white text-xs pointer-events-none"></i>
+												{/if}
+											</div>
+										</label>
+									</td>
+								{/each}
+							</tr>
+						{/each}
 					{/each}
 				</tbody>
 			</table>

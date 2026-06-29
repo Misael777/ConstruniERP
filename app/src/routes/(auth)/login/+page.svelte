@@ -50,7 +50,9 @@
 	}
 	
 	let passwordInputRef = $state<HTMLInputElement>();
-	const isTauriApp = typeof window !== 'undefined' && typeof (window as any).__TAURI__ !== 'undefined';
+	function isTauriApp() {
+		return typeof window !== 'undefined' && typeof (window as any).__TAURI__ !== 'undefined';
+	}
 
 	function getSavedEmail() {
 		if (typeof localStorage === 'undefined') return null;
@@ -83,7 +85,7 @@
 		checkingFirstAdmin = true;
 		console.log('[Login] Checking first-admin availability...');
 		try {
-			if (isTauriApp) {
+			if (isTauriApp()) {
 				// @ts-ignore: module may only exist in desktop runtime
 				const core = await import('@tauri-apps/api/core');
 				const canCreate = await core.invoke('check_first_admin_available');
@@ -313,7 +315,7 @@ async function handleSetupPassword(e: Event) {
 
 		isLoading = true;
 		try {
-			if (isTauriApp) {
+			if (isTauriApp()) {
 				// @ts-ignore: module may only exist in desktop runtime
 				const core = await import('@tauri-apps/api/core');
 				const response = await core.invoke('create_first_admin', {
