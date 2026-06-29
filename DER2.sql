@@ -101,25 +101,25 @@ ON CONFLICT (nombre) DO NOTHING;
 
 INSERT INTO area (nombre) VALUES ('Gerencia'), ('Operaciones'), ('Oficina Técnica') ON CONFLICT (nombre) DO NOTHING;
 
+-- Seed permissions for the current app modules and submodules
 INSERT INTO permisos (nombre, descripcion) VALUES
-  ('ver_dashboard',         'Ver Dashboard'),
-  ('ver_iam',               'Ver Control de Accesos (IAM)'),
-  ('ver_empleados',         'Ver módulo de Empleados'),
-  ('ver_roles_permisos',    'Ver módulo de Roles y Permisos'),
-  ('ver_comercial',         'Ver módulo Comercial'),
-  ('ver_comercial_ventas',  'Ver módulo Ventas'),
-  ('ver_comercial_clientes','Ver módulo Clientes'),
-  ('ver_comercial_proveedores','Ver módulo Proveedores'),
-  ('ver_proyectos',         'Ver módulo de Proyectos'),
-  ('ver_proyectos_dashboard','Ver Dashboard de Proyectos'),
+  ('ver_dashboard', 'Ver Dashboard'),
+  ('ver_iam', 'Ver módulo de Control de Accesos (IAM)'),
+  ('ver_empleados', 'Ver módulo de Empleados'),
+  ('ver_roles_permisos', 'Ver módulo de Roles y Permisos'),
+  ('ver_comercial', 'Ver módulo Comercial'),
+  ('ver_comercial_ventas', 'Ver módulo de Ventas'),
+  ('ver_comercial_clientes', 'Ver módulo de Clientes'),
+  ('ver_comercial_proveedores', 'Ver módulo de Proveedores'),
+  ('ver_proyectos', 'Ver módulo de Proyectos'),
+  ('ver_proyectos_dashboard', 'Ver Dashboard de Proyectos'),
   ('ver_proyectos_gestion', 'Ver Gestión de Proyectos'),
-  ('ver_finanzas',          'Ver módulo de Finanzas'),
+  ('ver_proyectos_partidas', 'Ver módulo de Partidas y Plantillas'),
+  ('ver_finanzas', 'Ver módulo de Finanzas'),
   ('ver_finanzas_centros_costos', 'Ver Centros de Costos'),
   ('ver_finanzas_cuentas_pendientes', 'Ver Cuentas Pendientes'),
   ('ver_finanzas_transacciones', 'Ver Transacciones')
 ON CONFLICT (nombre) DO NOTHING;
-
-INSERT INTO area (nombre) VALUES ('Gerencia'), ('Operaciones'), ('Oficina Técnica') ON CONFLICT (nombre) DO NOTHING;
 
 INSERT INTO roles_permisos (rol_id, permiso_id)
 SELECT r.id, p.id FROM roles r, permisos p WHERE r.nombre = 'administrador' ON CONFLICT DO NOTHING;

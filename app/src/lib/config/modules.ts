@@ -42,7 +42,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     subItems: [
       { path: '/proyectos/dashboard', label: 'Dashboard', permiso: 'ver_proyectos_dashboard' },
       { path: '/proyectos/gestion', label: 'Gestión', permiso: 'ver_proyectos_gestion' },
-      { path: '/proyectos/partidas', label: 'Partidas y Plantillas', permiso: 'ver_proyectos' }
+      { path: '/proyectos/partidas', label: 'Partidas y Plantillas', permiso: 'ver_proyectos_partidas' }
     ]
   },
   { 
