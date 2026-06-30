@@ -1,6 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 // @ts-ignore
 const host = process.env.TAURI_DEV_HOST;
@@ -25,5 +26,6 @@ export default defineConfig({
 					port: 5174,
 			  }
 			: undefined,
-	}
+	},
+	envPrefix: ['VITE_', 'PUBLIC_', 'GOOGLE_'], 
 });
