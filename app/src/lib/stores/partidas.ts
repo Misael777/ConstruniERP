@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 import { supabase } from '$lib/supabaseClient';
 
 export interface PartidaNode {
@@ -17,7 +17,7 @@ export interface Plantilla {
     nombre: string;
     descripcion: string | null;
     tipo: string | null;
-    num_partidas?: number;
+    num_partidas: number;
 }
 
 export interface PlantillaDetalle {
@@ -28,176 +28,235 @@ export interface PlantillaDetalle {
     nombre_partida: string;
 }
 
+export interface ProyectoBasico {
+    id_proyecto: number;
+    nombre_proyecto: string;
+}
+
+// --- Core stores ---
 export const partidasTree = writable<PartidaNode[]>([]);
+export const partidasCount = writable<number>(0);
 export const selectedPartida = writable<PartidaNode | null>(null);
 
 export const plantillasList = writable<Plantilla[]>([]);
 export const selectedPlantilla = writable<Plantilla | null>(null);
 export const selectedPlantillaDetalle = writable<PlantillaDetalle[]>([]);
 
-export const isLoading = writable<boolean>(false);
-export const errorMessage = writable<string | null>(null);
+export const proyectosList = writable<ProyectoBasico[]>([]);
 
-function getSupabaseClient() {
-    const hasSupabaseConfig = Boolean(import.meta.env.PUBLIC_SUPABASE_URL && import.meta.env.PUBLIC_SUPABASE_ANON_KEY);
-    if (!hasSupabaseConfig) {
-        throw new Error('La configuración de Supabase no está disponible. Revisa PUBLIC_SUPABASE_URL y PUBLIC_SUPABASE_ANON_KEY.');
+// Separate loading flags to avoid race conditions when both are called concurrently
+export const isLoadingTree = writable<boolean>(false);
+export const isLoading = writable<boolean>(false); // for plantilla detail fetches
+
+export const errorMessage = writable<string | null>(null);
+export const currentAuthUserId = writable<string | null>(null);
+export const searchTerm = writable<string>('');
+
+// --- Derived: client-side filtered tree (searches codigo and descripcion) ---
+function filterTree(nodes: PartidaNode[], term: string): PartidaNode[] {
+    return nodes
+        .map(node => {
+            const matches =
+                node.codigo.toLowerCase().includes(term) ||
+                node.descripcion.toLowerCase().includes(term);
+            const filteredChildren = node.children ? filterTree(node.children, term) : [];
+            if (matches || filteredChildren.length > 0) {
+                return { ...node, children: filteredChildren };
+            }
+            return null;
+        })
+        .filter((n): n is PartidaNode => n !== null);
+}
+
+export const filteredPartidasTree = derived(
+    [partidasTree, searchTerm],
+    ([$tree, $term]) => {
+        const t = $term.trim().toLowerCase();
+        return t ? filterTree($tree, t) : $tree;
+    }
+);
+
+// --- Supabase client guard ---
+function getClient() {
+    const hasConfig = Boolean(
+        import.meta.env.PUBLIC_SUPABASE_URL && import.meta.env.PUBLIC_SUPABASE_ANON_KEY
+    );
+    if (!hasConfig) {
+        throw new Error('Supabase no está configurado. Revisa PUBLIC_SUPABASE_URL y PUBLIC_SUPABASE_ANON_KEY.');
     }
     return supabase;
 }
 
+// --- Loaders ---
+
 export async function fetchPartidasTree() {
-    isLoading.set(true);
+    isLoadingTree.set(true);
     try {
-        const client = getSupabaseClient();
-        const { data, error } = await client
+        const { data, error } = await getClient()
             .from('partida')
             .select('id_partida, codigo, descripcion, nivel, id_partida_padre, unidad, precio_unitario')
             .order('codigo', { ascending: true });
-            
+
         if (error) throw error;
-        
-        const flatNodes: PartidaNode[] = data || [];
-        
-        // Convert flat list to tree
+
+        const flat: PartidaNode[] = data || [];
+        partidasCount.set(flat.length);
+
         const map = new Map<number, PartidaNode>();
-        flatNodes.forEach(n => map.set(n.id_partida, { ...n, children: [] }));
-        
+        flat.forEach(n => map.set(n.id_partida, { ...n, children: [] }));
+
         const tree: PartidaNode[] = [];
-        flatNodes.forEach(n => {
+        flat.forEach(n => {
+            const node = map.get(n.id_partida)!;
             if (n.id_partida_padre !== null) {
                 const parent = map.get(n.id_partida_padre);
                 if (parent) {
-                    parent.children = parent.children || [];
-                    parent.children.push(map.get(n.id_partida)!);
+                    parent.children!.push(node);
                 } else {
-                    tree.push(map.get(n.id_partida)!);
+                    tree.push(node); // orphan → place at root
                 }
             } else {
-                tree.push(map.get(n.id_partida)!);
+                tree.push(node);
             }
         });
-        
+
         errorMessage.set(null);
         partidasTree.set(tree);
     } catch (err: any) {
-        console.error(err);
         errorMessage.set(err.message || err.toString());
     } finally {
-        isLoading.set(false);
+        isLoadingTree.set(false);
     }
 }
 
 export async function fetchPlantillas() {
-    isLoading.set(true);
     try {
-        const client = getSupabaseClient();
-        const { data, error } = await client
+        // Fetch partida count per plantilla in one query via embedding
+        const { data, error } = await getClient()
             .from('plantilla_presupuesto')
-            .select('id_plantilla, nombre, descripcion, tipo')
+            .select('id_plantilla, nombre, descripcion, tipo, plantilla_detalle(id_plantilla_detalle)')
             .order('nombre', { ascending: true });
-            
+
         if (error) throw error;
-        
-        errorMessage.set(null);
-        plantillasList.set(data || []);
+
+        const mapped: Plantilla[] = (data || []).map((row: any) => ({
+            id_plantilla: row.id_plantilla,
+            nombre: row.nombre,
+            descripcion: row.descripcion,
+            tipo: row.tipo,
+            num_partidas: Array.isArray(row.plantilla_detalle) ? row.plantilla_detalle.length : 0,
+        }));
+
+        plantillasList.set(mapped);
     } catch (err: any) {
-        console.error(err);
         errorMessage.set(err.message || err.toString());
-    } finally {
-        isLoading.set(false);
+    }
+}
+
+export async function fetchProyectos() {
+    try {
+        const { data, error } = await getClient()
+            .from('proyecto')
+            .select('id_proyecto, nombre_proyecto')
+            .eq('estado_proyecto', 'activo')
+            .order('nombre_proyecto', { ascending: true });
+
+        if (error) throw error;
+        proyectosList.set(data || []);
+    } catch (err: any) {
+        console.error('Error al cargar proyectos:', err);
     }
 }
 
 export async function fetchPlantillaDetalle(id_plantilla: number) {
     isLoading.set(true);
     try {
-        const client = getSupabaseClient();
-        const { data, error } = await client
+        const { data, error } = await getClient()
             .from('plantilla_detalle')
             .select('id_plantilla_detalle, id_partida, cantidad_sugerida, orden, partida(descripcion)')
             .eq('id_plantilla', id_plantilla)
             .order('orden', { ascending: true });
-            
+
         if (error) throw error;
-        
+
         const detalle: PlantillaDetalle[] = (data || []).map((r: any) => ({
             id_plantilla_detalle: r.id_plantilla_detalle,
             id_partida: r.id_partida,
             cantidad_sugerida: r.cantidad_sugerida,
             orden: r.orden,
-            nombre_partida: Array.isArray(r.partida) ? r.partida[0]?.descripcion : r.partida?.descripcion || ''
+            nombre_partida: Array.isArray(r.partida)
+                ? (r.partida[0]?.descripcion ?? '')
+                : (r.partida?.descripcion ?? ''),
         }));
-        
+
         errorMessage.set(null);
         selectedPlantillaDetalle.set(detalle);
     } catch (err: any) {
-        console.error(err);
         errorMessage.set(err.message || err.toString());
     } finally {
         isLoading.set(false);
     }
 }
 
-export async function instanciarPlantilla(id_plantilla: number, id_proyecto: number, usar_cantidades: boolean, crear_metrados: boolean, auth_user_id: string) {
+export async function instanciarPlantilla(
+    id_plantilla: number,
+    id_proyecto: number,
+    usar_cantidades: boolean,
+    _crear_metrados: boolean,
+    auth_user_id: string
+) {
     isLoading.set(true);
     try {
-        const client = getSupabaseClient();
+        const client = getClient();
 
-        // 1. Check if presupuesto exists
+        // 1. Find or create presupuesto for this project
         let { data: presupuestos, error: pErr } = await client
             .from('presupuesto')
             .select('id_presupuesto')
             .eq('id_proyecto', id_proyecto)
             .limit(1);
-            
+
         if (pErr) throw pErr;
-        
-        let presupuesto_id = presupuestos?.[0]?.id_presupuesto;
-        
+
+        let presupuesto_id: number | undefined = presupuestos?.[0]?.id_presupuesto;
+
         if (!presupuesto_id) {
             const { data: newP, error: nErr } = await client
                 .from('presupuesto')
-                .insert({
-                    id_proyecto,
-                    nombre: "Presupuesto Base",
-                    usuario_registro: auth_user_id
-                })
+                .insert({ id_proyecto, nombre: 'Presupuesto Base', usuario_registro: auth_user_id })
                 .select('id_presupuesto');
             if (nErr) throw nErr;
             presupuesto_id = newP?.[0]?.id_presupuesto;
         }
-        
-        // 2. Get template details
+
+        if (!presupuesto_id) throw new Error('No se pudo obtener o crear el presupuesto');
+
+        // 2. Get template line items (only the fields we need)
         const { data: detalles, error: dErr } = await client
             .from('plantilla_detalle')
             .select('id_partida, cantidad_sugerida')
             .eq('id_plantilla', id_plantilla);
-            
+
         if (dErr) throw dErr;
-        
-        // 3. Insert into presupuesto_detalle
-        if (detalles && detalles.length > 0) {
-            const payload = detalles.map((d: any) => ({
-                id_presupuesto: presupuesto_id,
-                id_partida: d.id_partida,
-                cantidad: usar_cantidades ? (d.cantidad_sugerida || 0) : 0,
-                usuario_registro: auth_user_id
-            }));
-            
-            const { error: iErr } = await client
-                .from('presupuesto_detalle')
-                .insert(payload);
-                
-            if (iErr) throw iErr;
-            
+        if (!detalles?.length) {
             errorMessage.set(null);
-            return { success: true, message: `Se insertaron ${payload.length} partidas en el presupuesto` };
+            return { success: true, message: 'Esta plantilla no tiene partidas.' };
         }
+
+        // 3. Insert into presupuesto_detalle
+        const payload = detalles.map((d: any) => ({
+            id_presupuesto: presupuesto_id,
+            id_partida: d.id_partida,
+            cantidad: usar_cantidades ? (d.cantidad_sugerida ?? 0) : 0,
+            usuario_registro: auth_user_id,
+        }));
+
+        const { error: iErr } = await client.from('presupuesto_detalle').insert(payload);
+        if (iErr) throw iErr;
+
         errorMessage.set(null);
-        return { success: true, message: 'No hay partidas para insertar.' };
+        return { success: true, message: `Se insertaron ${payload.length} partidas en el presupuesto` };
     } catch (err: any) {
-        console.error(err);
         errorMessage.set(err.message || err.toString());
         return { success: false, message: err.message || err.toString() };
     } finally {
@@ -205,11 +264,34 @@ export async function instanciarPlantilla(id_plantilla: number, id_proyecto: num
     }
 }
 
-// CRUD Operations for Partida
+// --- Plantilla CRUD ---
+
+export async function createPlantilla(data: {
+    nombre: string;
+    descripcion?: string | null;
+    tipo?: string | null;
+}) {
+    try {
+        const { data: result, error } = await getClient()
+            .from('plantilla_presupuesto')
+            .insert({ nombre: data.nombre, descripcion: data.descripcion || null, tipo: data.tipo || null })
+            .select('id_plantilla, nombre, descripcion, tipo')
+            .single();
+
+        if (error) throw error;
+
+        await fetchPlantillas();
+        return { success: true, message: 'Plantilla creada exitosamente', data: result };
+    } catch (err: any) {
+        return { success: false, message: err.message || err.toString() };
+    }
+}
+
+// --- Partida CRUD ---
+
 export async function createPartida(partida: Omit<PartidaNode, 'id_partida' | 'children'>) {
     try {
-        const client = getSupabaseClient();
-        const { data, error } = await client
+        const { data, error } = await getClient()
             .from('partida')
             .insert({
                 codigo: partida.codigo,
@@ -217,63 +299,58 @@ export async function createPartida(partida: Omit<PartidaNode, 'id_partida' | 'c
                 nivel: partida.nivel,
                 id_partida_padre: partida.id_partida_padre,
                 unidad: partida.unidad,
-                precio_unitario: partida.precio_unitario
+                precio_unitario: partida.precio_unitario,
             })
             .select('id_partida, codigo, descripcion, nivel, id_partida_padre, unidad, precio_unitario')
             .single();
-            
+
         if (error) throw error;
-        
+
         errorMessage.set(null);
         await fetchPartidasTree();
         return { success: true, message: 'Partida creada exitosamente', data };
     } catch (err: any) {
-        const message = err.message || err.toString();
-        console.error(message);
-        return { success: false, message };
+        return { success: false, message: err.message || err.toString() };
     }
 }
 
-export async function updatePartida(id_partida: number, updates: Partial<Omit<PartidaNode, 'id_partida' | 'children'>>) {
+export async function updatePartida(
+    id_partida: number,
+    updates: Partial<Omit<PartidaNode, 'id_partida' | 'children'>>
+) {
     try {
-        const client = getSupabaseClient();
-        const { data, error } = await client
+        const { data, error } = await getClient()
             .from('partida')
             .update(updates)
             .eq('id_partida', id_partida)
             .select('id_partida, codigo, descripcion, nivel, id_partida_padre, unidad, precio_unitario')
             .single();
-            
+
         if (error) throw error;
-        
+
         errorMessage.set(null);
-        selectedPartida.set(data);
+        // Refresh the tree; do NOT set selectedPartida here to avoid re-triggering any reactive effects
         await fetchPartidasTree();
         return { success: true, message: 'Partida actualizada exitosamente', data };
     } catch (err: any) {
-        const message = err.message || err.toString();
-        console.error(message);
-        return { success: false, message };
+        return { success: false, message: err.message || err.toString() };
     }
 }
 
 export async function deletePartida(id_partida: number) {
     try {
-        const client = getSupabaseClient();
-        const { error } = await client
+        const { error } = await getClient()
             .from('partida')
             .delete()
             .eq('id_partida', id_partida);
-            
+
         if (error) throw error;
-        
+
         errorMessage.set(null);
         selectedPartida.set(null);
         await fetchPartidasTree();
         return { success: true, message: 'Partida eliminada exitosamente' };
     } catch (err: any) {
-        const message = err.message || err.toString();
-        console.error(message);
-        return { success: false, message };
+        return { success: false, message: err.message || err.toString() };
     }
 }

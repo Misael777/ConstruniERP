@@ -1,5 +1,4 @@
 <script lang="ts">
-	export const prerender = false;
 	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
