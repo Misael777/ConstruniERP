@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
+	import Toast from '$lib/components/Toast.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { getRequiredPermiso } from '$lib/config/modules';
 	
@@ -132,4 +133,5 @@
 			</div>
 		</main>
 	</div>
+	<Toast />
 {/if}

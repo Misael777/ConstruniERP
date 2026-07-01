@@ -10,7 +10,7 @@
  *   (useful for Tauri production builds where no server is embedded).
  */
 
-import { PUBLIC_API_BASE_URL } from '$env/static/public';
+import { env } from '$env/dynamic/public';
 
 function getBaseUrl(): string {
 	if (typeof window === 'undefined') return '';
@@ -23,9 +23,10 @@ function getBaseUrl(): string {
 	// If running under Tauri/file/app protocol, fall back to configured public API base
 	// PUBLIC_API_BASE_URL should be set to the deployed app URL (e.g. https://app.example.com)
 	if (href.startsWith('tauri://') || href.startsWith('app://') || href.startsWith('file://')) {
-		if (PUBLIC_API_BASE_URL && PUBLIC_API_BASE_URL.length > 0) {
+		const baseUrl = env.PUBLIC_API_BASE_URL;
+		if (baseUrl && baseUrl.length > 0) {
 			// Ensure it does not end with a slash
-			return PUBLIC_API_BASE_URL.replace(/\/$/, '');
+			return baseUrl.replace(/\/$/, '');
 		}
 		// No configured public API base — return empty so resolveApiUrl yields relative path
 		return '';

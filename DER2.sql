@@ -78,20 +78,20 @@ CREATE TABLE roles_permisos (
 );
 
 CREATE TABLE empleados (
-    id SERIAL PRIMARY KEY,
-    nombre TEXT NOT NULL,
-    correo TEXT UNIQUE NOT NULL,
-    telefono VARCHAR(20),
-    rol_id INT REFERENCES roles(id),
-    area_id INT REFERENCES area(id),
+    id_empleado  SERIAL PRIMARY KEY,
+    nombre       TEXT NOT NULL,
+    correo       TEXT UNIQUE NOT NULL,
+    telefono     VARCHAR(20),
+    rol_id       INT REFERENCES roles(id),
+    area_id      INT REFERENCES area(id),
     auth_user_id UUID UNIQUE,
     fecha_ingreso DATE,
-    salario NUMERIC,
-    horas NUMERIC,
-    periodo TEXT,
-    nivel TEXT,
+    salario      NUMERIC,
+    horas        NUMERIC,
+    periodo      TEXT,
+    nivel        TEXT,
     password_creada BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
 INSERT INTO roles (nombre, descripcion) VALUES
@@ -231,8 +231,8 @@ CREATE TABLE centro_costo (
     id_centro_costo    BIGSERIAL PRIMARY KEY,
     codigo             VARCHAR(50) NOT NULL,
     nombre             VARCHAR(200) NOT NULL,
-    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('proyecto', 'proveedor', 'cliente', 'otro')),
-    id_referencia      BIGINT NOT NULL, -- FK a proyecto.id_proyecto 
+    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('obra', 'consultoria', 'area', 'otro')),
+    monto_ctual        NUMERIC(12,2),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
