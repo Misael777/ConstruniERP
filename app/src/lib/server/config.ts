@@ -6,11 +6,13 @@ export const googleDriveConfig = {
 	refreshToken: env.GOOGLE_DRIVE_REFRESH_TOKEN || '',
 	accessToken: env.GOOGLE_DRIVE_ACCESS_TOKEN || '',
 	folderIdContratos: env.GOOGLE_DRIVE_FOLDER_ID_CONTRATOS || '',
-	folderIdProformas: env.GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || ''
+	folderIdProformas: env.GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || '',
+	folderIdDocumentos: env.GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || ''
 };
 
-function getDriveFolderId(type: 'contrato' | 'proforma') {
+function getDriveFolderId(type: 'contrato' | 'proforma' | 'documento') {
 	if (type === 'contrato') return googleDriveConfig.folderIdContratos;
+	if (type === 'documento') return googleDriveConfig.folderIdDocumentos;
 	return googleDriveConfig.folderIdProformas;
 }
 
@@ -46,7 +48,7 @@ async function getDriveAccessToken() {
 	return tokenData.access_token as string;
 }
 
-export async function uploadToDrive(file: File | Blob, fileName: string, type: 'contrato' | 'proforma') {
+export async function uploadToDrive(file: File | Blob, fileName: string, type: 'contrato' | 'proforma' | 'documento') {
 	const folderId = getDriveFolderId(type);
 	if (!folderId) {
 		throw new Error(`Google Drive folder ID is not configured for type=${type}`);

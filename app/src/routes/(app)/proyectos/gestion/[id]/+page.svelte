@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
+	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
 
 	let projectId = $state<string | undefined>(undefined);
 	let lastLoadedProjectId = $state<string | undefined>(undefined);
@@ -16,7 +17,7 @@
 	fecha_fin_plan: string;
 	estado_predio: string;
 	tipo_edifica: string;
-	Nro_pisos: number;
+	nro_pisos: number;
 	distrito: string;
 	provincia: string;
 	departamento: string;
@@ -206,11 +207,17 @@ function goBack() {
 		>
 			<i class="fas fa-list-ul"></i> Presupuesto / Partidas
 		</button>
-		<button 
+		<button
 			class={`px-5 py-3 text-sm font-bold flex items-center gap-2 rounded-t-xl transition-colors border-b-2 ${activeTab === 'gestion' ? 'text-orange-600 border-orange-600 bg-orange-50/50' : 'text-slate-500 border-transparent hover:text-slate-800 hover:bg-slate-50'}`}
 			onclick={() => activeTab = 'gestion'}
 		>
 			<i class="fas fa-chart-gantt"></i> Gestión de Obra
+		</button>
+		<button
+			class={`px-5 py-3 text-sm font-bold flex items-center gap-2 rounded-t-xl transition-colors border-b-2 ${activeTab === 'documentos' ? 'text-orange-600 border-orange-600 bg-orange-50/50' : 'text-slate-500 border-transparent hover:text-slate-800 hover:bg-slate-50'}`}
+			onclick={() => activeTab = 'documentos'}
+		>
+			<i class="fas fa-folder-open"></i> Documentos
 		</button>
 	</div>
 
@@ -388,7 +395,7 @@ function goBack() {
 								</td>
 								<td class="p-4 text-right font-bold text-slate-700">376.25</td>
 								<td class="p-4 text-center">
-									<button class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
+									<button aria-label="Eliminar partida" class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
 										<i class="fas fa-trash-alt text-xs"></i>
 									</button>
 								</td>
@@ -405,7 +412,7 @@ function goBack() {
 								</td>
 								<td class="p-4 text-right font-bold text-slate-700">2,034.00</td>
 								<td class="p-4 text-center">
-									<button class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
+									<button aria-label="Eliminar partida" class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
 										<i class="fas fa-trash-alt text-xs"></i>
 									</button>
 								</td>
@@ -439,6 +446,14 @@ function goBack() {
 					</button>
 				</div>
 			</div>
+		{/if}
+
+
+		{#if activeTab === 'documentos'}
+			<DocumentosTab
+				projectId={proyecto.id_proyecto}
+				projectName={proyecto.nombre_proyecto}
+			/>
 		{/if}
 
 	</div>
