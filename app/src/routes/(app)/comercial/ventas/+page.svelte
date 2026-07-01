@@ -29,6 +29,18 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 			.join('') || 'NA';
 	}
 
+	function mapProjectType(code: string) {
+		switch (code) {
+			case 'O': return 'Proyecto de Obra';
+			case 'M': return 'Mantenimiento';
+			case 'A': return 'Ampliación';
+			case 'N': return 'Nuevo';
+			case 'U': return 'Viv. Unifamiliar';
+			case 'C': return 'Comercial';
+			default: return code || 'Otros';
+		}
+	}
+
 	let ventas = $state<any[]>([]);
 	let isLoading = $state(true);
 	let errorMessage = $state<string | null>(null);
@@ -79,7 +91,8 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 			ventas = proyectos.map((project: any) => {
 				const valor = Number(project.precio_venta) || 0;
 				const comisionPct = Number(project.comision_asesor) || 10;
-				const tipo = String(project.tip_proyecto || project.tipo_edifica || 'Otros');
+				const tipoRaw = String(project.tip_proyecto || project.tipo_edifica || 'Otros');
+				const tipo = mapProjectType(tipoRaw);
 				const fechaRaw = project.fecha_inicio_plan || project.created_at;
 				const fecha = formatDate(fechaRaw);
 				const date = fechaRaw ? new Date(fechaRaw) : null;

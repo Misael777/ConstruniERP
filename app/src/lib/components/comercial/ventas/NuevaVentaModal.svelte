@@ -56,13 +56,11 @@
 		return clienteNombreGen.trim();
 	}
 
-let codigoGenerado = $derived(() => {
-	const anioFull = getAnioFromFecha();
-	const mesValue = getMesFromFecha();
-	return `${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mesValue}${anioFull.substring(2)} - ${distrito} - ${getClienteNombreActual() || 'Cliente'}`;
-});
+let codigoGenerado = $derived(
+	`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mes}${anio.substring(2)} - ${distrito} - ${getClienteNombreActual() || 'Cliente'}`
+);
 
-	let comisionMonto = $derived(() => (Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
+	let comisionMonto = $derived((Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
 
 	async function resolveCurrentAsesorName(): Promise<string> {
 		try {
@@ -305,11 +303,11 @@ let codigoGenerado = $derived(() => {
 			comision_asesor: comision,
 			responsable: asesorFinal,
 			asesor_comercial_id: asesorUserId,
-			tip_proyecto: tipoProyecto === 'O' ? 'Proyecto de Obra' : 'Mantenimiento',
-			estado_predio: estadoPredio === 'A' ? 'Ampliación' : 'Nuevo',
-			tipo_edifica: tipoEdificacion === 'M' ? 'Viv. Multifamiliar' : tipoEdificacion === 'U' ? 'Viv. Unifamiliar' : 'Comercial',
-			Nro_pisos: numeroPisosValue,
-			distrito,
+			tip_proyecto: tipoProyecto,
+			estado_predio: estadoPredio,
+			tipo_edifica: tipoEdificacion,
+			nro_pisos: numeroPisosValue,
+			distrito: distrito ? distrito.substring(0, 4).trim() : null,
 			costo_estima: precioVenta,
 			estado_proyecto: 'activo',
 			ubicacion: distrito,
@@ -484,7 +482,7 @@ let codigoGenerado = $derived(() => {
 								</div>
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-slate-600">Comisión (S/)</label>
-									<input type="text" readonly bind:value={comisionMonto} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
+									<input type="text" readonly value={comisionMonto} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								</div>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">

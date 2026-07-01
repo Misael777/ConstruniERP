@@ -10,20 +10,52 @@ const handler: RequestHandler = async ({ request }) => {
 	const type = String(formData.get('type') || '').trim();
 	const projectIdValue = formData.get('projectId');
 	const projectId = projectIdValue ? Number(projectIdValue) : null;
+	const documentType = String(formData.get('documentType') || '').trim();
+	const documentName = String(formData.get('documentName') || '').trim();
+	let projectName = String(formData.get('projectName') || '').trim();
 
 	if (!file || !(file instanceof Blob)) {
 		return json({ success: false, error: 'Archivo no válido.' }, { status: 400 });
 	}
 
-	if (!type || (type !== 'contrato' && type !== 'proforma')) {
+	if (!type || (type !== 'contrato' && type !== 'proforma' && type !== 'documento')) {
 		return json({ success: false, error: 'Tipo de documento inválido.' }, { status: 400 });
 	}
 
-	const fileName = `${type}-${Date.now()}-${file instanceof File ? file.name : 'document.pdf'}`;
+	if (type === 'documento' && !documentType) {
+		return json({ success: false, error: 'El tipo de documento es obligatorio para documentos de proyecto.' }, { status: 400 });
+	}
 
-	const url = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma');
+	if ((type === 'documento' || !projectName) && projectId) {
+		const { data: project, error: projectError } = await supabase
+			.from('proyecto')
+			.select('nombre_proyecto')
+			.eq('id_proyecto', projectId)
+			.single();
 
-	if (projectId) {
+		if (!projectError && project?.nombre_proyecto) {
+			projectName = project.nombre_proyecto;
+		}
+	}
+
+	const safeName = (value: string) =>
+		value
+			.trim()
+			.replace(/\s+/g, '_')
+			.replace(/[^a-zA-Z0-9._-]/g, '')
+			.replace(/_+/g, '_')
+			.replace(/^_+|_+$/g, '');
+
+	const originalName = file instanceof File ? file.name : 'document.pdf';
+	const extension = originalName.includes('.') ? `.${originalName.split('.').pop()}` : '';
+	const fileBaseName = type === 'documento'
+		? `${safeName(documentType)}_${safeName(documentName || originalName.replace(/\.[^.]+$/, ''))}_${safeName(projectName || 'Proyecto')}`
+		: `${type}-${Date.now()}-${safeName(originalName.replace(/\.[^.]+$/, ''))}`;
+	const fileName = `${fileBaseName}${extension}`;
+
+	const url = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma' | 'documento');
+
+	if (projectId && type !== 'documento') {
 		if (type === 'contrato') {
 			const { error: updateError } = await supabase
 				.from('proyecto')
@@ -63,7 +95,7 @@ const handler: RequestHandler = async ({ request }) => {
 		}
 	}
 
-	return json({ success: true, url });
+	return json({ success: true, url, fileName });
 };
 
 export const POST = safeEndpoint(handler);

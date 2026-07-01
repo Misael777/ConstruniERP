@@ -15,6 +15,7 @@ DROP INDEX IF EXISTS idx_metrado_proyecto CASCADE;
 DROP INDEX IF EXISTS idx_acero_proyecto CASCADE;
 DROP INDEX IF EXISTS idx_lookahead_proyecto CASCADE;
 DROP INDEX IF EXISTS idx_egreso_proyecto_semana CASCADE;
+DROP INDEX IF EXISTS idx_documento_proyecto_proyecto CASCADE;
 DROP TABLE IF EXISTS trans_detalle CASCADE;
 DROP TABLE IF EXISTS transaccion CASCADE;
 DROP TABLE IF EXISTS pagos CASCADE;
@@ -37,6 +38,7 @@ DROP TABLE IF EXISTS presupuesto_detalle CASCADE;
 DROP TABLE IF EXISTS presupuesto CASCADE;
 DROP TABLE IF EXISTS partida CASCADE;
 DROP TABLE IF EXISTS centro_costo CASCADE;
+DROP TABLE IF EXISTS documento_proyecto CASCADE;
 DROP TABLE IF EXISTS proyecto CASCADE;
 DROP TABLE IF EXISTS proveedor CASCADE;
 DROP TABLE IF EXISTS cliente CASCADE;
@@ -46,6 +48,7 @@ DROP TABLE IF EXISTS permisos CASCADE;
 DROP TABLE IF EXISTS empleados CASCADE;
 DROP TABLE IF EXISTS area CASCADE;
 DROP TABLE IF EXISTS roles CASCADE;
+DROP FUNCTION IF EXISTS trg_set_updated_at_documento() CASCADE;
 
 -- ------------------------------------------------------------
 -- 1. TABLAS DE SEGURIDAD Y ACCESO (IAM)
@@ -277,6 +280,47 @@ INSERT INTO centro_costo (codigo, nombre, tipo, id_referencia)
 SELECT CONCAT('PROY-', p.id_proyecto), p.nombre_proyecto, 'proyecto', p.id_proyecto
 FROM proyecto p
 ON CONFLICT DO NOTHING;  -- se puede manejar con trigger, pero para el script se asume insercion manual o trigger
+
+-- ------------------------------------------------------------
+-- 3.5. DOCUMENTOS DE PROYECTO
+-- ------------------------------------------------------------
+
+CREATE TABLE documento_proyecto (
+    id_documento    BIGSERIAL       PRIMARY KEY,
+    id_proyecto     BIGINT          NOT NULL REFERENCES proyecto(id_proyecto) ON DELETE CASCADE,
+    nombre          VARCHAR(200)    NOT NULL,
+    tipo_documento  VARCHAR(80)     NOT NULL DEFAULT 'Otro',
+    descripcion     TEXT,
+    version         VARCHAR(20)     NOT NULL DEFAULT 'V1.0',
+    estado          VARCHAR(30)     NOT NULL DEFAULT 'borrador'
+                        CHECK (estado IN ('borrador', 'revision', 'aprobado', 'rechazado')),
+    storage_path    TEXT,           -- ruta en Supabase Storage o nombre en Google Drive
+    storage_url     TEXT,           -- URL publica de descarga/previsualizacion
+    file_size       BIGINT,         -- tamano en bytes
+    file_type       VARCHAR(100),   -- MIME type (application/pdf, image/png, etc.)
+    creado_por      VARCHAR(100),
+    responsable     VARCHAR(100),
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE OR REPLACE FUNCTION trg_set_updated_at_documento()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_documento_proyecto_updated_at
+    BEFORE UPDATE ON documento_proyecto
+    FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at_documento();
+
+ALTER TABLE documento_proyecto ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "authenticated_full_access_documento"
+    ON documento_proyecto FOR ALL TO authenticated
+    USING (true) WITH CHECK (true);
 
 -- ------------------------------------------------------------
 -- 4. CATÃLOGO DE PARTIDAS (JERÃRQUICO)
@@ -804,6 +848,7 @@ CREATE TABLE recurso_precio (
 -- ------------------------------------------------------------
 
 CREATE INDEX IF NOT EXISTS idx_proyecto_cliente ON proyecto(id_cliente);
+CREATE INDEX IF NOT EXISTS idx_documento_proyecto_proyecto ON documento_proyecto(id_proyecto);
 CREATE INDEX IF NOT EXISTS idx_presupuesto_proyecto ON presupuesto(id_proyecto);
 CREATE INDEX IF NOT EXISTS idx_presupuesto_detalle_partida ON presupuesto_detalle(id_partida);
 CREATE INDEX IF NOT EXISTS idx_cronograma_proyecto ON cronograma_actividad(id_proyecto);
@@ -829,6 +874,7 @@ COMMENT ON TABLE metrado IS 'Calculos de cantidades de obra (planilla de metrado
 COMMENT ON TABLE valorizacion_semanal IS 'Valorizaciones semanales del proyecto';
 COMMENT ON TABLE cuentas_pagar IS 'Obligaciones generadas por el presupuesto de obra';
 COMMENT ON TABLE transaccion IS 'Movimientos economicos por centro de costo';
+COMMENT ON TABLE documento_proyecto IS 'Documentos de proyecto: contratos, planos, memorias, especificaciones, etc.';
 
 -- ------------------------------------------------------------
 
@@ -889,5 +935,25 @@ FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
 CREATE TRIGGER trg_audit_pagos
 AFTER INSERT OR UPDATE OR DELETE ON pagos
 FOR EACH ROW EXECUTE FUNCTION capture_instance_audit();
+-- ------------------------------------------------------------
+-- STORAGE: BUCKET PARA DOCUMENTOS DE PROYECTO
+-- ------------------------------------------------------------
 
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('project-documents', 'project-documents', true)
+ON CONFLICT (id) DO NOTHING;
 
+DROP POLICY IF EXISTS "auth_upload_project_docs" ON storage.objects;
+CREATE POLICY "auth_upload_project_docs"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'project-documents');
+
+DROP POLICY IF EXISTS "public_read_project_docs" ON storage.objects;
+CREATE POLICY "public_read_project_docs"
+    ON storage.objects FOR SELECT TO public
+    USING (bucket_id = 'project-documents');
+
+DROP POLICY IF EXISTS "auth_delete_project_docs" ON storage.objects;
+CREATE POLICY "auth_delete_project_docs"
+    ON storage.objects FOR DELETE TO authenticated
+    USING (bucket_id = 'project-documents');
