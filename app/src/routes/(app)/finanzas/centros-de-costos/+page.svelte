@@ -10,7 +10,8 @@
 		DEFAULT_SORT_FIELD,
 		DEFAULT_SORT_DIR,
 		DELETE_STRATEGY,
-		getOptionLabel
+		getOptionLabel,
+		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
@@ -81,6 +82,7 @@
 	function cellValue(field: (typeof tableFields)[number], item: CentroCosto) {
 		const raw = (item as any)[field.key];
 		if (field.tipo === 'select') return getOptionLabel(field, raw);
+		if (field.tipo === 'currency') return formatCurrency(raw);
 		if (field.key === 'created_at') return formatDate(raw);
 		return raw ?? '—';
 	}

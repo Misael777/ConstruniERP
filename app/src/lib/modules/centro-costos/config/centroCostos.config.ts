@@ -13,15 +13,21 @@
  * máximo, regex, mayúsculas, opciones de un select, etc.) solo
  * hay que tocar este archivo.
  *
- * ESQUEMA REAL EN BD (DER2.sql / DB_reset_withoutacces.sql):
+ * ESQUEMA REAL EN BD (verificado contra el schema cache de PostgREST, no contra el SQL local):
  *   CREATE TABLE centro_costo (
  *     id_centro_costo  BIGSERIAL PRIMARY KEY,
  *     codigo           VARCHAR(50) NOT NULL,
  *     nombre           VARCHAR(200) NOT NULL,
- *     tipo             VARCHAR(20) NOT NULL CHECK (tipo IN ('proyecto','proveedor','cliente','otro')),
- *     id_referencia    BIGINT NOT NULL, -- FK polimórfica según "tipo"
+ *     tipo             VARCHAR(20) NOT NULL,
+ *     monto_actual     NUMERIC,
  *     created_at       TIMESTAMPTZ DEFAULT NOW()
  *   );
+ *
+ * OJO: DER2.sql y DB_reset_withoutacces.sql tienen la columna mal escrita como "monto_ctual"
+ * (typo, falta la "a" de "actual"). La base de datos real en Supabase SÍ tiene el nombre correcto
+ * "monto_actual" (confirmado consultando GET {SUPABASE_URL}/rest/v1/ con Accept: application/openapi+json).
+ * Si actualizas esos .sql para corregir el typo, no hace falta tocar nada aquí — el código ya usa
+ * el nombre real "monto_actual".
  *
  * La tabla NO tiene columna de estado (no hay soft-delete todavía),
  * por eso DELETE_STRATEGY = 'hard'. Si en el futuro agregas una
@@ -34,7 +40,9 @@
 // ---------------------------------------------------------------
 // Tipos de campo soportados por el renderer genérico del modal
 // ---------------------------------------------------------------
-export type CentroCostoFieldType = 'text' | 'number' | 'select' | 'readonly';
+// 'currency' se valida y convierte igual que 'number', pero se renderiza como texto (para poder
+// aplicar máscara de miles/decimales) y se formatea como moneda en tabla y formulario.
+export type CentroCostoFieldType = 'text' | 'number' | 'currency' | 'select' | 'readonly';
 
 export interface CentroCostoFieldOption {
 	value: string;
@@ -52,6 +60,8 @@ export interface CentroCostoFieldConfig {
 	required?: boolean;
 	/** Largo máximo (debe reflejar el VARCHAR(n) real de la BD) */
 	maxLength?: number;
+	/** Valor numérico mínimo permitido (inclusive) para tipo 'number' | 'currency' */
+	min?: number;
 	/** Si true, el valor se fuerza a MAYÚSCULAS mientras se escribe */
 	uppercase?: boolean;
 	/** Expresión regular de validación (formato exacto del ERP) */
@@ -158,29 +168,39 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		required: true,
 		// Debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla centro_costo.
 		options: [
-			{ value: 'proyecto', label: 'Proyecto' },
-			{ value: 'proveedor', label: 'Proveedor' },
-			{ value: 'cliente', label: 'Cliente' },
+			{ value: 'obra', label: 'Obra' },
+			{ value: 'consultoria', label: 'Consultoría' },
+			{ value: 'area', label: 'Área' },
 			{ value: 'otro', label: 'Otro' }
 		],
-		helpText: 'Determina a qué tabla apunta "id_referencia" (proyecto.id_proyecto, proveedor.id_proveedor, cliente.id_cliente, o ninguna si es "otro").',
+		helpText: 'Clasificación del centro de costo (debe coincidir con el CHECK de la tabla en BD).',
 		showInTable: true,
 		showInForm: true,
 		sortable: true
 	},
 	{
-		key: 'id_referencia',
-		label: 'ID de referencia',
-		tipo: 'number',
+		key: 'monto_actual', // nombre real de la columna en BD (ver nota sobre el typo de los .sql arriba)
+		label: 'Monto Actual',
+		tipo: 'currency',
 		required: true,
-		helpText:
-			'FK polimórfica: el ID en la tabla que indica "tipo" (proyecto.id_proyecto / proveedor.id_proveedor / cliente.id_cliente). ' +
-			'AJUSTAR: hoy es un input numérico simple; si quieres un selector dinámico que liste proyectos/proveedores/clientes ' +
-			'según el "tipo" elegido, debe construirse aparte (este config solo valida que sea numérico y obligatorio).',
-		placeholder: '123',
+		min: 0.01, // AJUSTAR: representa ">0"; súbelo si el ERP exige un monto mínimo mayor.
+		// Máscara: conserva solo dígitos y un único punto decimal, con máximo 2 decimales,
+		// mientras el usuario escribe (el separador de miles solo se aplica al MOSTRAR el valor,
+		// no mientras se edita, para no pelear con la posición del cursor).
+		mask: (raw) => {
+			let value = raw.replace(/[^\d.]/g, '');
+			const parts = value.split('.');
+			if (parts.length > 2) value = parts[0] + '.' + parts.slice(1).join('');
+			const [intPart, decPart] = value.split('.');
+			return decPart !== undefined ? `${intPart}.${decPart.slice(0, 2)}` : value;
+		},
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '0.00',
+		helpText: 'Monto actual del centro de costo. Se muestra como S/ 1,234.56 en tabla y formulario.',
 		showInTable: true,
 		showInForm: true,
-		sortable: false
+		sortable: true
 	},
 	{
 		key: 'created_at',
@@ -209,8 +229,12 @@ export function validateField(field: CentroCostoFieldConfig, rawValue: unknown):
 	}
 	if (value === '') return null; // campo opcional vacío -> válido
 
-	if (field.tipo === 'number' && Number.isNaN(Number(value))) {
+	const isNumeric = field.tipo === 'number' || field.tipo === 'currency';
+	if (isNumeric && Number.isNaN(Number(value))) {
 		return `${field.label} debe ser un número`;
+	}
+	if (isNumeric && field.min !== undefined && Number(value) < field.min) {
+		return `${field.label} debe ser mayor a ${field.min}`;
 	}
 	if (field.maxLength && value.length > field.maxLength) {
 		return `${field.label} no puede superar ${field.maxLength} caracteres`;
@@ -247,4 +271,18 @@ export function applyFieldMask(field: CentroCostoFieldConfig, raw: string): stri
 export function getOptionLabel(field: CentroCostoFieldConfig, value: unknown): string {
 	const option = field.options?.find((o) => o.value === String(value));
 	return option?.label ?? String(value ?? '');
+}
+
+const CURRENCY_FORMATTER = new Intl.NumberFormat('es-PE', {
+	style: 'currency',
+	currency: 'PEN',
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2
+});
+
+/** Formatea un monto como moneda (ej. "S/ 1,234.56"). AJUSTAR locale/currency si el ERP cambia de moneda. */
+export function formatCurrency(value: unknown): string {
+	const num = Number(value);
+	if (value === null || value === undefined || value === '' || Number.isNaN(num)) return '—';
+	return CURRENCY_FORMATTER.format(num);
 }

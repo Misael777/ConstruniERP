@@ -30,7 +30,7 @@ export interface CentroCosto {
 	codigo: string;
 	nombre: string;
 	tipo: string;
-	id_referencia: number;
+	monto_actual: number; // nombre real de la columna en BD (los .sql locales tienen un typo, ver centroCostos.config.ts)
 	created_at: string;
 }
 
@@ -171,7 +171,7 @@ function buildWritablePayload(payload: Record<string, unknown>): Record<string, 
 		if (!field.showInForm) continue;
 		let value = payload[field.key];
 		if (typeof value === 'string') value = value.trim();
-		if (field.tipo === 'number' && value !== '' && value !== undefined && value !== null) {
+		if ((field.tipo === 'number' || field.tipo === 'currency') && value !== '' && value !== undefined && value !== null) {
 			value = Number(value);
 		}
 		result[field.key] = value === '' ? null : value;

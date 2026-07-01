@@ -7,7 +7,8 @@
 		FIELDS_CONFIG,
 		PK_COLUMN,
 		validateCentroCostoPayload,
-		applyFieldMask
+		applyFieldMask,
+		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 
@@ -151,6 +152,7 @@
 									id={`ccf-${field.key}`}
 									name={field.key}
 									type={field.tipo === 'number' ? 'number' : 'text'}
+									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
@@ -161,6 +163,10 @@
 											: 'border-slate-300 focus:ring-blue-200'
 									}`}
 								/>
+							{/if}
+
+							{#if field.tipo === 'currency' && formValues[field.key] && !fieldErrors[field.key]}
+								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues[field.key])}</p>
 							{/if}
 
 							{#if fieldErrors[field.key]}
