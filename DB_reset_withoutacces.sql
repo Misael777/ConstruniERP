@@ -98,8 +98,8 @@ CREATE TABLE centro_costo (
     id_centro_costo    BIGSERIAL PRIMARY KEY,
     codigo             VARCHAR(50) NOT NULL,
     nombre             VARCHAR(200) NOT NULL,
-    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('proyecto', 'proveedor', 'cliente', 'otro')),
-    id_referencia      BIGINT NOT NULL,
+    tipo               VARCHAR(20) NOT NULL CHECK (tipo IN ('obra', 'consultoria', 'area', 'otro')),
+    monto_ctual        NUMERIC(12,2),
     created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
