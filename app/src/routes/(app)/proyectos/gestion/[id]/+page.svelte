@@ -4,6 +4,8 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
+	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
+	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
 
 	let projectId = $state<string | undefined>(undefined);
 	let lastLoadedProjectId = $state<string | undefined>(undefined);
@@ -135,19 +137,6 @@ function goBack() {
 	<title>{proyecto ? `${proyecto.nombre_proyecto} | Gestión` : 'Cargando Proyecto...'}</title>
 </svelte:head>
 
-<div class="mb-4 p-4 rounded-2xl border border-orange-200 bg-orange-50 text-slate-800 text-sm">
-	<strong>Debug:</strong>
-	<div>projectId: {projectId}</div>
-	<div>isLoading: {isLoading ? 'true' : 'false'}</div>
-	<div>hasLoadedProject: {hasLoadedProject ? 'true' : 'false'}</div>
-	<div>proyecto: {proyecto ? proyecto.nombre_proyecto ?? JSON.stringify(proyecto) : 'null'}</div>
-	<div>proyecto raw: {proyecto ? JSON.stringify({
-		nombre_proyecto: proyecto.nombre_proyecto,
-		ubicacion: proyecto.ubicacion,
-		descripcion: proyecto.descripcion,
-		estado_proyecto: proyecto.estado_proyecto
-	}) : 'null'}</div>
-</div>
 
 {#if isLoading}
 	<div class="flex justify-center text-orange-600 text-3xl py-12">
@@ -358,93 +347,19 @@ function goBack() {
 
 		{#if activeTab === 'partidas'}
 			<div class="animate-in fade-in duration-300">
-				<div class="flex justify-between items-center mb-6">
-					<div>
-						<h3 class="text-lg font-bold text-slate-800">Presupuesto del Proyecto (Instancias de Partidas)</h3>
-						<p class="text-sm text-slate-500 mt-1">Jala las partidas del catálogo maestro para armar el presupuesto y modifica cantidades y precios específicos para esta obra.</p>
-					</div>
-					<button class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 transition-colors flex items-center gap-2">
-						<i class="fas fa-plus-circle"></i> Agregar del Catálogo Maestro
-					</button>
-				</div>
-
-				<div class="border border-slate-200 rounded-xl overflow-hidden">
-					<table class="w-full text-sm text-left">
-						<thead class="text-xs text-slate-500 bg-slate-50 font-bold uppercase border-b border-slate-200">
-							<tr>
-								<th class="p-4">Item</th>
-								<th class="p-4">Descripción de Partida</th>
-								<th class="p-4 text-center">Und.</th>
-								<th class="p-4 text-right">Metrado (Cant.)</th>
-								<th class="p-4 text-right">Precio Unit. (S/)</th>
-								<th class="p-4 text-right">Parcial (S/)</th>
-								<th class="p-4 text-center">Acciones</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-slate-100">
-							<!-- Placeholder Data -->
-							<tr class="hover:bg-slate-50/50">
-								<td class="p-4 font-mono text-slate-500">01.01.01</td>
-								<td class="p-4 font-bold text-slate-700">Trazo, nivelación y replanteo</td>
-								<td class="p-4 text-center">m2</td>
-								<td class="p-4 text-right">
-									<input type="number" value="150.50" class="w-24 px-2 py-1 text-right bg-white border border-slate-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-medium" />
-								</td>
-								<td class="p-4 text-right">
-									<input type="number" value="2.50" class="w-24 px-2 py-1 text-right bg-white border border-slate-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-medium" />
-								</td>
-								<td class="p-4 text-right font-bold text-slate-700">376.25</td>
-								<td class="p-4 text-center">
-									<button aria-label="Eliminar partida" class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
-										<i class="fas fa-trash-alt text-xs"></i>
-									</button>
-								</td>
-							</tr>
-							<tr class="hover:bg-slate-50/50">
-								<td class="p-4 font-mono text-slate-500">01.01.02</td>
-								<td class="p-4 font-bold text-slate-700">Excavación manual de zanjas</td>
-								<td class="p-4 text-center">m3</td>
-								<td class="p-4 text-right">
-									<input type="number" value="45.00" class="w-24 px-2 py-1 text-right bg-white border border-slate-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-medium" />
-								</td>
-								<td class="p-4 text-right">
-									<input type="number" value="45.20" class="w-24 px-2 py-1 text-right bg-white border border-slate-300 rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-medium" />
-								</td>
-								<td class="p-4 text-right font-bold text-slate-700">2,034.00</td>
-								<td class="p-4 text-center">
-									<button aria-label="Eliminar partida" class="w-8 h-8 rounded bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors shadow-sm">
-										<i class="fas fa-trash-alt text-xs"></i>
-									</button>
-								</td>
-							</tr>
-						</tbody>
-						<tfoot class="bg-slate-50 border-t border-slate-200">
-							<tr>
-								<td colspan="5" class="p-4 text-right font-bold text-slate-700">Costo Directo Total:</td>
-								<td class="p-4 text-right font-bold text-blue-700 text-base">S/ 2,410.25</td>
-								<td></td>
-							</tr>
-						</tfoot>
-					</table>
-				</div>
+				<PresupuestoTab
+					projectId={proyecto.id_proyecto}
+					{proyecto}
+				/>
 			</div>
 		{/if}
 
 		{#if activeTab === 'gestion'}
-			<div class="animate-in fade-in duration-300 text-center py-16">
-				<div class="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6 border border-orange-100">
-					<i class="fas fa-chart-gantt text-3xl text-orange-500"></i>
-				</div>
-				<h3 class="text-xl font-bold text-slate-800 mb-2">Módulo de Gestión Operativa</h3>
-				<p class="text-slate-500 max-w-lg mx-auto mb-8">Aquí se conectarán las instancias de las partidas del presupuesto para armar el cronograma (Gantt), generar el Lookahead de 4 semanas y realizar el control de valorizaciones.</p>
-				<div class="flex justify-center gap-4">
-					<button class="px-5 py-2.5 bg-white border-2 border-slate-200 hover:border-orange-500 hover:text-orange-600 text-slate-600 rounded-xl font-bold transition-all shadow-sm">
-						<i class="fas fa-calendar-alt mr-2"></i> Abrir Cronograma
-					</button>
-					<button class="px-5 py-2.5 bg-white border-2 border-slate-200 hover:border-orange-500 hover:text-orange-600 text-slate-600 rounded-xl font-bold transition-all shadow-sm">
-						<i class="fas fa-binoculars mr-2"></i> Lookahead Planning
-					</button>
-				</div>
+			<div class="animate-in fade-in duration-300">
+				<GanttTab
+					projectId={proyecto.id_proyecto}
+					{proyecto}
+				/>
 			</div>
 		{/if}
 
