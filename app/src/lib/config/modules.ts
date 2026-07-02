@@ -52,7 +52,8 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     permiso: 'ver_finanzas',
     subItems: [
       { path: '/finanzas/centros-de-costos', label: 'Centros de Costos', permiso: 'ver_finanzas_centros_costos' },
-      { path: '/finanzas/cuentas-pendientes', label: 'Cuentas pendientes', permiso: 'ver_finanzas_cuentas_pendientes' },
+      { path: '/finanzas/cuentas-cobrar', label: 'Cuentas por Cobrar', permiso: 'ver_finanzas_cuentas_pendientes' },
+      { path: '/finanzas/cuentas-pagar', label: 'Cuentas por Pagar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/tranzacciones', label: 'Tranzacciones', permiso: 'ver_finanzas_transacciones' }
     ]
   }
