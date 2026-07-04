@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG, PK_COLUMN } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
+	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
+	import { createCuentaPagar, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 
 	let {
@@ -12,13 +12,15 @@
 		mode = 'create',
 		cuenta = null,
 		dynamicOptions = {},
-		onClose
+		onClose,
+		onSaved
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
 		cuenta: CuentaPagar | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
+		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -42,6 +44,22 @@
 			fieldErrors = {};
 		}
 	});
+
+	// Recalcula en vivo los campos con computeValue (monto_imponible, monto_igv, monto_retencion)
+	// cada vez que cambia algo de lo que dependen (monto_comprometido, detraccion, etc.).
+	$effect(() => {
+		for (const field of formFields) {
+			if (!field.computeValue) continue;
+			const computed = String(field.computeValue(formValues) ?? '');
+			if (formValues[field.key] !== computed) {
+				formValues[field.key] = computed;
+			}
+		}
+	});
+
+	function isDisabled(field: (typeof formFields)[number]): boolean {
+		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
+	}
 
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
@@ -71,19 +89,17 @@
 
 		submitting = true;
 		try {
-			const endpoint = mode === 'create' ? '/api/cuentas-pagar/create' : '/api/cuentas-pagar/update';
-			const body = mode === 'edit' && cuenta ? { ...formValues, [PK_COLUMN]: cuenta.id_cuenta_pagar } : formValues;
-
-			const response = await fetch(resolveApiUrl(endpoint), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
-			});
-			const result = await response.json();
+			let result;
+			if (mode === 'edit' && cuenta) {
+				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues);
+			} else {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+			}
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				await invalidateAll();
+				onSaved();
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
@@ -116,13 +132,14 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.tipo === 'select'}
+							{#if field.tipo === 'select' || field.options}
 								<select
 									id={`ccp-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
+									disabled={isDisabled(field)}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
 									{#each optionsFor(field) as opt}
@@ -133,13 +150,14 @@
 								<input
 									id={`ccp-${field.key}`}
 									name={field.key}
-									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
-									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
+									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
+									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
+									disabled={isDisabled(field)}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 							{/if}
 

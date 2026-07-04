@@ -1,62 +1,129 @@
 <script lang="ts">
-	import { goto, invalidateAll } from '$app/navigation';
-	import { page } from '$app/state';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, ChevronsUpDown, X, Landmark, Receipt } from '@lucide/svelte';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
-	import { getOptionLabel, formatCurrency } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG, PK_COLUMN, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
-	import { PK_COLUMN as COBRO_PK } from '$lib/modules/cuentas-cobrar/config/cobro.config';
+	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
+	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
+	import {
+		getCuentasCobrar,
+		deleteCuentaCobrar,
+		getCobros,
+		deleteCobro,
+		getClienteOptions,
+		getProyectoOptions
+	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
-	import type { CuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import type { CuentaCobrar, Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
-	let { data } = $props();
+	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
+	// servidor embebido — ver nota de seguridad en centro-costos/+page.svelte: la BD todavía no
+	// tiene RLS real, este guard (isAdmin()) es solo de UI.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
+	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
+	const estadoBadgeClass: Record<string, string> = {
+		pendiente: 'bg-amber-100 text-amber-700',
+		pagado: 'bg-emerald-100 text-emerald-700',
+		vencido: 'bg-red-100 text-red-700'
+	};
+	const estadoIconClass: Record<string, string> = {
+		pendiente: 'bg-amber-100 text-amber-600',
+		pagado: 'bg-emerald-100 text-emerald-600',
+		vencido: 'bg-red-100 text-red-600'
+	};
+	const estadoCardClass: Record<string, string> = {
+		vencido: 'bg-red-50/60'
+	};
+
+	let items = $state<CuentaCobrar[]>([]);
+	let total = $state(0);
+	let pageNum = $state(1);
+	let totalPages = $state(1);
+	let loading = $state(true);
+	let loadError = $state('');
+
+	let search = $state('');
+	let searchInput = $state('');
+	let sortBy = $state(DEFAULT_SORT_FIELD);
+	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
+	let debounceTimer: ReturnType<typeof setTimeout>;
+
+	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [] });
+
+	let selectedId = $state<number | null>(null);
+	let selectedCobros = $state<Cobro[]>([]);
 
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaCobrar | null>(null);
 	let cobroModalOpen = $state(false);
 
-	let searchInput = $state(data.search ?? '');
-	let debounceTimer: ReturnType<typeof setTimeout>;
-
-	$effect(() => {
-		searchInput = data.search ?? '';
-	});
-
-	function updateQuery(updates: Record<string, string | null>) {
-		const params = new URLSearchParams(page.url.search);
-		for (const [key, value] of Object.entries(updates)) {
-			if (value === null || value === '') params.delete(key);
-			else params.set(key, value);
+	async function fetchList() {
+		loading = true;
+		try {
+			const result = await getCuentasCobrar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			items = result.items;
+			total = result.total;
+			totalPages = result.totalPages;
+			loadError = '';
+		} catch (err: any) {
+			loadError = err.message || 'No se pudo cargar el listado de cuentas por cobrar';
+		} finally {
+			loading = false;
 		}
-		goto(`?${params.toString()}`, { keepFocus: true, noScroll: true });
 	}
+
+	async function fetchSelectedCobros() {
+		if (!selectedId) {
+			selectedCobros = [];
+			return;
+		}
+		try {
+			selectedCobros = await getCobros(supabase, selectedId);
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudieron cargar los cobros');
+		}
+	}
+
+	onMount(async () => {
+		if (!isAdmin()) {
+			goto('/dashboard');
+			return;
+		}
+		try {
+			const [clienteOptions, proyectoOptions] = await Promise.all([getClienteOptions(supabase), getProyectoOptions(supabase)]);
+			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions };
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos');
+		}
+		await fetchList();
+	});
 
 	function onSearchInput(value: string) {
 		searchInput = value;
 		clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => updateQuery({ q: value || null, page: '1' }), 400);
+		debounceTimer = setTimeout(() => {
+			search = value;
+			pageNum = 1;
+			fetchList();
+		}, 400);
 	}
 
-	function currentSortField() {
-		return data.sortBy || DEFAULT_SORT_FIELD;
-	}
-	function currentSortDir() {
-		return data.sortDir || DEFAULT_SORT_DIR;
-	}
 	function toggleSort(fieldKey: string, sortable?: boolean) {
 		if (!sortable) return;
-		const isCurrent = currentSortField() === fieldKey;
-		const nextDir = isCurrent && currentSortDir() === 'asc' ? 'desc' : 'asc';
-		updateQuery({ sort: fieldKey, dir: nextDir, page: '1' });
+		sortDir = sortBy === fieldKey && sortDir === 'asc' ? 'desc' : 'asc';
+		sortBy = fieldKey;
+		pageNum = 1;
+		fetchList();
 	}
 	function goToPage(p: number) {
-		if (p < 1 || p > data.totalPages) return;
-		updateQuery({ page: String(p) });
+		if (p < 1 || p > totalPages) return;
+		pageNum = p;
+		fetchList();
 	}
 
 	function formatDate(value: string | null | undefined) {
@@ -65,21 +132,6 @@
 		if (Number.isNaN(date.getTime())) return '—';
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 	}
-
-	function cellValue(field: (typeof tableFields)[number], item: CuentaCobrar) {
-		if (field.key === 'id_cliente') return (item.cliente?.nombre ?? '—') as string;
-		const raw = (item as any)[field.key];
-		if (field.tipo === 'select') return getOptionLabel(field, raw, data.dynamicOptions);
-		if (field.tipo === 'currency') return formatCurrency(raw);
-		if (field.tipo === 'date' || field.key === 'created_at') return formatDate(raw);
-		return raw ?? '—';
-	}
-
-	const estadoBadgeClass: Record<string, string> = {
-		pendiente: 'bg-amber-100 text-amber-700',
-		pagado: 'bg-emerald-100 text-emerald-700',
-		vencido: 'bg-red-100 text-red-700'
-	};
 
 	function openCreate() {
 		modalMode = 'create';
@@ -96,46 +148,49 @@
 		editingCuenta = null;
 	}
 
-	function selectRow(item: CuentaCobrar) {
-		updateQuery({ selected: data.selectedId === item.id_cuenta_cobrar ? null : String(item.id_cuenta_cobrar) });
+	async function selectRow(item: CuentaCobrar) {
+		selectedId = selectedId === item.id_cuenta_cobrar ? null : item.id_cuenta_cobrar;
+		await fetchSelectedCobros();
 	}
 
-	const selectedCuenta = $derived(data.items.find((i: CuentaCobrar) => i.id_cuenta_cobrar === data.selectedId) ?? null);
+	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_cobrar === selectedId) ?? null);
 
 	async function handleDelete(item: CuentaCobrar) {
 		if (!confirm('¿Eliminar esta cuenta por cobrar y todos sus cobros registrados? Esta acción no se puede deshacer.')) return;
 		try {
-			const response = await fetch(resolveApiUrl('/api/cuentas-cobrar/delete'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ [PK_COLUMN]: item.id_cuenta_cobrar })
-			});
-			const result = await response.json();
-			if (result.success) toast.success(result.message ?? 'Eliminado con éxito');
-			else toast.error(result.message ?? 'Ocurrió un error');
+			const result = await deleteCuentaCobrar(supabase, item.id_cuenta_cobrar);
+			if (result.success) {
+				toast.success(result.message);
+				if (selectedId === item.id_cuenta_cobrar) selectedId = null;
+			} else {
+				toast.error(result.message);
+			}
 		} catch (err: any) {
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
-			await invalidateAll();
+			await fetchList();
 		}
 	}
 
 	async function handleDeleteCobro(idCobro: number) {
 		if (!confirm('¿Eliminar este cobro? El saldo de la cuenta se recalculará.')) return;
 		try {
-			const response = await fetch(resolveApiUrl('/api/cuentas-cobrar/cobros/delete'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ [COBRO_PK]: idCobro })
-			});
-			const result = await response.json();
-			if (result.success) toast.success(result.message ?? 'Cobro eliminado');
-			else toast.error(result.message ?? 'Ocurrió un error');
+			const result = await deleteCobro(supabase, idCobro);
+			if (result.success) toast.success(result.message);
+			else toast.error(result.message);
 		} catch (err: any) {
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
-			await invalidateAll();
+			await Promise.all([fetchList(), fetchSelectedCobros()]);
 		}
+	}
+
+	async function handleSaved() {
+		await fetchList();
+	}
+
+	async function handleCobroSaved() {
+		await Promise.all([fetchList(), fetchSelectedCobros()]);
 	}
 </script>
 
@@ -153,87 +208,87 @@
 		</button>
 	</div>
 
-	{#if data.loadError}
-		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{data.loadError}</div>
+	{#if loadError}
+		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<div class="mb-4 relative max-w-sm">
-		<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-		<input
-			type="text"
-			value={searchInput}
-			oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
-			placeholder="Buscar por N° documento, responsable..."
-			class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-		/>
-		{#if searchInput}
-			<button type="button" onclick={() => onSearchInput('')} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
-				<X size={14} />
-			</button>
-		{/if}
+	<div class="mb-4 flex flex-wrap items-center gap-3">
+		<div class="relative flex-1 min-w-[220px] max-w-sm">
+			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+			<input
+				type="text"
+				value={searchInput}
+				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
+				placeholder="Buscar por N° documento, responsable..."
+				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+			/>
+			{#if searchInput}
+				<button type="button" onclick={() => onSearchInput('')} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
+					<X size={14} />
+				</button>
+			{/if}
+		</div>
+
+		<select
+			value={sortBy}
+			onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
+			class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+		>
+			{#each tableFields.filter((f) => f.sortable) as field}
+				<option value={field.key}>Ordenar: {field.label}</option>
+			{/each}
+		</select>
+		<button
+			type="button"
+			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}
+			class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50"
+			title={sortDir === 'asc' ? 'Ascendente' : 'Descendente'}
+			aria-label="Cambiar dirección de orden"
+		>
+			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+		</button>
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-		<div class="overflow-x-auto">
-			<table class="w-full text-sm">
-				<thead class="bg-slate-50 border-b border-slate-200">
-					<tr>
-						{#each tableFields as field}
-							<th class="text-left px-4 py-3 font-semibold text-slate-600">
-								<button type="button" onclick={() => toggleSort(field.key, field.sortable)} class={`flex items-center gap-1 ${field.sortable ? 'cursor-pointer hover:text-[#0f3b5e]' : 'cursor-default'}`}>
-									{field.label}
-									{#if field.sortable}
-										{#if currentSortField() === field.key}
-											{#if currentSortDir() === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
-										{:else}
-											<ChevronsUpDown size={14} class="opacity-30" />
-										{/if}
-									{/if}
-								</button>
-							</th>
-						{/each}
-						<th class="text-right px-4 py-3 font-semibold text-slate-600">Acciones</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.items as item (item.id_cuenta_cobrar)}
-						<tr class={`border-b border-slate-100 hover:bg-slate-50 cursor-pointer ${data.selectedId === item.id_cuenta_cobrar ? 'bg-blue-50' : ''}`} onclick={() => selectRow(item)}>
-							{#each tableFields as field}
-								<td class="px-4 py-3 text-slate-700">
-									{#if field.key === 'estado'}
-										<span class={`px-2 py-0.5 rounded-full text-xs font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-											{getOptionLabel(field, item.estado)}
-										</span>
-									{:else}
-										{cellValue(field, item)}
-									{/if}
-								</td>
-							{/each}
-							<td class="px-4 py-3">
-								<div class="flex items-center justify-end gap-2">
-									<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-										<Pencil size={16} />
-									</button>
-									<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-										<Trash2 size={16} />
-									</button>
-								</div>
-							</td>
-						</tr>
-					{:else}
-						<tr>
-							<td colspan={tableFields.length + 1} class="px-4 py-10 text-center text-slate-400">No se encontraron cuentas por cobrar.</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		{#each items as item (item.id_cuenta_cobrar)}
+			<div
+				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+					selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+				}`}
+				onclick={() => selectRow(item)}
+			>
+				<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+					<FileText size={18} />
+				</div>
+				<div class="flex-1 min-w-0">
+					<p class="font-semibold text-slate-800 truncate">{item.cliente?.nombre ?? 'Sin cliente'}</p>
+					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
+					<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
+				</div>
+				<div class="text-right shrink-0">
+					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
+					<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+						{getOptionLabel(estadoField, item.estado)}
+					</span>
+				</div>
+				<div class="flex items-center gap-1 shrink-0 ml-2">
+					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+						<Pencil size={16} />
+					</button>
+					<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+						<Trash2 size={16} />
+					</button>
+				</div>
+			</div>
+		{:else}
+			<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por cobrar.'}</p>
+		{/each}
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
-			<span>{data.total} resultado{data.total === 1 ? '' : 's'} · Página {data.page} de {data.totalPages}</span>
+			<span>{total} resultado{total === 1 ? '' : 's'} · Página {pageNum} de {totalPages}</span>
 			<div class="flex items-center gap-2">
-				<button type="button" onclick={() => goToPage(data.page - 1)} disabled={data.page <= 1} class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Anterior</button>
-				<button type="button" onclick={() => goToPage(data.page + 1)} disabled={data.page >= data.totalPages} class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Siguiente</button>
+				<button type="button" onclick={() => goToPage(pageNum - 1)} disabled={pageNum <= 1} class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Anterior</button>
+				<button type="button" onclick={() => goToPage(pageNum + 1)} disabled={pageNum >= totalPages} class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Siguiente</button>
 			</div>
 		</div>
 	</div>
@@ -253,7 +308,7 @@
 				</button>
 			</div>
 
-			{#if data.selectedCobros.length === 0}
+			{#if selectedCobros.length === 0}
 				<p class="text-sm text-slate-400 text-center py-6">Sin cobros registrados todavía.</p>
 			{:else}
 				<table class="w-full text-sm">
@@ -267,7 +322,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each data.selectedCobros as cobro (cobro.id_cobro)}
+						{#each selectedCobros as cobro (cobro.id_cobro)}
 							<tr class="border-b border-slate-100">
 								<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
 								<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
@@ -287,5 +342,5 @@
 	{/if}
 </div>
 
-<CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={data.dynamicOptions} onClose={closeModal} />
-<CobroModal open={cobroModalOpen} idCuentaCobrar={data.selectedId} onClose={() => (cobroModalOpen = false)} />
+<CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
+<CobroModal open={cobroModalOpen} idCuentaCobrar={selectedId} onClose={() => (cobroModalOpen = false)} onSaved={handleCobroSaved} />

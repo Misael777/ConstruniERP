@@ -1,12 +1,13 @@
 /**
  * Servicio de acceso a datos para "cuentas_cobrar" + su detalle "cobros".
- * Recibe el SupabaseClient como parámetro para invocarse siempre desde el servidor
- * con el cliente de service role ($lib/server/supabase) — mismo patrón que centro-costos.
+ * Recibe el SupabaseClient como parámetro; se invoca client-side con el cliente anon
+ * ($lib/supabaseClient) para funcionar igual en web y en Tauri (Windows/Android) sin
+ * servidor embebido. AJUSTAR: la BD no tiene RLS real todavía, ver nota en +page.svelte.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError } from '$lib/shared/fieldConfig';
 import { TABLE_NAME, PK_COLUMN, SEARCHABLE_COLUMNS, DEFAULT_PAGE_SIZE, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, FIELDS_CONFIG } from '../config/cuentaCobrar.config';
 import {
 	TABLE_NAME as COBRO_TABLE,
@@ -124,7 +125,7 @@ export async function createCuentaCobrar(
 	const insertData = { ...buildWritablePayload(FIELDS_CONFIG, payload), monto_cobrado: 0, saldo_pendiente: Number(payload.monto), usuario_registro: usuarioRegistro };
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto)').single();
-	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${error.message}` };
+	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
 	return { success: true, message: 'Cuenta por cobrar creada correctamente', data: data as CuentaCobrar };
 }
@@ -154,7 +155,7 @@ export async function updateCuentaCobrar(
 		.eq(PK_COLUMN, id)
 		.select('*, cliente(nombre), proyecto(nombre_proyecto)')
 		.single();
-	if (error) return { success: false, message: `No se pudo actualizar la cuenta por cobrar: ${error.message}` };
+	if (error) return { success: false, message: `No se pudo actualizar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
 	return { success: true, message: 'Cuenta por cobrar actualizada correctamente', data: data as CuentaCobrar };
 }
@@ -162,7 +163,7 @@ export async function updateCuentaCobrar(
 export async function deleteCuentaCobrar(client: SupabaseClient, id: number): Promise<ServiceResult> {
 	// ON DELETE CASCADE en cobros.id_cuenta_cobrar se encarga de borrar sus cobros asociados.
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
-	if (error) return { success: false, message: `No se pudo eliminar la cuenta por cobrar: ${error.message}` };
+	if (error) return { success: false, message: `No se pudo eliminar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 	return { success: true, message: 'Cuenta por cobrar eliminada correctamente' };
 }
 
@@ -194,7 +195,7 @@ export async function createCobro(
 	};
 
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
-	if (error) return { success: false, message: `No se pudo registrar el cobro: ${error.message}` };
+	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
 	await recalcularCuentaCobrar(client, idCuentaCobrar);
 	return { success: true, message: 'Cobro registrado correctamente', data: data as Cobro };
@@ -205,7 +206,7 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number): Prom
 	if (fetchError || !cobro) return { success: false, message: 'Cobro no encontrado' };
 
 	const { error } = await client.from(COBRO_TABLE).delete().eq(COBRO_PK, idCobro);
-	if (error) return { success: false, message: `No se pudo eliminar el cobro: ${error.message}` };
+	if (error) return { success: false, message: `No se pudo eliminar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
 	await recalcularCuentaCobrar(client, (cobro as any)[PARENT_FK_COLUMN]);
 	return { success: true, message: 'Cobro eliminado correctamente' };

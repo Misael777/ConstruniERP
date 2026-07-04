@@ -1,27 +1,28 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import {
 		FIELDS_CONFIG,
-		PK_COLUMN,
 		validateCentroCostoPayload,
 		applyFieldMask,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
+	import { createCentroCosto, updateCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
 		open = false,
 		mode = 'create',
 		centro = null,
-		onClose
+		onClose,
+		onSaved
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
 		centro: CentroCosto | null;
 		onClose: () => void;
+		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -77,20 +78,14 @@
 
 		submitting = true;
 		try {
-			const endpoint = mode === 'create' ? '/api/centro-costos/create' : '/api/centro-costos/update';
-			const body =
-				mode === 'edit' && centro ? { ...formValues, [PK_COLUMN]: centro.id_centro_costo } : formValues;
-
-			const response = await fetch(resolveApiUrl(endpoint), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
-			});
-			const result = await response.json();
+			const result =
+				mode === 'edit' && centro
+					? await updateCentroCosto(supabase, centro.id_centro_costo, formValues)
+					: await createCentroCosto(supabase, formValues);
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				await invalidateAll();
+				onSaved();
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');

@@ -9,7 +9,7 @@
  *     fecha_cobro        DATE NOT NULL,
  *     medio_cobro        SMALLINT,
  *     num_operacion      VARCHAR(20),
- *     cuenta_banco       SMALLINT,
+ *     cuenta_banco       VARCHAR(20),  -- migrada de SMALLINT a VARCHAR(20) para guardar el N° de cuenta real
  *     numero_opracion    VARCHAR(20),  -- ver nota abajo
  *     usuario_registro   VARCHAR(100),
  *     referencia         VARCHAR(100),
@@ -24,8 +24,8 @@
  *   typo, falta la "e" de "operacion"). Parecen una columna duplicada por error de diseño. Se dejó
  *   fuera del formulario (`numero_opracion`) para no confundir con dos campos "N° de operación";
  *   si el ERP en verdad necesita ambas, agrégala aquí explícitamente.
- * - `medio_cobro` y `cuenta_banco` son códigos SMALLINT sin catálogo de referencia — AJUSTAR a
- *   'select' cuando exista esa tabla.
+ * - `medio_cobro` sigue siendo un código SMALLINT sin catálogo de referencia — AJUSTAR a
+ *   'select' con `optionsSource` cuando exista esa tabla (hoy tiene opciones fijas Efectivo/Transferencia).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -62,18 +62,27 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'medio_cobro',
-		label: 'Medio de Cobro (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Medio de Cobro',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		options: [
+			{ value: '1', label: 'Efectivo' },
+			{ value: '2', label: 'Transferencia bancaria' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
 		key: 'cuenta_banco',
-		label: 'Cuenta Banco (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'N° de Cuenta Bancaria',
+		tipo: 'text',
+		maxLength: 20, // la columna en BD se migró a VARCHAR(20) — cabe una cuenta normal o un CCI interbancario
+		// Solo dígitos, espacios y guiones (formatos típicos al mostrar una cuenta, ej. "191-1234567-0-89").
+		mask: (raw) => raw.replace(/[^\d\s-]/g, ''),
+		regex: /^[\d\s-]+$/,
+		regexMessage: 'Solo números, espacios y guiones',
+		placeholder: 'Ej. 191-1234567-0-89 o CCI de 20 dígitos',
+		helpText: 'Número de cuenta bancaria o CCI donde se recibió el cobro.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false

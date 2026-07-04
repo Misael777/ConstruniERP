@@ -31,6 +31,13 @@ export interface FieldConfig {
 	maxLength?: number;
 	/** Valor numérico mínimo permitido (inclusive) para tipo 'number' | 'currency' */
 	min?: number;
+	/** Valor numérico máximo permitido (inclusive) para tipo 'number' | 'currency' */
+	max?: number;
+	/**
+	 * Renderiza el input como texto plano (sin flechitas de spinner) aunque `tipo` sea 'number'.
+	 * Útil para códigos cortos donde no tiene sentido un <input type="number"> (ej. cuenta_banco).
+	 */
+	renderAsText?: boolean;
 	uppercase?: boolean;
 	regex?: RegExp;
 	regexMessage?: string;
@@ -49,6 +56,19 @@ export interface FieldConfig {
 	showInForm?: boolean;
 	sortable?: boolean;
 	defaultSort?: 'asc' | 'desc';
+	/**
+	 * Bloquea el campo (input deshabilitado, no se valida, se guarda como null) cuando esta función
+	 * devuelve true, evaluada contra el payload completo del formulario (para poder depender del
+	 * valor de OTRO campo). Ej.: cuotas.disabledWhen = (v) => v.forma_pago === '1' (Contado).
+	 */
+	disabledWhen?: (payload: Record<string, unknown>) => boolean;
+	/**
+	 * Convierte el campo en "calculado": se muestra deshabilitado (no se escribe a mano), su valor
+	 * se recalcula en vivo a partir del resto del payload, no se valida, y al guardar SIEMPRE se usa
+	 * el resultado de esta función (nunca lo que traiga el formulario, para que no se pueda desincronizar).
+	 * Ej.: monto_imponible.computeValue = (v) => Number(v.monto_comprometido) / 1.18.
+	 */
+	computeValue?: (payload: Record<string, unknown>) => string | number | null;
 }
 
 /** Valida un único campo según su definición. Devuelve el mensaje de error o null. */
@@ -69,6 +89,9 @@ export function validateField(field: FieldConfig, rawValue: unknown): string | n
 	if (isNumeric && field.min !== undefined && Number(value) < field.min) {
 		return `${field.label} debe ser mayor a ${field.min}`;
 	}
+	if (isNumeric && field.max !== undefined && Number(value) > field.max) {
+		return `${field.label} no puede superar ${field.max}`;
+	}
 	if (field.tipo === 'date' && Number.isNaN(new Date(value).getTime())) {
 		return `${field.label} debe ser una fecha válida`;
 	}
@@ -78,7 +101,9 @@ export function validateField(field: FieldConfig, rawValue: unknown): string | n
 	if (field.regex && !field.regex.test(value)) {
 		return field.regexMessage || `${field.label} tiene un formato inválido`;
 	}
-	if (field.tipo === 'select' && field.options && !field.options.some((o) => o.value === value)) {
+	// Aplica a cualquier campo con `options` fijas, no solo tipo:'select' — un campo 'number' con
+	// `options` (ej. un código SMALLINT mostrado como dropdown) también debe venir de esa lista.
+	if (field.options && !field.options.some((o) => o.value === value)) {
 		return `${field.label} tiene un valor no permitido`;
 	}
 	return null;
@@ -89,6 +114,8 @@ export function validatePayload(fields: FieldConfig[], payload: Record<string, u
 	const errors: Record<string, string> = {};
 	for (const field of fields) {
 		if (!field.showInForm) continue;
+		if (field.disabledWhen?.(payload)) continue; // campo bloqueado: no se exige ni se valida
+		if (field.computeValue) continue; // campo calculado: lo controla el sistema, no el usuario
 		const message = validateField(field, payload[field.key]);
 		if (message) errors[field.key] = message;
 	}
@@ -128,6 +155,29 @@ export function formatCurrency(value: unknown): string {
 	return CURRENCY_FORMATTER.format(num);
 }
 
+/**
+ * Traduce un error crudo de Postgres/PostgREST a un mensaje legible en español, usando FIELDS_CONFIG
+ * para identificar a qué campo se refiere (ej. una violación de FK como "cuentas_pagar_id_presupuesto_fkey"
+ * se traduce a "El valor ingresado en 'ID Presupuesto' no existe..."). Si no reconoce el error, devuelve
+ * error.message tal cual llegó.
+ */
+export function translateSupabaseError(error: { code?: string; message?: string }, fields: FieldConfig[]): string {
+	if (error.code === '23503' && error.message) {
+		const match = error.message.match(/constraint "([a-z0-9_]+)_fkey"/i);
+		const field = match ? fields.find((f) => match[1].endsWith(f.key)) : undefined;
+		return field
+			? `El valor ingresado en "${field.label}" no existe. Verifica el ID o déjalo vacío si no aplica.`
+			: 'El valor ingresado hace referencia a un registro que no existe.';
+	}
+	if (error.code === '23514') {
+		return 'El valor ingresado no cumple una regla de la base de datos (revisa las opciones permitidas).';
+	}
+	if (error.code === '23502') {
+		return 'Falta completar un campo obligatorio.';
+	}
+	return error.message || 'Ocurrió un error inesperado.';
+}
+
 /** Máscara reutilizable para campos de moneda: solo dígitos + un punto decimal, máx. 2 decimales. */
 export function currencyMask(raw: string): string {
 	let value = raw.replace(/[^\d.]/g, '');
@@ -142,6 +192,15 @@ export function buildWritablePayload(fields: FieldConfig[], payload: Record<stri
 	const result: Record<string, unknown> = {};
 	for (const field of fields) {
 		if (!field.showInForm) continue;
+		if (field.disabledWhen?.(payload)) {
+			result[field.key] = null; // campo bloqueado -> se guarda vacío, sin importar lo que tenga el formulario
+			continue;
+		}
+		if (field.computeValue) {
+			const computed = field.computeValue(payload);
+			result[field.key] = computed === '' || computed === null || computed === undefined ? null : Number(computed);
+			continue;
+		}
 		let value = payload[field.key];
 		if (typeof value === 'string') value = value.trim();
 		if ((field.tipo === 'number' || field.tipo === 'currency') && value !== '' && value !== undefined && value !== null) {

@@ -1,10 +1,15 @@
 /**
  * Servicio de acceso a datos para "centro_costo".
  *
- * Recibe el SupabaseClient como parámetro (en vez de importar uno fijo)
- * para que siempre se invoque desde +page.server.ts con el cliente de
- * service role ($lib/server/supabase) — igual que el resto de endpoints
- * administrativos del ERP (ver app/src/routes/api/*).
+ * Recibe el SupabaseClient como parámetro en vez de importar uno fijo. Se invoca
+ * client-side con el cliente anon ($lib/supabaseClient) para que el módulo funcione
+ * igual en web, y en los builds de Tauri (Windows/Android) que no tienen servidor
+ * SvelteKit embebido — mismo patrón que el módulo de partidas.
+ *
+ * AJUSTAR: la BD no tiene políticas RLS reales todavía (ver nota de seguridad en
+ * +page.svelte), así que hoy la anon key puede leer/escribir esta tabla sin pasar
+ * por la UI. Cuando se agregue RLS, este servicio no necesita cambios — solo la
+ * política en Postgres.
  *
  * Toda regla de validación/formato vive en centroCostos.config.ts; este
  * archivo solo arma las queries y traduce errores de Supabase a mensajes.

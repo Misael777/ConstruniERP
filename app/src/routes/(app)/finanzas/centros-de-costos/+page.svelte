@@ -1,22 +1,28 @@
 <script lang="ts">
-	import { goto, invalidateAll } from '$app/navigation';
-	import { page } from '$app/state';
-	import { Plus, Pencil, Trash2, Ban, Search, ChevronUp, ChevronDown, ChevronsUpDown, X, Building2 } from '@lucide/svelte';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { Plus, Pencil, Trash2, Ban, Search, ChevronUp, ChevronDown, X, Building2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import {
 		FIELDS_CONFIG,
-		PK_COLUMN,
 		DEFAULT_SORT_FIELD,
 		DEFAULT_SORT_DIR,
+		DEFAULT_PAGE_SIZE,
 		DELETE_STRATEGY,
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
+	import { getCentroCostos, deleteCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 
-	let { data } = $props();
+	// Módulo 100% client-side (habla directo con Supabase vía la anon key) para funcionar en
+	// cualquier plataforma empaquetada con Tauri (Windows, Android) sin necesitar un servidor
+	// SvelteKit embebido. AJUSTAR: hoy la seguridad depende únicamente del guard de UI de abajo
+	// (isAdmin()) — la BD no tiene políticas RLS reales todavía, así que cualquiera con la anon
+	// key puede leer/escribir esta tabla sin pasar por esta pantalla. Agregar RLS es tarea aparte.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
 	const deleteLabel = DELETE_STRATEGY === 'soft' ? 'Anular' : 'Eliminar';
@@ -25,51 +31,68 @@
 			? '¿Anular este centro de costo? Podrás revertirlo desde la base de datos si fue un error.'
 			: '¿Eliminar este centro de costo de forma permanente? Esta acción no se puede deshacer.';
 
+	let items = $state<CentroCosto[]>([]);
+	let total = $state(0);
+	let pageNum = $state(1);
+	let totalPages = $state(1);
+	let loading = $state(true);
+	let loadError = $state('');
+
+	let search = $state('');
+	let searchInput = $state('');
+	let sortBy = $state(DEFAULT_SORT_FIELD);
+	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
+	let debounceTimer: ReturnType<typeof setTimeout>;
+
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCentro = $state<CentroCosto | null>(null);
 
-	let searchInput = $state(data.search ?? '');
-	let debounceTimer: ReturnType<typeof setTimeout>;
-
-	$effect(() => {
-		searchInput = data.search ?? '';
-	});
-
-	function updateQuery(updates: Record<string, string | null>) {
-		const params = new URLSearchParams(page.url.search);
-		for (const [key, value] of Object.entries(updates)) {
-			if (value === null || value === '') params.delete(key);
-			else params.set(key, value);
+	async function fetchList() {
+		loading = true;
+		try {
+			const result = await getCentroCostos(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			items = result.items;
+			total = result.total;
+			totalPages = result.totalPages;
+			loadError = '';
+		} catch (err: any) {
+			loadError = err.message || 'No se pudo cargar el listado de centros de costo';
+		} finally {
+			loading = false;
 		}
-		goto(`?${params.toString()}`, { keepFocus: true, noScroll: true });
 	}
+
+	onMount(() => {
+		if (!isAdmin()) {
+			goto('/dashboard');
+			return;
+		}
+		fetchList();
+	});
 
 	function onSearchInput(value: string) {
 		searchInput = value;
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			updateQuery({ q: value || null, page: '1' });
+			search = value;
+			pageNum = 1;
+			fetchList();
 		}, 400);
-	}
-
-	function currentSortField() {
-		return data.sortBy || DEFAULT_SORT_FIELD;
-	}
-	function currentSortDir() {
-		return data.sortDir || DEFAULT_SORT_DIR;
 	}
 
 	function toggleSort(fieldKey: string, sortable?: boolean) {
 		if (!sortable) return;
-		const isCurrent = currentSortField() === fieldKey;
-		const nextDir = isCurrent && currentSortDir() === 'asc' ? 'desc' : 'asc';
-		updateQuery({ sort: fieldKey, dir: nextDir, page: '1' });
+		sortDir = sortBy === fieldKey && sortDir === 'asc' ? 'desc' : 'asc';
+		sortBy = fieldKey;
+		pageNum = 1;
+		fetchList();
 	}
 
 	function goToPage(p: number) {
-		if (p < 1 || p > data.totalPages) return;
-		updateQuery({ page: String(p) });
+		if (p < 1 || p > totalPages) return;
+		pageNum = p;
+		fetchList();
 	}
 
 	function formatDate(value: string | null | undefined) {
@@ -108,22 +131,13 @@
 		if (!confirm(deleteConfirmMessage)) return;
 
 		try {
-			const response = await fetch(resolveApiUrl('/api/centro-costos/delete'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ [PK_COLUMN]: item.id_centro_costo })
-			});
-			const result = await response.json();
-
-			if (result.success) {
-				toast.success(result.message ?? 'Operación realizada con éxito');
-			} else {
-				toast.error(result.message ?? 'Ocurrió un error');
-			}
+			const result = await deleteCentroCosto(supabase, item.id_centro_costo);
+			if (result.success) toast.success(result.message);
+			else toast.error(result.message);
 		} catch (err: any) {
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
-			await invalidateAll();
+			await fetchList();
 		}
 	}
 </script>
@@ -147,9 +161,9 @@
 		</button>
 	</div>
 
-	{#if data.loadError}
+	{#if loadError}
 		<div class="mb-4 flex items-center justify-between bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">
-			<span>{data.loadError}</span>
+			<span>{loadError}</span>
 		</div>
 	{/if}
 
@@ -189,16 +203,8 @@
 									class={`flex items-center gap-1 ${field.sortable ? 'cursor-pointer hover:text-[#0f3b5e]' : 'cursor-default'}`}
 								>
 									{field.label}
-									{#if field.sortable}
-										{#if currentSortField() === field.key}
-											{#if currentSortDir() === 'asc'}
-												<ChevronUp size={14} />
-											{:else}
-												<ChevronDown size={14} />
-											{/if}
-										{:else}
-											<ChevronsUpDown size={14} class="opacity-30" />
-										{/if}
+									{#if field.sortable && sortBy === field.key}
+										{#if sortDir === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
 									{/if}
 								</button>
 							</th>
@@ -207,7 +213,7 @@
 					</tr>
 				</thead>
 				<tbody>
-					{#each data.items as item (item.id_centro_costo)}
+					{#each items as item (item.id_centro_costo)}
 						<tr class="border-b border-slate-100 hover:bg-slate-50">
 							{#each tableFields as field}
 								<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
@@ -242,7 +248,7 @@
 					{:else}
 						<tr>
 							<td colspan={tableFields.length + 1} class="px-4 py-10 text-center text-slate-400">
-								No se encontraron centros de costo.
+								{loading ? 'Cargando...' : 'No se encontraron centros de costo.'}
 							</td>
 						</tr>
 					{/each}
@@ -253,21 +259,21 @@
 		<!-- Pagination -->
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
 			<span>
-				{data.total} resultado{data.total === 1 ? '' : 's'} · Página {data.page} de {data.totalPages}
+				{total} resultado{total === 1 ? '' : 's'} · Página {pageNum} de {totalPages}
 			</span>
 			<div class="flex items-center gap-2">
 				<button
 					type="button"
-					onclick={() => goToPage(data.page - 1)}
-					disabled={data.page <= 1}
+					onclick={() => goToPage(pageNum - 1)}
+					disabled={pageNum <= 1}
 					class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50"
 				>
 					Anterior
 				</button>
 				<button
 					type="button"
-					onclick={() => goToPage(data.page + 1)}
-					disabled={data.page >= data.totalPages}
+					onclick={() => goToPage(pageNum + 1)}
+					disabled={pageNum >= totalPages}
 					class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50"
 				>
 					Siguiente
@@ -277,4 +283,4 @@
 	</div>
 </div>
 
-<CentroCostoModal open={modalOpen} mode={modalMode} centro={editingCentro} onClose={closeModal} />
+<CentroCostoModal open={modalOpen} mode={modalMode} centro={editingCentro} onClose={closeModal} onSaved={fetchList} />

@@ -88,9 +88,25 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'tipo_documento',
-		label: 'Tipo Documento (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Tipo de Documento',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options` (ver modal/motor genérico)
+		required: false,
+		// AJUSTAR: son códigos secuenciales (1..11) en el orden pedido, NO están verificados contra
+		// el catálogo oficial SUNAT N.º 01 (que usa otros números, ej. Factura=01, Boleta=03, etc.).
+		// Si necesitas cumplimiento SUNAT exacto, cambia los `value` de abajo por esos códigos.
+		options: [
+			{ value: '1', label: 'Factura' },
+			{ value: '2', label: 'Boleta' },
+			{ value: '3', label: 'Recibo por Honorarios' },
+			{ value: '4', label: 'Liquidación de Compras' },
+			{ value: '5', label: 'Ticket' },
+			{ value: '6', label: 'Nota de Crédito' },
+			{ value: '7', label: 'Guía de Remisión' },
+			{ value: '8', label: 'Comprobante de Retención' },
+			{ value: '9', label: 'Comprobante de Percepción' },
+			{ value: '10', label: 'Recibo de Servicios' },
+			{ value: '11', label: 'Boleta de Transporte' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -127,18 +143,26 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'forma_pago',
-		label: 'Forma de Pago (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Forma de Pago',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		options: [
+			{ value: '1', label: 'Contado' },
+			{ value: '2', label: 'Crédito' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
 		key: 'condición_pago', // nombre real de columna con tilde, ver nota arriba
-		label: 'Condición de Pago (código)',
+		label: 'Número de Cuotas',
 		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		min: 1,
+		placeholder: 'Ej. 3',
+		// Se bloquea (deshabilitado, no se valida, se guarda como null) cuando forma_pago = '1' (Contado).
+		// AJUSTAR: si más adelante quieres exigirlo cuando es Crédito, agrega required condicional aparte.
+		disabledWhen: (values) => String(values.forma_pago ?? '') === '1',
+		helpText: 'Solo aplica si la forma de pago es Crédito. Se bloquea automáticamente en Contado.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false

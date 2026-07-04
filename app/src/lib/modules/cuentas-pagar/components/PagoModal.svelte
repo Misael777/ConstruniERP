@@ -1,19 +1,21 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import { validatePayload, applyFieldMask, formatCurrency } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG, PARENT_FK_COLUMN } from '$lib/modules/cuentas-pagar/config/pago.config';
+	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/pago.config';
+	import { createPago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 
 	let {
 		open = false,
 		idCuentaPagar,
-		onClose
+		onClose,
+		onSaved
 	}: {
 		open: boolean;
 		idCuentaPagar: number | null;
 		onClose: () => void;
+		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -55,16 +57,12 @@
 
 		submitting = true;
 		try {
-			const response = await fetch(resolveApiUrl('/api/cuentas-pagar/pagos/create'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ ...formValues, [PARENT_FK_COLUMN]: idCuentaPagar })
-			});
-			const result = await response.json();
+			const { data: userData } = await supabase.auth.getUser();
+			const result = await createPago(supabase, idCuentaPagar, formValues, userData?.user?.email ?? null);
 
 			if (result.success) {
 				toast.success(result.message ?? 'Pago registrado con éxito');
-				await invalidateAll();
+				onSaved();
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al registrar el pago');

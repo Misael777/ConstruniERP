@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG, PK_COLUMN } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
+	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
+	import { createCuentaCobrar, updateCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { CuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	let {
@@ -12,13 +12,15 @@
 		mode = 'create',
 		cuenta = null,
 		dynamicOptions = {},
-		onClose
+		onClose,
+		onSaved
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
 		cuenta: CuentaCobrar | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
+		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -42,6 +44,20 @@
 			fieldErrors = {};
 		}
 	});
+
+	// Limpia el valor de cualquier campo que quede bloqueado por disabledWhen (ej. cuotas cuando
+	// forma_pago pasa a "Contado"), para que no se vea un valor "fantasma" en un input deshabilitado.
+	$effect(() => {
+		for (const field of formFields) {
+			if (field.disabledWhen?.(formValues) && formValues[field.key] !== '') {
+				formValues[field.key] = '';
+			}
+		}
+	});
+
+	function isDisabled(field: (typeof formFields)[number]): boolean {
+		return field.disabledWhen?.(formValues) ?? false;
+	}
 
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
@@ -71,19 +87,17 @@
 
 		submitting = true;
 		try {
-			const endpoint = mode === 'create' ? '/api/cuentas-cobrar/create' : '/api/cuentas-cobrar/update';
-			const body = mode === 'edit' && cuenta ? { ...formValues, [PK_COLUMN]: cuenta.id_cuenta_cobrar } : formValues;
-
-			const response = await fetch(resolveApiUrl(endpoint), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
-			});
-			const result = await response.json();
+			let result;
+			if (mode === 'edit' && cuenta) {
+				result = await updateCuentaCobrar(supabase, cuenta.id_cuenta_cobrar, formValues);
+			} else {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);
+			}
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				await invalidateAll();
+				onSaved();
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
@@ -116,13 +130,14 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.tipo === 'select'}
+							{#if field.tipo === 'select' || field.options}
 								<select
 									id={`ccb-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
+									disabled={isDisabled(field)}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
 									{#each optionsFor(field) as opt}
@@ -138,8 +153,9 @@
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
+									disabled={isDisabled(field)}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 							{/if}
 

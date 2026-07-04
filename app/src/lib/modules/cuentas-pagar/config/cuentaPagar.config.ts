@@ -40,14 +40,16 @@
  * - `condicion_pago` (sin tilde) y `observacion` (singular) son distintos, a propósito, de los
  *   nombres usados en cuentas_cobrar ("condición_pago" con tilde, "observaciones" plural) — no es
  *   un error de este archivo, así están definidas ambas tablas en la BD real.
- * - `monto_pagado` y `saldo_pendiente` NO son editables (showInForm:false): se recalculan
- *   automáticamente en cuentasPagar.service.ts cada vez que se registra o elimina un pago.
- *   `estado` también se ajusta ahí, salvo que ya esté en "vencido" (marca manual).
+ * - `monto_pagado`, `saldo_pendiente` y `estado` NO son editables (showInForm:false): los calcula
+ *   cuentasPagar.service.ts (ver computeEstadoCuentaPagar) cada vez que se crea/edita la cuenta o
+ *   se registra/elimina un pago — pagado si saldo=0, vencido si hoy pasó fecha_vencimiento o
+ *   fecha_pago_programada, si no pendiente. Ya NO es una marca manual.
  * - `usuario_registro` NO está en FIELDS_CONFIG: se completa server-side con el usuario autenticado.
- * - `id_presupuesto` / `id_partida` son FK opcionales sin selector dinámico todavía — AJUSTAR a
- *   'select' con `optionsSource` si se necesita elegirlos desde una lista en vez de digitar el ID.
- * - `tipo_documento`, `fotma_pago`, `categoria_gasto` son códigos SMALLINT sin tabla de catálogo —
- *   AJUSTAR a 'select' cuando el ERP defina esos catálogos.
+ * - `id_presupuesto` / `id_partida` son FK opcionales sin selector dinámico todavía (se digitan como
+ *   número). AJUSTAR a 'select' con `optionsSource` si se necesita elegirlos desde una lista.
+ * - `tipo_documento`, `fotma_pago` y `categoria_gasto` ya son 'select' con opciones fijas
+ *   (`categoria_gasto` usa los códigos reales del PCGE clase 6, los demás son secuenciales sin
+ *   catálogo oficial verificado — ver notas en cada campo).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -74,7 +76,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'id_presupuesto',
 		label: 'ID Presupuesto',
-		tipo: 'number',
+		tipo: 'number', // FK numérica en BD; se renderiza como textbox (sin flechitas) vía renderAsText
+		renderAsText: true,
+		mask: (raw) => raw.replace(/\D/g, ''), // solo dígitos mientras se escribe
+		regex: /^\d+$/,
+		regexMessage: 'Solo dígitos',
 		helpText: 'FK opcional a presupuesto.id_presupuesto. AJUSTAR a select si se necesita elegir de una lista.',
 		showInTable: false,
 		showInForm: true,
@@ -101,9 +107,23 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'tipo_documento',
-		label: 'Tipo Documento (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Tipo de Documento',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		// Mismos códigos/orden que cuentaCobrar.config.ts (tipo_documento) — mantenerlos sincronizados
+		// si se ajustan allá. AJUSTAR: son códigos secuenciales (1..11), no verificados contra SUNAT.
+		options: [
+			{ value: '1', label: 'Factura' },
+			{ value: '2', label: 'Boleta' },
+			{ value: '3', label: 'Recibo por Honorarios' },
+			{ value: '4', label: 'Liquidación de Compras' },
+			{ value: '5', label: 'Ticket' },
+			{ value: '6', label: 'Nota de Crédito' },
+			{ value: '7', label: 'Guía de Remisión' },
+			{ value: '8', label: 'Comprobante de Retención' },
+			{ value: '9', label: 'Comprobante de Percepción' },
+			{ value: '10', label: 'Recibo de Servicios' },
+			{ value: '11', label: 'Boleta de Transporte' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -139,69 +159,97 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: true
 	},
 	{
+		// Calculado: monto_imponible = monto_comprometido / 1.18 (base sin IGV, IGV Perú = 18%).
+		// AJUSTAR la tasa 1.18 aquí si el IGV cambia.
 		key: 'monto_imponible',
 		label: 'Monto Imponible',
 		tipo: 'currency',
-		required: true,
-		min: 0,
-		mask: currencyMask,
-		regex: /^\d+(\.\d{1,2})?$/,
-		regexMessage: 'Solo números, con máximo 2 decimales',
+		computeValue: (v) => {
+			const comprometido = Number(v.monto_comprometido);
+			return Number.isFinite(comprometido) && v.monto_comprometido !== '' ? (comprometido / 1.18).toFixed(2) : '';
+		},
+		helpText: 'Se calcula solo: Monto Comprometido ÷ 1.18',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
+		// Calculado: monto_igv = monto_comprometido - monto_imponible.
 		key: 'monto_igv',
 		label: 'Monto IGV',
 		tipo: 'currency',
-		required: true,
-		min: 0,
-		mask: currencyMask,
-		regex: /^\d+(\.\d{1,2})?$/,
-		regexMessage: 'Solo números, con máximo 2 decimales',
+		computeValue: (v) => {
+			const comprometido = Number(v.monto_comprometido);
+			if (!Number.isFinite(comprometido) || v.monto_comprometido === '') return '';
+			// Resta el imponible YA REDONDEADO (no el valor crudo), para que Imponible + IGV
+			// siempre cuadre exacto con el Monto Comprometido, sin desfases de centavos.
+			const imponibleRedondeado = Number((comprometido / 1.18).toFixed(2));
+			return (comprometido - imponibleRedondeado).toFixed(2);
+		},
+		helpText: 'Se calcula solo: Monto Comprometido − Monto Imponible',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
+		// Editable: porcentaje de detracción (ej. 4, 10, 12), NO un monto en soles.
 		key: 'detraccion',
-		label: 'Detracción',
-		tipo: 'currency',
+		label: 'Detracción (%)',
+		tipo: 'number',
 		min: 0,
-		mask: currencyMask,
-		regex: /^\d+(\.\d{1,2})?$/,
-		regexMessage: 'Solo números, con máximo 2 decimales',
+		max: 100,
+		placeholder: 'Ej. 4',
+		helpText: 'Porcentaje de detracción (no un monto). Se usa para calcular la Retención.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
+		// Calculado: monto_retencion = (monto_comprometido * detraccion) / 100.
 		key: 'monto_retencion',
 		label: 'Retención',
 		tipo: 'currency',
-		min: 0,
-		mask: currencyMask,
-		regex: /^\d+(\.\d{1,2})?$/,
-		regexMessage: 'Solo números, con máximo 2 decimales',
+		computeValue: (v) => {
+			const comprometido = Number(v.monto_comprometido);
+			const detraccionPct = Number(v.detraccion);
+			if (!Number.isFinite(comprometido) || v.monto_comprometido === '') return '';
+			if (!Number.isFinite(detraccionPct) || v.detraccion === '') return '';
+			return ((comprometido * detraccionPct) / 100).toFixed(2);
+		},
+		helpText: 'Se calcula solo: (Monto Comprometido × Detracción) ÷ 100',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
 		key: 'fotma_pago', // nombre real de columna (typo en BD), ver nota arriba
-		label: 'Forma de Pago (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Forma de Pago',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		options: [
+			{ value: '1', label: 'Contado' },
+			{ value: '2', label: 'Crédito' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
 		key: 'categoria_gasto',
-		label: 'Categoría de Gasto (código)',
-		tipo: 'number',
-		helpText: 'Código numérico sin catálogo definido aún. AJUSTAR a select cuando exista la tabla de referencia.',
+		label: 'Categoría de Gasto',
+		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		// Códigos reales del PCGE (Plan Contable General Empresarial - Perú), clase 6: Gastos por Naturaleza.
+		options: [
+			{ value: '60', label: 'Compras' },
+			{ value: '61', label: 'Variación de Inventarios' },
+			{ value: '62', label: 'Gastos de Personal y Directores' },
+			{ value: '63', label: 'Gastos de Servicios Prestados por Terceros' },
+			{ value: '64', label: 'Gastos por Tributos' },
+			{ value: '65', label: 'Otros Gastos de Gestión' },
+			{ value: '66', label: 'Pérdida por Deterioro de Activos' },
+			{ value: '67', label: 'Gastos Financieros' },
+			{ value: '68', label: 'Valuación y Deterioro de Activos y Provisiones' },
+			{ value: '69', label: 'Costos de Producción y Gastos por Función' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -211,6 +259,9 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Condición de Pago',
 		tipo: 'text',
 		maxLength: 100,
+		// Se bloquea (deshabilitado, no se valida, se guarda como null) cuando fotma_pago = '1' (Contado).
+		disabledWhen: (values) => String(values.fotma_pago ?? '') === '1',
+		helpText: 'Solo aplica si la forma de pago es Crédito. Se bloquea automáticamente en Contado.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -250,6 +301,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		// Ya NO es editable a mano (showInForm:false): lo calcula computeEstadoCuentaPagar() en
+		// cuentasPagar.service.ts — pagado si saldo_pendiente=0; vencido si hoy > fecha_vencimiento
+		// o > fecha_pago_programada; si no, pendiente. `options` se mantiene para mostrar el label
+		// del badge en la tabla (getOptionLabel lo usa ahí, independiente de showInForm).
 		key: 'estado',
 		label: 'Estado',
 		tipo: 'select',
@@ -258,9 +313,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'pagado', label: 'Pagado' },
 			{ value: 'vencido', label: 'Vencido' }
 		],
-		helpText: 'Pendiente/Pagado se recalculan solos al registrar pagos. "Vencido" es una marca manual que se conserva.',
 		showInTable: true,
-		showInForm: true,
+		showInForm: false,
 		sortable: true
 	},
 	{

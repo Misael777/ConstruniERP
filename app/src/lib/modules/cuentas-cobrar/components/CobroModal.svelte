@@ -1,19 +1,21 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { resolveApiUrl } from '$lib/apiClient';
 	import { validatePayload, applyFieldMask, formatCurrency } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG, PARENT_FK_COLUMN } from '$lib/modules/cuentas-cobrar/config/cobro.config';
+	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
+	import { createCobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	let {
 		open = false,
 		idCuentaCobrar,
-		onClose
+		onClose,
+		onSaved
 	}: {
 		open: boolean;
 		idCuentaCobrar: number | null;
 		onClose: () => void;
+		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -55,16 +57,12 @@
 
 		submitting = true;
 		try {
-			const response = await fetch(resolveApiUrl('/api/cuentas-cobrar/cobros/create'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ ...formValues, [PARENT_FK_COLUMN]: idCuentaCobrar })
-			});
-			const result = await response.json();
+			const { data: userData } = await supabase.auth.getUser();
+			const result = await createCobro(supabase, idCuentaCobrar, formValues, userData?.user?.email ?? null);
 
 			if (result.success) {
 				toast.success(result.message ?? 'Cobro registrado con éxito');
-				await invalidateAll();
+				onSaved();
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al registrar el cobro');
@@ -96,17 +94,32 @@
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
-							<input
-								id={`cb-${field.key}`}
-								name={field.key}
-								type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
-								inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
-								value={formValues[field.key]}
-								maxlength={field.maxLength}
-								placeholder={field.placeholder}
-								oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-								class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-							/>
+							{#if field.tipo === 'select' || field.options}
+								<select
+									id={`cb-${field.key}`}
+									name={field.key}
+									value={formValues[field.key]}
+									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+								>
+									<option value="" disabled>Selecciona una opción</option>
+									{#each field.options ?? [] as opt}
+										<option value={opt.value}>{opt.label}</option>
+									{/each}
+								</select>
+							{:else}
+								<input
+									id={`cb-${field.key}`}
+									name={field.key}
+									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
+									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
+									value={formValues[field.key]}
+									maxlength={field.maxLength}
+									placeholder={field.placeholder}
+									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+								/>
+							{/if}
 
 							{#if field.tipo === 'currency' && formValues[field.key] && !fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues[field.key])}</p>
