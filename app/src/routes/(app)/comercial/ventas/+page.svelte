@@ -222,8 +222,27 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 		isDeleting = true;
 
 		try {
-			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', confirmRow.id);
+			const id = confirmRow.id;
+
+			// Delete tables that reference proyecto WITHOUT ON DELETE CASCADE
+			// presupuesto_detalle cascades from presupuesto, so deleting presupuesto covers it
+			const { error: e1 } = await supabase.from('presupuesto').delete().eq('id_proyecto', id);
+			if (e1) throw e1;
+
+			const { error: e2 } = await supabase.from('adelanto').delete().eq('id_proyecto', id);
+			if (e2) throw e2;
+
+			const { error: e3 } = await supabase.from('contrato_proyecto').delete().eq('id_proyecto', id);
+			if (e3) throw e3;
+
+			// cuentas_cobrar has a nullable FK — nullify to preserve payment records
+			const { error: e4 } = await supabase.from('cuentas_cobrar').update({ id_proyecto: null }).eq('id_proyecto', id);
+			if (e4) throw e4;
+
+			// All other FK references have ON DELETE CASCADE and will auto-delete
+			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', id);
 			if (error) throw error;
+
 			confirmRow = null;
 			fetchVentas();
 		} catch (err) {

@@ -1,7 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { supabase } from '$lib/supabaseClient';
-    import { resolveApiUrl } from '$lib/apiClient';
+    import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
+    import { isRunningInTauri, uploadToDriveClient } from '$lib/driveUploadClient';
 
     const { projectId, projectName = 'Proyecto' } = $props<{
         projectId: number | string;
@@ -81,8 +82,17 @@ function buildDocumentFileName(tipo: string, nombre: string, proyecto: string, o
 }
 
 async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
-    console.log(`[DocumentosTab] uploadDocumentToDrive() - tipo: ${tipo}, nombre: ${nombre}, file: ${file.name} (${file.size} bytes)`);
+    console.log(`[DocumentosTab] uploadDocumentToDrive() - tipo: ${tipo}, inTauri: ${isRunningInTauri()}`);
 
+    if (isRunningInTauri()) {
+        // adapter-static: no server endpoint available — upload directly from the WebView
+        const fileName = buildDocumentFileName(tipo, nombre, projectName, file.name);
+        const url = await uploadToDriveClient(file, fileName, 'documento');
+        console.log(`[DocumentosTab] ✓ Tauri upload OK. URL: ${url}`);
+        return { url, fileName };
+    }
+
+    // Web: delegate to the SvelteKit server endpoint
     const formData = new FormData();
     formData.append('file', file);
     formData.append('type', 'documento');
@@ -96,17 +106,12 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
         body: formData
     });
 
-    console.log(`[DocumentosTab] Respuesta del servidor: status=${response.status}`);
-
-    const result = await response.json();
-    console.log(`[DocumentosTab] Resultado JSON:`, result);
-
+    const result = await parseJsonResponse(response);
     if (!response.ok || !result.success) {
-        console.error(`[DocumentosTab] Error en upload: status=${response.status}`, result);
         throw new Error(result.details || result.error || 'Error al subir documento a Google Drive.');
     }
 
-    console.log(`[DocumentosTab] Upload exitoso. URL: ${result.url}`);
+    console.log(`[DocumentosTab] ✓ Server upload OK. URL: ${result.url}`);
     return { url: result.url as string, fileName: result.fileName as string };
 }
 

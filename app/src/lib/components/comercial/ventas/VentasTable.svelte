@@ -13,11 +13,11 @@
 		{ proyecto: 'Local Comercial La Molina', valor: 250000, tipo: 'Comercial', fecha: '22/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 25000, comisionPct: 10 }
 	] } = $props<{ data?: any[] }>();
 
-	let filtroProyecto = 'Todos';
-	let filtroTipo = 'Todos';
-	let filtroAsesor = 'Todos';
-	let fechaDesde = '';
-	let fechaHasta = '';
+	let filtroProyecto = $state('Todos');
+	let filtroTipo     = $state('Todos');
+	let filtroAsesor   = $state('Todos');
+	let fechaDesde     = $state('');
+	let fechaHasta     = $state('');
 
 	function getProyectosDisponibles() {
 		return Array.from(new Set(data.map(row => row.proyecto))).sort();

@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { fetchApi, parseJsonResponse } from '$lib/apiClient';
+	import { isRunningInTauri } from '$lib/driveUploadClient';
 	
 	let mode = $state<'login' | 'setup_password' | 'forgot_password' | 'first_admin'>('login');
 	let email = $state('');
@@ -51,7 +52,7 @@
 	
 	let passwordInputRef = $state<HTMLInputElement>();
 	function isTauriApp() {
-		return typeof window !== 'undefined' && typeof (window as any).__TAURI__ !== 'undefined';
+		return isRunningInTauri();
 	}
 
 	function getSavedEmail() {
@@ -124,8 +125,17 @@
 		}
 	}
 
-	onMount(() => {
-		console.log('[Login] onMount started, checking saved email and first-admin availability');
+	onMount(async () => {
+		console.log('[Login] onMount started');
+
+		// If the user already has a valid session, skip the login form
+		const { data: { session } } = await supabase.auth.getSession();
+		if (session) {
+			console.log('[Login] active session found — redirecting to /dashboard');
+			goto('/dashboard', { replaceState: true });
+			return;
+		}
+
 		// Recuperar email de localStorage si existe
 		const savedEmail = getSavedEmail();
 		if (savedEmail) {
