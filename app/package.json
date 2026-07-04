@@ -32,6 +32,7 @@
 		"chart.js": "^4.5.1",
 		"svelte-chartjs": "^4.0.1",
 		"svelte-dnd-action": "^0.9.70",
+		"svelte-gantt": "^4.5.0",
 		"tailwindcss": "^4.3.0"
 	}
 }
