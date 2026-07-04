@@ -4,6 +4,22 @@
 		onEdit?: (proveedor: any) => void;
 		onDelete?: (id: number) => void;
 	}>();
+
+	let searchTerm = $state('');
+
+	const filteredProveedores = $derived(
+		searchTerm.trim() === ''
+			? proveedores
+			: proveedores.filter((p: any) => {
+				const term = searchTerm.trim().toLowerCase();
+				return (
+					String(p.razon_social ?? '').toLowerCase().includes(term) ||
+					String(p.ruc ?? '').toLowerCase().includes(term) ||
+					String(p.contacto ?? '').toLowerCase().includes(term) ||
+					String(p.email ?? '').toLowerCase().includes(term)
+				);
+			})
+	);
 </script>
 
 <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col h-full">
@@ -12,7 +28,7 @@
 	<div class="p-4 border-b border-slate-100 flex flex-wrap items-center gap-4">
 		<div class="flex flex-col gap-1 flex-1 min-w-[200px]">
 			<div class="relative">
-				<input type="text" placeholder="Buscar por Razón Social o RUC..." class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-9">
+				<input bind:value={searchTerm} type="text" placeholder="Buscar por Razón Social, RUC o Contacto..." class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-9">
 				<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
 			</div>
 		</div>
@@ -40,7 +56,7 @@
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
-					{#each proveedores as proveedor}
+					{#each filteredProveedores as proveedor}
 						<tr class="hover:bg-slate-50/80 transition-colors group">
 							<td class="px-5 py-4 font-medium text-slate-800">
 								<div class="max-w-[250px] truncate">{proveedor.razon_social}</div>
@@ -97,7 +113,9 @@
 	<!-- Pagination Footer -->
 	{#if proveedores.length > 0}
 		<div class="p-4 border-t border-slate-100 flex items-center justify-between mt-auto bg-slate-50/30">
-			<span class="text-xs text-slate-500 font-medium">Mostrando {proveedores.length} registros</span>
+			<span class="text-xs text-slate-500 font-medium">
+				Mostrando {filteredProveedores.length}{filteredProveedores.length !== proveedores.length ? ` de ${proveedores.length}` : ''} registros
+			</span>
 		</div>
 	{/if}
 </div>

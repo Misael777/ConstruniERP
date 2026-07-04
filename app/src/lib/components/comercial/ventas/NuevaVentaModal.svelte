@@ -2,7 +2,8 @@
 	import { fade, scale } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import { resolveApiUrl } from '$lib/apiClient';
+	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
+	import { isRunningInTauri, uploadToDriveClient, safeSegment } from '$lib/driveUploadClient';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
 
@@ -43,6 +44,9 @@
 	let observaciones = $state('');
 	let isSaving = $state(false);
 	let saveError = $state('');
+
+	// Reset whenever the modal is opened
+	$effect(() => { if (isOpen) { saveError = ''; } });
 
 	// Auto-calculated code
 	function getClienteNombreActual() {
@@ -103,32 +107,35 @@ let codigoGenerado = $derived(
 	}
 
 	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number) {
-		console.log(`[NuevaVentaModal] uploadDocument() iniciado - type: ${type}, file: ${file.name}, projectId: ${projectId}`);
-		console.log(`[NuevaVentaModal] Tamaño del archivo: ${file.size} bytes, tipo MIME: ${file.type}`);
+		console.log(`[NuevaVentaModal] uploadDocument() - type: ${type}, file: ${file.name} (${file.size}b), inTauri: ${isRunningInTauri()}`);
 
+		// In Tauri (adapter-static build) there is no Node server, so +server.ts routes don't
+		// exist. Upload directly to Google Drive using the client-side helper.
+		if (isRunningInTauri()) {
+			const ext      = file.name.includes('.') ? `.${file.name.split('.').pop()}` : '';
+			const baseName = `${type}-${Date.now()}-${safeSegment(file.name.replace(/\.[^.]+$/, ''))}`;
+			const url = await uploadToDriveClient(file, `${baseName}${ext}`, type);
+			console.log(`[NuevaVentaModal] ✓ Tauri upload OK. URL: ${url}`);
+			return url;
+		}
+
+		// Web: delegate to the SvelteKit server endpoint
 		const formData = new FormData();
 		formData.append('file', file);
 		formData.append('type', type);
 		formData.append('projectId', String(projectId));
-
-		console.log(`[NuevaVentaModal] FormData construido, llamando a /api/upload-document...`);
 
 		const response = await fetch(resolveApiUrl('/api/upload-document'), {
 			method: 'POST',
 			body: formData
 		});
 
-		console.log(`[NuevaVentaModal] Respuesta del servidor recibida. Status: ${response.status}`);
-
-		const result = await response.json();
-		console.log(`[NuevaVentaModal] Resultado JSON parseado:`, result);
-
+		const result = await parseJsonResponse(response);
 		if (!response.ok || !result.success) {
-			console.error(`[NuevaVentaModal] ❌ ERROR en uploadDocument: status=${response.status}, success=${result.success}`);
 			throw new Error(result.error || 'Error al subir documento.');
 		}
 
-		console.log(`[NuevaVentaModal] ✓ uploadDocument completado exitosamente. URL: ${result.url}`);
+		console.log(`[NuevaVentaModal] ✓ Server upload OK. URL: ${result.url}`);
 		return result.url as string;
 	}
 
@@ -197,6 +204,7 @@ let codigoGenerado = $derived(
 
 	async function handleGuardar() {
 		console.log('[NuevaVentaModal] === INICIO handleGuardar ===');
+	try {
 		console.log('[NuevaVentaModal] Estado inicial:', {
 			proyectoNombre,
 			fechaVenta,
@@ -328,11 +336,8 @@ let codigoGenerado = $derived(
 			.single();
 
 		if (error) {
-			console.error('[NuevaVentaModal] ❌ ERROR al insertar proyecto:', error);
-			console.error('[NuevaVentaModal] Error code:', error.code);
-			console.error('[NuevaVentaModal] Error message:', error.message);
-			console.error('[NuevaVentaModal] Error details:', error.details);
-			saveError = 'Error guardando la venta en Proyectos. Revisa los datos e intenta de nuevo.';
+			console.error('[NuevaVentaModal] Error al insertar proyecto:', error);
+			saveError = `Error guardando la venta: ${error.message ?? 'Error desconocido.'}`;
 			isSaving = false;
 			return;
 		}
@@ -392,10 +397,7 @@ let codigoGenerado = $derived(
 
 				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
 			} catch (uploadError) {
-				console.error('[NuevaVentaModal] ❌ ERROR al subir documentos:', uploadError);
-				console.error('[NuevaVentaModal] Error tipo:', typeof uploadError);
-				console.error('[NuevaVentaModal] Error stack:', uploadError instanceof Error ? uploadError.stack : 'N/A');
-
+				console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
 				saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
 				isSaving = false;
 				return;
@@ -412,6 +414,11 @@ let codigoGenerado = $derived(
 		console.log('[NuevaVentaModal] Llamando onClose()...');
 		onClose();
 		console.log('[NuevaVentaModal] === FIN handleGuardar (exitoso) ===');
+	} catch (fatal: unknown) {
+		console.error('[NuevaVentaModal] Error inesperado:', fatal);
+		saveError = `Error inesperado: ${fatal instanceof Error ? fatal.message : String(fatal)}`;
+		isSaving = false;
+	}
 	}
 
 
@@ -424,10 +431,18 @@ let codigoGenerado = $derived(
 			<!-- Header -->
 			<div class="flex items-center justify-between p-6 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
 				<h2 class="text-xl font-bold text-slate-800">Nueva venta</h2>
-				<button on:click={onClose} aria-label="Cerrar modal" class="text-slate-400 hover:text-slate-600 transition-colors p-2 rounded-full hover:bg-slate-100">
+				<button onclick={onClose} aria-label="Cerrar modal" class="text-slate-400 hover:text-slate-600 transition-colors p-2 rounded-full hover:bg-slate-100">
 					<i class="fas fa-times text-lg"></i>
 				</button>
 			</div>
+
+			<!-- Error banner -->
+			{#if saveError}
+				<div class="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm flex items-start gap-2">
+					<i class="fas fa-exclamation-circle mt-0.5 shrink-0"></i>
+					<span>{saveError}</span>
+				</div>
+			{/if}
 
 			<!-- Body -->
 			<div class="p-6 md:p-8 overflow-y-auto max-h-[calc(100vh-200px)]">
@@ -490,7 +505,7 @@ let codigoGenerado = $derived(
 									<label class="text-xs font-semibold text-slate-600">Proforma</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
-										<input type="file" accept="application/pdf" on:change={(event) => proformaFile = event.currentTarget.files?.[0] ?? null} class="hidden" />
+										<input type="file" accept="application/pdf" onchange={(event) => proformaFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
 										{#if proformaFile}
 											<span class="text-xs text-slate-500 truncate max-w-[120px]">{proformaFile.name}</span>
 										{:else}
@@ -502,7 +517,7 @@ let codigoGenerado = $derived(
 									<label class="text-xs font-semibold text-slate-600">Contrato</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
-										<input type="file" accept="application/pdf" on:change={(event) => contratoFile = event.currentTarget.files?.[0] ?? null} class="hidden" />
+										<input type="file" accept="application/pdf" onchange={(event) => contratoFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
 										{#if contratoFile}
 											<span class="text-xs text-slate-500 truncate max-w-[120px]">{contratoFile.name}</span>
 										{:else}
@@ -644,10 +659,10 @@ let codigoGenerado = $derived(
 
 			<!-- Footer -->
 			<div class="p-6 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex justify-end gap-3">
-				<button on:click={onClose} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-slate-800 font-medium text-sm transition-colors shadow-sm">
+				<button onclick={onClose} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-slate-800 font-medium text-sm transition-colors shadow-sm">
 					Cancelar
 				</button>
-				<button on:click={() => !isSaving && handleGuardar()} disabled={isSaving} aria-busy={isSaving} class="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				<button onclick={() => !isSaving && handleGuardar()} disabled={isSaving} aria-busy={isSaving} class="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
 					{#if isSaving}
 						<i class="fas fa-spinner fa-spin"></i> Guardando...
 					{:else}

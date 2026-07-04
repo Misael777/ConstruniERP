@@ -26,6 +26,9 @@ export interface PlantillaDetalle {
     cantidad_sugerida: number | null;
     orden: number | null;
     nombre_partida: string;
+    codigo: string;
+    nivel: number;
+    id_partida_padre: number | null;
 }
 
 export interface ProyectoBasico {
@@ -52,6 +55,10 @@ export const errorMessage = writable<string | null>(null);
 export const currentAuthUserId = writable<string | null>(null);
 export const searchTerm = writable<string>('');
 
+// Drag-from-catalog state (shared across TreeView → PlantillaDetail)
+export const draggingNode = writable<PartidaNode | null>(null);
+export const draggingPos  = writable<{ x: number; y: number } | null>(null);
+
 // --- Derived: client-side filtered tree (searches codigo and descripcion) ---
 function filterTree(nodes: PartidaNode[], term: string): PartidaNode[] {
     return nodes
@@ -65,7 +72,7 @@ function filterTree(nodes: PartidaNode[], term: string): PartidaNode[] {
             }
             return null;
         })
-        .filter((n): n is PartidaNode => n !== null);
+        .filter(Boolean) as PartidaNode[];
 }
 
 export const filteredPartidasTree = derived(
@@ -173,21 +180,25 @@ export async function fetchPlantillaDetalle(id_plantilla: number) {
     try {
         const { data, error } = await getClient()
             .from('plantilla_detalle')
-            .select('id_plantilla_detalle, id_partida, cantidad_sugerida, orden, partida(descripcion)')
+            .select('id_plantilla_detalle, id_partida, cantidad_sugerida, orden, partida:id_partida(descripcion, codigo, nivel, id_partida_padre)')
             .eq('id_plantilla', id_plantilla)
             .order('orden', { ascending: true });
 
         if (error) throw error;
 
-        const detalle: PlantillaDetalle[] = (data || []).map((r: any) => ({
-            id_plantilla_detalle: r.id_plantilla_detalle,
-            id_partida: r.id_partida,
-            cantidad_sugerida: r.cantidad_sugerida,
-            orden: r.orden,
-            nombre_partida: Array.isArray(r.partida)
-                ? (r.partida[0]?.descripcion ?? '')
-                : (r.partida?.descripcion ?? ''),
-        }));
+        const detalle: PlantillaDetalle[] = (data || []).map((r: any) => {
+            const p = Array.isArray(r.partida) ? r.partida[0] : r.partida;
+            return {
+                id_plantilla_detalle: r.id_plantilla_detalle,
+                id_partida: r.id_partida,
+                cantidad_sugerida: r.cantidad_sugerida,
+                orden: r.orden,
+                nombre_partida: p?.descripcion ?? '',
+                codigo: p?.codigo ?? '',
+                nivel: p?.nivel ?? 1,
+                id_partida_padre: p?.id_partida_padre ?? null,
+            };
+        });
 
         errorMessage.set(null);
         selectedPlantillaDetalle.set(detalle);
@@ -334,6 +345,80 @@ export async function updatePartida(
         return { success: true, message: 'Partida actualizada exitosamente', data };
     } catch (err: any) {
         return { success: false, message: err.message || err.toString() };
+    }
+}
+
+// --- Plantilla-detalle helpers ---
+
+export function countDescendants(node: PartidaNode): number {
+    if (!node.children?.length) return 0;
+    return node.children.reduce((sum, c) => sum + 1 + countDescendants(c), 0);
+}
+
+function collectAll(node: PartidaNode): PartidaNode[] {
+    const out: PartidaNode[] = [node];
+    if (node.children?.length) {
+        for (const c of node.children) out.push(...collectAll(c));
+    }
+    return out;
+}
+
+export async function removePartidaFromPlantilla(
+    id_plantilla_detalle: number,
+    id_plantilla: number
+): Promise<{ success: boolean; message: string }> {
+    try {
+        const { error } = await getClient()
+            .from('plantilla_detalle')
+            .delete()
+            .eq('id_plantilla_detalle', id_plantilla_detalle);
+        if (error) throw error;
+        await fetchPlantillaDetalle(id_plantilla);
+        await fetchPlantillas();
+        return { success: true, message: 'Partida eliminada de la plantilla' };
+    } catch (err: any) {
+        return { success: false, message: err.message ?? String(err) };
+    }
+}
+
+export async function addPartidaToPlantilla(
+    id_plantilla: number,
+    node: PartidaNode
+): Promise<{ success: boolean; message: string; count: number }> {
+    try {
+        const client = getClient();
+
+        // Load current items in one query
+        const { data: currItems, error: cErr } = await client
+            .from('plantilla_detalle')
+            .select('id_partida, orden')
+            .eq('id_plantilla', id_plantilla);
+        if (cErr) throw cErr;
+
+        const maxOrden = Math.max(0, ...(currItems ?? []).map((r: any) => r.orden ?? 0));
+        const existingIds = new Set((currItems ?? []).map((r: any) => r.id_partida as number));
+
+        const nodes = collectAll(node).filter(n => !existingIds.has(n.id_partida));
+        if (!nodes.length) {
+            return { success: true, message: 'Todas las partidas ya están en la plantilla', count: 0 };
+        }
+
+        const payload = nodes.map((n, i) => ({
+            id_plantilla,
+            id_partida: n.id_partida,
+            cantidad_sugerida: 1,
+            orden: maxOrden + i + 1,
+        }));
+
+        const { error: iErr } = await client.from('plantilla_detalle').insert(payload);
+        if (iErr) throw iErr;
+
+        await fetchPlantillaDetalle(id_plantilla);
+        await fetchPlantillas();
+
+        return { success: true, message: `${nodes.length} partida(s) agregada(s)`, count: nodes.length };
+    } catch (err: any) {
+        return { success: false, message: err.message ?? String(err), count: 0 };
     }
 }
 

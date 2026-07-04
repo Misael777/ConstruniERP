@@ -11,18 +11,19 @@
  */
 
 import { env } from '$env/dynamic/public';
+import { isRunningInTauri } from './driveUploadClient';
 
 function getBaseUrl(): string {
 	if (typeof window === 'undefined') return '';
 
 	const href = window.location.href;
 
-	// Normal web origin -> use relative URLs
-	if (href.startsWith('http://') || href.startsWith('https://')) return '';
-
-	// If running under Tauri/file/app protocol, fall back to configured public API base
-	// PUBLIC_API_BASE_URL should be set to the deployed app URL (e.g. https://app.example.com)
-	if (href.startsWith('tauri://') || href.startsWith('app://') || href.startsWith('file://')) {
+	// Running under Tauri (any platform, including Windows' https://tauri.localhost)
+	// or a raw file:// origin: fall back to a configured public API base.
+	// PUBLIC_API_BASE_URL should be set to the deployed app URL (e.g. https://app.example.com).
+	// Note: production Tauri builds use adapter-static, so +server.ts endpoints don't
+	// exist at all — prefer driveUploadClient's direct upload path over this fallback.
+	if (isRunningInTauri() || href.startsWith('file://')) {
 		const baseUrl = env.PUBLIC_API_BASE_URL;
 		if (baseUrl && baseUrl.length > 0) {
 			// Ensure it does not end with a slash
@@ -32,6 +33,7 @@ function getBaseUrl(): string {
 		return '';
 	}
 
+	// Normal web origin -> use relative URLs
 	return '';
 }
 

@@ -5,22 +5,12 @@
 		onDelete?: (id: number) => void;
 	}>();
 
-	let searchTerm = '';
-	let tipoFilter = 'Todos';
-	let activeFilterColumn: string | null = null;
-	let showColumnPanel = false;
-	let visibleColumns = {
-		nombre: true,
-		tipo: true,
-		documento: true,
-		contacto: true
-	};
-	let columnFilters = {
-		nombre: 'Todos',
-		tipo: 'Todos',
-		documento: 'Todos',
-		contacto: 'Todos'
-	};
+	let searchTerm         = $state('');
+	let tipoFilter         = $state('Todos');
+	let activeFilterColumn = $state<string | null>(null);
+	let showColumnPanel    = $state(false);
+	let visibleColumns     = $state({ nombre: true, tipo: true, documento: true, contacto: true });
+	let columnFilters      = $state({ nombre: 'Todos', tipo: 'Todos', documento: 'Todos', contacto: 'Todos' });
 
 	function getTipoBadgeColor(tipo: string) {
 		if (tipo === 'J') return 'bg-blue-50 text-blue-600 border-blue-200';

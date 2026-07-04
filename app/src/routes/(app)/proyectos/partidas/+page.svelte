@@ -6,6 +6,7 @@
         filteredPartidasTree, partidasTree, partidasCount, plantillasList,
         isLoadingTree, errorMessage,
         searchTerm, currentAuthUserId,
+        draggingNode, draggingPos, countDescendants,
     } from '$lib/stores/partidas';
     import TreeView from '$lib/components/partidas/TreeView.svelte';
     import PartidaDetail from '$lib/components/partidas/PartidaDetail.svelte';
@@ -216,4 +217,19 @@
     <!-- Modals -->
     <PartidaModal isOpen={showPartidaModal} partida={editingPartida} on:close={closePartidaModal} />
     <PlantillaModal isOpen={showPlantillaModal} on:close={() => showPlantillaModal = false} />
+
+    <!-- Drag ghost: follows cursor while dragging a catalog node -->
+    {#if $draggingNode && $draggingPos}
+        {@const childCount = countDescendants($draggingNode)}
+        <div
+            class="fixed z-[9999] pointer-events-none bg-white border border-amber-400 shadow-xl rounded-lg px-3 py-2 text-xs max-w-[200px]"
+            style="left:{$draggingPos.x + 14}px; top:{$draggingPos.y - 14}px; transform:rotate(-1.5deg)"
+        >
+            <div class="font-mono text-amber-600 text-[10px] font-bold mb-0.5 truncate">{$draggingNode.codigo}</div>
+            <div class="text-slate-700 truncate font-medium">{$draggingNode.descripcion}</div>
+            {#if childCount > 0}
+                <div class="text-[10px] text-slate-400 mt-0.5">+ {childCount} partida{childCount !== 1 ? 's' : ''} hijas</div>
+            {/if}
+        </div>
+    {/if}
 </div>
