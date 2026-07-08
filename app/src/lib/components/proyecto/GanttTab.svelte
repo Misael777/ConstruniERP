@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
+	import { SvelteGantt, SvelteGanttTable, SvelteGanttDependencies } from 'svelte-gantt/svelte';
 
 	const { projectId, proyecto } = $props<{
 		projectId: number;
@@ -30,8 +31,6 @@
 		color: string | null;
 		partida?: PartidaJoin | null;   // joined from supabase select
 	};
-
-	type FlatRow = Actividad & { depth: number; hasChildren: boolean };
 
 	type PartidaItem = {
 		id_partida: number;
@@ -97,7 +96,6 @@
 	let tolerancia      = $state(0);
 	let activeSection   = $state<'gantt' | 'restricciones'>('gantt');
 
-	let collapsedIds = $state(new Set<number>());
 	let selectedId   = $state<number | null>(null);
 
 	let planBaseDate = $state<string | null>(null);
@@ -113,66 +111,26 @@
 	let buscarPartida  = $state('');
 	let partidaExpIds  = $state(new Set<number>());
 
-	// Sidebar drag state (ghost follows pointer)
-	type SidebarDrag = { partida: PartidaItem; x: number; y: number };
-	let sidebarDrag = $state<SidebarDrag | null>(null);
-
 	// Plantilla application
 	let applyingPlantId  = $state<number | null>(null);
 	let plantStartDate   = $state(new Date().toISOString().slice(0, 10));
-
-	// Row drag
-	let dragSrcId  = $state<number | null>(null);
-	let dragOverId = $state<number | null>(null);
-
-	// Bar drag (pointer events — works on touch, mouse, stylus)
-	type BarDrag = { id: number; mode: 'move' | 'resize'; startX: number; origStart: Date; origEnd: Date };
-	let barDrag    = $state<BarDrag | null>(null);
-	let barPreview = $state<{ id: number; start: Date; end: Date } | null>(null);
 
 	// Inline add
 	let showAddForm    = $state(false);
 	let addingParentId = $state<number | null>(null);
 	let newActName     = $state('');
 
-	// Dependency creation
-	let depSrcId = $state<number | null>(null);
-
 	// Restrictions form
 	let showRestrictForm = $state(false);
-	let newR = $state({ actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '' });
+	let newR = $state<{ actividad: string; responsable: string; fecha: string; tipo: string; descripcion: string; idActividad: number | null }>(
+		{ actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '', idActividad: null }
+	);
 
-	// ── CONSTANTS ──────────────────────────────────────────────────────────────
-	const DAY_PX    = 26;
-	const ROW_H     = 44;  // ≥44 px for WCAG touch target minimum
-	const HEADER_H  = 52;
-	const LABEL_W   = 280;
-	const MONTHS_ES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-	const BAR_COLORS = ['#f97316','#3b82f6','#14b8a6','#a78bfa','#f43f5e','#eab308'];
+	// svelte-gantt bound instance — gives access to `api` (tasks.on.changed/select, etc.)
+	// See https://github.com/ANovokmet/svelte-gantt
+	let ganttApi = $state<any>(null);
 
 	// ── DERIVED ────────────────────────────────────────────────────────────────
-	const flatList = $derived.by(() => {
-		const childMap = new Map<number | null, Actividad[]>();
-		for (const a of actividades) {
-			const key = a.id_actividad_padre ?? null;
-			if (!childMap.has(key)) childMap.set(key, []);
-			childMap.get(key)!.push(a);
-		}
-		for (const [, arr] of childMap) arr.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
-
-		const result: FlatRow[] = [];
-		function dfs(pid: number | null, depth: number) {
-			for (const a of childMap.get(pid) ?? []) {
-				const hasChildren = (childMap.get(a.id_cronograma_actividad)?.length ?? 0) > 0;
-				result.push({ ...a, depth, hasChildren });
-				if (hasChildren && !collapsedIds.has(a.id_cronograma_actividad))
-					dfs(a.id_cronograma_actividad, depth + 1);
-			}
-		}
-		dfs(null, 0);
-		return result;
-	});
-
 	const timelineStart = $derived.by(() => {
 		const dates = actividades.filter(a => a.fecha_inicio_plan).map(a => +new Date(a.fecha_inicio_plan!));
 		const base = dates.length ? Math.min(...dates) : +(proyecto.fecha_inicio_plan ? new Date(proyecto.fecha_inicio_plan) : new Date());
@@ -192,38 +150,6 @@
 		d.setDate(d.getDate() + 21);
 		return d;
 	});
-
-	const totalDays  = $derived(Math.ceil((+timelineEnd - +timelineStart) / 864e5));
-	const totalWidth = $derived(Math.max(totalDays * DAY_PX, 600));
-
-	const monthHeaders = $derived.by(() => {
-		const out: { label: string; left: number; width: number }[] = [];
-		let cur = new Date(timelineStart.getFullYear(), timelineStart.getMonth(), 1);
-		while (+cur < +timelineEnd) {
-			const next = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
-			const cStart = Math.max(+cur, +timelineStart);
-			const cEnd   = Math.min(+next, +timelineEnd);
-			out.push({
-				label: `${MONTHS_ES[cur.getMonth()]} ${cur.getFullYear()}`,
-				left:  (+cStart - +timelineStart) / 864e5 * DAY_PX,
-				width: (+cEnd   - +cStart)         / 864e5 * DAY_PX,
-			});
-			cur = next;
-		}
-		return out;
-	});
-
-	const weekHeaders = $derived.by(() => {
-		const out: { label: string; left: number }[] = [];
-		const d = new Date(timelineStart);
-		while (+d < +timelineEnd) {
-			out.push({ label: `S${getWeekNum(d)}`, left: (+d - +timelineStart) / 864e5 * DAY_PX });
-			d.setDate(d.getDate() + 7);
-		}
-		return out;
-	});
-
-	const todayPx = $derived(Math.max(0, (+new Date() - +timelineStart) / 864e5 * DAY_PX));
 
 	const planVsReal = $derived.by(() => {
 		const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -262,28 +188,142 @@
 		return roots;
 	});
 
+	// ── RESTRICCIONES ↔ ACTIVIDAD LINK ─────────────────────────────────────────
+	// Restricciones with id_cronograma_actividad set are tied to a specific
+	// actividad; used to flag that actividad in both the sidebar row label and
+	// its gantt bar (only "abierta"/"en_seguimiento" ones count as active).
+	const restriccionesAbiertasPorActividad = $derived.by(() => {
+		const m = new Map<number, Restriccion[]>();
+		for (const r of restricciones) {
+			if (!r.id_cronograma_actividad || r.estado === 'resuelta') continue;
+			if (!m.has(r.id_cronograma_actividad)) m.set(r.id_cronograma_actividad, []);
+			m.get(r.id_cronograma_actividad)!.push(r);
+		}
+		return m;
+	});
+
+	// ── SVELTE-GANTT ROWS / TASKS / DEPENDENCIES ──────────────────────────────
+	// One row + at most one task per actividad (id shared between the two).
+	const ganttRows = $derived.by(() => {
+		const childMap = new Map<number | null, Actividad[]>();
+		for (const a of actividades) {
+			const key = a.id_actividad_padre ?? null;
+			if (!childMap.has(key)) childMap.set(key, []);
+			childMap.get(key)!.push(a);
+		}
+		for (const [, arr] of childMap) arr.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+
+		function build(pid: number | null): any[] {
+			return (childMap.get(pid) ?? []).map(a => {
+				const tieneRestriccion = restriccionesAbiertasPorActividad.has(a.id_cronograma_actividad);
+				const nombre = a.partida?.codigo ? `${a.partida.codigo} · ${a.nombre_actividad}` : a.nombre_actividad;
+				return {
+					id: a.id_cronograma_actividad,
+					label: tieneRestriccion ? `⚠ ${nombre}` : nombre,
+					children: build(a.id_cronograma_actividad),
+					expanded: true,
+				};
+			});
+		}
+		return build(null);
+	});
+
+	const ganttTasks = $derived.by(() => {
+		const today = new Date(); today.setHours(0, 0, 0, 0);
+		return actividades
+			.filter(a => a.fecha_inicio_plan && a.fecha_fin_plan)
+			.map(a => {
+				const completada = a.porcentaje_avance_real >= 100;
+				const atrasada = !completada
+					&& new Date(a.fecha_fin_plan!) < today
+					&& a.porcentaje_avance_real < 100 - tolerancia;
+				const classes = [
+					`crono-nivel-${Math.min(a.nivel, 3)}`,
+					atrasada ? 'crono-atrasada' : '',
+					completada ? 'crono-completada' : '',
+					restriccionesAbiertasPorActividad.has(a.id_cronograma_actividad) ? 'crono-restriccion' : '',
+				].filter(Boolean);
+				return {
+					id: a.id_cronograma_actividad,
+					resourceId: a.id_cronograma_actividad,
+					from: +new Date(a.fecha_inicio_plan!),
+					to: +addDays(new Date(a.fecha_fin_plan!), 1), // exclusive end (spans through the last day)
+					label: a.nombre_actividad,
+					amountDone: showAvanceReal ? (a.porcentaje_avance_real || undefined) : undefined,
+					classes,
+				};
+			});
+	});
+
+	const ganttDependencies = $derived(
+		showDeps
+			? dependencias.map(d => ({
+					id: d.id_dependencia,
+					fromId: d.id_actividad_origen,
+					toId: d.id_actividad_destino,
+					stroke: '#94a3b8',
+					strokeWidth: 1.5,
+					arrowSize: 6,
+				}))
+			: []
+	);
+
+	const ganttTableModules = [SvelteGanttTable];
+	const ganttBodyModules  = [SvelteGanttDependencies];
+	const ganttTableHeaders = [{ title: 'Actividad', property: 'label', width: 280, type: 'tree' }];
+	const ganttHeaders = [
+		{ unit: 'month', format: 'MMMM YYYY' },
+		{ unit: 'week', format: 'WW' },
+	];
+
+	// Applies a per-actividad custom color (a.color) as an inline override on
+	// top of the nivel-based CSS classes — svelte-gantt tasks only support
+	// `classes`, not inline styles, so this fills that gap via its
+	// `taskElementHook` extension point.
+	function ganttTaskElementHook(node: HTMLElement, model: any) {
+		function apply(m: any) {
+			const id = Number(m.id);
+			const a = actividades.find(x => x.id_cronograma_actividad === id);
+			if (a?.color) node.style.setProperty('background-color', a.color, 'important');
+			else node.style.removeProperty('background-color');
+
+			const restrs = restriccionesAbiertasPorActividad.get(id);
+			node.title = restrs?.length
+				? `Restricción: ${restrs.map(r => r.descripcion || r.tipo_restriccion || 'sin detalle').join(' · ')}`
+				: '';
+		}
+		apply(model);
+		return { update: apply, destroy() {} };
+	}
+
+	// ── CREATE TASK BY CLICK-DRAG (on an empty row, i.e. an actividad with no
+	//    dates yet) ────────────────────────────────────────────────────────────
+	// The row id IS the actividad id (see ganttRows/ganttTasks), so the newly
+	// created task must reuse that same id instead of svelte-gantt's random one.
+	function ganttOnCreateTask(e: { resourceId: PropertyKey; from: number; to: number }) {
+		const a = actividades.find(x => x.id_cronograma_actividad === Number(e.resourceId));
+		return {
+			id: e.resourceId,
+			resourceId: e.resourceId,
+			from: e.from,
+			to: e.to,
+			label: a?.nombre_actividad ?? '',
+			classes: a ? [`crono-nivel-${Math.min(a.nivel, 3)}`] : [],
+		};
+	}
+
+	function ganttOnCreatedTask(task: any) {
+		const id = Number(task.model.id);
+		if (Number.isNaN(id)) return;
+		saveTaskDates(id, new Date(task.model.from), new Date(task.model.to));
+	}
+
 	// ── DATE UTILS ─────────────────────────────────────────────────────────────
-	function dateToPx(d: Date) { return (+d - +timelineStart) / 864e5 * DAY_PX; }
 	function addDays(d: Date, n: number) { return new Date(+d + n * 864e5); }
 	function fmt(d: Date)  { return d.toISOString().slice(0, 10); }
 	function fmtDisp(s: string | null) {
 		if (!s) return '—';
 		return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' });
-	}
-	function daysDiff(s: string, e: string) { return Math.ceil((+new Date(e) - +new Date(s)) / 864e5) + 1; }
-	function getWeekNum(d: Date) {
-		const j1 = new Date(d.getFullYear(), 0, 1);
-		return Math.ceil(((+d - +j1) / 864e5 + j1.getDay() + 1) / 7);
-	}
-	function barColor(a: Actividad) {
-		return a.color ?? (a.nivel === 1 ? '#f97316' : a.nivel === 2 ? '#3b82f6' : '#14b8a6');
-	}
-
-	// ── BAR DATES (live during drag) ───────────────────────────────────────────
-	function getBarDates(a: Actividad): { start: Date; end: Date } | null {
-		if (barPreview?.id === a.id_cronograma_actividad) return barPreview;
-		if (!a.fecha_inicio_plan || !a.fecha_fin_plan) return null;
-		return { start: new Date(a.fecha_inicio_plan), end: new Date(a.fecha_fin_plan) };
 	}
 
 	// ── LOAD ───────────────────────────────────────────────────────────────────
@@ -352,52 +392,61 @@
 		partidas = (cats ?? []) as PartidaItem[];
 	}
 
-	// ── SAVE DATES ─────────────────────────────────────────────────────────────
-	async function saveBarDates(id: number, start: Date, end: Date) {
-		const s = fmt(start), e = fmt(end);
-		await supabase.from('cronograma_actividad').update({ fecha_inicio_plan: s, fecha_fin_plan: e })
+	// ── SET / SAVE DATES (shared by manual inputs, svelte-gantt drag/resize,
+	//    and click-drag task creation) ─────────────────────────────────────────
+	async function setFechas(id: number, inicioStr: string, finStr: string) {
+		if (!inicioStr || !finStr) return;
+		if (new Date(finStr) < new Date(inicioStr)) return; // ignore invalid ranges
+		await supabase.from('cronograma_actividad').update({ fecha_inicio_plan: inicioStr, fecha_fin_plan: finStr })
 			.eq('id_cronograma_actividad', id);
 		actividades = actividades.map(a =>
-			a.id_cronograma_actividad === id ? { ...a, fecha_inicio_plan: s, fecha_fin_plan: e } : a
+			a.id_cronograma_actividad === id ? { ...a, fecha_inicio_plan: inicioStr, fecha_fin_plan: finStr } : a
 		);
 	}
 
-	// ── BAR DRAG (Pointer Events API — mouse + touch + stylus) ───────────────
-	function startBarDrag(e: PointerEvent, id: number, mode: 'move' | 'resize') {
-		e.preventDefault(); e.stopPropagation();
-		const a = actividades.find(x => x.id_cronograma_actividad === id);
-		if (!a) return;
-		barDrag = {
-			id, mode, startX: e.clientX,
-			origStart: new Date(a.fecha_inicio_plan ?? new Date()),
-			origEnd:   new Date(a.fecha_fin_plan   ?? new Date()),
-		};
-
-		const onMove = (ev: PointerEvent) => {
-			if (!barDrag) return;
-			const days = Math.round((ev.clientX - barDrag.startX) / DAY_PX);
-			if (barDrag.mode === 'move') {
-				barPreview = { id: barDrag.id, start: addDays(barDrag.origStart, days), end: addDays(barDrag.origEnd, days) };
-			} else {
-				const newEnd = addDays(barDrag.origEnd, days);
-				if (+newEnd > +barDrag.origStart)
-					barPreview = { id: barDrag.id, start: barDrag.origStart, end: newEnd };
-			}
-		};
-		const onUp = async () => {
-			if (barPreview) {
-				await saveBarDates(barPreview.id, barPreview.start, barPreview.end);
-				barPreview = null;
-			}
-			barDrag = null;
-			window.removeEventListener('pointermove', onMove);
-			window.removeEventListener('pointerup', onUp);
-		};
-		window.addEventListener('pointermove', onMove);
-		window.addEventListener('pointerup', onUp);
+	// svelte-gantt's `to` is exclusive (spans through midnight of the day after
+	// fecha_fin_plan — see ganttTasks below), so drag/resize/create events need
+	// to shift the end back by one day before persisting.
+	async function saveTaskDates(id: number, start: Date, endExclusive: Date) {
+		await setFechas(id, fmt(start), fmt(addDays(endExclusive, -1)));
 	}
 
-	// ── DEPENDENCY CREATION (drag from bar end) ────────────────────────────────
+	function duracionDias(inicio: string | null | undefined, fin: string | null | undefined): number {
+		if (!inicio || !fin) return 1;
+		return Math.max(1, Math.round((+new Date(fin) - +new Date(inicio)) / 864e5) + 1);
+	}
+
+	function finFromDuracion(inicioStr: string, dias: number): string {
+		return fmt(addDays(new Date(inicioStr + 'T00:00:00'), Math.max(dias, 1) - 1));
+	}
+
+	// svelte-gantt's event bus wraps handler args in a tuple; be defensive about
+	// whether we get the payload directly or wrapped in a 1-element array.
+	function unwrapGanttEvent(args: any[]): any {
+		const raw = args.length === 1 ? args[0] : args;
+		return Array.isArray(raw) ? raw[0] : raw;
+	}
+
+	$effect(() => {
+		if (!ganttApi) return;
+		const offChanged = ganttApi.tasks.on.changed((...args: any[]) => {
+			const payload = unwrapGanttEvent(args);
+			const task = payload?.task;
+			if (!task) return;
+			const id = Number(task.model.id);
+			if (Number.isNaN(id)) return;
+			saveTaskDates(id, new Date(task.model.from), new Date(task.model.to));
+		});
+		const offSelect = ganttApi.tasks.on.select((...args: any[]) => {
+			const payload = unwrapGanttEvent(args);
+			const model = payload?.model ?? payload;
+			const id = Number(model?.id);
+			selectedId = Number.isNaN(id) ? null : id;
+		});
+		return () => { offChanged?.(); offSelect?.(); };
+	});
+
+	// ── DEPENDENCY CREATION (via dropdown, replaces old drag-to-link) ─────────
 	async function createDep(srcId: number, dstId: number) {
 		if (srcId === dstId) return;
 		const exists = dependencias.some(d => d.id_actividad_origen === srcId && d.id_actividad_destino === dstId);
@@ -406,50 +455,6 @@
 			.insert({ id_actividad_origen: srcId, id_actividad_destino: dstId, tipo_dependencia: 'FS', lag_dias: 0 })
 			.select().single();
 		if (data) dependencias = [...dependencias, data as Dependencia];
-	}
-
-	// ── ROW DRAG (Pointer Events — works on touch + mouse) ────────────────────
-	// Uses elementFromPoint hit-testing instead of HTML5 DnD (which has no touch support).
-	function startRowDrag(e: PointerEvent, id: number) {
-		e.preventDefault();
-		dragSrcId = id;
-
-		const onMove = (ev: PointerEvent) => {
-			const el = document.elementFromPoint(ev.clientX, ev.clientY);
-			const rowEl = el?.closest('[data-row-id]') as HTMLElement | null;
-			dragOverId = rowEl ? Number(rowEl.dataset.rowId) : null;
-		};
-		const onUp = async () => {
-			if (dragOverId !== null && dragOverId !== dragSrcId) await commitRowDrop(dragOverId);
-			dragSrcId = null; dragOverId = null;
-			window.removeEventListener('pointermove', onMove);
-			window.removeEventListener('pointerup', onUp);
-		};
-		window.addEventListener('pointermove', onMove);
-		window.addEventListener('pointerup', onUp);
-	}
-
-	async function commitRowDrop(targetId: number) {
-		if (!dragSrcId || dragSrcId === targetId) return;
-		const si = actividades.findIndex(a => a.id_cronograma_actividad === dragSrcId);
-		const ti = actividades.findIndex(a => a.id_cronograma_actividad === targetId);
-		if (si === -1 || ti === -1) return;
-		const next = [...actividades];
-		const [moved] = next.splice(si, 1);
-		next.splice(ti, 0, moved);
-		actividades = next.map((a, i) => ({ ...a, orden: i + 1 }));
-		for (let i = 0; i < actividades.length; i++) {
-			await supabase.from('cronograma_actividad')
-				.update({ orden: i + 1 })
-				.eq('id_cronograma_actividad', actividades[i].id_cronograma_actividad);
-		}
-	}
-
-	// ── COLLAPSE ───────────────────────────────────────────────────────────────
-	function toggleCollapse(id: number) {
-		const s = new Set(collapsedIds);
-		s.has(id) ? s.delete(id) : s.add(id);
-		collapsedIds = s;
 	}
 
 	// ── ADD ACTIVITY ───────────────────────────────────────────────────────────
@@ -500,7 +505,7 @@
 		}
 	}
 
-	// ── ADD FROM PARTIDA (sidebar + or drag-drop) ──────────────────────────────
+	// ── ADD FROM PARTIDA (sidebar "+") ─────────────────────────────────────────
 	async function addFromPartida(p: PartidaItem, parentId: number | null = selectedId) {
 		const siblings = actividades.filter(a => a.id_actividad_padre === parentId);
 		const parent   = parentId ? actividades.find(a => a.id_cronograma_actividad === parentId) : null;
@@ -517,29 +522,6 @@
 		if (data) actividades = [...actividades, data as Actividad];
 		// Mirror to budget so user can set quantities/prices in Presupuesto tab
 		await syncPartidaToBudget(p.id_partida);
-	}
-
-	// ── SIDEBAR DRAG (partida → gantt) ────────────────────────────────────────
-	function startSidebarDrag(e: PointerEvent, p: PartidaItem) {
-		e.preventDefault();
-		sidebarDrag = { partida: p, x: e.clientX, y: e.clientY };
-
-		const onMove = (ev: PointerEvent) => {
-			if (sidebarDrag) sidebarDrag = { ...sidebarDrag, x: ev.clientX, y: ev.clientY };
-		};
-		const onUp = async (ev: PointerEvent) => {
-			if (sidebarDrag) {
-				const el = document.elementFromPoint(ev.clientX, ev.clientY);
-				const rowEl = el?.closest('[data-row-id]') as HTMLElement | null;
-				const parentId = rowEl ? Number(rowEl.dataset.rowId) : null;
-				await addFromPartida(sidebarDrag.partida, parentId);
-			}
-			sidebarDrag = null;
-			window.removeEventListener('pointermove', onMove);
-			window.removeEventListener('pointerup', onUp);
-		};
-		window.addEventListener('pointermove', onMove);
-		window.addEventListener('pointerup', onUp);
 	}
 
 	// ── APPLY PLANTILLA ────────────────────────────────────────────────────────
@@ -597,6 +579,7 @@
 		}
 		await supabase.from('cronograma_actividad').delete().in('id_cronograma_actividad', [...ids]);
 		actividades = actividades.filter(a => !ids.has(a.id_cronograma_actividad));
+		if (selectedId && ids.has(selectedId)) selectedId = null;
 	}
 
 	// ── PLAN BASE ──────────────────────────────────────────────────────────────
@@ -633,11 +616,18 @@
 			fecha_maxima: newR.fecha,
 			tipo_restriccion: newR.tipo || null,
 			descripcion: newR.descripcion || null,
+			id_cronograma_actividad: newR.idActividad,
 			estado: 'abierta',
 		}).select().single();
 		if (data) restricciones = [data as Restriccion, ...restricciones];
-		newR = { actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '' };
+		newR = { actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '', idActividad: null };
 		showRestrictForm = false;
+	}
+
+	// Jump to the gantt and select the actividad linked to a restricción
+	function verEnGantt(id: number) {
+		activeSection = 'gantt';
+		selectedId = id;
 	}
 
 	async function setEstado(id: number, estado: string) {
@@ -648,22 +638,6 @@
 	async function deleteRestricion(id: number) {
 		await supabase.from('restriccion').delete().eq('id_restriccion', id);
 		restricciones = restricciones.filter(r => r.id_restriccion !== id);
-	}
-
-	// ── DEPENDENCY SVG PATHS ──────────────────────────────────────────────────
-	function depPath(dep: Dependencia): string | null {
-		const si = flatList.findIndex(r => r.id_cronograma_actividad === dep.id_actividad_origen);
-		const di = flatList.findIndex(r => r.id_cronograma_actividad === dep.id_actividad_destino);
-		if (si === -1 || di === -1) return null;
-		const srcDates = getBarDates(flatList[si]);
-		const dstDates = getBarDates(flatList[di]);
-		if (!srcDates || !dstDates) return null;
-		const x1 = dateToPx(srcDates.end);
-		const y1 = si * ROW_H + ROW_H / 2;
-		const x2 = dateToPx(dstDates.start);
-		const y2 = di * ROW_H + ROW_H / 2;
-		const mx = Math.max(x1 + 12, x2 - 12);
-		return `M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}`;
 	}
 
 	// ── HELPERS ────────────────────────────────────────────────────────────────
@@ -740,6 +714,92 @@
 					{/each}
 				</select>
 			</div>
+
+			<!-- Activity picker: lets you select an activity even if it has no
+			     dates yet (and so no bar to click on in the gantt) -->
+			<div class="flex items-center gap-1 ml-1">
+				<span class="text-slate-400">Actividad:</span>
+				<select
+					class="border border-slate-200 rounded px-1.5 py-1 bg-white text-slate-700 font-medium max-w-[180px]"
+					value={selectedId ?? ''}
+					onchange={(e) => { const v = (e.target as HTMLSelectElement).value; selectedId = v ? Number(v) : null; }}
+				>
+					<option value="">Seleccionar…</option>
+					{#each actividades as a}
+						<option value={a.id_cronograma_actividad}>{'—'.repeat(Math.max(a.nivel - 1, 0))} {a.nombre_actividad}</option>
+					{/each}
+				</select>
+			</div>
+
+			<!-- Selected activity actions + manual date/duration editing -->
+			{#if selectedId}
+				{@const selAct = actividades.find(a => a.id_cronograma_actividad === selectedId)}
+				<div class="flex items-center gap-1.5 ml-1 px-2 py-1 bg-white border border-slate-200 rounded-lg flex-wrap">
+					<button
+						class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-blue-500 hover:bg-blue-50"
+						title="Agregar sub-actividad"
+						onclick={() => { addingParentId = selectedId; showAddForm = true; }}
+					><i class="fas fa-plus text-[9px]"></i></button>
+					<button
+						class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50"
+						title="Eliminar"
+						onclick={() => selectedId && deleteActividad(selectedId)}
+					><i class="fas fa-trash-alt text-[9px]"></i></button>
+
+					<span class="text-slate-300">|</span>
+
+					<!-- Manual fecha inicio/fin + duración — same setFechas() path the gantt drag/resize/create use -->
+					<span class="text-slate-400">Inicio:</span>
+					<input
+						type="date"
+						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+						value={selAct?.fecha_inicio_plan ?? ''}
+						onchange={(e) => {
+							const v = (e.target as HTMLInputElement).value;
+							if (selectedId && v) setFechas(selectedId, v, selAct?.fecha_fin_plan && selAct.fecha_fin_plan >= v ? selAct.fecha_fin_plan : v);
+						}}
+					/>
+					<span class="text-slate-400">Fin:</span>
+					<input
+						type="date"
+						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+						value={selAct?.fecha_fin_plan ?? ''}
+						onchange={(e) => {
+							const v = (e.target as HTMLInputElement).value;
+							if (selectedId && v) setFechas(selectedId, selAct?.fecha_inicio_plan && selAct.fecha_inicio_plan <= v ? selAct.fecha_inicio_plan : v, v);
+						}}
+					/>
+					<span class="text-slate-400">Duración (d):</span>
+					<input
+						type="number"
+						min="1"
+						class="w-14 border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+						value={duracionDias(selAct?.fecha_inicio_plan, selAct?.fecha_fin_plan)}
+						onchange={(e) => {
+							const dias = Number((e.target as HTMLInputElement).value);
+							const inicio = selAct?.fecha_inicio_plan ?? fmt(new Date());
+							if (selectedId && dias > 0) setFechas(selectedId, inicio, finFromDuracion(inicio, dias));
+						}}
+					/>
+
+					<span class="text-slate-300">|</span>
+
+					<select
+						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+						onchange={(e) => {
+							const v = Number((e.target as HTMLSelectElement).value);
+							if (v && selectedId) createDep(v, selectedId);
+							(e.target as HTMLSelectElement).value = '';
+						}}
+					>
+						<option value="">Depende de…</option>
+						{#each actividades.filter(a => a.id_cronograma_actividad !== selectedId) as a}
+							<option value={a.id_cronograma_actividad}>{a.nombre_actividad}</option>
+						{/each}
+					</select>
+					<button class="text-slate-300 hover:text-slate-500" onclick={() => selectedId = null}><i class="fas fa-times text-[10px]"></i></button>
+				</div>
+			{/if}
 
 			<div class="flex-1"></div>
 
@@ -859,7 +919,8 @@
 					{/if}
 				</div>
 				<div class="px-2 py-2 border-t border-slate-100 text-[10px] text-slate-400 text-center">
-					Arrastra o presiona <strong>+</strong> para agregar al cronograma
+					Presiona <strong>+</strong> para agregar al cronograma
+					{#if selectedId}(como sub-actividad de la seleccionada){/if}
 				</div>
 
 			{:else}
@@ -922,7 +983,7 @@
 			</div>
 		{/if}
 
-		<!-- ════ GANTT MAIN AREA ═══════════════════════════════════════════════ -->
+		<!-- ════ GANTT MAIN AREA (svelte-gantt) ═══════════════════════════════ -->
 		<div class="flex-1 flex flex-col min-w-0 min-h-0">
 
 		{#if actividades.length === 0 && !showAddForm}
@@ -932,7 +993,7 @@
 				</div>
 				<h4 class="font-bold text-slate-700 mb-1">Sin actividades aún</h4>
 				<p class="text-slate-400 text-sm mb-4">
-					Arrastra partidas desde el panel izquierdo o agrega actividades manualmente
+					Agrega partidas desde el panel izquierdo o crea actividades manualmente
 				</p>
 				<button
 					class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-semibold transition-colors"
@@ -940,299 +1001,64 @@
 				><i class="fas fa-plus mr-2"></i>Agregar primera actividad</button>
 			</div>
 		{:else}
-			<!-- Gantt scrollable area: touch-action pan-x pan-y lets the user scroll
-			     freely; individual drag targets (bars, drag handles) override with none -->
-			<div class="flex-1 overflow-auto" style="max-height:calc(100vh - 280px);touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch">
-				<div style="min-width:{LABEL_W + totalWidth}px">
-
-					<!-- ── HEADER (sticky top) ──────────────────────────────── -->
-					<div class="flex sticky top-0 z-30 bg-white border-b border-slate-200 select-none" style="height:{HEADER_H}px">
-						<!-- Label header -->
-						<div
-							class="sticky left-0 z-40 bg-slate-50 border-r border-slate-200 flex items-end px-3 pb-1"
-							style="width:{LABEL_W}px;flex-shrink:0;height:{HEADER_H}px"
-						>
-							<span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Actividad</span>
-						</div>
-						<!-- Timeline header -->
-						<div class="relative flex-1" style="width:{totalWidth}px;height:{HEADER_H}px">
-							<!-- Month row -->
-							<div class="absolute top-0 left-0 right-0 h-6 border-b border-slate-100">
-								{#each monthHeaders as mh}
-									<div
-										class="absolute top-0 h-6 flex items-center pl-2 text-[10px] font-bold text-slate-500 border-r border-slate-200 overflow-hidden"
-										style="left:{mh.left}px;width:{mh.width}px"
-									>{mh.label}</div>
-								{/each}
-							</div>
-							<!-- Week row -->
-							<div class="absolute bottom-0 left-0 right-0 h-6">
-								{#each weekHeaders as wh}
-									<div
-										class="absolute top-0 h-6 flex items-center pl-1.5 text-[9px] text-slate-400 border-r border-slate-100 overflow-hidden"
-										style="left:{wh.left}px;width:{7 * DAY_PX}px"
-									>{wh.label}</div>
-								{/each}
-							</div>
-							<!-- Today marker header -->
-							<div
-								class="absolute top-0 bottom-0 w-px bg-orange-400 z-10"
-								style="left:{todayPx}px"
-							></div>
-						</div>
-					</div>
-
-					<!-- ── ROWS ────────────────────────────────────────────── -->
-					<div class="relative">
-						<!-- SVG dependency overlay -->
-						{#if showDeps && dependencias.length > 0}
-							<svg
-								class="absolute pointer-events-none z-20"
-								style="left:{LABEL_W}px;top:0;width:{totalWidth}px;height:{flatList.length * ROW_H}px;overflow:visible"
-							>
-								<defs>
-									<marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-										<path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8" />
-									</marker>
-									<marker id="arr-hl" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-										<path d="M0,0 L6,3 L0,6 Z" fill="#f97316" />
-									</marker>
-								</defs>
-								{#each dependencias as dep}
-									{@const path = depPath(dep)}
-									{#if path}
-										{@const isSelected = selectedId === dep.id_actividad_origen || selectedId === dep.id_actividad_destino}
-										<path
-											d={path}
-											fill="none"
-											stroke={isSelected ? '#f97316' : '#94a3b8'}
-											stroke-width={isSelected ? 2 : 1.5}
-											stroke-dasharray="5 3"
-											marker-end={isSelected ? 'url(#arr-hl)' : 'url(#arr)'}
-											opacity={isSelected ? 1 : 0.6}
-										/>
-									{/if}
-								{/each}
-							</svg>
-						{/if}
-
-						{#each flatList as row, ri (row.id_cronograma_actividad)}
-							{@const barDates = getBarDates(row)}
-							{@const pbDates  = (row.plan_base_inicio && row.plan_base_fin) ? { start: new Date(row.plan_base_inicio), end: new Date(row.plan_base_fin) } : null}
-							{@const realDates= (showAvanceReal && row.fecha_inicio_real && row.fecha_fin_real) ? { start: new Date(row.fecha_inicio_real), end: new Date(row.fecha_fin_real) } : null}
-							{@const bc = barColor(row)}
-							{@const isSelected = selectedId === row.id_cronograma_actividad}
-
-							<!-- data-row-id is used by startRowDrag's elementFromPoint hit-test -->
-							<div
-								class="flex border-b transition-colors {isSelected ? 'bg-orange-50/50' : 'hover:bg-slate-50/70'} {dragOverId === row.id_cronograma_actividad ? 'bg-blue-50' : ''}"
-								style="height:{ROW_H}px"
-								data-row-id={row.id_cronograma_actividad}
-								role="row"
-								tabindex="0"
-							>
-								<!-- ── LABEL CELL ──────────────────────────── -->
-								<div
-									class="group sticky left-0 z-10 flex items-center gap-1 border-r border-slate-100 px-1 select-none"
-									style="width:{LABEL_W}px;flex-shrink:0;padding-left:{4 + row.depth * 14}px;background:inherit"
-									onclick={() => selectedId = isSelected ? null : row.id_cronograma_actividad}
-									role="gridcell"
-									tabindex="0"
-								>
-									<!-- Drag handle: pointer events for cross-platform touch+mouse support -->
-									<div
-										class="cursor-grab text-slate-400 hover:text-slate-600 px-0.5 text-[13px] shrink-0 select-none"
-										onpointerdown={(e) => startRowDrag(e, row.id_cronograma_actividad)}
-										style="touch-action: none;"
-										role="button"
-										tabindex="0"
-										aria-label="Arrastrar para reordenar"
-									>⣿</div>
-
-									<!-- Collapse toggle -->
-									{#if row.hasChildren}
-										<button
-											class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600 shrink-0"
-											onclick={(e) => { e.stopPropagation(); toggleCollapse(row.id_cronograma_actividad); }}
-										>
-											<i class="fas fa-chevron-{collapsedIds.has(row.id_cronograma_actividad) ? 'right' : 'down'} text-[8px]"></i>
-										</button>
-									{:else}
-										<div class="w-4 shrink-0"></div>
-									{/if}
-
-									<!-- Color dot -->
-									<div class="w-2 h-2 rounded-full shrink-0" style="background:{bc}"></div>
-
-									<!-- Name + partida code chip -->
-									<div class="flex-1 min-w-0">
-										{#if row.partida?.codigo}
-											<div class="text-[9px] text-orange-500 font-mono font-bold leading-none mb-0.5 truncate">{row.partida.codigo}{row.partida.unidad ? ` · ${row.partida.unidad}` : ''}</div>
-										{/if}
-										<span
-											class="text-xs truncate block"
-											class:font-bold={row.nivel <= 2}
-											class:text-slate-800={row.nivel === 1}
-											class:text-slate-700={row.nivel === 2}
-											class:text-slate-600={row.nivel > 2}
-										>{row.nombre_actividad}</span>
-									</div>
-
-									<!-- Row actions: visible on hover (desktop) or when selected (touch) -->
-									<div class="flex gap-0.5 {isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity shrink-0">
-										<button
-											class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-blue-500 hover:bg-blue-50 text-[9px]"
-											title="Agregar sub-actividad"
-											onclick={(e) => { e.stopPropagation(); addingParentId = row.id_cronograma_actividad; showAddForm = true; }}
-										><i class="fas fa-plus"></i></button>
-										<button
-											class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 text-[9px]"
-											title="Eliminar"
-											onclick={(e) => { e.stopPropagation(); deleteActividad(row.id_cronograma_actividad); }}
-										><i class="fas fa-trash-alt"></i></button>
-									</div>
-								</div>
-
-								<!-- ── TIMELINE CELL ────────────────────────── -->
-								<div class="relative flex-1" style="width:{totalWidth}px;height:{ROW_H}px">
-									<!-- Alternating row bg -->
-									{#if ri % 2 === 0}
-										<div class="absolute inset-0 bg-slate-50/30 pointer-events-none"></div>
-									{/if}
-
-									<!-- Week grid lines -->
-									{#each weekHeaders as wh}
-										<div class="absolute top-0 bottom-0 w-px bg-slate-100/60" style="left:{wh.left}px"></div>
-									{/each}
-
-									<!-- Today marker -->
-									<div class="absolute top-0 bottom-0 w-px bg-orange-400/60 z-10" style="left:{todayPx}px"></div>
-
-									{#if barDates}
-										{@const left  = dateToPx(barDates.start)}
-										{@const width = Math.max(dateToPx(barDates.end) - left + DAY_PX, 8)}
-										{@const barTop = (ROW_H - (row.nivel === 1 ? 22 : 18)) / 2}
-										{@const barH   = row.nivel === 1 ? 22 : 18}
-
-										<!-- Plan base ghost bar -->
-										{#if pbDates}
-											{@const pl = dateToPx(pbDates.start)}
-											{@const pw = Math.max(dateToPx(pbDates.end) - pl + DAY_PX, 4)}
-											<div
-												class="absolute rounded pointer-events-none"
-												style="left:{pl}px;width:{pw}px;top:{barTop + 2}px;height:{barH - 4}px;background:{bc};opacity:0.18;border:1px dashed {bc}"
-											></div>
-										{/if}
-
-										<!-- Real bar -->
-										{#if realDates}
-											{@const rl = dateToPx(realDates.start)}
-											{@const rw = Math.max(dateToPx(realDates.end) - rl + DAY_PX, 4)}
-											<div
-												class="absolute rounded pointer-events-none"
-												style="left:{rl}px;width:{rw}px;top:{barTop + barH - 5}px;height:4px;background:#1d4ed8;opacity:0.7"
-											></div>
-										{/if}
-
-										<!-- Main plan bar: touch-action none so pointer events reach us -->
-										<div
-											class="absolute rounded overflow-hidden select-none cursor-move group/bar shadow-sm"
-											style="left:{left}px;width:{width}px;top:{barTop}px;height:{barH}px;background:{bc};opacity:{barDrag?.id === row.id_cronograma_actividad ? 0.6 : 0.85};touch-action:none"
-											onpointerdown={(e) => startBarDrag(e, row.id_cronograma_actividad, 'move')}
-										>
-											<!-- Avance overlay -->
-											{#if row.porcentaje_avance_real > 0}
-												<div
-													class="absolute inset-y-0 left-0 pointer-events-none"
-													style="width:{Math.min(row.porcentaje_avance_real, 100)}%;background:rgba(0,0,0,0.22)"
-												></div>
-											{/if}
-
-											<!-- Bar label -->
-											{#if width > 50}
-												<span class="absolute inset-0 flex items-center px-1.5 text-[9px] font-bold text-white pointer-events-none overflow-hidden whitespace-nowrap">
-													{row.fecha_inicio_plan && row.fecha_fin_plan ? daysDiff(row.fecha_inicio_plan, row.fecha_fin_plan) + 'd' : ''}
-													{row.porcentaje_avance_real > 0 ? ` · ${row.porcentaje_avance_real}%` : ''}
-												</span>
-											{/if}
-
-											<!-- Resize handle: wider on touch (12px instead of 8px) -->
-											<div
-												class="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize hover:bg-black/20"
-												style="touch-action:none"
-												onpointerdown={(e) => { e.stopPropagation(); startBarDrag(e, row.id_cronograma_actividad, 'resize'); }}
-											></div>
-
-											<!-- Dependency connect point: tap to select row first, then drag dot -->
-											{#if isSelected}
-												<div
-													class="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-orange-500 border-2 border-white cursor-crosshair z-20 shadow flex items-center justify-center"
-													title="Arrastrar para crear dependencia"
-													style="touch-action:none"
-													onpointerdown={(e) => { e.stopPropagation(); e.preventDefault(); depSrcId = row.id_cronograma_actividad; }}
-												>
-													<i class="fas fa-link text-white text-[8px] pointer-events-none"></i>
-												</div>
-											{/if}
-										</div>
-									{:else}
-										<!-- No dates: show empty placeholder line -->
-										<div
-											class="absolute rounded border-2 border-dashed border-slate-200 cursor-pointer hover:border-orange-300 transition-colors"
-											style="left:4px;right:4px;top:{(ROW_H - 14) / 2}px;height:14px"
-											title="Haz clic para asignar fechas"
-										></div>
-									{/if}
-
-									<!-- Dep destination drop target when depSrcId is active -->
-									{#if depSrcId && depSrcId !== row.id_cronograma_actividad}
-										<div
-											class="absolute inset-0 z-30 cursor-crosshair"
-											onpointerup={() => { if (depSrcId) { createDep(depSrcId, row.id_cronograma_actividad); depSrcId = null; } }}
-										></div>
-									{/if}
-								</div>
-							</div>
-						{/each}
-
-						<!-- Clear dep src on background mouseup -->
-						{#if depSrcId}
-							<div
-								class="fixed inset-0 z-40 cursor-crosshair"
-								onpointerup={() => depSrcId = null}
-								role="presentation"
-							></div>
-						{/if}
-					</div>
-				</div>
+			<div class="flex-1 min-h-0" style="max-height:calc(100vh - 280px)">
+				<SvelteGantt
+					bind:api={ganttApi}
+					rows={ganttRows}
+					tasks={ganttTasks}
+					dependencies={ganttDependencies}
+					from={+timelineStart}
+					to={+timelineEnd}
+					fitWidth={false}
+					minWidth={800}
+					rowHeight={44}
+					rowPadding={6}
+					columnUnit="day"
+					columnOffset={1}
+					magnetUnit="day"
+					magnetOffset={1}
+					headers={ganttHeaders}
+					tableHeaders={ganttTableHeaders}
+					tableWidth={280}
+					ganttTableModules={ganttTableModules}
+					ganttBodyModules={ganttBodyModules}
+					taskElementHook={ganttTaskElementHook}
+					enableCreateTask={true}
+					onCreateTask={ganttOnCreateTask}
+					onCreatedTask={ganttOnCreatedTask}
+				/>
 			</div>
+			<p class="px-4 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
+				<i class="fas fa-info-circle mr-1"></i>
+				Actividades sin fecha aparecen sin barra — arrastra sobre su fila para crear una, o usa "Seleccionar actividad" arriba para poner las fechas manualmente.
+			</p>
+		{/if}
 
-			<!-- ── ADD FORM ────────────────────────────────────────────────── -->
-			{#if showAddForm}
-				<div class="px-4 py-3 bg-orange-50 border-t border-orange-100 flex items-center gap-2">
-					<div class="w-2 h-2 rounded-full bg-orange-400 shrink-0"></div>
-					<input
-						class="flex-1 px-3 py-1.5 rounded-lg border border-orange-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-						placeholder={addingParentId ? 'Nombre de la sub-actividad…' : 'Nombre de la actividad raíz…'}
-						bind:value={newActName}
-						onkeydown={(e) => { if (e.key === 'Enter') addActivity(); if (e.key === 'Escape') { showAddForm = false; newActName = ''; } }}
-						autofocus
-					/>
-					<button
-						class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold transition-colors"
-						onclick={addActivity}
-					>Agregar</button>
-					<button
-						class="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors"
-						onclick={() => { showAddForm = false; newActName = ''; addingParentId = null; }}
-					>Cancelar</button>
-					{#if addingParentId}
-						<span class="text-xs text-slate-400">
-							sub-actividad de: <strong>{actividades.find(a => a.id_cronograma_actividad === addingParentId)?.nombre_actividad ?? ''}</strong>
-						</span>
-					{/if}
-				</div>
-			{/if}
+		<!-- ── ADD FORM ────────────────────────────────────────────────── -->
+		{#if showAddForm}
+			<div class="px-4 py-3 bg-orange-50 border-t border-orange-100 flex items-center gap-2">
+				<div class="w-2 h-2 rounded-full bg-orange-400 shrink-0"></div>
+				<input
+					class="flex-1 px-3 py-1.5 rounded-lg border border-orange-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+					placeholder={addingParentId ? 'Nombre de la sub-actividad…' : 'Nombre de la actividad raíz…'}
+					bind:value={newActName}
+					onkeydown={(e) => { if (e.key === 'Enter') addActivity(); if (e.key === 'Escape') { showAddForm = false; newActName = ''; } }}
+					autofocus
+				/>
+				<button
+					class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold transition-colors"
+					onclick={addActivity}
+				>Agregar</button>
+				<button
+					class="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors"
+					onclick={() => { showAddForm = false; newActName = ''; addingParentId = null; }}
+				>Cancelar</button>
+				{#if addingParentId}
+					<span class="text-xs text-slate-400">
+						sub-actividad de: <strong>{actividades.find(a => a.id_cronograma_actividad === addingParentId)?.nombre_actividad ?? ''}</strong>
+					</span>
+				{/if}
+			</div>
 		{/if}
 
 		</div><!-- /gantt main area -->
@@ -1245,6 +1071,25 @@
 			<div class="mx-4 mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
 				<h4 class="font-bold text-slate-700 text-sm mb-3"><i class="fas fa-plus-circle mr-1 text-orange-500"></i>Nueva Restricción</h4>
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+					<div class="sm:col-span-2">
+						<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Vincular a actividad del cronograma (opcional)</label>
+						<select
+							class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-300"
+							value={newR.idActividad ?? ''}
+							onchange={(e) => {
+								const v = (e.target as HTMLSelectElement).value;
+								newR.idActividad = v ? Number(v) : null;
+								const a = actividades.find(x => x.id_cronograma_actividad === newR.idActividad);
+								if (a) newR.actividad = a.nombre_actividad;
+							}}
+						>
+							<option value="">— Sin vincular (solo texto libre) —</option>
+							{#each actividades as a}
+								<option value={a.id_cronograma_actividad}>{'—'.repeat(Math.max(a.nivel - 1, 0))} {a.nombre_actividad}</option>
+							{/each}
+						</select>
+						<p class="text-[10px] text-slate-400 mt-1">Al vincularla aparecerá con ⚠ en el cronograma, sobre la barra de esa actividad.</p>
+					</div>
 					<div class="sm:col-span-2">
 						<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Actividad relacionada *</label>
 						<input class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" placeholder="Ej. Excavación — Cimiento Corrido" bind:value={newR.actividad} />
@@ -1277,7 +1122,7 @@
 				</div>
 				<div class="flex gap-2 mt-3">
 					<button class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold transition-colors" onclick={addRestriction}>Guardar</button>
-					<button class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors" onclick={() => { showRestrictForm = false; newR = { actividad:'',responsable:'',fecha:'',tipo:'',descripcion:'' }; }}>Cancelar</button>
+					<button class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors" onclick={() => { showRestrictForm = false; newR = { actividad:'',responsable:'',fecha:'',tipo:'',descripcion:'',idActividad:null }; }}>Cancelar</button>
 				</div>
 			</div>
 		{/if}
@@ -1313,6 +1158,12 @@
 										<div class="font-semibold text-slate-700 truncate">{r.actividad_relacionada}</div>
 										{#if r.descripcion}
 											<div class="text-slate-400 text-[10px] truncate mt-0.5">{r.descripcion}</div>
+										{/if}
+										{#if r.id_cronograma_actividad}
+											<button
+												class="mt-1 inline-flex items-center gap-1 text-[10px] text-orange-600 hover:text-orange-700 font-semibold"
+												onclick={() => verEnGantt(r.id_cronograma_actividad!)}
+											><i class="fas fa-chart-gantt text-[9px]"></i> Ver en cronograma</button>
 										{/if}
 									</td>
 									<td class="px-3 py-2">
@@ -1358,17 +1209,6 @@
 			{/if}
 		</div>
 	{/if}
-
-	<!-- ── SIDEBAR DRAG GHOST (follows pointer) ───────────────────────────── -->
-	{#if sidebarDrag}
-		<div
-			class="fixed z-50 pointer-events-none px-3 py-1.5 bg-slate-800 text-white text-xs rounded-lg shadow-xl flex items-center gap-2 max-w-[200px]"
-			style="left:{sidebarDrag.x + 12}px;top:{sidebarDrag.y - 16}px"
-		>
-			<i class="fas fa-grip-vertical text-slate-400 text-[10px]"></i>
-			<span class="truncate">{sidebarDrag.partida.descripcion}</span>
-		</div>
-	{/if}
 </div>
 
 <!-- ── PARTIDA NODE SNIPPET (recursive tree) ─────────────────────────────── -->
@@ -1377,10 +1217,8 @@
 	{@const expanded = partidaExpIds.has(node.id_partida)}
 	{@const alreadyInGantt = actividades.some(a => a.id_partida === node.id_partida)}
 	<div
-		class="flex items-center gap-1 border-b border-slate-100 hover:bg-white cursor-pointer group/pn select-none"
+		class="flex items-center gap-1 border-b border-slate-100 hover:bg-white group/pn select-none"
 		style="padding-left:{8 + depth * 10}px;padding-right:4px;min-height:32px"
-		onpointerdown={(e) => { if (!hasKids) startSidebarDrag(e, node); }}
-		style:touch-action={hasKids ? 'auto' : 'none'}
 		role="treeitem"
 		tabindex="0"
 	>
@@ -1388,13 +1226,10 @@
 		{#if hasKids}
 			<button
 				class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700 shrink-0"
-				onpointerdown={(e) => { e.stopPropagation(); togglePartidaExp(node.id_partida); }}
-				onclick={(e) => e.stopPropagation()}
+				onclick={() => togglePartidaExp(node.id_partida)}
 			><i class="fas fa-chevron-{expanded ? 'down' : 'right'} text-[8px]"></i></button>
 		{:else}
-			<div class="w-4 shrink-0 flex items-center justify-center">
-				<i class="fas fa-grip-vertical text-slate-200 text-[8px]"></i>
-			</div>
+			<div class="w-4 shrink-0"></div>
 		{/if}
 
 		<!-- Content -->
@@ -1408,14 +1243,14 @@
 			{/if}
 		</div>
 
-		<!-- Add button (non-drag alternative, touch-friendly) -->
+		<!-- Add button -->
 		{#if !hasKids}
 			<button
 				class="w-6 h-6 rounded flex items-center justify-center text-slate-300
 					{alreadyInGantt ? 'text-emerald-400 hover:text-emerald-600' : 'hover:text-orange-500 hover:bg-orange-50'}
 					opacity-0 group-hover/pn:opacity-100 transition-opacity shrink-0"
 				title={alreadyInGantt ? 'Ya está en el cronograma — agregar otra instancia' : 'Agregar al cronograma'}
-				onclick={(e) => { e.stopPropagation(); addFromPartida(node); }}
+				onclick={() => addFromPartida(node)}
 			>
 				<i class="fas {alreadyInGantt ? 'fa-plus-circle' : 'fa-plus'} text-[10px]"></i>
 			</button>
@@ -1429,3 +1264,34 @@
 		{/each}
 	{/if}
 {/snippet}
+
+<style>
+	:global(.crono-nivel-1) { background: #f97316; color: #fff; }
+	:global(.crono-nivel-2) { background: #3b82f6; color: #fff; }
+	:global(.crono-nivel-3) { background: #14b8a6; color: #fff; }
+	:global(.crono-atrasada) { background: #e11d48 !important; }
+	:global(.crono-completada) { opacity: 0.55; }
+
+	/* Restricción vinculada: dashed amber outline + a small ⚠ badge in the
+	   top-right corner of the bar (Task.svelte's .sg-task is position:absolute
+	   with overflow visible, so the badge sits just outside the bar). */
+	:global(.crono-restriccion) {
+		outline: 2px dashed #d97706;
+		outline-offset: 2px;
+	}
+	:global(.crono-restriccion::after) {
+		content: '⚠';
+		position: absolute;
+		top: -8px;
+		right: -8px;
+		width: 15px;
+		height: 15px;
+		border-radius: 50%;
+		background: #d97706;
+		color: #fff;
+		font-size: 9px;
+		line-height: 15px;
+		text-align: center;
+		z-index: 5;
+	}
+</style>
