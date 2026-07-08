@@ -4,35 +4,56 @@
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
-	import { createCobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { createCobro, updateCobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import type { Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	let {
 		open = false,
 		idCuentaCobrar,
+		cobro = null,
 		onClose,
-		onSaved
+		onSaved,
+		onTransaccionSugerida
 	}: {
 		open: boolean;
 		idCuentaCobrar: number | null;
+		/** Si viene un cobro, el modal edita esa cuota en vez de crear una nueva. */
+		cobro?: Cobro | null;
 		onClose: () => void;
 		onSaved: () => void;
+		/** Se llama cuando una cuota recién pasa a 'cobrado' y hay un payload de transacción sugerido
+		 * para completar — ver updateCobro en cuentasCobrar.service.ts. */
+		onTransaccionSugerida?: (payload: Record<string, unknown>) => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
+	const mode = $derived(cobro ? 'edit' : 'create');
+	const title = $derived(cobro ? 'Editar Cuota Programada' : 'Registrar Cobro');
+
+	const ESTADO_OPCIONES: { value: 'programado' | 'cobrado' | 'cancelado'; label: string }[] = [
+		{ value: 'programado', label: 'Programado' },
+		{ value: 'cobrado', label: 'Cobrado' },
+		{ value: 'cancelado', label: 'Cancelado' }
+	];
 
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
-		for (const field of formFields) values[field.key] = '';
+		for (const field of formFields) {
+			const raw = cobro ? (cobro as any)[field.key] : '';
+			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
+		}
 		return values;
 	}
 
 	let formValues = $state<Record<string, string>>(buildInitialValues());
+	let estadoCobro = $state<'programado' | 'cobrado' | 'cancelado'>(cobro?.estado_cobro ?? 'programado');
 	let fieldErrors = $state<Record<string, string>>({});
 	let submitting = $state(false);
 
 	$effect(() => {
 		if (open) {
 			formValues = buildInitialValues();
+			estadoCobro = cobro?.estado_cobro ?? 'programado';
 			fieldErrors = {};
 		}
 	});
@@ -53,19 +74,26 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		revalidate();
-		if (hasErrors || !idCuentaCobrar) return;
+		if (hasErrors) return;
+		if (mode === 'create' && !idCuentaCobrar) return;
 
 		submitting = true;
 		try {
-			const { data: userData } = await supabase.auth.getUser();
-			const result = await createCobro(supabase, idCuentaCobrar, formValues, userData?.user?.email ?? null);
+			let result;
+			if (mode === 'edit' && cobro) {
+				result = await updateCobro(supabase, cobro.id_cobro, formValues, estadoCobro);
+			} else {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await createCobro(supabase, idCuentaCobrar as number, formValues, userData?.user?.email ?? null);
+			}
 
 			if (result.success) {
-				toast.success(result.message ?? 'Cobro registrado con éxito');
+				toast.success(result.message ?? 'Guardado con éxito');
 				onSaved();
 				onClose();
+				if (result.transaccionSugerida) onTransaccionSugerida?.(result.transaccionSugerida);
 			} else {
-				toast.error(result.message ?? 'Ocurrió un error al registrar el cobro');
+				toast.error(result.message ?? 'Ocurrió un error al guardar');
 				if (result.errors) fieldErrors = { ...fieldErrors, ...result.errors };
 			}
 		} catch (err: any) {
@@ -80,7 +108,7 @@
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
-				<h2 class="text-lg font-semibold text-[#0f3b5e]">Registrar Cobro</h2>
+				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
 				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
 					<X size={20} />
 				</button>
@@ -88,6 +116,25 @@
 
 			<form onsubmit={handleSubmit}>
 				<div class="p-6 grid grid-cols-1 gap-4">
+					{#if mode === 'edit'}
+						<div>
+							<label for="cb-estado_cobro" class="block text-sm font-medium text-slate-700 mb-1">Estado</label>
+							<select
+								id="cb-estado_cobro"
+								value={estadoCobro}
+								onchange={(e) => (estadoCobro = (e.target as HTMLSelectElement).value as typeof estadoCobro)}
+								class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+							>
+								{#each ESTADO_OPCIONES as opt}
+									<option value={opt.value}>{opt.label}</option>
+								{/each}
+							</select>
+							<p class="mt-1 text-xs text-slate-400">
+								Pásala a "Cobrado" si se cobró antes o después de lo programado, o a "Cancelado" si ya no se hará.
+							</p>
+						</div>
+					{/if}
+
 					{#each formFields as field (field.key)}
 						<div>
 							<label for={`cb-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
@@ -140,7 +187,7 @@
 					</button>
 					<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 						{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
-						Registrar
+						{mode === 'edit' ? 'Guardar Cambios' : 'Registrar'}
 					</button>
 				</div>
 			</form>

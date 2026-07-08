@@ -13,6 +13,7 @@
  *     numero_opracion    VARCHAR(20),  -- ver nota abajo
  *     usuario_registro   VARCHAR(100),
  *     referencia         VARCHAR(100),
+ *     estado_cobro       VARCHAR(20) NOT NULL DEFAULT 'cobrado', -- agregada por migración (ver nota abajo)
  *     created_at         TIMESTAMPTZ DEFAULT NOW()
  *   );
  *
@@ -26,6 +27,11 @@
  *   si el ERP en verdad necesita ambas, agrégala aquí explícitamente.
  * - `medio_cobro` sigue siendo un código SMALLINT sin catálogo de referencia — AJUSTAR a
  *   'select' con `optionsSource` cuando exista esa tabla (hoy tiene opciones fijas Efectivo/Transferencia).
+ * - `estado_cobro` (agregada vía migración manual, mismo patrón que `pagos.estado_pago` en
+ *   cuentas_pagar) NO está en FIELDS_CONFIG a propósito: se maneja aparte en CobroModal.svelte (select
+ *   "Estado" que solo aparece en modo edición). Valores: 'programado' (cuota futura autogenerada desde
+ *   "Número de Cuotas" de la cuenta, no cuenta para el saldo), 'cobrado' (cobro real, cuenta para el
+ *   saldo), 'cancelado' (una 'programado' que el usuario canceló, tampoco cuenta para el saldo).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';

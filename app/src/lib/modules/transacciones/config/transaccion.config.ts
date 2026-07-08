@@ -198,22 +198,32 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		// Columna real en BD sigue llamándose tipo_transaccion (no tenía catálogo ni uso definido) —
+		// se reutiliza como "Número de Cuota": cuando la transacción se genera desde una cuota
+		// programada de pagos/cobros, se prellena sola con la posición de esa cuota (1, 2, 3...) en
+		// el calendario de la cuenta. En una transacción creada a mano, queda libre para digitar.
 		key: 'tipo_transaccion',
-		label: 'Tipo de Transacción',
+		label: 'Número de Cuota',
 		tipo: 'text',
 		maxLength: 2,
-		helpText: 'Código libre (máx. 2 caracteres), sin catálogo definido todavía.',
+		mask: (raw) => raw.replace(/\D/g, ''),
+		regex: /^\d*$/,
+		regexMessage: 'Solo dígitos',
+		helpText: 'Se completa solo si esta transacción viene de una cuota programada de pagos/cobros.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
+		// id_nombre ya NO es editable a mano: se completa solo con el nombre del usuario que inició
+		// sesión en el ERP (permisosState.userName), igual que usuario_registro pero legible para
+		// mostrar en vez del email — ver TransaccionModal.svelte y createTransaccion().
 		key: 'id_nombre',
 		label: 'Nombre',
-		tipo: 'text',
+		tipo: 'readonly',
 		maxLength: 20,
 		showInTable: false,
-		showInForm: true,
+		showInForm: false,
 		sortable: false
 	},
 	{

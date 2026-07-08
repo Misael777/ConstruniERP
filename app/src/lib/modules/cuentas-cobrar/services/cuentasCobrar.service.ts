@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency } from '$lib/shared/fieldConfig';
 import { TABLE_NAME, PK_COLUMN, SEARCHABLE_COLUMNS, DEFAULT_PAGE_SIZE, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, FIELDS_CONFIG } from '../config/cuentaCobrar.config';
 import {
 	TABLE_NAME as COBRO_TABLE,
@@ -15,7 +15,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as COBRO_FIELDS
 } from '../config/cobro.config';
-import { registrarTransaccionPorCobro } from '../../transacciones/services/transacciones.service';
+import { registrarTransaccionPorCobro, construirPayloadTransaccionPorCobro } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
@@ -52,6 +52,10 @@ export interface Cobro {
 	usuario_registro: string | null;
 	referencia: string | null;
 	created_at: string;
+	/** 'cobrado' = registrado a mano en "Registrar Cobro" (default); 'programado' = cuota futura
+	 * autogenerada desde "Número de Cuotas" (condición_pago); 'cancelado' = una 'programado' que el
+	 * usuario canceló editando su Estado — ninguna de las dos últimas cuenta para el saldo. */
+	estado_cobro: 'programado' | 'cobrado' | 'cancelado';
 }
 
 export interface ListParams {
@@ -75,6 +79,9 @@ export interface ServiceResult<T = undefined> {
 	message: string;
 	data?: T;
 	errors?: Record<string, string>;
+	/** Payload sugerido (sin insertar) para prellenar el modal de "Nueva Transacción", cuando una
+	 * cuota programada recién pasa a 'cobrado' — ver updateCobro y transacciones.service.ts. */
+	transaccionSugerida?: Record<string, unknown>;
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
@@ -124,12 +131,107 @@ export async function createCuentaCobrar(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
-	const insertData = { ...buildWritablePayload(FIELDS_CONFIG, payload), monto_cobrado: 0, saldo_pendiente: Number(payload.monto), usuario_registro: usuarioRegistro };
+	const saldoInicial = Number(payload.monto);
+	const insertData: Record<string, unknown> = {
+		...buildWritablePayload(FIELDS_CONFIG, payload),
+		monto_cobrado: 0,
+		saldo_pendiente: saldoInicial,
+		usuario_registro: usuarioRegistro
+	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto)').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
+	await resincronizarCobrosProgramados(client, data.id_cuenta_cobrar, saldoInicial, Number(insertData['condición_pago']), data.fecha_emision, data.fecha_vencimiento);
+
 	return { success: true, message: 'Cuenta por cobrar creada correctamente', data: data as CuentaCobrar };
+}
+
+/** Suma meses a una fecha sin el bug clásico de "31 de enero + 1 mes = 3 de marzo" (fija el día al último válido del mes destino). */
+function addMonths(date: Date, months: number): Date {
+	const d = new Date(date);
+	const day = d.getDate();
+	d.setDate(1);
+	d.setMonth(d.getMonth() + months);
+	const diasEnMesDestino = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+	d.setDate(Math.min(day, diasEnMesDestino));
+	return d;
+}
+
+function toISODate(d: Date): string {
+	return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Genera N cuotas programadas (tabla cobros, estado_cobro='programado') — NO se cuentan como cobros
+ * reales todavía (recalcularCuentaCobrar las ignora), es solo para ver cómo quedarían programados los
+ * cobros futuros. Una cuota por mes desde fecha_emision, topada a fecha_vencimiento (si varias cuotas
+ * caen después del vencimiento, todas esas comparten esa misma fecha tope). Monto = monto ÷ N, la
+ * última cuota absorbe el redondeo de centavos para que la suma cuadre exacto. Reutiliza la columna
+ * `fecha_cobro` de "cobros" como fecha programada (misma técnica que cuentasPagar.service.ts).
+ */
+async function generarCobrosProgramados(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	monto: number,
+	numCuotas: number,
+	fechaEmision: string,
+	fechaVencimiento: string | null
+): Promise<{ error: unknown | null }> {
+	const inicio = new Date(fechaEmision);
+	if (Number.isNaN(inicio.getTime())) return { error: null };
+	const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
+
+	const montoBase = Math.floor((monto / numCuotas) * 100) / 100;
+	const filas: Record<string, unknown>[] = [];
+	let acumulado = 0;
+
+	for (let i = 1; i <= numCuotas; i++) {
+		let fecha = addMonths(inicio, i);
+		if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) {
+			fecha = limite;
+		}
+		const esUltima = i === numCuotas;
+		const montoCuota = esUltima ? Number((monto - acumulado).toFixed(2)) : montoBase;
+		acumulado += montoCuota;
+		filas.push({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: montoCuota, fecha_cobro: toISODate(fecha), estado_cobro: 'programado' });
+	}
+
+	const { error } = await client.from(COBRO_TABLE).insert(filas);
+	return { error };
+}
+
+/**
+ * Borra las cuotas 'programado' que ya existan para la cuenta (nunca toca las 'cobrado', esas son
+ * reales) y las vuelve a generar según el Número de Cuotas / monto / fechas ACTUALES. Se llama tanto
+ * al crear como al actualizar la cuenta, para que un cambio en "Número de Cuotas" (condición_pago, o
+ * en el monto o las fechas, que afectan el reparto) siempre deje las cuotas programadas al día. Si
+ * numCuotas <= 1 simplemente no regenera nada (quedan borradas): un cobro de 1 sola cuota no necesita
+ * programación aparte.
+ */
+async function resincronizarCobrosProgramados(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	monto: number,
+	numCuotas: number,
+	fechaEmision: string,
+	fechaVencimiento: string | null
+): Promise<void> {
+	// No se revienta la creación/edición de la cuenta si esto falla (ej. falta la migración de
+	// estado_cobro en la BD) — pero SÍ se deja constancia en consola: antes fallaba en silencio y la
+	// cuenta se guardaba "bien" sin que nunca aparecieran las cuotas programadas.
+	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
+	if (deleteError) {
+		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
+		return;
+	}
+
+	if (Number.isFinite(numCuotas) && numCuotas > 1) {
+		const { error: insertError } = await generarCobrosProgramados(client, idCuentaCobrar, monto, numCuotas, fechaEmision, fechaVencimiento);
+		if (insertError) {
+			console.error('No se pudieron generar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
+		}
+	}
 }
 
 export async function updateCuentaCobrar(
@@ -145,9 +247,11 @@ export async function updateCuentaCobrar(
 	// monto_cobrado / saldo_pendiente no se tocan aquí (showInForm:false los excluye de buildWritablePayload);
 	// si cambia "monto", el saldo se recalcula para reflejar lo ya cobrado hasta ahora.
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
+	// select('*') en vez de listar columnas: el parser de tipos de supabase-js no soporta el
+	// carácter acentuado de "condición_pago" en un select explícito (falla solo a nivel de tipos).
+	const { data: current } = await client.from(TABLE_NAME).select('*').eq(PK_COLUMN, id).single();
+	const cobrado = Number(current?.monto_cobrado ?? 0);
 	if (typeof updateData.monto === 'number') {
-		const { data: current } = await client.from(TABLE_NAME).select('monto_cobrado').eq(PK_COLUMN, id).single();
-		const cobrado = Number(current?.monto_cobrado ?? 0);
 		updateData.saldo_pendiente = Math.max(updateData.monto - cobrado, 0);
 	}
 
@@ -158,6 +262,17 @@ export async function updateCuentaCobrar(
 		.select('*, cliente(nombre), proyecto(nombre_proyecto)')
 		.single();
 	if (error) return { success: false, message: `No se pudo actualizar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	// Solo regenera el calendario de cuotas si el Número de Cuotas realmente cambió — si no, un cobro
+	// que el usuario ya haya editado o cancelado a mano se conserva tal cual, sin que un cambio en
+	// otro campo cualquiera (ej. "responsable") lo borre y lo vuelva a armar desde cero.
+	// (cast a `any`: el parser de tipos de select() de supabase-js no maneja bien la key acentuada)
+	const dataAny = data as any;
+	const numCuotasAnterior = Number((current as any)?.['condición_pago'] ?? 0);
+	const numCuotasNueva = Number(dataAny['condición_pago']);
+	if (numCuotasNueva !== numCuotasAnterior) {
+		await resincronizarCobrosProgramados(client, id, Number(dataAny.monto), numCuotasNueva, dataAny.fecha_emision, dataAny.fecha_vencimiento);
+	}
 
 	return { success: true, message: 'Cuenta por cobrar actualizada correctamente', data: data as CuentaCobrar };
 }
@@ -193,12 +308,17 @@ export async function createCobro(
 	const insertData = {
 		...buildWritablePayload(COBRO_FIELDS, payload),
 		[PARENT_FK_COLUMN]: idCuentaCobrar,
-		usuario_registro: usuarioRegistro
+		usuario_registro: usuarioRegistro,
+		estado_cobro: 'cobrado' // registrado a mano acá = cobro real, a diferencia de las cuotas autogeneradas
 	};
 
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
+	// Un cobro nuevo registrado a mano (no viene de editar una cuota programada) también debe restarse
+	// de lo que queda por cobrar: si no se ajustara, las cuotas 'programado' seguirían sumando el monto
+	// completo y el total quedaría descuadrado (cobrado + programado > monto).
+	await rebalancearUltimaCuota(client, idCuentaCobrar, data.id_cobro);
 	await recalcularCuentaCobrar(client, idCuentaCobrar);
 
 	// Genera la transacción (tipo 'ingreso') asociada. Si falla, no revierte el cobro — ya se registró
@@ -214,6 +334,7 @@ export async function createCobro(
 				client,
 				cuenta,
 				{
+					id_cobro: data.id_cobro,
 					monto: Number(data.monto),
 					fecha_cobro: data.fecha_cobro,
 					medio_cobro: data.medio_cobro,
@@ -230,6 +351,154 @@ export async function createCobro(
 	return { success: true, message: 'Cobro registrado correctamente', data: data as Cobro };
 }
 
+/**
+ * Edita una cuota (pensado para las 'programado': ajustar monto/fecha/estado). `estadoCobro` es
+ * opcional y va aparte de `payload` porque no vive en COBRO_FIELDS (el formulario de "Registrar
+ * Cobro" no debe mostrarlo — un cobro nuevo registrado a mano siempre es 'cobrado'). Se usa para que
+ * el usuario pueda pasar una cuota a 'cobrado' (se cobró antes o después de lo programado) o
+ * 'cancelado' (ya no se hará), directo desde el modal de edición. Mismo comportamiento que
+ * updatePago en cuentasPagar.service.ts.
+ */
+export async function updateCobro(
+	client: SupabaseClient,
+	idCobro: number,
+	payload: Record<string, unknown>,
+	estadoCobro?: 'programado' | 'cobrado' | 'cancelado'
+): Promise<ServiceResult<Cobro>> {
+	const errors = validatePayload(COBRO_FIELDS, payload);
+	if (Object.keys(errors).length > 0) {
+		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro').eq(COBRO_PK, idCobro).single();
+	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
+	const estadoAnterior = cobroActual.estado_cobro as 'programado' | 'cobrado' | 'cancelado';
+
+	// Al pasar a 'Cancelado' ya NO se reajusta sola la última cuota (a diferencia de un simple cambio
+	// de monto): se BLOQUEA la anulación si el resto de los cobros no cuadra con el monto de la cuenta,
+	// para que el usuario ajuste los montos a mano ANTES de anular. Solo aplica a esta transición
+	// (no al botón de eliminar/papelera, que es una acción aparte).
+	if (estadoCobro === 'cancelado' && estadoAnterior !== 'cancelado') {
+		const chequeo = await verificarSumaTrasCancelar(client, cobroActual.id_cuenta_cobrar, idCobro);
+		if (!chequeo.cuadra) {
+			return {
+				success: false,
+				message: `No se puede anular: el resto de los cobros sumaría ${formatCurrency(chequeo.sumaResultante)} y el Monto es ${formatCurrency(chequeo.monto)}. Ajusta los montos de las demás cuotas antes de anular esta.`
+			};
+		}
+	}
+
+	const updateData: Record<string, unknown> = buildWritablePayload(COBRO_FIELDS, payload);
+	if (estadoCobro) updateData.estado_cobro = estadoCobro;
+
+	const { data, error } = await client.from(COBRO_TABLE).update(updateData).eq(COBRO_PK, idCobro).select('*').single();
+	if (error) return { success: false, message: `No se pudo editar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
+
+	// El reajuste automático solo aplica cuando NO se está cancelando (ver verificarSumaTrasCancelar
+	// arriba, que ahora bloquea en vez de reajustar para el caso específico de anular una cuota).
+	if (estadoCobro !== 'cancelado') {
+		await rebalancearUltimaCuota(client, data.id_cuenta_cobrar, idCobro);
+	}
+	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
+
+	// Una cuota que RECIÉN se vuelve 'cobrado' (venía de 'programado') es dinero que recién entró de
+	// verdad: en vez de insertar la transacción sola, se arma el payload sugerido y se devuelve para
+	// que la UI abra el modal de "Nueva Transacción" ya prellenado y el usuario la complete/confirme
+	// (ver CobroModal.svelte). Si ya estaba 'cobrado' antes (ej. solo se editó el monto o la
+	// referencia), no se sugiere nada de nuevo.
+	let transaccionSugerida: Record<string, unknown> | undefined;
+	if (estadoCobro === 'cobrado' && estadoAnterior !== 'cobrado') {
+		try {
+			const { data: cuenta } = await client
+				.from(TABLE_NAME)
+				.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+				.eq(PK_COLUMN, data.id_cuenta_cobrar)
+				.single();
+			if (cuenta) {
+				const payload = await construirPayloadTransaccionPorCobro(client, cuenta, {
+					id_cobro: data.id_cobro,
+					monto: Number(data.monto),
+					fecha_cobro: data.fecha_cobro,
+					medio_cobro: data.medio_cobro,
+					cuenta_banco: data.cuenta_banco,
+					referencia: data.referencia
+				});
+				if (payload) transaccionSugerida = payload;
+			}
+		} catch (err) {
+			console.error('No se pudo preparar la transacción sugerida del cobro:', err);
+		}
+	}
+
+	return { success: true, message: 'Cobro actualizado correctamente', data: data as Cobro, transaccionSugerida };
+}
+
+/**
+ * Comprueba si, al anular la cuota `idCobroAAnular`, el resto de los cobros (cobrado + programado,
+ * excluyendo esa cuota ya que al cancelarse deja de contar) seguiría sumando exactamente el monto de
+ * la cuenta. No modifica nada — solo informa si cuadra o no, para que updateCobro decida si bloquea
+ * la anulación.
+ */
+async function verificarSumaTrasCancelar(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	idCobroAAnular: number
+): Promise<{ cuadra: boolean; sumaResultante: number; monto: number }> {
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuentaCobrar).single();
+	const monto = Number(cuenta?.monto ?? 0);
+
+	const { data: cobros } = await client
+		.from(COBRO_TABLE)
+		.select('id_cobro, monto, estado_cobro')
+		.eq(PARENT_FK_COLUMN, idCuentaCobrar);
+
+	const sumaResultante = (cobros ?? [])
+		.filter((c: any) => c.id_cobro !== idCobroAAnular && (c.estado_cobro === 'cobrado' || c.estado_cobro === 'programado'))
+		.reduce((sum: number, c: any) => sum + Number(c.monto), 0);
+
+	return {
+		cuadra: Number(sumaResultante.toFixed(2)) === Number(monto.toFixed(2)),
+		sumaResultante: Number(sumaResultante.toFixed(2)),
+		monto
+	};
+}
+
+/**
+ * El monto total de la cuenta SIEMPRE debe ser igual a la suma de sus cuotas. Si el usuario edita el
+ * monto de una cuota a mano, o cancela una (con lo que su monto deja de estar cubierto por el
+ * calendario), esta función ajusta la ÚLTIMA cuota 'programado' que quede (excluyendo la que se acaba
+ * de editar, para no deshacer justo ese cambio) sumándole/restándole la diferencia — el mismo
+ * "colchón de redondeo" que ya se usa al generar el calendario inicial (generarCobrosProgramados). Si
+ * no queda ninguna otra cuota 'programado' para absorber la diferencia, no se toca nada.
+ */
+async function rebalancearUltimaCuota(client: SupabaseClient, idCuentaCobrar: number, idCobroEditado: number): Promise<void> {
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuentaCobrar).single();
+	if (!cuenta) return;
+
+	const { data: cobros } = await client
+		.from(COBRO_TABLE)
+		.select('id_cobro, monto, estado_cobro, fecha_cobro')
+		.eq(PARENT_FK_COLUMN, idCuentaCobrar);
+	if (!cobros) return;
+
+	const fijos = cobros.filter((c: any) => c.estado_cobro === 'cobrado').reduce((sum: number, c: any) => sum + Number(c.monto), 0);
+	const programado = cobros
+		.filter((c: any) => c.estado_cobro === 'programado')
+		.sort((a: any, b: any) => new Date(a.fecha_cobro).getTime() - new Date(b.fecha_cobro).getTime());
+
+	const restante = Number(cuenta.monto) - fijos;
+	const sumaProgramado = programado.reduce((sum: number, c: any) => sum + Number(c.monto), 0);
+	const diferencia = Number((restante - sumaProgramado).toFixed(2));
+	if (diferencia === 0) return; // ya cuadra, nada que ajustar
+
+	const candidatas = programado.filter((c: any) => c.id_cobro !== idCobroEditado);
+	if (candidatas.length === 0) return; // no hay otra cuota programada que absorba la diferencia
+
+	const candidata = candidatas[candidatas.length - 1];
+	const nuevoMonto = Number((Number(candidata.monto) + diferencia).toFixed(2));
+	await client.from(COBRO_TABLE).update({ monto: nuevoMonto }).eq(COBRO_PK, candidata.id_cobro);
+}
+
 export async function deleteCobro(client: SupabaseClient, idCobro: number): Promise<ServiceResult> {
 	const { data: cobro, error: fetchError } = await client.from(COBRO_TABLE).select(PARENT_FK_COLUMN).eq(COBRO_PK, idCobro).single();
 	if (fetchError || !cobro) return { success: false, message: 'Cobro no encontrado' };
@@ -242,18 +511,22 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number): Prom
 }
 
 /**
- * Recalcula monto_cobrado/saldo_pendiente sumando los cobros reales de la cuenta, y ajusta
- * estado a pendiente/pagado según corresponda. Preserva "vencido" si ya estaba así marcado
- * (es una marca manual, no derivada del saldo). No es una transacción atómica de BD — con el
- * volumen esperado de cobros por cuenta el riesgo de condición de carrera es bajo, pero si el
- * ERP crece a alta concurrencia, esto debería moverse a una función SQL con transacción real.
+ * Recalcula monto_cobrado/saldo_pendiente sumando SOLO los cobros con estado_cobro='cobrado' (las
+ * cuotas 'programado' generadas por generarCobrosProgramados NO cuentan hasta que se registren como
+ * cobros reales, igual que en cuentasPagar.service.ts), y ajusta estado a pendiente/pagado. Preserva
+ * "vencido" si ya estaba así marcado (es una marca manual, no derivada del saldo). No es una
+ * transacción atómica de BD — con el volumen esperado de cobros por cuenta el riesgo de condición de
+ * carrera es bajo, pero si el ERP crece a alta concurrencia, esto debería moverse a una función SQL
+ * con transacción real.
  */
 async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
 	const { data: cuenta } = await client.from(TABLE_NAME).select('monto, estado').eq(PK_COLUMN, idCuentaCobrar).single();
 	if (!cuenta) return;
 
-	const { data: cobros } = await client.from(COBRO_TABLE).select('monto').eq(PARENT_FK_COLUMN, idCuentaCobrar);
-	const totalCobrado = (cobros ?? []).reduce((sum: number, c: any) => sum + Number(c.monto), 0);
+	const { data: cobros } = await client.from(COBRO_TABLE).select('monto, estado_cobro').eq(PARENT_FK_COLUMN, idCuentaCobrar);
+	const totalCobrado = (cobros ?? [])
+		.filter((c: any) => c.estado_cobro === 'cobrado')
+		.reduce((sum: number, c: any) => sum + Number(c.monto), 0);
 	const saldoPendiente = Math.max(Number(cuenta.monto) - totalCobrado, 0);
 
 	const nuevoEstado = cuenta.estado === 'vencido' ? 'vencido' : saldoPendiente <= 0 ? 'pagado' : 'pendiente';

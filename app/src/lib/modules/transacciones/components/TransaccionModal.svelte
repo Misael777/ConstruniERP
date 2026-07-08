@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
 	import { createTransaccion, updateTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { permisosState } from '$lib/stores/permisos.svelte';
 
 	let {
 		open = false,
@@ -78,7 +79,7 @@
 				result = await updateTransaccion(supabase, transaccion.id_transaccion, formValues);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
-				result = await createTransaccion(supabase, formValues, userData?.user?.email ?? null);
+				result = await createTransaccion(supabase, formValues, userData?.user?.email ?? null, permisosState.userName || null);
 			}
 
 			if (result.success) {

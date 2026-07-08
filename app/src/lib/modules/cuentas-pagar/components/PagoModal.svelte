@@ -12,7 +12,8 @@
 		idCuentaPagar,
 		pago = null,
 		onClose,
-		onSaved
+		onSaved,
+		onTransaccionSugerida
 	}: {
 		open: boolean;
 		idCuentaPagar: number | null;
@@ -20,6 +21,9 @@
 		pago?: Pago | null;
 		onClose: () => void;
 		onSaved: () => void;
+		/** Se llama cuando una cuota recién pasa a 'pagado' y hay un payload de transacción sugerido
+		 * para completar — ver updatePago en cuentasPagar.service.ts. */
+		onTransaccionSugerida?: (payload: Record<string, unknown>) => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -87,6 +91,7 @@
 				toast.success(result.message ?? 'Guardado con éxito');
 				onSaved();
 				onClose();
+				if (result.transaccionSugerida) onTransaccionSugerida?.(result.transaccionSugerida);
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
 				if (result.errors) fieldErrors = { ...fieldErrors, ...result.errors };

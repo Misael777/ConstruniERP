@@ -17,6 +17,7 @@
 	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
+	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -53,6 +54,7 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [] });
+	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
 	let selectedId = $state<number | null>(null);
 	let selectedPagos = $state<Pago[]>([]);
@@ -62,6 +64,8 @@
 	let editingCuenta = $state<CuentaPagar | null>(null);
 	let pagoModalOpen = $state(false);
 	let editingPago = $state<Pago | null>(null);
+	let transaccionModalOpen = $state(false);
+	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -96,10 +100,12 @@
 			return;
 		}
 		try {
+			const centroCostoOptions = await getCentroCostoOptions(supabase);
 			dynamicOptions = {
 				id_proveedor: await getProveedorOptions(supabase),
-				id_centro_costo: await getCentroCostoOptions(supabase)
+				id_centro_costo: centroCostoOptions
 			};
+			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
@@ -207,6 +213,15 @@
 
 	async function handlePagoSaved() {
 		await Promise.all([fetchList(), fetchSelectedPagos()]);
+	}
+
+	function handleTransaccionSugerida(payload: Record<string, unknown>) {
+		transaccionPrefill = payload;
+		transaccionModalOpen = true;
+	}
+	function closeTransaccionModal() {
+		transaccionModalOpen = false;
+		transaccionPrefill = null;
 	}
 </script>
 
@@ -383,4 +398,19 @@
 </div>
 
 <CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
-<PagoModal open={pagoModalOpen} idCuentaPagar={selectedId} pago={editingPago} onClose={closePagoModal} onSaved={handlePagoSaved} />
+<PagoModal
+	open={pagoModalOpen}
+	idCuentaPagar={selectedId}
+	pago={editingPago}
+	onClose={closePagoModal}
+	onSaved={handlePagoSaved}
+	onTransaccionSugerida={handleTransaccionSugerida}
+/>
+<TransaccionModal
+	open={transaccionModalOpen}
+	mode="create"
+	transaccion={transaccionPrefill as any}
+	dynamicOptions={transaccionDynamicOptions}
+	onClose={closeTransaccionModal}
+	onSaved={closeTransaccionModal}
+/>

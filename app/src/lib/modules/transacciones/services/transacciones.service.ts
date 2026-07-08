@@ -122,14 +122,20 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 export async function createTransaccion(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
-	usuarioRegistro: string | null
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null
 ): Promise<ServiceResult<Transaccion>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
-	const insertData = { ...buildWritablePayload(FIELDS_CONFIG, payload), usuario_registro: usuarioRegistro };
+	const insertData = {
+		...buildWritablePayload(FIELDS_CONFIG, payload),
+		usuario_registro: usuarioRegistro,
+		// id_nombre no es editable (showInForm:false): siempre es el nombre de quien inició sesión.
+		id_nombre: usuarioNombre ? usuarioNombre.slice(0, 20) : null
+	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo crear la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
@@ -259,11 +265,85 @@ async function getOrCrearCentroExterno(client: SupabaseClient, tipo: 'proveedore
 }
 
 /**
+ * Calcula la posición (1-based) de una fila entre todas las de su cuenta, ordenadas por fecha — esa
+ * posición es lo que se guarda como "Número de Cuota" en la transacción autogenerada. Se calcula al
+ * vuelo (ninguna de las dos tablas guarda el número de cuota como columna aparte) contando TODAS las
+ * filas de la cuenta (programado/pagado/cobrado/cancelado), en el mismo orden en que se generaron.
+ * Ordena por fecha Y por PK como desempate: varias cuotas suelen compartir la misma fecha (todas las
+ * que quedan topadas a fecha_vencimiento), y sin un desempate estable el orden de PostgREST entre
+ * filas con la misma fecha no está garantizado — se probó y da resultados distintos entre llamadas.
+ */
+async function calcularNumeroCuota(
+	client: SupabaseClient,
+	tabla: 'pagos' | 'cobros',
+	columnaFk: 'id_cuenta_pagar' | 'id_cuenta_cobrar',
+	columnaPk: 'id_pago' | 'id_cobro',
+	columnaFecha: 'fecha_pago' | 'fecha_cobro',
+	idCuenta: number,
+	idFila: number
+): Promise<number | null> {
+	const { data } = await client
+		.from(tabla)
+		.select(`${columnaPk}, ${columnaFecha}`)
+		.eq(columnaFk, idCuenta)
+		.order(columnaFecha, { ascending: true })
+		.order(columnaPk, { ascending: true });
+	if (!data) return null;
+	const index = (data as any[]).findIndex((row) => row[columnaPk] === idFila);
+	return index === -1 ? null : index + 1;
+}
+
+/**
+ * Arma (sin insertar) el payload de la transacción 'egreso' correspondiente a un pago, con el mismo
+ * criterio que registrarTransaccionPorPago (centro de costo origen = el de la cuenta, destino = el
+ * externo fijo de proveedores, códigos traducidos, "Número de Cuota" = posición del pago en el
+ * calendario de la cuenta, etc.). Devuelve `null` si la cuenta todavía no tiene `id_centro_costo`
+ * asignado (no hay de dónde sacar el origen). Se reutiliza tanto para el alta automática y silenciosa
+ * (createPago) como para prellenar el modal de "Nueva Transacción" cuando el usuario pasa una cuota a
+ * 'pagado' a mano (ver updatePago), para que la complete y confirme él mismo.
+ */
+export async function construirPayloadTransaccionPorPago(
+	client: SupabaseClient,
+	cuentaPagar: {
+		id_cuenta_pagar: number;
+		id_centro_costo: number | null;
+		tipo_documento: number | null;
+		num_documento: string | null;
+		fotma_pago: number | null;
+	},
+	pago: { id_pago?: number; monto: number; fecha_pago: string; medio_pago: string | null; referencia: string | null }
+): Promise<Record<string, unknown> | null> {
+	if (!cuentaPagar.id_centro_costo) return null;
+
+	const idCentroDestino = await getOrCrearCentroExterno(client, 'proveedores');
+	const numeroCuota = pago.id_pago
+		? await calcularNumeroCuota(client, 'pagos', 'id_cuenta_pagar', 'id_pago', 'fecha_pago', cuentaPagar.id_cuenta_pagar, pago.id_pago)
+		: null;
+
+	return {
+		id_centro_costo_origen: cuentaPagar.id_centro_costo,
+		id_centro_costo_destino: idCentroDestino,
+		fecha: pago.fecha_pago,
+		tipo_documento: cuentaPagar.tipo_documento !== null ? String(cuentaPagar.tipo_documento) : null,
+		num_documento: cuentaPagar.num_documento,
+		forma_pago: cuentaPagar.fotma_pago !== null ? String(cuentaPagar.fotma_pago) : null,
+		tipo_transaccion: numeroCuota !== null ? String(numeroCuota).slice(0, 2) : null, // "Número de Cuota"
+		tipo: 'egreso',
+		monto_total: pago.monto,
+		medio_pago: codigoPorLabel(pago.medio_pago),
+		descripcion: `Pago de cuenta por pagar #${cuentaPagar.id_cuenta_pagar}${pago.referencia ? ' - ' + pago.referencia : ''}`,
+		estado: 'activo'
+	};
+}
+
+/**
  * Genera automáticamente la transacción (tipo 'egreso') correspondiente a un pago recién registrado.
- * Solo se llama al crear un pago nuevo (createPago en cuentasPagar.service.ts) — NO cuando una cuota
- * programada pasa a 'pagado' después (así se acordó con el usuario). Si la cuenta por pagar todavía
- * no tiene `id_centro_costo` asignado (cuentas creadas antes de esta migración), se omite en silencio:
- * el pago ya se registró, la transacción es un registro contable secundario, no debe bloquear el pago.
+ * Solo se llama al crear un pago nuevo (createPago en cuentasPagar.service.ts) — cuando una cuota
+ * programada pasa a 'pagado' después, en cambio, NO se inserta sola: se prellena el modal de
+ * "Nueva Transacción" con construirPayloadTransaccionPorPago para que el usuario la complete y
+ * confirme (ver updatePago). Si la cuenta por pagar todavía no tiene `id_centro_costo` asignado
+ * (cuentas creadas antes de esta migración), se omite en silencio: el pago ya se registró, la
+ * transacción es un registro contable secundario, no debe bloquear el pago.
  */
 export async function registrarTransaccionPorPago(
 	client: SupabaseClient,
@@ -274,34 +354,62 @@ export async function registrarTransaccionPorPago(
 		num_documento: string | null;
 		fotma_pago: number | null;
 	},
-	pago: { monto: number; fecha_pago: string; medio_pago: string | null; referencia: string | null },
+	pago: { id_pago?: number; monto: number; fecha_pago: string; medio_pago: string | null; referencia: string | null },
 	usuarioRegistro: string | null
 ): Promise<void> {
-	if (!cuentaPagar.id_centro_costo) return;
+	const payload = await construirPayloadTransaccionPorPago(client, cuentaPagar, pago);
+	if (!payload) return;
+	await client.from(TABLE_NAME).insert({ ...payload, usuario_registro: usuarioRegistro });
+}
 
-	const idCentroDestino = await getOrCrearCentroExterno(client, 'proveedores');
+/**
+ * Arma (sin insertar) el payload de la transacción 'ingreso' correspondiente a un cobro, con el mismo
+ * criterio que registrarTransaccionPorCobro. Devuelve `null` si la cuenta todavía no tiene
+ * `id_centro_costo` asignado. Se reutiliza tanto para el alta automática y silenciosa (createCobro)
+ * como para prellenar el modal de "Nueva Transacción" cuando el usuario pasa una cuota a 'cobrado' a
+ * mano (ver updateCobro), para que la complete y confirme él mismo.
+ */
+export async function construirPayloadTransaccionPorCobro(
+	client: SupabaseClient,
+	cuentaCobrar: {
+		id_cuenta_cobrar: number;
+		id_centro_costo: number | null;
+		tipo_documento: number | null;
+		num_documento: string | null;
+		forma_pago: number | null;
+	},
+	cobro: { id_cobro?: number; monto: number; fecha_cobro: string; medio_cobro: number | null; cuenta_banco: string | null; referencia: string | null }
+): Promise<Record<string, unknown> | null> {
+	if (!cuentaCobrar.id_centro_costo) return null;
 
-	await client.from(TABLE_NAME).insert({
-		id_centro_costo_origen: cuentaPagar.id_centro_costo,
-		id_centro_costo_destino: idCentroDestino,
-		fecha: pago.fecha_pago,
-		tipo_documento: cuentaPagar.tipo_documento !== null ? String(cuentaPagar.tipo_documento) : null,
-		num_documento: cuentaPagar.num_documento,
-		forma_pago: cuentaPagar.fotma_pago !== null ? String(cuentaPagar.fotma_pago) : null,
-		tipo: 'egreso',
-		monto_total: pago.monto,
-		medio_pago: codigoPorLabel(pago.medio_pago),
-		descripcion: `Pago de cuenta por pagar #${cuentaPagar.id_cuenta_pagar}${pago.referencia ? ' - ' + pago.referencia : ''}`,
-		estado: 'activo',
-		usuario_registro: usuarioRegistro
-	});
+	const idCentroOrigen = await getOrCrearCentroExterno(client, 'clientes');
+	const numeroCuota = cobro.id_cobro
+		? await calcularNumeroCuota(client, 'cobros', 'id_cuenta_cobrar', 'id_cobro', 'fecha_cobro', cuentaCobrar.id_cuenta_cobrar, cobro.id_cobro)
+		: null;
+
+	return {
+		id_centro_costo_origen: idCentroOrigen,
+		id_centro_costo_destino: cuentaCobrar.id_centro_costo,
+		fecha: cobro.fecha_cobro,
+		tipo_documento: cuentaCobrar.tipo_documento !== null ? String(cuentaCobrar.tipo_documento) : null,
+		num_documento: cuentaCobrar.num_documento,
+		forma_pago: cuentaCobrar.forma_pago !== null ? String(cuentaCobrar.forma_pago) : null,
+		tipo_transaccion: numeroCuota !== null ? String(numeroCuota).slice(0, 2) : null, // "Número de Cuota"
+		tipo: 'ingreso',
+		monto_total: cobro.monto,
+		medio_pago: cobro.medio_cobro !== null ? String(cobro.medio_cobro) : null,
+		cuente_destino: cobro.cuenta_banco,
+		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
+		estado: 'activo'
+	};
 }
 
 /**
  * Genera automáticamente la transacción (tipo 'ingreso') correspondiente a un cobro recién registrado.
- * Se llama siempre al crear un cobro (createCobro en cuentasCobrar.service.ts) — cuentas_cobrar no
- * tiene concepto de cuotas 'programado', todo cobro registrado ya es real. Igual que con los pagos, si
- * la cuenta por cobrar no tiene `id_centro_costo` asignado, se omite en silencio.
+ * Se llama siempre al crear un cobro (createCobro en cuentasCobrar.service.ts) — cuando una cuota
+ * programada pasa a 'cobrado' después, en cambio, NO se inserta sola: se prellena el modal de
+ * "Nueva Transacción" con construirPayloadTransaccionPorCobro (ver updateCobro). Si la cuenta por
+ * cobrar no tiene `id_centro_costo` asignado, se omite en silencio.
  */
 export async function registrarTransaccionPorCobro(
 	client: SupabaseClient,
@@ -312,26 +420,10 @@ export async function registrarTransaccionPorCobro(
 		num_documento: string | null;
 		forma_pago: number | null;
 	},
-	cobro: { monto: number; fecha_cobro: string; medio_cobro: number | null; cuenta_banco: string | null; referencia: string | null },
+	cobro: { id_cobro?: number; monto: number; fecha_cobro: string; medio_cobro: number | null; cuenta_banco: string | null; referencia: string | null },
 	usuarioRegistro: string | null
 ): Promise<void> {
-	if (!cuentaCobrar.id_centro_costo) return;
-
-	const idCentroOrigen = await getOrCrearCentroExterno(client, 'clientes');
-
-	await client.from(TABLE_NAME).insert({
-		id_centro_costo_origen: idCentroOrigen,
-		id_centro_costo_destino: cuentaCobrar.id_centro_costo,
-		fecha: cobro.fecha_cobro,
-		tipo_documento: cuentaCobrar.tipo_documento !== null ? String(cuentaCobrar.tipo_documento) : null,
-		num_documento: cuentaCobrar.num_documento,
-		forma_pago: cuentaCobrar.forma_pago !== null ? String(cuentaCobrar.forma_pago) : null,
-		tipo: 'ingreso',
-		monto_total: cobro.monto,
-		medio_pago: cobro.medio_cobro !== null ? String(cobro.medio_cobro) : null,
-		cuente_destino: cobro.cuenta_banco,
-		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
-		estado: 'activo',
-		usuario_registro: usuarioRegistro
-	});
+	const payload = await construirPayloadTransaccionPorCobro(client, cuentaCobrar, cobro);
+	if (!payload) return;
+	await client.from(TABLE_NAME).insert({ ...payload, usuario_registro: usuarioRegistro });
 }

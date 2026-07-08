@@ -18,6 +18,7 @@
 	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
+	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import type { CuentaCobrar, Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -54,6 +55,7 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [] });
+	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
 	let selectedId = $state<number | null>(null);
 	let selectedCobros = $state<Cobro[]>([]);
@@ -62,6 +64,9 @@
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaCobrar | null>(null);
 	let cobroModalOpen = $state(false);
+	let editingCobro = $state<Cobro | null>(null);
+	let transaccionModalOpen = $state(false);
+	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -102,6 +107,7 @@
 				getCentroCostoOptions(supabase)
 			]);
 			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptions };
+			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
@@ -190,12 +196,34 @@
 		}
 	}
 
+	function openCreateCobro() {
+		editingCobro = null;
+		cobroModalOpen = true;
+	}
+	function openEditCobro(cobro: Cobro) {
+		editingCobro = cobro;
+		cobroModalOpen = true;
+	}
+	function closeCobroModal() {
+		cobroModalOpen = false;
+		editingCobro = null;
+	}
+
 	async function handleSaved() {
 		await fetchList();
 	}
 
 	async function handleCobroSaved() {
 		await Promise.all([fetchList(), fetchSelectedCobros()]);
+	}
+
+	function handleTransaccionSugerida(payload: Record<string, unknown>) {
+		transaccionPrefill = payload;
+		transaccionModalOpen = true;
+	}
+	function closeTransaccionModal() {
+		transaccionModalOpen = false;
+		transaccionPrefill = null;
 	}
 </script>
 
@@ -308,7 +336,7 @@
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
-				<button type="button" onclick={() => (cobroModalOpen = true)} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
+				<button type="button" onclick={openCreateCobro} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
 					<Plus size={14} /> Registrar Cobro
 				</button>
 			</div>
@@ -322,18 +350,35 @@
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">Fecha</th>
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">Monto</th>
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">N° Operación</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Referencia</th>
+							<th class="text-left px-3 py-2 font-semibold text-slate-600">Estado</th>
 							<th class="text-right px-3 py-2 font-semibold text-slate-600">Acciones</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each selectedCobros as cobro (cobro.id_cobro)}
-							<tr class="border-b border-slate-100">
+							<tr
+								class={`border-b border-slate-100 ${cobro.estado_cobro === 'programado' ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+								ondblclick={() => cobro.estado_cobro === 'programado' && openEditCobro(cobro)}
+								title={cobro.estado_cobro === 'programado' ? 'Doble clic para editar/cancelar esta cuota' : undefined}
+							>
 								<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
 								<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
 								<td class="px-3 py-2">{cobro.num_operacion ?? '—'}</td>
-								<td class="px-3 py-2">{cobro.referencia ?? '—'}</td>
+								<td class="px-3 py-2">
+									{#if cobro.estado_cobro === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if cobro.estado_cobro === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+									{:else}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
+									{/if}
+								</td>
 								<td class="px-3 py-2 text-right">
+									{#if cobro.estado_cobro === 'programado'}
+										<button type="button" onclick={() => openEditCobro(cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+											<Pencil size={16} />
+										</button>
+									{/if}
 									<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar cobro" aria-label="Eliminar cobro">
 										<Trash2 size={16} />
 									</button>
@@ -348,4 +393,19 @@
 </div>
 
 <CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
-<CobroModal open={cobroModalOpen} idCuentaCobrar={selectedId} onClose={() => (cobroModalOpen = false)} onSaved={handleCobroSaved} />
+<CobroModal
+	open={cobroModalOpen}
+	idCuentaCobrar={selectedId}
+	cobro={editingCobro}
+	onClose={closeCobroModal}
+	onSaved={handleCobroSaved}
+	onTransaccionSugerida={handleTransaccionSugerida}
+/>
+<TransaccionModal
+	open={transaccionModalOpen}
+	mode="create"
+	transaccion={transaccionPrefill as any}
+	dynamicOptions={transaccionDynamicOptions}
+	onClose={closeTransaccionModal}
+	onSaved={closeTransaccionModal}
+/>

@@ -23,7 +23,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as PAGO_FIELDS
 } from '../config/pago.config';
-import { registrarTransaccionPorPago } from '../../transacciones/services/transacciones.service';
+import { registrarTransaccionPorPago, construirPayloadTransaccionPorPago } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaPagar {
 	id_cuenta_pagar: number;
@@ -91,6 +91,9 @@ export interface ServiceResult<T = undefined> {
 	message: string;
 	data?: T;
 	errors?: Record<string, string>;
+	/** Payload sugerido (sin insertar) para prellenar el modal de "Nueva Transacción", cuando una
+	 * cuota programada recién pasa a 'pagado' — ver updatePago y transacciones.service.ts. */
+	transaccionSugerida?: Record<string, unknown>;
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
@@ -226,10 +229,19 @@ async function resincronizarCuotasProgramadas(
 	fechaEmision: string,
 	fechaVencimiento: string | null
 ): Promise<void> {
-	await client.from(PAGO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaPagar).eq('estado_pago', 'programado');
+	// No se revienta la creación/edición de la cuenta si esto falla — pero SÍ se deja constancia en
+	// consola: antes fallaba en silencio y la cuenta se guardaba "bien" sin que aparecieran las cuotas.
+	const { error: deleteError } = await client.from(PAGO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaPagar).eq('estado_pago', 'programado');
+	if (deleteError) {
+		console.error('No se pudieron limpiar las cuotas programadas anteriores:', deleteError);
+		return;
+	}
 
 	if (Number.isFinite(numCuotas) && numCuotas > 1) {
-		await generarCuotasProgramadas(client, idCuentaPagar, montoComprometido, numCuotas, fechaEmision, fechaVencimiento);
+		const { error: insertError } = await generarCuotasProgramadas(client, idCuentaPagar, montoComprometido, numCuotas, fechaEmision, fechaVencimiento);
+		if (insertError) {
+			console.error('No se pudieron generar las cuotas programadas:', insertError);
+		}
 	}
 }
 
@@ -266,9 +278,9 @@ async function generarCuotasProgramadas(
 	numCuotas: number,
 	fechaEmision: string,
 	fechaVencimiento: string | null
-): Promise<void> {
+): Promise<{ error: unknown | null }> {
 	const inicio = new Date(fechaEmision);
-	if (Number.isNaN(inicio.getTime())) return;
+	if (Number.isNaN(inicio.getTime())) return { error: null };
 	const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
 
 	const montoBase = Math.floor((montoComprometido / numCuotas) * 100) / 100;
@@ -286,7 +298,8 @@ async function generarCuotasProgramadas(
 		filas.push({ [PARENT_FK_COLUMN]: idCuentaPagar, monto, fecha_pago: toISODate(fecha), estado_pago: 'programado' });
 	}
 
-	await client.from(PAGO_TABLE).insert(filas);
+	const { error } = await client.from(PAGO_TABLE).insert(filas);
+	return { error };
 }
 
 export async function updateCuentaPagar(
@@ -365,6 +378,10 @@ export async function createPago(
 	const { data, error } = await client.from(PAGO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
 
+	// Un pago nuevo registrado a mano (no viene de editar una cuota programada) también debe restarse
+	// de lo que queda por pagar: si no se ajustara, las cuotas 'programado' seguirían sumando el monto
+	// completo y el total quedaría descuadrado (pagado + programado > monto_comprometido).
+	await rebalancearUltimaCuota(client, idCuentaPagar, data.id_pago);
 	await recalcularCuentaPagar(client, idCuentaPagar);
 
 	// Genera la transacción (tipo 'egreso') asociada, solo al registrar un pago nuevo (no cuando una
@@ -380,7 +397,7 @@ export async function createPago(
 			await registrarTransaccionPorPago(
 				client,
 				cuenta,
-				{ monto: Number(data.monto), fecha_pago: data.fecha_pago, medio_pago: data.medio_pago, referencia: data.referencia },
+				{ id_pago: data.id_pago, monto: Number(data.monto), fecha_pago: data.fecha_pago, medio_pago: data.medio_pago, referencia: data.referencia },
 				usuarioRegistro
 			);
 		}
@@ -409,22 +426,21 @@ export async function updatePago(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
+	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago').eq(PAGO_PK, idPago).single();
+	if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
+	const estadoAnterior = pagoActual.estado_pago as 'programado' | 'pagado' | 'cancelado';
+
 	// Al pasar a 'Cancelado' ya NO se reajusta sola la última cuota (a diferencia de un simple cambio
 	// de monto): se BLOQUEA la anulación si el resto de los pagos no cuadra con monto_comprometido,
 	// para que el usuario ajuste los montos a mano ANTES de anular. Solo aplica a esta transición
 	// (no al botón de eliminar/papelera, que es una acción aparte).
-	if (estadoPago === 'cancelado') {
-		const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago').eq(PAGO_PK, idPago).single();
-		if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
-
-		if (pagoActual.estado_pago !== 'cancelado') {
-			const chequeo = await verificarSumaTrasCancelar(client, pagoActual.id_cuenta_pagar, idPago);
-			if (!chequeo.cuadra) {
-				return {
-					success: false,
-					message: `No se puede anular: el resto de los pagos sumaría ${formatCurrency(chequeo.sumaResultante)} y el Monto Comprometido es ${formatCurrency(chequeo.montoComprometido)}. Ajusta los montos de las demás cuotas antes de anular esta.`
-				};
-			}
+	if (estadoPago === 'cancelado' && estadoAnterior !== 'cancelado') {
+		const chequeo = await verificarSumaTrasCancelar(client, pagoActual.id_cuenta_pagar, idPago);
+		if (!chequeo.cuadra) {
+			return {
+				success: false,
+				message: `No se puede anular: el resto de los pagos sumaría ${formatCurrency(chequeo.sumaResultante)} y el Monto Comprometido es ${formatCurrency(chequeo.montoComprometido)}. Ajusta los montos de las demás cuotas antes de anular esta.`
+			};
 		}
 	}
 
@@ -440,7 +456,36 @@ export async function updatePago(
 		await rebalancearUltimaCuota(client, data.id_cuenta_pagar, idPago);
 	}
 	await recalcularCuentaPagar(client, data.id_cuenta_pagar);
-	return { success: true, message: 'Pago actualizado correctamente', data: data as Pago };
+
+	// Una cuota que RECIÉN se vuelve 'pagado' (venía de 'programado') es dinero que recién salió de
+	// verdad: en vez de insertar la transacción sola, se arma el payload sugerido y se devuelve para
+	// que la UI abra el modal de "Nueva Transacción" ya prellenado y el usuario la complete/confirme
+	// (ver PagoModal.svelte). Si ya estaba 'pagado' antes (ej. solo se editó el monto o la referencia),
+	// no se sugiere nada de nuevo.
+	let transaccionSugerida: Record<string, unknown> | undefined;
+	if (estadoPago === 'pagado' && estadoAnterior !== 'pagado') {
+		try {
+			const { data: cuenta } = await client
+				.from(TABLE_NAME)
+				.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
+				.eq(PK_COLUMN, data.id_cuenta_pagar)
+				.single();
+			if (cuenta) {
+				const payload = await construirPayloadTransaccionPorPago(client, cuenta, {
+					id_pago: data.id_pago,
+					monto: Number(data.monto),
+					fecha_pago: data.fecha_pago,
+					medio_pago: data.medio_pago,
+					referencia: data.referencia
+				});
+				if (payload) transaccionSugerida = payload;
+			}
+		} catch (err) {
+			console.error('No se pudo preparar la transacción sugerida del pago:', err);
+		}
+	}
+
+	return { success: true, message: 'Pago actualizado correctamente', data: data as Pago, transaccionSugerida };
 }
 
 /**
