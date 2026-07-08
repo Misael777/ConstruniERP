@@ -15,10 +15,12 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as COBRO_FIELDS
 } from '../config/cobro.config';
+import { registrarTransaccionPorCobro } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
 	id_cliente: number;
+	id_centro_costo: number | null;
 	id_proyecto: number | null;
 	tipo_documento: number | null;
 	num_documento: string | null;
@@ -198,6 +200,33 @@ export async function createCobro(
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
 	await recalcularCuentaCobrar(client, idCuentaCobrar);
+
+	// Genera la transacción (tipo 'ingreso') asociada. Si falla, no revierte el cobro — ya se registró
+	// correctamente; esto es un registro contable secundario.
+	try {
+		const { data: cuenta } = await client
+			.from(TABLE_NAME)
+			.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+			.eq(PK_COLUMN, idCuentaCobrar)
+			.single();
+		if (cuenta) {
+			await registrarTransaccionPorCobro(
+				client,
+				cuenta,
+				{
+					monto: Number(data.monto),
+					fecha_cobro: data.fecha_cobro,
+					medio_cobro: data.medio_cobro,
+					cuenta_banco: data.cuenta_banco,
+					referencia: data.referencia
+				},
+				usuarioRegistro
+			);
+		}
+	} catch (err) {
+		console.error('No se pudo generar la transacción automática del cobro:', err);
+	}
+
 	return { success: true, message: 'Cobro registrado correctamente', data: data as Cobro };
 }
 

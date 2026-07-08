@@ -58,7 +58,12 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Medio de Pago',
 		tipo: 'text',
 		maxLength: 50,
-		placeholder: 'Transferencia, efectivo, cheque...',
+		options: [
+			{ value: 'Efectivo', label: 'Efectivo' },
+			{ value: 'Transferencia bancaria', label: 'Transferencia bancaria' },
+			{ value: 'Depósito bancario', label: 'Depósito bancario' },
+			{ value: 'Yape o Plin', label: 'Yape o Plin' }
+		],
 		showInTable: false,
 		showInForm: true,
 		sortable: false

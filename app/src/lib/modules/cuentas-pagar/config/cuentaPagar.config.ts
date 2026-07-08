@@ -10,6 +10,7 @@
  *   CREATE TABLE cuentas_pagar (
  *     id_cuenta_pagar     BIGSERIAL PRIMARY KEY,
  *     id_proveedor        BIGINT NOT NULL REFERENCES proveedor(id_proveedor),
+ *     id_centro_costo     BIGINT REFERENCES centro_costo(id_centro_costo), -- agregada por migración (ver nota abajo)
  *     id_presupuesto      BIGINT REFERENCES presupuesto(id_presupuesto),
  *     id_partida          BIGINT REFERENCES partida(id_partida),
  *     tipo_documento      SMALLINT,
@@ -50,6 +51,11 @@
  * - `tipo_documento`, `fotma_pago` y `categoria_gasto` ya son 'select' con opciones fijas
  *   (`categoria_gasto` usa los códigos reales del PCGE clase 6, los demás son secuenciales sin
  *   catálogo oficial verificado — ver notas en cada campo).
+ * - `id_centro_costo` se agregó vía migración manual (ALTER TABLE, ver transacciones.service.ts) para
+ *   poder generar automáticamente una fila en `transaccion` (tipo 'egreso') cada vez que se registra
+ *   un pago nuevo — ese centro de costo se usa como ORIGEN de la transacción (de ahí sale el gasto).
+ *   Cuentas creadas ANTES de la migración quedan con id_centro_costo NULL: en ese caso la generación
+ *   automática de la transacción simplemente se omite (no bloquea el registro del pago).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -68,8 +74,19 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Proveedor',
 		tipo: 'select',
 		required: true,
-		optionsSource: 'proveedor', // opciones cargadas en runtime desde la tabla proveedor, ver +page.server.ts
+		optionsSource: 'proveedor', // opciones cargadas en runtime desde la tabla proveedor, ver +page.svelte (client-side, sin servidor)
 		showInTable: true,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'id_centro_costo',
+		label: 'Centro de Costo',
+		tipo: 'select',
+		required: true,
+		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
+		helpText: 'Centro de costo al que se carga este gasto. Se usa como origen al generar automáticamente la transacción del pago.',
+		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
@@ -255,13 +272,27 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		// `condicion_pago` (columna real, VARCHAR(100), sin tilde) se reutiliza aquí como "Número de
+		// Cuotas": se guarda como texto numérico ("3", "6"...) porque la columna es texto libre, no
+		// se migró a numérico. Si > 0 y forma de pago es Crédito, cuentasPagar.service.ts genera
+		// automáticamente esa cantidad de registros en "pagos" (estado_pago='programado'), uno por
+		// mes desde Fecha Emisión, topados a Fecha Vencimiento — ver generarCuotasProgramadas().
 		key: 'condicion_pago', // sin tilde, distinto de cuentas_cobrar
-		label: 'Condición de Pago',
+		label: 'Número de Cuotas',
 		tipo: 'text',
-		maxLength: 100,
-		// Se bloquea (deshabilitado, no se valida, se guarda como null) cuando fotma_pago = '1' (Contado).
+		maxLength: 3,
+		mask: (raw) => raw.replace(/\D/g, ''), // solo dígitos mientras se escribe
+		regex: /^\d+$/,
+		regexMessage: 'Solo dígitos',
+		// Se bloquea (deshabilitado, no se valida) y queda fijo en "1" cuando fotma_pago = '1'
+		// (Contado) — un pago de contado es, por definición, una sola cuota.
 		disabledWhen: (values) => String(values.fotma_pago ?? '') === '1',
-		helpText: 'Solo aplica si la forma de pago es Crédito. Se bloquea automáticamente en Contado.',
+		disabledValue: '1',
+		placeholder: 'Ej. 3',
+		helpText:
+			'En Contado queda fijo en 1 (un solo pago). Si es Crédito y pones más de 1, se programan ' +
+			'automáticamente esa cantidad de pagos futuros al guardar, uno por mes desde la Fecha ' +
+			'Emisión, sin pasar la Fecha Vencimiento.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false

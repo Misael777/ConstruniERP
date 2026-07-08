@@ -7,7 +7,7 @@
  * formulario/tabla de "centro_costo": tipos, validaciones, máscaras,
  * opciones de select y orden por defecto.
  *
- * El service (centroCostos.service.ts), el +page.server.ts y el
+ * El service (centroCostos.service.ts), el +page.svelte (client-side, sin servidor) y el
  * modal (CentroCostoModal.svelte) leen FIELDS_CONFIG en lugar de
  * tener reglas hardcodeadas — así, para ajustar un formato (largo
  * máximo, regex, mayúsculas, opciones de un select, etc.) solo

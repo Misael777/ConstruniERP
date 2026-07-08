@@ -10,6 +10,7 @@
  *   CREATE TABLE cuentas_cobrar (
  *     id_cuenta_cobrar   BIGSERIAL PRIMARY KEY,
  *     id_cliente         BIGINT NOT NULL REFERENCES cliente(id_cliente),
+ *     id_centro_costo    BIGINT REFERENCES centro_costo(id_centro_costo), -- agregada por migración (ver nota abajo)
  *     id_proyecto        BIGINT REFERENCES proyecto(id_proyecto),
  *     tipo_documento     SMALLINT,
  *     num_documento      VARCHAR(50),
@@ -43,6 +44,11 @@
  * - `tipo_documento`, `forma_pago`, "condición_pago" son códigos SMALLINT sin tabla de referencia
  *   en el esquema actual — AJUSTAR: conviértelos a 'select' con `options` fijas (o `optionsSource`
  *   apuntando a una tabla de catálogo) en cuanto el ERP defina qué significa cada código.
+ * - `id_centro_costo` se agregó vía migración manual (ALTER TABLE, ver transacciones.service.ts) para
+ *   poder generar automáticamente una fila en `transaccion` (tipo 'ingreso') cada vez que se registra
+ *   un cobro nuevo — ese centro de costo se usa como DESTINO de la transacción (ahí entra el ingreso).
+ *   Cuentas creadas ANTES de la migración quedan con id_centro_costo NULL: en ese caso la generación
+ *   automática de la transacción simplemente se omite (no bloquea el registro del cobro).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -61,8 +67,19 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Cliente',
 		tipo: 'select',
 		required: true,
-		optionsSource: 'cliente', // opciones cargadas en runtime desde la tabla cliente, ver +page.server.ts
+		optionsSource: 'cliente', // opciones cargadas en runtime desde la tabla cliente, ver +page.svelte (client-side, sin servidor)
 		showInTable: true,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'id_centro_costo',
+		label: 'Centro de Costo',
+		tipo: 'select',
+		required: true,
+		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
+		helpText: 'Centro de costo que recibe este ingreso. Se usa como destino al generar automáticamente la transacción del cobro.',
+		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},

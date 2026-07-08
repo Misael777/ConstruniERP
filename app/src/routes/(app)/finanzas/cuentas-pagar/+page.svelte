@@ -14,6 +14,7 @@
 		deletePago,
 		getProveedorOptions
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
 	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
@@ -51,7 +52,7 @@
 	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
-	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [] });
+	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [] });
 
 	let selectedId = $state<number | null>(null);
 	let selectedPagos = $state<Pago[]>([]);
@@ -60,6 +61,7 @@
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaPagar | null>(null);
 	let pagoModalOpen = $state(false);
+	let editingPago = $state<Pago | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -94,9 +96,12 @@
 			return;
 		}
 		try {
-			dynamicOptions = { id_proveedor: await getProveedorOptions(supabase) };
+			dynamicOptions = {
+				id_proveedor: await getProveedorOptions(supabase),
+				id_centro_costo: await getCentroCostoOptions(supabase)
+			};
 		} catch (err: any) {
-			toast.error(err?.message ?? 'No se pudieron cargar proveedores');
+			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
 		await fetchList();
 	});
@@ -181,6 +186,19 @@
 		} finally {
 			await Promise.all([fetchList(), fetchSelectedPagos()]);
 		}
+	}
+
+	function openCreatePago() {
+		editingPago = null;
+		pagoModalOpen = true;
+	}
+	function openEditPago(pago: Pago) {
+		editingPago = pago;
+		pagoModalOpen = true;
+	}
+	function closePagoModal() {
+		pagoModalOpen = false;
+		editingPago = null;
 	}
 
 	async function handleSaved() {
@@ -306,7 +324,7 @@
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
-				<button type="button" onclick={() => (pagoModalOpen = true)} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
+				<button type="button" onclick={openCreatePago} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
 					<Plus size={14} /> Registrar Pago
 				</button>
 			</div>
@@ -321,17 +339,36 @@
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">Monto</th>
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">Medio</th>
 							<th class="text-left px-3 py-2 font-semibold text-slate-600">N° Operación</th>
+							<th class="text-left px-3 py-2 font-semibold text-slate-600">Estado</th>
 							<th class="text-right px-3 py-2 font-semibold text-slate-600">Acciones</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each selectedPagos as pago (pago.id_pago)}
-							<tr class="border-b border-slate-100">
+							<tr
+								class={`border-b border-slate-100 ${pago.estado_pago === 'programado' ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+								ondblclick={() => pago.estado_pago === 'programado' && openEditPago(pago)}
+								title={pago.estado_pago === 'programado' ? 'Doble clic para editar/cancelar esta cuota' : undefined}
+							>
 								<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
 								<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
 								<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
 								<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
+								<td class="px-3 py-2">
+									{#if pago.estado_pago === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if pago.estado_pago === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+									{:else}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
+									{/if}
+								</td>
 								<td class="px-3 py-2 text-right">
+									{#if pago.estado_pago === 'programado'}
+										<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+											<Pencil size={16} />
+										</button>
+									{/if}
 									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
 										<Trash2 size={16} />
 									</button>
@@ -346,4 +383,4 @@
 </div>
 
 <CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
-<PagoModal open={pagoModalOpen} idCuentaPagar={selectedId} onClose={() => (pagoModalOpen = false)} onSaved={handlePagoSaved} />
+<PagoModal open={pagoModalOpen} idCuentaPagar={selectedId} pago={editingPago} onClose={closePagoModal} onSaved={handlePagoSaved} />

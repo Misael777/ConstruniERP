@@ -3,32 +3,34 @@
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
-	import { createCuentaPagar, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transDetalle.config';
+	import { createTransDetalle, updateTransDetalle } from '$lib/modules/transacciones/services/transacciones.service';
+	import type { TransDetalle } from '$lib/modules/transacciones/services/transacciones.service';
 
 	let {
 		open = false,
-		mode = 'create',
-		cuenta = null,
+		idTransaccion,
+		detalle = null,
 		dynamicOptions = {},
 		onClose,
 		onSaved
 	}: {
 		open: boolean;
-		mode: 'create' | 'edit';
-		cuenta: CuentaPagar | null;
+		idTransaccion: number | null;
+		detalle?: TransDetalle | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
 		onSaved: () => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
+	const mode = $derived(detalle ? 'edit' : 'create');
+	const title = $derived(detalle ? 'Editar Detalle' : 'Agregar Detalle');
 
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
-			const raw = cuenta ? (cuenta as any)[field.key] : '';
+			const raw = detalle ? (detalle as any)[field.key] : '';
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		return values;
@@ -45,28 +47,6 @@
 		}
 	});
 
-	// Recalcula en vivo los campos con computeValue (monto_imponible, monto_igv, monto_retencion)
-	// cada vez que cambia algo de lo que dependen (monto_comprometido, detraccion, etc.). También
-	// fuerza los campos bloqueados por disabledWhen a su disabledValue (ej. Número de Cuotas -> "1"
-	// cuando Forma de Pago es Contado), para que lo que se VE coincida con lo que se va a guardar.
-	$effect(() => {
-		for (const field of formFields) {
-			if (field.computeValue) {
-				const computed = String(field.computeValue(formValues) ?? '');
-				if (formValues[field.key] !== computed) formValues[field.key] = computed;
-				continue;
-			}
-			if (field.disabledWhen?.(formValues)) {
-				const forzado = String(field.disabledValue ?? '');
-				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
-			}
-		}
-	});
-
-	function isDisabled(field: (typeof formFields)[number]): boolean {
-		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
-	}
-
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -79,10 +59,6 @@
 	}
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
-	const title = $derived(mode === 'create' ? 'Nueva Cuenta por Pagar' : 'Editar Cuenta por Pagar');
-
-	const modalWidthClass = $derived(formFields.length <= 4 ? 'max-w-md' : formFields.length <= 8 ? 'max-w-2xl' : 'max-w-4xl');
-	const gridColsClass = $derived(formFields.length <= 4 ? 'grid-cols-1' : formFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
@@ -92,19 +68,20 @@
 		event.preventDefault();
 		revalidate();
 		if (hasErrors) return;
+		if (mode === 'create' && !idTransaccion) return;
 
 		submitting = true;
 		try {
 			let result;
-			if (mode === 'edit' && cuenta) {
-				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues);
+			if (mode === 'edit' && detalle) {
+				result = await updateTransDetalle(supabase, detalle.id_trans_detalle, formValues);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
-				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+				result = await createTransDetalle(supabase, idTransaccion as number, formValues, userData?.user?.email ?? null);
 			}
 
 			if (result.success) {
-				toast.success(result.message ?? 'Operación realizada con éxito');
+				toast.success(result.message ?? 'Guardado con éxito');
 				onSaved();
 				onClose();
 			} else {
@@ -121,7 +98,7 @@
 
 {#if open}
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-		<div class={`bg-white rounded-2xl shadow-2xl w-full ${modalWidthClass} max-h-[90vh] overflow-y-auto`}>
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
 				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
@@ -130,22 +107,21 @@
 			</div>
 
 			<form onsubmit={handleSubmit}>
-				<div class={`p-6 grid ${gridColsClass} gap-4`}>
+				<div class="p-6 grid grid-cols-1 gap-4">
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`ccp-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`td-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
 							{#if field.tipo === 'select' || field.options}
 								<select
-									id={`ccp-${field.key}`}
+									id={`td-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
-									disabled={isDisabled(field)}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
 									{#each optionsFor(field) as opt}
@@ -154,16 +130,15 @@
 								</select>
 							{:else}
 								<input
-									id={`ccp-${field.key}`}
+									id={`td-${field.key}`}
 									name={field.key}
-									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
-									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
+									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
+									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
-									disabled={isDisabled(field)}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 							{/if}
 
@@ -186,7 +161,7 @@
 					</button>
 					<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 						{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
-						{mode === 'create' ? 'Crear' : 'Actualizar'}
+						{mode === 'edit' ? 'Guardar Cambios' : 'Agregar'}
 					</button>
 				</div>
 			</form>

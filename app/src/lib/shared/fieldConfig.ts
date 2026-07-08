@@ -57,11 +57,16 @@ export interface FieldConfig {
 	sortable?: boolean;
 	defaultSort?: 'asc' | 'desc';
 	/**
-	 * Bloquea el campo (input deshabilitado, no se valida, se guarda como null) cuando esta función
-	 * devuelve true, evaluada contra el payload completo del formulario (para poder depender del
-	 * valor de OTRO campo). Ej.: cuotas.disabledWhen = (v) => v.forma_pago === '1' (Contado).
+	 * Bloquea el campo (input deshabilitado, no se valida) cuando esta función devuelve true,
+	 * evaluada contra el payload completo del formulario (para poder depender del valor de OTRO
+	 * campo). Ej.: cuotas.disabledWhen = (v) => v.forma_pago === '1' (Contado).
 	 */
 	disabledWhen?: (payload: Record<string, unknown>) => boolean;
+	/**
+	 * Valor que toma el campo mientras está bloqueado por disabledWhen (en vez de vaciarse a null).
+	 * Ej.: cuotas.disabledValue = '1' -> Contado siempre queda en "1 cuota" en vez de vacío.
+	 */
+	disabledValue?: string | number;
 	/**
 	 * Convierte el campo en "calculado": se muestra deshabilitado (no se escribe a mano), su valor
 	 * se recalcula en vivo a partir del resto del payload, no se valida, y al guardar SIEMPRE se usa
@@ -193,7 +198,9 @@ export function buildWritablePayload(fields: FieldConfig[], payload: Record<stri
 	for (const field of fields) {
 		if (!field.showInForm) continue;
 		if (field.disabledWhen?.(payload)) {
-			result[field.key] = null; // campo bloqueado -> se guarda vacío, sin importar lo que tenga el formulario
+			// Campo bloqueado -> usa disabledValue si se definió (ej. "1"), si no queda vacío. Nunca lo
+			// que tenga el formulario, sin importar lo que el usuario haya escrito antes de bloquearse.
+			result[field.key] = field.disabledValue ?? null;
 			continue;
 		}
 		if (field.computeValue) {

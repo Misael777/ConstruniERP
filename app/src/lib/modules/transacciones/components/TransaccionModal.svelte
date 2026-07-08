@@ -3,21 +3,21 @@
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
-	import { createCuentaPagar, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
+	import { createTransaccion, updateTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 
 	let {
 		open = false,
 		mode = 'create',
-		cuenta = null,
+		transaccion = null,
 		dynamicOptions = {},
 		onClose,
 		onSaved
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
-		cuenta: CuentaPagar | null;
+		transaccion: Transaccion | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
 		onSaved: () => void;
@@ -28,7 +28,7 @@
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
-			const raw = cuenta ? (cuenta as any)[field.key] : '';
+			const raw = transaccion ? (transaccion as any)[field.key] : '';
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		return values;
@@ -45,28 +45,6 @@
 		}
 	});
 
-	// Recalcula en vivo los campos con computeValue (monto_imponible, monto_igv, monto_retencion)
-	// cada vez que cambia algo de lo que dependen (monto_comprometido, detraccion, etc.). También
-	// fuerza los campos bloqueados por disabledWhen a su disabledValue (ej. Número de Cuotas -> "1"
-	// cuando Forma de Pago es Contado), para que lo que se VE coincida con lo que se va a guardar.
-	$effect(() => {
-		for (const field of formFields) {
-			if (field.computeValue) {
-				const computed = String(field.computeValue(formValues) ?? '');
-				if (formValues[field.key] !== computed) formValues[field.key] = computed;
-				continue;
-			}
-			if (field.disabledWhen?.(formValues)) {
-				const forzado = String(field.disabledValue ?? '');
-				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
-			}
-		}
-	});
-
-	function isDisabled(field: (typeof formFields)[number]): boolean {
-		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
-	}
-
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -79,7 +57,7 @@
 	}
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
-	const title = $derived(mode === 'create' ? 'Nueva Cuenta por Pagar' : 'Editar Cuenta por Pagar');
+	const title = $derived(mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción');
 
 	const modalWidthClass = $derived(formFields.length <= 4 ? 'max-w-md' : formFields.length <= 8 ? 'max-w-2xl' : 'max-w-4xl');
 	const gridColsClass = $derived(formFields.length <= 4 ? 'grid-cols-1' : formFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
@@ -96,11 +74,11 @@
 		submitting = true;
 		try {
 			let result;
-			if (mode === 'edit' && cuenta) {
-				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues);
+			if (mode === 'edit' && transaccion) {
+				result = await updateTransaccion(supabase, transaccion.id_transaccion, formValues);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
-				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+				result = await createTransaccion(supabase, formValues, userData?.user?.email ?? null);
 			}
 
 			if (result.success) {
@@ -133,19 +111,18 @@
 				<div class={`p-6 grid ${gridColsClass} gap-4`}>
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`ccp-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`tr-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
 							{#if field.tipo === 'select' || field.options}
 								<select
-									id={`ccp-${field.key}`}
+									id={`tr-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
-									disabled={isDisabled(field)}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
 									{#each optionsFor(field) as opt}
@@ -154,16 +131,15 @@
 								</select>
 							{:else}
 								<input
-									id={`ccp-${field.key}`}
+									id={`tr-${field.key}`}
 									name={field.key}
-									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
-									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
+									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
+									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
-									disabled={isDisabled(field)}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 							{/if}
 

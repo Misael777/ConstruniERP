@@ -15,6 +15,7 @@
 		getClienteOptions,
 		getProyectoOptions
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
 	import type { CuentaCobrar, Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -52,7 +53,7 @@
 	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
-	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [] });
+	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [] });
 
 	let selectedId = $state<number | null>(null);
 	let selectedCobros = $state<Cobro[]>([]);
@@ -95,10 +96,14 @@
 			return;
 		}
 		try {
-			const [clienteOptions, proyectoOptions] = await Promise.all([getClienteOptions(supabase), getProyectoOptions(supabase)]);
-			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions };
+			const [clienteOptions, proyectoOptions, centroCostoOptions] = await Promise.all([
+				getClienteOptions(supabase),
+				getProyectoOptions(supabase),
+				getCentroCostoOptions(supabase)
+			]);
+			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptions };
 		} catch (err: any) {
-			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos');
+			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
 		await fetchList();
 	});
