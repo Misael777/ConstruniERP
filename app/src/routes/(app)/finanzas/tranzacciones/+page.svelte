@@ -328,7 +328,9 @@
 				<div class="flex items-center gap-2">
 					<ListTree class="text-amber-500" size={20} />
 					<h2 class="text-lg font-semibold text-[#0f3b5e]">
-						Detalle de la transacción — {formatCurrency(selectedTransaccion.monto_total)}
+						Detalle de la Transacción #{selectedTransaccion.id_transaccion}
+						{#if selectedTransaccion.num_documento}— {selectedTransaccion.num_documento}{/if}
+						— {formatCurrency(selectedTransaccion.monto_total)}
 					</h2>
 				</div>
 				<button type="button" onclick={openCreateDetalle} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
