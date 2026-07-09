@@ -7,12 +7,14 @@ export const googleDriveConfig = {
 	accessToken: env.GOOGLE_DRIVE_ACCESS_TOKEN || '',
 	folderIdContratos: env.GOOGLE_DRIVE_FOLDER_ID_CONTRATOS || '',
 	folderIdProformas: env.GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || '',
-	folderIdDocumentos: env.GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || ''
+	folderIdDocumentos: env.GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || '',
+	folderIdComprobantes: env.GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES || ''
 };
 
-function getDriveFolderId(type: 'contrato' | 'proforma' | 'documento') {
+function getDriveFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante') {
 	if (type === 'contrato') return googleDriveConfig.folderIdContratos;
 	if (type === 'documento') return googleDriveConfig.folderIdDocumentos;
+	if (type === 'comprobante') return googleDriveConfig.folderIdComprobantes;
 	return googleDriveConfig.folderIdProformas;
 }
 
@@ -48,7 +50,11 @@ async function getDriveAccessToken() {
 	return tokenData.access_token as string;
 }
 
-export async function uploadToDrive(file: File | Blob, fileName: string, type: 'contrato' | 'proforma' | 'documento') {
+export async function uploadToDrive(
+	file: File | Blob,
+	fileName: string,
+	type: 'contrato' | 'proforma' | 'documento' | 'comprobante'
+): Promise<{ url: string; fileId: string }> {
 	const folderId = getDriveFolderId(type);
 	if (!folderId) {
 		throw new Error(`Google Drive folder ID is not configured for type=${type}`);
@@ -94,5 +100,42 @@ export async function uploadToDrive(file: File | Blob, fileName: string, type: '
 		}
 	}
 
-	return `https://drive.google.com/uc?export=download&id=${fileId}`;
+	return { url: `https://drive.google.com/uc?export=download&id=${fileId}`, fileId };
+}
+
+/**
+ * Renombra un archivo ya subido — usado para el comprobante de una transacción recién creada, cuyo
+ * nombre definitivo (código = id_transaccion) solo se conoce después del insert (ver
+ * TransaccionModal.svelte). No es crítico: si falla, el archivo sigue accesible con su nombre temporal.
+ */
+export async function renameDriveFile(fileId: string, newName: string): Promise<void> {
+	const accessToken = await getDriveAccessToken();
+	const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+		method: 'PATCH',
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ name: newName })
+	});
+	if (!response.ok) {
+		const errorBody = await response.text();
+		throw new Error(`Google Drive rename failed: ${errorBody}`);
+	}
+}
+
+/**
+ * Borra un archivo de Drive por su id — usado para quitar el comprobante anterior de una transacción
+ * cuando se reemplaza por uno nuevo, para no dejar duplicados (ver TransaccionModal.svelte).
+ */
+export async function deleteDriveFile(fileId: string): Promise<void> {
+	const accessToken = await getDriveAccessToken();
+	const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${accessToken}` }
+	});
+	if (!response.ok && response.status !== 404) {
+		const errorBody = await response.text();
+		throw new Error(`Google Drive delete failed: ${errorBody}`);
+	}
 }

@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import { createCuentaPagar, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 
 	let {
 		open = false,
@@ -97,7 +98,7 @@
 		try {
 			let result;
 			if (mode === 'edit' && cuenta) {
-				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues);
+				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin());
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
 				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);

@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
 	import { createCobro, updateCobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 
 	let {
 		open = false,
@@ -22,8 +23,9 @@
 		onClose: () => void;
 		onSaved: () => void;
 		/** Se llama cuando una cuota recién pasa a 'cobrado' y hay un payload de transacción sugerido
-		 * para completar — ver updateCobro en cuentasCobrar.service.ts. */
-		onTransaccionSugerida?: (payload: Record<string, unknown>) => void;
+		 * para completar — ver updateCobro en cuentasCobrar.service.ts. idCobro es el que hay que
+		 * confirmar con confirmarCobroCobrado una vez el usuario complete esa transacción. */
+		onTransaccionSugerida?: (payload: Record<string, unknown>, idCobro: number) => void;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -81,7 +83,7 @@
 		try {
 			let result;
 			if (mode === 'edit' && cobro) {
-				result = await updateCobro(supabase, cobro.id_cobro, formValues, estadoCobro);
+				result = await updateCobro(supabase, cobro.id_cobro, formValues, estadoCobro, isAdmin());
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
 				result = await createCobro(supabase, idCuentaCobrar as number, formValues, userData?.user?.email ?? null);
@@ -91,7 +93,7 @@
 				toast.success(result.message ?? 'Guardado con éxito');
 				onSaved();
 				onClose();
-				if (result.transaccionSugerida) onTransaccionSugerida?.(result.transaccionSugerida);
+				if (result.transaccionSugerida && result.data) onTransaccionSugerida?.(result.transaccionSugerida, result.data.id_cobro);
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
 				if (result.errors) fieldErrors = { ...fieldErrors, ...result.errors };
@@ -131,7 +133,14 @@
 							</select>
 							<p class="mt-1 text-xs text-slate-400">
 								Pásala a "Cobrado" si se cobró antes o después de lo programado, o a "Cancelado" si ya no se hará.
+								{#if estadoCobro === 'cobrado' && cobro?.estado_cobro !== 'cobrado'}
+									<span class="block mt-1 text-amber-600 font-medium">Al guardar te pedirá completar la transacción de respaldo — sin ella no queda como "Cobrado".</span>
+								{/if}
 							</p>
+						</div>
+					{:else}
+						<div class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+							Al guardar te pedirá completar la transacción de respaldo — el cobro no queda confirmado como "Cobrado" hasta que la completes.
 						</div>
 					{/if}
 

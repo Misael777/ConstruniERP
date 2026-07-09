@@ -15,7 +15,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as COBRO_FIELDS
 } from '../config/cobro.config';
-import { registrarTransaccionPorCobro, construirPayloadTransaccionPorCobro } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorCobro, createTransaccion } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
@@ -56,6 +56,12 @@ export interface Cobro {
 	 * autogenerada desde "Número de Cuotas" (condición_pago); 'cancelado' = una 'programado' que el
 	 * usuario canceló editando su Estado — ninguna de las dos últimas cuenta para el saldo. */
 	estado_cobro: 'programado' | 'cobrado' | 'cancelado';
+	/** Transacción de respaldo (tipo 'ingreso') que prueba este cobro — ver createCobro y
+	 * confirmarCobroCobrado. Un cobro con estado_cobro='cobrado' SIEMPRE debe tener esto no-nulo. */
+	id_transaccion: number | null;
+	/** Solo viene poblado desde getCobros (join embebido) — usado en la UI para deshabilitar
+	 * editar/eliminar cuando la transacción vinculada ya fue aprobada por un administrador. */
+	transaccion?: { aprobado: boolean; aprobado_por: string | null } | null;
 }
 
 export interface ListParams {
@@ -85,6 +91,28 @@ export interface ServiceResult<T = undefined> {
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
+
+const BLOQUEADO_POR_APROBACION =
+	'No se puede modificar/eliminar: tiene un comprobante ya aprobado por un administrador. Solo un administrador puede hacerlo.';
+
+/** true si ALGUNO de los cobros de la cuenta tiene una transacción con aprobado=true. */
+async function cuentaTieneTransaccionAprobada(client: SupabaseClient, idCuentaCobrar: number): Promise<boolean> {
+	const { data } = await client
+		.from(COBRO_TABLE)
+		.select('transaccion:id_transaccion(aprobado)')
+		.eq(PARENT_FK_COLUMN, idCuentaCobrar);
+	return (data ?? []).some((row: any) => row.transaccion?.aprobado === true);
+}
+
+/** true si el cobro puntual tiene una transacción con aprobado=true. */
+async function cobroTieneTransaccionAprobada(client: SupabaseClient, idCobro: number): Promise<boolean> {
+	const { data } = await client
+		.from(COBRO_TABLE)
+		.select('transaccion:id_transaccion(aprobado)')
+		.eq(COBRO_PK, idCobro)
+		.maybeSingle();
+	return (data as any)?.transaccion?.aprobado === true;
+}
 
 export async function getCuentasCobrar(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<CuentaCobrar>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
@@ -237,11 +265,15 @@ async function resincronizarCobrosProgramados(
 export async function updateCuentaCobrar(
 	client: SupabaseClient,
 	id: number,
-	payload: Record<string, unknown>
+	payload: Record<string, unknown>,
+	esAdmin: boolean = false
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
 	// monto_cobrado / saldo_pendiente no se tocan aquí (showInForm:false los excluye de buildWritablePayload);
@@ -277,23 +309,49 @@ export async function updateCuentaCobrar(
 	return { success: true, message: 'Cuenta por cobrar actualizada correctamente', data: data as CuentaCobrar };
 }
 
-export async function deleteCuentaCobrar(client: SupabaseClient, id: number): Promise<ServiceResult> {
+/**
+ * Elimina la cuenta y, en cadena, sus cobros (ON DELETE CASCADE) Y las transacciones de respaldo
+ * vinculadas a esos cobros — `transaccion` no tiene FK hacia `cobros`, así que ese borrado en cadena
+ * no lo hace la BD sola y hay que hacerlo aquí explícitamente. Bloqueada para no-admins si algún
+ * cobro tiene una transacción ya aprobada (ver BLOQUEADO_POR_APROBACION).
+ */
+export async function deleteCuentaCobrar(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
+	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+
+	const { data: cobros } = await client.from(COBRO_TABLE).select('id_transaccion').eq(PARENT_FK_COLUMN, id);
+	const idsTransaccion = (cobros ?? []).map((c: any) => c.id_transaccion).filter((v: unknown): v is number => v !== null);
+
 	// ON DELETE CASCADE en cobros.id_cuenta_cobrar se encarga de borrar sus cobros asociados.
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	if (idsTransaccion.length > 0) {
+		await client.from('transaccion').delete().in('id_transaccion', idsTransaccion);
+	}
+
 	return { success: true, message: 'Cuenta por cobrar eliminada correctamente' };
 }
 
 export async function getCobros(client: SupabaseClient, idCuentaCobrar: number): Promise<Cobro[]> {
 	const { data, error } = await client
 		.from(COBRO_TABLE)
-		.select('*')
+		.select('*, transaccion:id_transaccion(aprobado, aprobado_por)')
 		.eq(PARENT_FK_COLUMN, idCuentaCobrar)
 		.order('fecha_cobro', { ascending: false });
 	if (error) throw error;
 	return (data ?? []) as Cobro[];
 }
 
+/**
+ * "Registrar Cobro" ya NO confirma solo — funciona exactamente igual que pasar una cuota programada
+ * a 'cobrado' (ver updateCobro): se inserta como 'programado' y se devuelve `transaccionSugerida`
+ * para que la UI abra el modal de "Nueva Transacción" de forma obligatoria (ver CobroModal.svelte,
+ * que ya reenvía esto sea alta o edición). El cobro solo pasa a 'cobrado' cuando el usuario confirma
+ * esa transacción (confirmarCobroCobrado) — si cancela, el cobro se queda como 'programado' (visible
+ * y editable/eliminable en la lista, no se pierde lo que ya escribió).
+ */
 export async function createCobro(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
@@ -305,50 +363,44 @@ export async function createCobro(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+		.eq(PK_COLUMN, idCuentaCobrar)
+		.single();
+	if (!cuenta?.id_centro_costo) {
+		return {
+			success: false,
+			message:
+				'No se puede registrar el cobro: la cuenta no tiene un Centro de Costo asignado (es necesario para generar la transacción de respaldo). Edita la cuenta y asígnale uno primero.'
+		};
+	}
+
 	const insertData = {
 		...buildWritablePayload(COBRO_FIELDS, payload),
 		[PARENT_FK_COLUMN]: idCuentaCobrar,
 		usuario_registro: usuarioRegistro,
-		estado_cobro: 'cobrado' // registrado a mano acá = cobro real, a diferencia de las cuotas autogeneradas
+		estado_cobro: 'programado' // queda así hasta confirmar la transacción — ver confirmarCobroCobrado
 	};
 
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
-	// Un cobro nuevo registrado a mano (no viene de editar una cuota programada) también debe restarse
-	// de lo que queda por cobrar: si no se ajustara, las cuotas 'programado' seguirían sumando el monto
-	// completo y el total quedaría descuadrado (cobrado + programado > monto).
-	await rebalancearUltimaCuota(client, idCuentaCobrar, data.id_cobro);
-	await recalcularCuentaCobrar(client, idCuentaCobrar);
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, cuenta, {
+		id_cobro: data.id_cobro,
+		monto: Number(data.monto),
+		fecha_cobro: data.fecha_cobro,
+		medio_cobro: data.medio_cobro,
+		cuenta_banco: data.cuenta_banco,
+		referencia: data.referencia
+	});
 
-	// Genera la transacción (tipo 'ingreso') asociada. Si falla, no revierte el cobro — ya se registró
-	// correctamente; esto es un registro contable secundario.
-	try {
-		const { data: cuenta } = await client
-			.from(TABLE_NAME)
-			.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
-			.eq(PK_COLUMN, idCuentaCobrar)
-			.single();
-		if (cuenta) {
-			await registrarTransaccionPorCobro(
-				client,
-				cuenta,
-				{
-					id_cobro: data.id_cobro,
-					monto: Number(data.monto),
-					fecha_cobro: data.fecha_cobro,
-					medio_cobro: data.medio_cobro,
-					cuenta_banco: data.cuenta_banco,
-					referencia: data.referencia
-				},
-				usuarioRegistro
-			);
-		}
-	} catch (err) {
-		console.error('No se pudo generar la transacción automática del cobro:', err);
-	}
-
-	return { success: true, message: 'Cobro registrado correctamente', data: data as Cobro };
+	return {
+		success: true,
+		message: 'Cobro guardado. Completa la transacción de respaldo para confirmarlo como Cobrado.',
+		data: data as Cobro,
+		transaccionSugerida: transaccionSugerida ?? undefined
+	};
 }
 
 /**
@@ -363,11 +415,15 @@ export async function updateCobro(
 	client: SupabaseClient,
 	idCobro: number,
 	payload: Record<string, unknown>,
-	estadoCobro?: 'programado' | 'cobrado' | 'cancelado'
+	estadoCobro?: 'programado' | 'cobrado' | 'cancelado',
+	esAdmin: boolean = false
 ): Promise<ServiceResult<Cobro>> {
 	const errors = validatePayload(COBRO_FIELDS, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+	if (!esAdmin && (await cobroTieneTransaccionAprobada(client, idCobro))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
 	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro').eq(COBRO_PK, idCobro).single();
@@ -388,8 +444,13 @@ export async function updateCobro(
 		}
 	}
 
+	// La transición a 'cobrado' NUNCA se persiste directamente aquí — exige una transacción de
+	// respaldo creada en el mismo paso (ver confirmarCobroCobrado, más abajo). El resto de los campos
+	// (monto, fecha, etc.) y cualquier otra transición de estado (a 'programado' o 'cancelado') sí se
+	// guardan normalmente en este mismo update.
+	const pasandoACobrado = estadoCobro === 'cobrado' && estadoAnterior !== 'cobrado';
 	const updateData: Record<string, unknown> = buildWritablePayload(COBRO_FIELDS, payload);
-	if (estadoCobro) updateData.estado_cobro = estadoCobro;
+	if (estadoCobro && !pasandoACobrado) updateData.estado_cobro = estadoCobro;
 
 	const { data, error } = await client.from(COBRO_TABLE).update(updateData).eq(COBRO_PK, idCobro).select('*').single();
 	if (error) return { success: false, message: `No se pudo editar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
@@ -401,36 +462,79 @@ export async function updateCobro(
 	}
 	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
 
-	// Una cuota que RECIÉN se vuelve 'cobrado' (venía de 'programado') es dinero que recién entró de
-	// verdad: en vez de insertar la transacción sola, se arma el payload sugerido y se devuelve para
-	// que la UI abra el modal de "Nueva Transacción" ya prellenado y el usuario la complete/confirme
-	// (ver CobroModal.svelte). Si ya estaba 'cobrado' antes (ej. solo se editó el monto o la
-	// referencia), no se sugiere nada de nuevo.
-	let transaccionSugerida: Record<string, unknown> | undefined;
-	if (estadoCobro === 'cobrado' && estadoAnterior !== 'cobrado') {
-		try {
-			const { data: cuenta } = await client
-				.from(TABLE_NAME)
-				.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
-				.eq(PK_COLUMN, data.id_cuenta_cobrar)
-				.single();
-			if (cuenta) {
-				const payload = await construirPayloadTransaccionPorCobro(client, cuenta, {
-					id_cobro: data.id_cobro,
-					monto: Number(data.monto),
-					fecha_cobro: data.fecha_cobro,
-					medio_cobro: data.medio_cobro,
-					cuenta_banco: data.cuenta_banco,
-					referencia: data.referencia
-				});
-				if (payload) transaccionSugerida = payload;
-			}
-		} catch (err) {
-			console.error('No se pudo preparar la transacción sugerida del cobro:', err);
-		}
+	if (!pasandoACobrado) {
+		return { success: true, message: 'Cobro actualizado correctamente', data: data as Cobro };
 	}
 
-	return { success: true, message: 'Cobro actualizado correctamente', data: data as Cobro, transaccionSugerida };
+	// Arma (sin insertar) el payload sugerido de la transacción de respaldo: la UI DEBE abrir el modal
+	// de "Nueva Transacción" con esto y el usuario tiene que confirmarlo (ver confirmarCobroCobrado) —
+	// si cancela ese paso, este cobro se queda tal como estaba (todavía NO 'cobrado', ver arriba).
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+		.eq(PK_COLUMN, data.id_cuenta_cobrar)
+		.single();
+
+	if (!cuenta?.id_centro_costo) {
+		return {
+			success: true,
+			message:
+				'Cambios guardados, pero no se pudo pasar a "Cobrado": la cuenta no tiene un Centro de Costo asignado (necesario para la transacción de respaldo). Asígnale uno editando la cuenta y vuelve a intentarlo.',
+			data: data as Cobro
+		};
+	}
+
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, cuenta, {
+		id_cobro: data.id_cobro,
+		monto: Number(data.monto),
+		fecha_cobro: data.fecha_cobro,
+		medio_cobro: data.medio_cobro,
+		cuenta_banco: data.cuenta_banco,
+		referencia: data.referencia
+	});
+
+	return {
+		success: true,
+		message: 'Cambios guardados. Completa la transacción de respaldo para confirmar el cobro.',
+		data: data as Cobro,
+		transaccionSugerida: transaccionSugerida ?? undefined
+	};
+}
+
+/**
+ * Segundo paso, obligatorio, para pasar una cuota programada a 'cobrado': crea la transacción de
+ * respaldo (a partir del payload que la UI arma con construirPayloadTransaccionPorCobro / lo que el
+ * usuario haya ajustado en el modal) y SOLO si se crea con éxito, confirma el cobro como 'cobrado'
+ * enlazado a ella. Si la transacción falla, el cobro NO se toca — sigue en su estado anterior (ver
+ * updateCobro, que deliberadamente no cambia estado_cobro hasta que esto se llama y funciona).
+ */
+export async function confirmarCobroCobrado(
+	client: SupabaseClient,
+	idCobro: number,
+	transaccionPayload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null
+): Promise<ServiceResult<Cobro>> {
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar').eq(COBRO_PK, idCobro).single();
+	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
+
+	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
+	if (!transResult.success || !transResult.data) {
+		return { success: false, message: transResult.message, errors: transResult.errors };
+	}
+
+	const { data, error } = await client
+		.from(COBRO_TABLE)
+		.update({ estado_cobro: 'cobrado', id_transaccion: transResult.data.id_transaccion })
+		.eq(COBRO_PK, idCobro)
+		.select('*')
+		.single();
+	if (error) return { success: false, message: `La transacción se creó, pero no se pudo confirmar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
+
+	await rebalancearUltimaCuota(client, data.id_cuenta_cobrar, idCobro);
+	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
+
+	return { success: true, message: 'Cobro confirmado como Cobrado', data: data as Cobro };
 }
 
 /**
@@ -499,9 +603,13 @@ async function rebalancearUltimaCuota(client: SupabaseClient, idCuentaCobrar: nu
 	await client.from(COBRO_TABLE).update({ monto: nuevoMonto }).eq(COBRO_PK, candidata.id_cobro);
 }
 
-export async function deleteCobro(client: SupabaseClient, idCobro: number): Promise<ServiceResult> {
+export async function deleteCobro(client: SupabaseClient, idCobro: number, esAdmin: boolean = false): Promise<ServiceResult> {
 	const { data: cobro, error: fetchError } = await client.from(COBRO_TABLE).select(PARENT_FK_COLUMN).eq(COBRO_PK, idCobro).single();
 	if (fetchError || !cobro) return { success: false, message: 'Cobro no encontrado' };
+
+	if (!esAdmin && (await cobroTieneTransaccionAprobada(client, idCobro))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
 
 	const { error } = await client.from(COBRO_TABLE).delete().eq(COBRO_PK, idCobro);
 	if (error) return { success: false, message: `No se pudo eliminar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
@@ -519,7 +627,7 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number): Prom
  * carrera es bajo, pero si el ERP crece a alta concurrencia, esto debería moverse a una función SQL
  * con transacción real.
  */
-async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
+export async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
 	const { data: cuenta } = await client.from(TABLE_NAME).select('monto, estado').eq(PK_COLUMN, idCuentaCobrar).single();
 	if (!cuenta) return;
 

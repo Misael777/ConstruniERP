@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { createCuentaCobrar, updateCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { CuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 
 	let {
 		open = false,
@@ -89,7 +90,7 @@
 		try {
 			let result;
 			if (mode === 'edit' && cuenta) {
-				result = await updateCuentaCobrar(supabase, cuenta.id_cuenta_cobrar, formValues);
+				result = await updateCuentaCobrar(supabase, cuenta.id_cuenta_cobrar, formValues, isAdmin());
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
 				result = await createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);

@@ -25,7 +25,11 @@
  *     cuente_destino              VARCHAR(20),   -- ídem
  *     estado                      VARCHAR(10),   -- sin CHECK real, texto libre (probado insertando valor arbitrario)
  *     usuario_registro            VARCHAR(100),
- *     created_at                  TIMESTAMPTZ DEFAULT NOW()
+ *     created_at                  TIMESTAMPTZ DEFAULT NOW(),
+ *     comprobante_url             TEXT,  -- agregada por migración, ver transaccion_comprobante_migration.sql
+ *     aprobado                    BOOLEAN NOT NULL DEFAULT FALSE, -- agregada por migración, ver transaccion_aprobacion_migration.sql
+ *     aprobado_por                VARCHAR(100),
+ *     aprobado_en                 TIMESTAMPTZ
  *   );
  *
  * Notas importantes:
@@ -234,6 +238,27 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		showInTable: false,
 		showInForm: true,
 		sortable: false
+	},
+	{
+		// No editable por el motor genérico (showInForm:false, mismo criterio que id_nombre): se sube a
+		// Google Drive y se completa desde TransaccionModal.svelte (ver uploadComprobante) — createTransaccion/
+		// updateTransaccion lo exigen (no-nulo) antes de guardar, ver transacciones.service.ts.
+		key: 'comprobante_url',
+		label: 'Comprobante',
+		tipo: 'readonly',
+		showInTable: false,
+		showInForm: false,
+		sortable: false
+	},
+	{
+		// Solo se cambia vía aprobarTransaccion/desaprobarTransaccion (botón "Aprobar", solo admin) —
+		// nunca por el formulario genérico. Ver transacciones.service.ts.
+		key: 'aprobado',
+		label: 'Aprobado',
+		tipo: 'readonly',
+		showInTable: true,
+		showInForm: false,
+		sortable: true
 	},
 	{
 		key: 'estado',

@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Wallet, Receipt, FileText, LayoutGrid } from '@lucide/svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
@@ -12,7 +12,8 @@
 		deleteCuentaPagar,
 		getPagos,
 		deletePago,
-		getProveedorOptions
+		getProveedorOptions,
+		confirmarPagoPagado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
@@ -66,6 +67,10 @@
 	let editingPago = $state<Pago | null>(null);
 	let transaccionModalOpen = $state(false);
 	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
+	/** Pago que se está confirmando como 'pagado' vía el TransaccionModal — ver
+	 * handleTransaccionSugerida/confirmarTransaccionPago. null = TransaccionModal está en su modo
+	 * normal (crear una transacción suelta), no en el flujo de confirmación obligatoria. */
+	let confirmandoPagoId = $state<number | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -165,9 +170,9 @@
 	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_pagar === selectedId) ?? null);
 
 	async function handleDelete(item: CuentaPagar) {
-		if (!confirm('¿Eliminar esta cuenta por pagar y todos sus pagos registrados? Esta acción no se puede deshacer.')) return;
+		if (!confirm('¿Eliminar esta cuenta por pagar y todos sus pagos registrados? Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer.')) return;
 		try {
-			const result = await deleteCuentaPagar(supabase, item.id_cuenta_pagar);
+			const result = await deleteCuentaPagar(supabase, item.id_cuenta_pagar, isAdmin());
 			if (result.success) {
 				toast.success(result.message);
 				if (selectedId === item.id_cuenta_pagar) selectedId = null;
@@ -184,7 +189,7 @@
 	async function handleDeletePago(idPago: number) {
 		if (!confirm('¿Eliminar este pago? El saldo de la cuenta se recalculará.')) return;
 		try {
-			const result = await deletePago(supabase, idPago);
+			const result = await deletePago(supabase, idPago, isAdmin());
 			if (result.success) toast.success(result.message);
 			else toast.error(result.message);
 		} catch (err: any) {
@@ -215,13 +220,26 @@
 		await Promise.all([fetchList(), fetchSelectedPagos()]);
 	}
 
-	function handleTransaccionSugerida(payload: Record<string, unknown>) {
+	function handleTransaccionSugerida(payload: Record<string, unknown>, idPago: number) {
 		transaccionPrefill = payload;
+		confirmandoPagoId = idPago;
 		transaccionModalOpen = true;
 	}
 	function closeTransaccionModal() {
 		transaccionModalOpen = false;
 		transaccionPrefill = null;
+		confirmandoPagoId = null;
+	}
+
+	// Se pasa como onConfirm al TransaccionModal cuando está confirmando un pago (ver
+	// confirmandoPagoId) — crea la transacción Y confirma el pago como 'pagado' en un solo paso
+	// atómico (ver confirmarPagoPagado en cuentasPagar.service.ts). Si esto falla, el pago se queda
+	// como estaba (nunca "pagado" sin transacción).
+	async function confirmarTransaccionPago(payload: Record<string, unknown>) {
+		const { data: userData } = await supabase.auth.getUser();
+		const result = await confirmarPagoPagado(supabase, confirmandoPagoId as number, payload, userData?.user?.email ?? null, permisosState.userName || null);
+		if (result.success) await Promise.all([fetchList(), fetchSelectedPagos()]);
+		return result;
 	}
 </script>
 
@@ -360,33 +378,45 @@
 					</thead>
 					<tbody>
 						{#each selectedPagos as pago (pago.id_pago)}
+							{@const bloqueado = !!pago.transaccion?.aprobado && !isAdmin()}
 							<tr
-								class={`border-b border-slate-100 ${pago.estado_pago === 'programado' ? 'cursor-pointer hover:bg-slate-50' : ''}`}
-								ondblclick={() => pago.estado_pago === 'programado' && openEditPago(pago)}
-								title={pago.estado_pago === 'programado' ? 'Doble clic para editar/cancelar esta cuota' : undefined}
+								class={`border-b border-slate-100 ${pago.estado_pago === 'programado' && !bloqueado ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+								ondblclick={() => pago.estado_pago === 'programado' && !bloqueado && openEditPago(pago)}
+								title={pago.estado_pago === 'programado' && !bloqueado ? 'Doble clic para editar/cancelar esta cuota' : undefined}
 							>
 								<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
 								<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
 								<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
 								<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
 								<td class="px-3 py-2">
-									{#if pago.estado_pago === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
-									{:else if pago.estado_pago === 'cancelado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-									{:else}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
-									{/if}
+									<div class="flex items-center gap-1.5">
+										{#if pago.estado_pago === 'programado'}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+										{:else if pago.estado_pago === 'cancelado'}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+										{:else}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
+										{/if}
+										{#if pago.transaccion?.aprobado}
+											<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${pago.transaccion.aprobado_por ?? 'un administrador'}`} />
+										{/if}
+									</div>
 								</td>
 								<td class="px-3 py-2 text-right">
-									{#if pago.estado_pago === 'programado'}
-										<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
-											<Pencil size={16} />
+									{#if bloqueado}
+										<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
+											<Lock size={16} />
+										</span>
+									{:else}
+										{#if pago.estado_pago === 'programado'}
+											<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+												<Pencil size={16} />
+											</button>
+										{/if}
+										<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
+											<Trash2 size={16} />
 										</button>
 									{/if}
-									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
-										<Trash2 size={16} />
-									</button>
 								</td>
 							</tr>
 						{/each}
@@ -413,4 +443,7 @@
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
+	onConfirm={confirmandoPagoId ? confirmarTransaccionPago : null}
+	confirmTitle={confirmandoPagoId ? 'Confirmar Pago — Transacción de Respaldo' : null}
+	confirmButtonLabel={confirmandoPagoId ? 'Confirmar Pago' : null}
 />

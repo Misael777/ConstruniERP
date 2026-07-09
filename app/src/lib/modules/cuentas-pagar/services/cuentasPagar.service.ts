@@ -23,7 +23,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as PAGO_FIELDS
 } from '../config/pago.config';
-import { registrarTransaccionPorPago, construirPayloadTransaccionPorPago } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorPago, createTransaccion } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaPagar {
 	id_cuenta_pagar: number;
@@ -68,6 +68,12 @@ export interface Pago {
 	 * autogenerada desde "Número de Cuotas"; 'cancelado' = una 'programado' que el usuario canceló
 	 * editando su Estado (ver PagoModal.svelte) — ninguna de las dos últimas cuenta para el saldo. */
 	estado_pago: 'programado' | 'pagado' | 'cancelado';
+	/** Transacción de respaldo (tipo 'egreso') que prueba este pago — ver createPago y
+	 * confirmarPagoPagado. Un pago con estado_pago='pagado' SIEMPRE debe tener esto no-nulo. */
+	id_transaccion: number | null;
+	/** Solo viene poblado desde getPagos (join embebido) — usado en la UI para deshabilitar
+	 * editar/eliminar cuando la transacción vinculada ya fue aprobada por un administrador. */
+	transaccion?: { aprobado: boolean; aprobado_por: string | null } | null;
 }
 
 export interface ListParams {
@@ -97,6 +103,28 @@ export interface ServiceResult<T = undefined> {
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
+
+const BLOQUEADO_POR_APROBACION =
+	'No se puede modificar/eliminar: tiene un comprobante ya aprobado por un administrador. Solo un administrador puede hacerlo.';
+
+/** true si ALGUNO de los pagos de la cuenta tiene una transacción con aprobado=true. */
+async function cuentaTieneTransaccionAprobada(client: SupabaseClient, idCuentaPagar: number): Promise<boolean> {
+	const { data } = await client
+		.from(PAGO_TABLE)
+		.select('transaccion:id_transaccion(aprobado)')
+		.eq(PARENT_FK_COLUMN, idCuentaPagar);
+	return (data ?? []).some((row: any) => row.transaccion?.aprobado === true);
+}
+
+/** true si el pago puntual tiene una transacción con aprobado=true. */
+async function pagoTieneTransaccionAprobada(client: SupabaseClient, idPago: number): Promise<boolean> {
+	const { data } = await client
+		.from(PAGO_TABLE)
+		.select('transaccion:id_transaccion(aprobado)')
+		.eq(PAGO_PK, idPago)
+		.maybeSingle();
+	return (data as any)?.transaccion?.aprobado === true;
+}
 
 /**
  * Regla de negocio de `estado`: pagado si el saldo ya llegó a 0; vencido si hoy pasó la fecha de
@@ -305,11 +333,15 @@ async function generarCuotasProgramadas(
 export async function updateCuentaPagar(
 	client: SupabaseClient,
 	id: number,
-	payload: Record<string, unknown>
+	payload: Record<string, unknown>,
+	esAdmin: boolean = false
 ): Promise<ServiceResult<CuentaPagar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
@@ -340,23 +372,49 @@ export async function updateCuentaPagar(
 	return { success: true, message: 'Cuenta por pagar actualizada correctamente', data: data as CuentaPagar };
 }
 
-export async function deleteCuentaPagar(client: SupabaseClient, id: number): Promise<ServiceResult> {
+/**
+ * Elimina la cuenta y, en cadena, sus pagos (ON DELETE CASCADE) Y las transacciones de respaldo
+ * vinculadas a esos pagos — `transaccion` no tiene FK hacia `pagos`, así que ese borrado en cadena no
+ * lo hace la BD sola y hay que hacerlo aquí explícitamente. Bloqueada para no-admins si algún pago
+ * tiene una transacción ya aprobada (ver BLOQUEADO_POR_APROBACION).
+ */
+export async function deleteCuentaPagar(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
+	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+
+	const { data: pagos } = await client.from(PAGO_TABLE).select('id_transaccion').eq(PARENT_FK_COLUMN, id);
+	const idsTransaccion = (pagos ?? []).map((p: any) => p.id_transaccion).filter((v: unknown): v is number => v !== null);
+
 	// ON DELETE CASCADE en pagos.id_cuenta_pagar se encarga de borrar sus pagos asociados.
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar la cuenta por pagar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	if (idsTransaccion.length > 0) {
+		await client.from('transaccion').delete().in('id_transaccion', idsTransaccion);
+	}
+
 	return { success: true, message: 'Cuenta por pagar eliminada correctamente' };
 }
 
 export async function getPagos(client: SupabaseClient, idCuentaPagar: number): Promise<Pago[]> {
 	const { data, error } = await client
 		.from(PAGO_TABLE)
-		.select('*')
+		.select('*, transaccion:id_transaccion(aprobado, aprobado_por)')
 		.eq(PARENT_FK_COLUMN, idCuentaPagar)
 		.order('fecha_pago', { ascending: false });
 	if (error) throw error;
 	return (data ?? []) as Pago[];
 }
 
+/**
+ * "Registrar Pago" ya NO confirma solo — funciona exactamente igual que pasar una cuota programada a
+ * 'pagado' (ver updatePago): se inserta como 'programado' y se devuelve `transaccionSugerida` para
+ * que la UI abra el modal de "Nueva Transacción" de forma obligatoria (ver PagoModal.svelte, que ya
+ * reenvía esto sea alta o edición). El pago solo pasa a 'pagado' cuando el usuario confirma esa
+ * transacción (confirmarPagoPagado) — si cancela, el pago se queda como 'programado' (visible y
+ * editable/eliminable en la lista, no se pierde lo que ya escribió).
+ */
 export async function createPago(
 	client: SupabaseClient,
 	idCuentaPagar: number,
@@ -368,44 +426,43 @@ export async function createPago(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
+		.eq(PK_COLUMN, idCuentaPagar)
+		.single();
+	if (!cuenta?.id_centro_costo) {
+		return {
+			success: false,
+			message:
+				'No se puede registrar el pago: la cuenta no tiene un Centro de Costo asignado (es necesario para generar la transacción de respaldo). Edita la cuenta y asígnale uno primero.'
+		};
+	}
+
 	const insertData = {
 		...buildWritablePayload(PAGO_FIELDS, payload),
 		[PARENT_FK_COLUMN]: idCuentaPagar,
 		usuario_registro: usuarioRegistro,
-		estado_pago: 'pagado' // registrado a mano acá = pago real, a diferencia de las cuotas autogeneradas
+		estado_pago: 'programado' // queda así hasta confirmar la transacción — ver confirmarPagoPagado
 	};
 
 	const { data, error } = await client.from(PAGO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
 
-	// Un pago nuevo registrado a mano (no viene de editar una cuota programada) también debe restarse
-	// de lo que queda por pagar: si no se ajustara, las cuotas 'programado' seguirían sumando el monto
-	// completo y el total quedaría descuadrado (pagado + programado > monto_comprometido).
-	await rebalancearUltimaCuota(client, idCuentaPagar, data.id_pago);
-	await recalcularCuentaPagar(client, idCuentaPagar);
+	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, cuenta, {
+		id_pago: data.id_pago,
+		monto: Number(data.monto),
+		fecha_pago: data.fecha_pago,
+		medio_pago: data.medio_pago,
+		referencia: data.referencia
+	});
 
-	// Genera la transacción (tipo 'egreso') asociada, solo al registrar un pago nuevo (no cuando una
-	// cuota programada pasa a 'pagado' después, ver updatePago). Si falla, no revierte el pago — ya
-	// se registró correctamente; esto es un registro contable secundario.
-	try {
-		const { data: cuenta } = await client
-			.from(TABLE_NAME)
-			.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
-			.eq(PK_COLUMN, idCuentaPagar)
-			.single();
-		if (cuenta) {
-			await registrarTransaccionPorPago(
-				client,
-				cuenta,
-				{ id_pago: data.id_pago, monto: Number(data.monto), fecha_pago: data.fecha_pago, medio_pago: data.medio_pago, referencia: data.referencia },
-				usuarioRegistro
-			);
-		}
-	} catch (err) {
-		console.error('No se pudo generar la transacción automática del pago:', err);
-	}
-
-	return { success: true, message: 'Pago registrado correctamente', data: data as Pago };
+	return {
+		success: true,
+		message: 'Pago guardado. Completa la transacción de respaldo para confirmarlo como Pagado.',
+		data: data as Pago,
+		transaccionSugerida: transaccionSugerida ?? undefined
+	};
 }
 
 /**
@@ -419,11 +476,15 @@ export async function updatePago(
 	client: SupabaseClient,
 	idPago: number,
 	payload: Record<string, unknown>,
-	estadoPago?: 'programado' | 'pagado' | 'cancelado'
+	estadoPago?: 'programado' | 'pagado' | 'cancelado',
+	esAdmin: boolean = false
 ): Promise<ServiceResult<Pago>> {
 	const errors = validatePayload(PAGO_FIELDS, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+	if (!esAdmin && (await pagoTieneTransaccionAprobada(client, idPago))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
 	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago').eq(PAGO_PK, idPago).single();
@@ -444,8 +505,13 @@ export async function updatePago(
 		}
 	}
 
+	// La transición a 'pagado' NUNCA se persiste directamente aquí — exige una transacción de respaldo
+	// creada en el mismo paso (ver confirmarPagoPagado, más abajo). El resto de los campos (monto,
+	// fecha, etc.) y cualquier otra transición de estado (a 'programado' o 'cancelado') sí se guardan
+	// normalmente en este mismo update.
+	const pasandoAPagado = estadoPago === 'pagado' && estadoAnterior !== 'pagado';
 	const updateData: Record<string, unknown> = buildWritablePayload(PAGO_FIELDS, payload);
-	if (estadoPago) updateData.estado_pago = estadoPago;
+	if (estadoPago && !pasandoAPagado) updateData.estado_pago = estadoPago;
 
 	const { data, error } = await client.from(PAGO_TABLE).update(updateData).eq(PAGO_PK, idPago).select('*').single();
 	if (error) return { success: false, message: `No se pudo editar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
@@ -457,35 +523,78 @@ export async function updatePago(
 	}
 	await recalcularCuentaPagar(client, data.id_cuenta_pagar);
 
-	// Una cuota que RECIÉN se vuelve 'pagado' (venía de 'programado') es dinero que recién salió de
-	// verdad: en vez de insertar la transacción sola, se arma el payload sugerido y se devuelve para
-	// que la UI abra el modal de "Nueva Transacción" ya prellenado y el usuario la complete/confirme
-	// (ver PagoModal.svelte). Si ya estaba 'pagado' antes (ej. solo se editó el monto o la referencia),
-	// no se sugiere nada de nuevo.
-	let transaccionSugerida: Record<string, unknown> | undefined;
-	if (estadoPago === 'pagado' && estadoAnterior !== 'pagado') {
-		try {
-			const { data: cuenta } = await client
-				.from(TABLE_NAME)
-				.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
-				.eq(PK_COLUMN, data.id_cuenta_pagar)
-				.single();
-			if (cuenta) {
-				const payload = await construirPayloadTransaccionPorPago(client, cuenta, {
-					id_pago: data.id_pago,
-					monto: Number(data.monto),
-					fecha_pago: data.fecha_pago,
-					medio_pago: data.medio_pago,
-					referencia: data.referencia
-				});
-				if (payload) transaccionSugerida = payload;
-			}
-		} catch (err) {
-			console.error('No se pudo preparar la transacción sugerida del pago:', err);
-		}
+	if (!pasandoAPagado) {
+		return { success: true, message: 'Pago actualizado correctamente', data: data as Pago };
 	}
 
-	return { success: true, message: 'Pago actualizado correctamente', data: data as Pago, transaccionSugerida };
+	// Arma (sin insertar) el payload sugerido de la transacción de respaldo: la UI DEBE abrir el modal
+	// de "Nueva Transacción" con esto y el usuario tiene que confirmarlo (ver confirmarPagoPagado) —
+	// si cancela ese paso, este pago se queda tal como estaba (todavía NO 'pagado', ver arriba).
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
+		.eq(PK_COLUMN, data.id_cuenta_pagar)
+		.single();
+
+	if (!cuenta?.id_centro_costo) {
+		return {
+			success: true,
+			message:
+				'Cambios guardados, pero no se pudo pasar a "Pagado": la cuenta no tiene un Centro de Costo asignado (necesario para la transacción de respaldo). Asígnale uno editando la cuenta y vuelve a intentarlo.',
+			data: data as Pago
+		};
+	}
+
+	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, cuenta, {
+		id_pago: data.id_pago,
+		monto: Number(data.monto),
+		fecha_pago: data.fecha_pago,
+		medio_pago: data.medio_pago,
+		referencia: data.referencia
+	});
+
+	return {
+		success: true,
+		message: 'Cambios guardados. Completa la transacción de respaldo para confirmar el pago.',
+		data: data as Pago,
+		transaccionSugerida: transaccionSugerida ?? undefined
+	};
+}
+
+/**
+ * Segundo paso, obligatorio, para pasar una cuota programada a 'pagado': crea la transacción de
+ * respaldo (a partir del payload que la UI arma con construirPayloadTransaccionPorPago / lo que el
+ * usuario haya ajustado en el modal) y SOLO si se crea con éxito, confirma el pago como 'pagado'
+ * enlazado a ella. Si la transacción falla, el pago NO se toca — sigue en su estado anterior (ver
+ * updatePago, que deliberadamente no cambia estado_pago hasta que esto se llama y funciona).
+ */
+export async function confirmarPagoPagado(
+	client: SupabaseClient,
+	idPago: number,
+	transaccionPayload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null
+): Promise<ServiceResult<Pago>> {
+	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar').eq(PAGO_PK, idPago).single();
+	if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
+
+	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
+	if (!transResult.success || !transResult.data) {
+		return { success: false, message: transResult.message, errors: transResult.errors };
+	}
+
+	const { data, error } = await client
+		.from(PAGO_TABLE)
+		.update({ estado_pago: 'pagado', id_transaccion: transResult.data.id_transaccion })
+		.eq(PAGO_PK, idPago)
+		.select('*')
+		.single();
+	if (error) return { success: false, message: `La transacción se creó, pero no se pudo confirmar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
+
+	await rebalancearUltimaCuota(client, data.id_cuenta_pagar, idPago);
+	await recalcularCuentaPagar(client, data.id_cuenta_pagar);
+
+	return { success: true, message: 'Pago confirmado como Pagado', data: data as Pago };
 }
 
 /**
@@ -556,9 +665,13 @@ async function rebalancearUltimaCuota(client: SupabaseClient, idCuentaPagar: num
 	await client.from(PAGO_TABLE).update({ monto: nuevoMonto }).eq(PAGO_PK, candidata.id_pago);
 }
 
-export async function deletePago(client: SupabaseClient, idPago: number): Promise<ServiceResult> {
+export async function deletePago(client: SupabaseClient, idPago: number, esAdmin: boolean = false): Promise<ServiceResult> {
 	const { data: pago, error: fetchError } = await client.from(PAGO_TABLE).select(PARENT_FK_COLUMN).eq(PAGO_PK, idPago).single();
 	if (fetchError || !pago) return { success: false, message: 'Pago no encontrado' };
+
+	if (!esAdmin && (await pagoTieneTransaccionAprobada(client, idPago))) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
 
 	const { error } = await client.from(PAGO_TABLE).delete().eq(PAGO_PK, idPago);
 	if (error) return { success: false, message: `No se pudo eliminar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
@@ -573,7 +686,7 @@ export async function deletePago(client: SupabaseClient, idPago: number): Promis
  * como pagos reales), y ajusta estado con computeEstadoCuentaPagar. No es una transacción atómica
  * de BD — ver misma nota en cuentasCobrar.service.ts.
  */
-async function recalcularCuentaPagar(client: SupabaseClient, idCuentaPagar: number): Promise<void> {
+export async function recalcularCuentaPagar(client: SupabaseClient, idCuentaPagar: number): Promise<void> {
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
 		.select('monto_comprometido, fecha_vencimiento, fecha_pago_programada')

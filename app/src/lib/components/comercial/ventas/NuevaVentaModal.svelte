@@ -114,7 +114,7 @@ let codigoGenerado = $derived(
 		if (isRunningInTauri()) {
 			const ext      = file.name.includes('.') ? `.${file.name.split('.').pop()}` : '';
 			const baseName = `${type}-${Date.now()}-${safeSegment(file.name.replace(/\.[^.]+$/, ''))}`;
-			const url = await uploadToDriveClient(file, `${baseName}${ext}`, type);
+			const { url } = await uploadToDriveClient(file, `${baseName}${ext}`, type);
 			console.log(`[NuevaVentaModal] ✓ Tauri upload OK. URL: ${url}`);
 			return url;
 		}

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
@@ -163,9 +163,16 @@
 	const selectedTransaccion = $derived(items.find((i) => i.id_transaccion === selectedId) ?? null);
 
 	async function handleDelete(item: Transaccion) {
-		if (!confirm('¿Eliminar esta transacción y todo su detalle? Esta acción no se puede deshacer.')) return;
+		if (item.aprobado && !isAdmin()) {
+			toast.error('No se puede eliminar: el comprobante ya fue aprobado por un administrador.');
+			return;
+		}
+		const advertencia = item.aprobado
+			? '¿Eliminar esta transacción APROBADA y todo su detalle? Si está vinculada a un cobro/pago, ese cobro/pago volverá a quedar pendiente. Esta acción no se puede deshacer.'
+			: '¿Eliminar esta transacción y todo su detalle? Si está vinculada a un cobro/pago, ese cobro/pago volverá a quedar pendiente. Esta acción no se puede deshacer.';
+		if (!confirm(advertencia)) return;
 		try {
-			const result = await deleteTransaccion(supabase, item.id_transaccion);
+			const result = await deleteTransaccion(supabase, item.id_transaccion, isAdmin());
 			if (result.success) {
 				toast.success(result.message);
 				if (selectedId === item.id_transaccion) selectedId = null;
@@ -275,12 +282,25 @@
 				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${selectedId === item.id_transaccion ? 'bg-blue-50 hover:bg-blue-50' : ''}`}
 				onclick={() => selectRow(item)}
 			>
-				<div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 bg-slate-100 text-slate-500">
-					<FileText size={18} />
+				<div class="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-100 text-slate-500 flex items-center justify-center">
+					{#if item.comprobante_url}
+						<img
+							src={item.comprobante_url}
+							alt="Comprobante"
+							class="w-full h-full object-cover"
+							onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget as HTMLImageElement).nextElementSibling?.classList.remove('hidden'); }}
+						/>
+						<FileText size={18} class="hidden" />
+					{:else}
+						<FileText size={18} />
+					{/if}
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 truncate">
+					<p class="font-semibold text-slate-800 truncate flex items-center gap-1.5">
 						{centroCostoLabel(item.id_centro_costo_origen)} → {centroCostoLabel(item.id_centro_costo_destino)}
+						{#if item.aprobado}
+							<ShieldCheck size={14} class="text-emerald-600 shrink-0" title={`Aprobado por ${item.aprobado_por ?? 'un administrador'}`} />
+						{/if}
 					</p>
 					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
 					<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
@@ -298,15 +318,26 @@
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						{/if}
+						{#if item.aprobado}
+							<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
+								<ShieldCheck size={11} /> Aprobado
+							</span>
+						{/if}
 					</div>
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
 					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 						<Pencil size={16} />
 					</button>
-					<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-						<Trash2 size={16} />
-					</button>
+					{#if item.aprobado && !isAdmin()}
+						<span class="p-1.5 text-slate-300" title="Bloqueado: comprobante aprobado, solo un administrador puede eliminarlo">
+							<Lock size={16} />
+						</span>
+					{:else}
+						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+							<Trash2 size={16} />
+						</button>
+					{/if}
 				</div>
 			</div>
 		{:else}

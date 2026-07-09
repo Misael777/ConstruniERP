@@ -30,9 +30,10 @@ export function isRunningInTauri(): boolean {
 	return false;
 }
 
-function getFolderId(type: 'contrato' | 'proforma' | 'documento'): string {
+function getFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante'): string {
 	if (type === 'contrato') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_CONTRATOS || '';
 	if (type === 'documento') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || '';
+	if (type === 'comprobante') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES || '';
 	return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || '';
 }
 
@@ -73,13 +74,14 @@ async function getAccessToken(): Promise<string> {
 
 /**
  * Upload a file to Google Drive directly from the browser/Tauri WebView.
- * Returns the public download URL (same format as the server-side version).
+ * Returns the public download URL plus the Drive file id (needed to rename/delete it later —
+ * see renameDriveFileClient/deleteDriveFileClient below).
  */
 export async function uploadToDriveClient(
 	file: File | Blob,
 	fileName: string,
-	type: 'contrato' | 'proforma' | 'documento'
-): Promise<string> {
+	type: 'contrato' | 'proforma' | 'documento' | 'comprobante'
+): Promise<{ url: string; fileId: string }> {
 	const folderId = getFolderId(type);
 	if (!folderId) {
 		throw new Error(`Google Drive folder ID not configured for type="${type}"`);
@@ -123,7 +125,34 @@ export async function uploadToDriveClient(
 		}
 	}
 
-	return `https://drive.google.com/uc?export=download&id=${fileId}`;
+	return { url: `https://drive.google.com/uc?export=download&id=${fileId}`, fileId };
+}
+
+/** Renames an already-uploaded Drive file — used to rename a comprobante to its final
+ * transacción-code-based name once the transacción's real id is known (see TransaccionModal.svelte). */
+export async function renameDriveFileClient(fileId: string, newName: string): Promise<void> {
+	const accessToken = await getAccessToken();
+	const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+		method: 'PATCH',
+		headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+		body: JSON.stringify({ name: newName })
+	});
+	if (!res.ok) {
+		throw new Error(`Google Drive rename failed: ${await res.text()}`);
+	}
+}
+
+/** Deletes a Drive file by id — used to remove a comprobante's previous file when it's replaced,
+ * so re-uploads don't pile up as duplicates (see TransaccionModal.svelte). */
+export async function deleteDriveFileClient(fileId: string): Promise<void> {
+	const accessToken = await getAccessToken();
+	const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${accessToken}` }
+	});
+	if (!res.ok && res.status !== 404) {
+		throw new Error(`Google Drive delete failed: ${await res.text()}`);
+	}
 }
 
 /** Safe filename segment: remove special chars, collapse underscores */

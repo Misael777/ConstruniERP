@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText } from '@lucide/svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText, Lock, ShieldCheck } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
@@ -13,7 +13,8 @@
 		getCobros,
 		deleteCobro,
 		getClienteOptions,
-		getProyectoOptions
+		getProyectoOptions,
+		confirmarCobroCobrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
@@ -67,6 +68,10 @@
 	let editingCobro = $state<Cobro | null>(null);
 	let transaccionModalOpen = $state(false);
 	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
+	/** Cobro que se está confirmando como 'cobrado' vía el TransaccionModal — ver
+	 * handleTransaccionSugerida/confirmarTransaccionCobro. null = TransaccionModal está en su modo
+	 * normal (crear una transacción suelta), no en el flujo de confirmación obligatoria. */
+	let confirmandoCobroId = $state<number | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -167,9 +172,9 @@
 	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_cobrar === selectedId) ?? null);
 
 	async function handleDelete(item: CuentaCobrar) {
-		if (!confirm('¿Eliminar esta cuenta por cobrar y todos sus cobros registrados? Esta acción no se puede deshacer.')) return;
+		if (!confirm('¿Eliminar esta cuenta por cobrar y todos sus cobros registrados? Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer.')) return;
 		try {
-			const result = await deleteCuentaCobrar(supabase, item.id_cuenta_cobrar);
+			const result = await deleteCuentaCobrar(supabase, item.id_cuenta_cobrar, isAdmin());
 			if (result.success) {
 				toast.success(result.message);
 				if (selectedId === item.id_cuenta_cobrar) selectedId = null;
@@ -186,7 +191,7 @@
 	async function handleDeleteCobro(idCobro: number) {
 		if (!confirm('¿Eliminar este cobro? El saldo de la cuenta se recalculará.')) return;
 		try {
-			const result = await deleteCobro(supabase, idCobro);
+			const result = await deleteCobro(supabase, idCobro, isAdmin());
 			if (result.success) toast.success(result.message);
 			else toast.error(result.message);
 		} catch (err: any) {
@@ -217,13 +222,26 @@
 		await Promise.all([fetchList(), fetchSelectedCobros()]);
 	}
 
-	function handleTransaccionSugerida(payload: Record<string, unknown>) {
+	function handleTransaccionSugerida(payload: Record<string, unknown>, idCobro: number) {
 		transaccionPrefill = payload;
+		confirmandoCobroId = idCobro;
 		transaccionModalOpen = true;
 	}
 	function closeTransaccionModal() {
 		transaccionModalOpen = false;
 		transaccionPrefill = null;
+		confirmandoCobroId = null;
+	}
+
+	// Se pasa como onConfirm al TransaccionModal cuando está confirmando un cobro (ver
+	// confirmandoCobroId) — crea la transacción Y confirma el cobro como 'cobrado' en un solo paso
+	// atómico (ver confirmarCobroCobrado en cuentasCobrar.service.ts). Si esto falla, el cobro se
+	// queda como estaba (nunca "cobrado" sin transacción).
+	async function confirmarTransaccionCobro(payload: Record<string, unknown>) {
+		const { data: userData } = await supabase.auth.getUser();
+		const result = await confirmarCobroCobrado(supabase, confirmandoCobroId as number, payload, userData?.user?.email ?? null, permisosState.userName || null);
+		if (result.success) await Promise.all([fetchList(), fetchSelectedCobros()]);
+		return result;
 	}
 </script>
 
@@ -356,32 +374,44 @@
 					</thead>
 					<tbody>
 						{#each selectedCobros as cobro (cobro.id_cobro)}
+							{@const bloqueado = !!cobro.transaccion?.aprobado && !isAdmin()}
 							<tr
-								class={`border-b border-slate-100 ${cobro.estado_cobro === 'programado' ? 'cursor-pointer hover:bg-slate-50' : ''}`}
-								ondblclick={() => cobro.estado_cobro === 'programado' && openEditCobro(cobro)}
-								title={cobro.estado_cobro === 'programado' ? 'Doble clic para editar/cancelar esta cuota' : undefined}
+								class={`border-b border-slate-100 ${cobro.estado_cobro === 'programado' && !bloqueado ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+								ondblclick={() => cobro.estado_cobro === 'programado' && !bloqueado && openEditCobro(cobro)}
+								title={cobro.estado_cobro === 'programado' && !bloqueado ? 'Doble clic para editar/cancelar esta cuota' : undefined}
 							>
 								<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
 								<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
 								<td class="px-3 py-2">{cobro.num_operacion ?? '—'}</td>
 								<td class="px-3 py-2">
-									{#if cobro.estado_cobro === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
-									{:else if cobro.estado_cobro === 'cancelado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-									{:else}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
-									{/if}
+									<div class="flex items-center gap-1.5">
+										{#if cobro.estado_cobro === 'programado'}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+										{:else if cobro.estado_cobro === 'cancelado'}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+										{:else}
+											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
+										{/if}
+										{#if cobro.transaccion?.aprobado}
+											<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${cobro.transaccion.aprobado_por ?? 'un administrador'}`} />
+										{/if}
+									</div>
 								</td>
 								<td class="px-3 py-2 text-right">
-									{#if cobro.estado_cobro === 'programado'}
-										<button type="button" onclick={() => openEditCobro(cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
-											<Pencil size={16} />
+									{#if bloqueado}
+										<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
+											<Lock size={16} />
+										</span>
+									{:else}
+										{#if cobro.estado_cobro === 'programado'}
+											<button type="button" onclick={() => openEditCobro(cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+												<Pencil size={16} />
+											</button>
+										{/if}
+										<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar cobro" aria-label="Eliminar cobro">
+											<Trash2 size={16} />
 										</button>
 									{/if}
-									<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar cobro" aria-label="Eliminar cobro">
-										<Trash2 size={16} />
-									</button>
 								</td>
 							</tr>
 						{/each}
@@ -408,4 +438,7 @@
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
+	onConfirm={confirmandoCobroId ? confirmarTransaccionCobro : null}
+	confirmTitle={confirmandoCobroId ? 'Confirmar Cobro — Transacción de Respaldo' : null}
+	confirmButtonLabel={confirmandoCobroId ? 'Confirmar Cobro' : null}
 />

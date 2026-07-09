@@ -23,6 +23,11 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as DETALLE_FIELDS
 } from '../config/transDetalle.config';
+// Import "cruzado": cuentasCobrar/cuentasPagar también importan de este archivo (createTransaccion,
+// construirPayloadTransaccionPor*). Es un ciclo de módulos seguro porque ambos lados solo usan estas
+// funciones DENTRO de otras funciones (nunca en el top-level), ver deleteTransaccion más abajo.
+import { recalcularCuentaCobrar } from '../../cuentas-cobrar/services/cuentasCobrar.service';
+import { recalcularCuentaPagar } from '../../cuentas-pagar/services/cuentasPagar.service';
 
 export interface Transaccion {
 	id_transaccion: number;
@@ -43,6 +48,16 @@ export interface Transaccion {
 	estado: string | null;
 	usuario_registro: string | null;
 	created_at: string;
+	/** Comprobante (imagen o PDF) de respaldo, subido a Google Drive — ver TransaccionModal.svelte.
+	 * Toda transacción debe tener uno; nullable solo por transacciones creadas antes de esta migración. */
+	comprobante_url: string | null;
+	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, ni esta
+	 * transacción ni la cuenta por pagar/cobrar ni el cobro/pago vinculados se pueden editar/eliminar
+	 * salvo por un administrador — ver updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION
+	 * en cuentasCobrar.service.ts/cuentasPagar.service.ts. */
+	aprobado: boolean;
+	aprobado_por: string | null;
+	aprobado_en: string | null;
 }
 
 export interface TransDetalle {
@@ -83,6 +98,9 @@ export interface ServiceResult<T = undefined> {
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
+
+const BLOQUEADO_POR_APROBACION =
+	'No se puede modificar/eliminar: el comprobante ya fue aprobado por un administrador. Solo un administrador puede hacerlo.';
 
 export async function getTransacciones(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<Transaccion>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
@@ -129,12 +147,19 @@ export async function createTransaccion(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+	// comprobante_url no vive en FIELDS_CONFIG (lo sube TransaccionModal.svelte a Google Drive antes de
+	// llamar aquí, ver uploadComprobante) — toda transacción debe tener uno, se valida server-side
+	// también por si algún día se llama a esto desde otro lado que no sea ese modal.
+	if (!payload.comprobante_url) {
+		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
+	}
 
 	const insertData = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		usuario_registro: usuarioRegistro,
 		// id_nombre no es editable (showInForm:false): siempre es el nombre de quien inició sesión.
-		id_nombre: usuarioNombre ? usuarioNombre.slice(0, 20) : null
+		id_nombre: usuarioNombre ? usuarioNombre.slice(0, 20) : null,
+		comprobante_url: payload.comprobante_url as string
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
@@ -146,14 +171,24 @@ export async function createTransaccion(
 export async function updateTransaccion(
 	client: SupabaseClient,
 	id: number,
-	payload: Record<string, unknown>
+	payload: Record<string, unknown>,
+	esAdmin: boolean = false
 ): Promise<ServiceResult<Transaccion>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+	if (!payload.comprobante_url) {
+		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
+	}
+
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado').eq(PK_COLUMN, id).single();
+	if (actual?.aprobado && !esAdmin) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
+	updateData.comprobante_url = payload.comprobante_url as string;
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
@@ -161,11 +196,68 @@ export async function updateTransaccion(
 	return { success: true, message: 'Transacción actualizada correctamente', data: data as Transaccion };
 }
 
-export async function deleteTransaccion(client: SupabaseClient, id: number): Promise<ServiceResult> {
+/**
+ * Elimina la transacción. Bloqueada para no-admins si ya está aprobada. Si es el respaldo de un
+ * cobro/pago ya confirmado, ese cobro/pago pierde su prueba: se revierte a 'programado' (se
+ * "desconfirma") y la cuenta por cobrar/pagar se recalcula — si estaba pagada del todo, vuelve a
+ * pendiente, ya que ahora le falta esa transacción (ver recalcularCuentaCobrar/recalcularCuentaPagar).
+ */
+export async function deleteTransaccion(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado').eq(PK_COLUMN, id).single();
+	if (actual?.aprobado && !esAdmin) {
+		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+
+	const { data: cobros } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id);
+	for (const cobro of (cobros ?? []) as any[]) {
+		await client.from('cobros').update({ estado_cobro: 'programado', id_transaccion: null }).eq('id_cobro', cobro.id_cobro);
+		await recalcularCuentaCobrar(client, cobro.id_cuenta_cobrar);
+	}
+
+	const { data: pagos } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id);
+	for (const pago of (pagos ?? []) as any[]) {
+		await client.from('pagos').update({ estado_pago: 'programado', id_transaccion: null }).eq('id_pago', pago.id_pago);
+		await recalcularCuentaPagar(client, pago.id_cuenta_pagar);
+	}
+
 	// ON DELETE CASCADE en trans_detalle.id_transaccion se encarga de borrar su detalle asociado.
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 	return { success: true, message: 'Transacción eliminada correctamente' };
+}
+
+/** Aprueba el comprobante de una transacción — a partir de ahí queda bloqueada para no-admins (ver
+ * BLOQUEADO_POR_APROBACION). Solo un administrador puede llamar a esto (UI-gated, ver TransaccionModal.svelte). */
+export async function aprobarTransaccion(
+	client: SupabaseClient,
+	id: number,
+	usuarioNombre: string | null,
+	esAdmin: boolean
+): Promise<ServiceResult<Transaccion>> {
+	if (!esAdmin) return { success: false, message: 'Solo un administrador puede aprobar el comprobante.' };
+
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.update({ aprobado: true, aprobado_por: usuarioNombre ? usuarioNombre.slice(0, 100) : null, aprobado_en: new Date().toISOString() })
+		.eq(PK_COLUMN, id)
+		.select('*')
+		.single();
+	if (error) return { success: false, message: `No se pudo aprobar el comprobante: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	return { success: true, message: 'Comprobante aprobado', data: data as Transaccion };
+}
+
+/** Quita la aprobación (por si se aprobó por error) — igual que aprobar, solo un administrador. */
+export async function desaprobarTransaccion(client: SupabaseClient, id: number, esAdmin: boolean): Promise<ServiceResult<Transaccion>> {
+	if (!esAdmin) return { success: false, message: 'Solo un administrador puede quitar la aprobación.' };
+
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.update({ aprobado: false, aprobado_por: null, aprobado_en: null })
+		.eq(PK_COLUMN, id)
+		.select('*')
+		.single();
+	if (error) return { success: false, message: `No se pudo quitar la aprobación: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	return { success: true, message: 'Aprobación retirada', data: data as Transaccion };
 }
 
 export async function getTransDetalles(client: SupabaseClient, idTransaccion: number): Promise<TransDetalle[]> {
@@ -294,13 +386,14 @@ async function calcularNumeroCuota(
 }
 
 /**
- * Arma (sin insertar) el payload de la transacción 'egreso' correspondiente a un pago, con el mismo
- * criterio que registrarTransaccionPorPago (centro de costo origen = el de la cuenta, destino = el
- * externo fijo de proveedores, códigos traducidos, "Número de Cuota" = posición del pago en el
- * calendario de la cuenta, etc.). Devuelve `null` si la cuenta todavía no tiene `id_centro_costo`
- * asignado (no hay de dónde sacar el origen). Se reutiliza tanto para el alta automática y silenciosa
- * (createPago) como para prellenar el modal de "Nueva Transacción" cuando el usuario pasa una cuota a
- * 'pagado' a mano (ver updatePago), para que la complete y confirme él mismo.
+ * Arma (sin insertar) el payload de la transacción 'egreso' correspondiente a un pago (centro de
+ * costo origen = el de la cuenta, destino = el externo fijo de proveedores, códigos traducidos,
+ * "Número de Cuota" = posición del pago en el calendario de la cuenta, etc.). Devuelve `null` si la
+ * cuenta todavía no tiene `id_centro_costo` asignado (no hay de dónde sacar el origen). Se usa tanto
+ * al registrar un pago nuevo como al pasar una cuota programada a 'pagado' (ver createPago/updatePago
+ * en cuentasPagar.service.ts) para prellenar el modal de "Nueva Transacción" que el usuario debe
+ * completar y confirmar — ningún pago queda 'pagado' sin que esto se confirme (ver
+ * confirmarPagoPagado).
  */
 export async function construirPayloadTransaccionPorPago(
 	client: SupabaseClient,
@@ -337,37 +430,12 @@ export async function construirPayloadTransaccionPorPago(
 }
 
 /**
- * Genera automáticamente la transacción (tipo 'egreso') correspondiente a un pago recién registrado.
- * Solo se llama al crear un pago nuevo (createPago en cuentasPagar.service.ts) — cuando una cuota
- * programada pasa a 'pagado' después, en cambio, NO se inserta sola: se prellena el modal de
- * "Nueva Transacción" con construirPayloadTransaccionPorPago para que el usuario la complete y
- * confirme (ver updatePago). Si la cuenta por pagar todavía no tiene `id_centro_costo` asignado
- * (cuentas creadas antes de esta migración), se omite en silencio: el pago ya se registró, la
- * transacción es un registro contable secundario, no debe bloquear el pago.
- */
-export async function registrarTransaccionPorPago(
-	client: SupabaseClient,
-	cuentaPagar: {
-		id_cuenta_pagar: number;
-		id_centro_costo: number | null;
-		tipo_documento: number | null;
-		num_documento: string | null;
-		fotma_pago: number | null;
-	},
-	pago: { id_pago?: number; monto: number; fecha_pago: string; medio_pago: string | null; referencia: string | null },
-	usuarioRegistro: string | null
-): Promise<void> {
-	const payload = await construirPayloadTransaccionPorPago(client, cuentaPagar, pago);
-	if (!payload) return;
-	await client.from(TABLE_NAME).insert({ ...payload, usuario_registro: usuarioRegistro });
-}
-
-/**
- * Arma (sin insertar) el payload de la transacción 'ingreso' correspondiente a un cobro, con el mismo
- * criterio que registrarTransaccionPorCobro. Devuelve `null` si la cuenta todavía no tiene
- * `id_centro_costo` asignado. Se reutiliza tanto para el alta automática y silenciosa (createCobro)
- * como para prellenar el modal de "Nueva Transacción" cuando el usuario pasa una cuota a 'cobrado' a
- * mano (ver updateCobro), para que la complete y confirme él mismo.
+ * Arma (sin insertar) el payload de la transacción 'ingreso' correspondiente a un cobro. Devuelve
+ * `null` si la cuenta todavía no tiene `id_centro_costo` asignado. Se usa tanto al registrar un
+ * cobro nuevo como al pasar una cuota programada a 'cobrado' (ver createCobro/updateCobro en
+ * cuentasCobrar.service.ts) para prellenar el modal de "Nueva Transacción" que el usuario debe
+ * completar y confirmar — ningún cobro queda 'cobrado' sin que esto se confirme (ver
+ * confirmarCobroCobrado).
  */
 export async function construirPayloadTransaccionPorCobro(
 	client: SupabaseClient,
@@ -404,26 +472,3 @@ export async function construirPayloadTransaccionPorCobro(
 	};
 }
 
-/**
- * Genera automáticamente la transacción (tipo 'ingreso') correspondiente a un cobro recién registrado.
- * Se llama siempre al crear un cobro (createCobro en cuentasCobrar.service.ts) — cuando una cuota
- * programada pasa a 'cobrado' después, en cambio, NO se inserta sola: se prellena el modal de
- * "Nueva Transacción" con construirPayloadTransaccionPorCobro (ver updateCobro). Si la cuenta por
- * cobrar no tiene `id_centro_costo` asignado, se omite en silencio.
- */
-export async function registrarTransaccionPorCobro(
-	client: SupabaseClient,
-	cuentaCobrar: {
-		id_cuenta_cobrar: number;
-		id_centro_costo: number | null;
-		tipo_documento: number | null;
-		num_documento: string | null;
-		forma_pago: number | null;
-	},
-	cobro: { id_cobro?: number; monto: number; fecha_cobro: string; medio_cobro: number | null; cuenta_banco: string | null; referencia: string | null },
-	usuarioRegistro: string | null
-): Promise<void> {
-	const payload = await construirPayloadTransaccionPorCobro(client, cuentaCobrar, cobro);
-	if (!payload) return;
-	await client.from(TABLE_NAME).insert({ ...payload, usuario_registro: usuarioRegistro });
-}

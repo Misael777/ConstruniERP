@@ -87,7 +87,7 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
     if (isRunningInTauri()) {
         // adapter-static: no server endpoint available — upload directly from the WebView
         const fileName = buildDocumentFileName(tipo, nombre, projectName, file.name);
-        const url = await uploadToDriveClient(file, fileName, 'documento');
+        const { url } = await uploadToDriveClient(file, fileName, 'documento');
         console.log(`[DocumentosTab] ✓ Tauri upload OK. URL: ${url}`);
         return { url, fileName };
     }
