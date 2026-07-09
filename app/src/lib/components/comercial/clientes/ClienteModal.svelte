@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
+	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, clienteEdit = null, onClose = () => {}, onSave = () => {} } = $props<{
 		isOpen?: boolean;
@@ -76,10 +77,22 @@
 				if (error) throw error;
 			} else {
 				// Insert
-				const { error } = await supabase
+				const { data: nuevoCliente, error } = await supabase
 					.from('cliente')
-					.insert([payload]);
+					.insert([payload])
+					.select('id_cliente')
+					.single();
 				if (error) throw error;
+
+				// Centro de costo del cliente — secundario: si falla, el cliente ya quedó guardado
+				// (se puede reintentar más tarde vía getOrCrearCentroCostoParaEntidad, p.ej. al generar
+				// la primera transacción de un cobro suyo).
+				if (nuevoCliente) {
+					const idCentroCosto = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', nuevoCliente.id_cliente, nombre);
+					if (!idCentroCosto) {
+						console.warn('[ClienteModal] No se pudo crear el centro de costo del cliente recién creado.');
+					}
+				}
 			}
 
 			onSave();

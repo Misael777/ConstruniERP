@@ -28,6 +28,7 @@ import {
 // funciones DENTRO de otras funciones (nunca en el top-level), ver deleteTransaccion más abajo.
 import { recalcularCuentaCobrar } from '../../cuentas-cobrar/services/cuentasCobrar.service';
 import { recalcularCuentaPagar } from '../../cuentas-pagar/services/cuentasPagar.service';
+import { getOrCrearCentroCostoParaEntidad } from '../../centro-costos/services/centroCostos.service';
 
 export interface Transaccion {
 	id_transaccion: number;
@@ -339,24 +340,6 @@ function codigoPorLabel(label: string | null | undefined): string | null {
 }
 
 /**
- * Devuelve el id del centro de costo "externo" fijo que representa la contraparte (proveedor o
- * cliente) en las transacciones autogeneradas por pagos/cobros — `transaccion` exige SIEMPRE un
- * centro de costo origen y uno destino, pero un proveedor/cliente no es un centro de costo real.
- * Lo crea la primera vez que hace falta (idempotente: busca por `codigo` antes de insertar).
- */
-async function getOrCrearCentroExterno(client: SupabaseClient, tipo: 'proveedores' | 'clientes'): Promise<number> {
-	const codigo = tipo === 'proveedores' ? 'EXT-PROV' : 'EXT-CLI';
-	const nombre = tipo === 'proveedores' ? 'Externo - Proveedores' : 'Externo - Clientes';
-
-	const { data: existente } = await client.from('centro_costo').select('id_centro_costo').eq('codigo', codigo).maybeSingle();
-	if (existente) return existente.id_centro_costo;
-
-	const { data: creado, error } = await client.from('centro_costo').insert({ codigo, nombre, tipo: 'otro' }).select('id_centro_costo').single();
-	if (error || !creado) throw new Error('No se pudo crear el centro de costo externo automático');
-	return creado.id_centro_costo;
-}
-
-/**
  * Calcula la posición (1-based) de una fila entre todas las de su cuenta, ordenadas por fecha — esa
  * posición es lo que se guarda como "Número de Cuota" en la transacción autogenerada. Se calcula al
  * vuelo (ninguna de las dos tablas guarda el número de cuota como columna aparte) contando TODAS las
@@ -387,11 +370,12 @@ async function calcularNumeroCuota(
 
 /**
  * Arma (sin insertar) el payload de la transacción 'egreso' correspondiente a un pago (centro de
- * costo origen = el de la cuenta, destino = el externo fijo de proveedores, códigos traducidos,
- * "Número de Cuota" = posición del pago en el calendario de la cuenta, etc.). Devuelve `null` si la
- * cuenta todavía no tiene `id_centro_costo` asignado (no hay de dónde sacar el origen). Se usa tanto
- * al registrar un pago nuevo como al pasar una cuota programada a 'pagado' (ver createPago/updatePago
- * en cuentasPagar.service.ts) para prellenar el modal de "Nueva Transacción" que el usuario debe
+ * costo origen = el de la cuenta, destino = el del proveedor específico — ver
+ * getOrCrearCentroCostoParaEntidad —, códigos traducidos, "Número de Cuota" = posición del pago en
+ * el calendario de la cuenta, etc.). Devuelve `null` si la cuenta todavía no tiene `id_centro_costo`
+ * asignado, o si no se pudo asegurar el centro de costo del proveedor. Se usa tanto al registrar un
+ * pago nuevo como al pasar una cuota programada a 'pagado' (ver createPago/updatePago en
+ * cuentasPagar.service.ts) para prellenar el modal de "Nueva Transacción" que el usuario debe
  * completar y confirmar — ningún pago queda 'pagado' sin que esto se confirme (ver
  * confirmarPagoPagado).
  */
@@ -400,6 +384,8 @@ export async function construirPayloadTransaccionPorPago(
 	cuentaPagar: {
 		id_cuenta_pagar: number;
 		id_centro_costo: number | null;
+		id_proveedor: number;
+		proveedorNombre?: string | null;
 		tipo_documento: number | null;
 		num_documento: string | null;
 		fotma_pago: number | null;
@@ -408,7 +394,14 @@ export async function construirPayloadTransaccionPorPago(
 ): Promise<Record<string, unknown> | null> {
 	if (!cuentaPagar.id_centro_costo) return null;
 
-	const idCentroDestino = await getOrCrearCentroExterno(client, 'proveedores');
+	const idCentroDestino = await getOrCrearCentroCostoParaEntidad(
+		client,
+		'proveedor',
+		cuentaPagar.id_proveedor,
+		cuentaPagar.proveedorNombre || `Proveedor #${cuentaPagar.id_proveedor}`
+	);
+	if (!idCentroDestino) return null;
+
 	const numeroCuota = pago.id_pago
 		? await calcularNumeroCuota(client, 'pagos', 'id_cuenta_pagar', 'id_pago', 'fecha_pago', cuentaPagar.id_cuenta_pagar, pago.id_pago)
 		: null;
@@ -430,18 +423,21 @@ export async function construirPayloadTransaccionPorPago(
 }
 
 /**
- * Arma (sin insertar) el payload de la transacción 'ingreso' correspondiente a un cobro. Devuelve
- * `null` si la cuenta todavía no tiene `id_centro_costo` asignado. Se usa tanto al registrar un
- * cobro nuevo como al pasar una cuota programada a 'cobrado' (ver createCobro/updateCobro en
- * cuentasCobrar.service.ts) para prellenar el modal de "Nueva Transacción" que el usuario debe
- * completar y confirmar — ningún cobro queda 'cobrado' sin que esto se confirme (ver
- * confirmarCobroCobrado).
+ * Arma (sin insertar) el payload de la transacción 'ingreso' correspondiente a un cobro (centro de
+ * costo origen = el del cliente específico — ver getOrCrearCentroCostoParaEntidad —, destino = el de
+ * la cuenta). Devuelve `null` si la cuenta todavía no tiene `id_centro_costo` asignado, o si no se
+ * pudo asegurar el centro de costo del cliente. Se usa tanto al registrar un cobro nuevo como al
+ * pasar una cuota programada a 'cobrado' (ver createCobro/updateCobro en cuentasCobrar.service.ts)
+ * para prellenar el modal de "Nueva Transacción" que el usuario debe completar y confirmar — ningún
+ * cobro queda 'cobrado' sin que esto se confirme (ver confirmarCobroCobrado).
  */
 export async function construirPayloadTransaccionPorCobro(
 	client: SupabaseClient,
 	cuentaCobrar: {
 		id_cuenta_cobrar: number;
 		id_centro_costo: number | null;
+		id_cliente: number;
+		clienteNombre?: string | null;
 		tipo_documento: number | null;
 		num_documento: string | null;
 		forma_pago: number | null;
@@ -450,7 +446,14 @@ export async function construirPayloadTransaccionPorCobro(
 ): Promise<Record<string, unknown> | null> {
 	if (!cuentaCobrar.id_centro_costo) return null;
 
-	const idCentroOrigen = await getOrCrearCentroExterno(client, 'clientes');
+	const idCentroOrigen = await getOrCrearCentroCostoParaEntidad(
+		client,
+		'cliente',
+		cuentaCobrar.id_cliente,
+		cuentaCobrar.clienteNombre || `Cliente #${cuentaCobrar.id_cliente}`
+	);
+	if (!idCentroOrigen) return null;
+
 	const numeroCuota = cobro.id_cobro
 		? await calcularNumeroCuota(client, 'cobros', 'id_cuenta_cobrar', 'id_cobro', 'fecha_cobro', cuentaCobrar.id_cuenta_cobrar, cobro.id_cobro)
 		: null;

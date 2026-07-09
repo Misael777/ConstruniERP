@@ -37,7 +37,27 @@ export interface CentroCosto {
 	tipo: string;
 	monto_actual: number; // nombre real de la columna en BD (los .sql locales tienen un typo, ver centroCostos.config.ts)
 	created_at: string;
+	/** Vinculación a la entidad dueña de este centro de costo — como mucho UNA de las tres no-nula
+	 * (ver chk_centro_costo_una_entidad, centro_costo_vinculacion_migration.sql). Se completan solas
+	 * vía getOrCrearCentroCostoParaEntidad, nunca a mano desde el formulario genérico. */
+	id_proyecto: number | null;
+	id_cliente: number | null;
+	id_proveedor: number | null;
 }
+
+export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor';
+
+const PREFIJO_CODIGO_POR_TIPO: Record<EntidadCentroCosto, string> = {
+	proyecto: 'PROY',
+	cliente: 'CLI',
+	proveedor: 'PROV'
+};
+
+const COLUMNA_POR_TIPO: Record<EntidadCentroCosto, 'id_proyecto' | 'id_cliente' | 'id_proveedor'> = {
+	proyecto: 'id_proyecto',
+	cliente: 'id_cliente',
+	proveedor: 'id_proveedor'
+};
 
 export interface ListParams {
 	page?: number;
@@ -167,6 +187,49 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar el centro de costo: ${error.message}` };
 	return { success: true, message: 'Centro de costo eliminado correctamente' };
+}
+
+/**
+ * Busca el centro de costo ya vinculado a esta entidad (proyecto/cliente/proveedor) y, si no existe,
+ * lo crea — idempotente (protegido además por el índice único parcial de la migración, ante una
+ * carrera entre dos llamadas casi simultáneas). Pensado para llamarse:
+ *   1. Al crear la entidad (ClienteModal.svelte, ProveedorModal.svelte, NuevaVentaModal.svelte), y
+ *   2. De forma perezosa cuando haga falta un centro de costo para generar una transacción de un
+ *      pago/cobro (ver transacciones.service.ts) — cubre entidades creadas antes de esta migración,
+ *      o si el paso 1 falló por lo que sea.
+ * Nunca lanza: crear el centro de costo es secundario al flujo principal (guardar el cliente/
+ * proveedor/proyecto, o registrar la transacción), así que un fallo aquí se loguea y devuelve null
+ * en vez de tumbar esa operación principal.
+ */
+export async function getOrCrearCentroCostoParaEntidad(
+	client: SupabaseClient,
+	tipo: EntidadCentroCosto,
+	idEntidad: number,
+	nombre: string
+): Promise<number | null> {
+	const columna = COLUMNA_POR_TIPO[tipo];
+
+	const { data: existente } = await client.from(TABLE_NAME).select('id_centro_costo').eq(columna, idEntidad).maybeSingle();
+	if (existente) return existente.id_centro_costo;
+
+	const codigo = `${PREFIJO_CODIGO_POR_TIPO[tipo]}-${idEntidad}`;
+	const { data: creado, error } = await client
+		.from(TABLE_NAME)
+		.insert({ codigo, nombre: nombre.slice(0, 200), tipo, [columna]: idEntidad, monto_actual: 0 })
+		.select('id_centro_costo')
+		.single();
+
+	if (error) {
+		if (error.code === '23505') {
+			// Carrera: otra llamada ya insertó el centro de costo de esta entidad justo antes — se usa ese.
+			const { data: reintento } = await client.from(TABLE_NAME).select('id_centro_costo').eq(columna, idEntidad).maybeSingle();
+			if (reintento) return reintento.id_centro_costo;
+		}
+		console.error(`[centroCostos.service] No se pudo crear el centro de costo para ${tipo} #${idEntidad}:`, error);
+		return null;
+	}
+
+	return creado?.id_centro_costo ?? null;
 }
 
 /** Construye el objeto a insertar/actualizar, limitado a las columnas editables de FIELDS_CONFIG. */

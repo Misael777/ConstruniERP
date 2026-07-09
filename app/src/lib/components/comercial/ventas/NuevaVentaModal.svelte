@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, safeSegment } from '$lib/driveUploadClient';
+	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
 
@@ -349,21 +350,14 @@ let codigoGenerado = $derived(
 			const nuevoProyectoId = data.id_proyecto;
 			console.log('[NuevaVentaModal] Nuevo ID_PROYECTO:', nuevoProyectoId);
 
-			// === UPSERT centro_costo ===
-			const centroCostoPayload = {
-				codigo: `PROY-${nuevoProyectoId}`,
-				nombre: proyectoNombre,
-				tipo: 'proyecto',
-				id_referencia: nuevoProyectoId
-			};
-
-			console.log('[NuevaVentaModal] Payload para centro_costo:', centroCostoPayload);
-			console.log('[NuevaVentaModal] Insertando/actualizando centro_costo...');
-
-			const ccResult = await supabase.from('centro_costo').upsert([centroCostoPayload], { onConflict: 'id_referencia', ignoreDuplicates: true });
-
-			console.log('[NuevaVentaModal] ✓ Centro de costo actualizado');
-			console.log('[NuevaVentaModal] Resultado centro_costo:', ccResult);
+			// === Centro de costo del proyecto (getOrCrear — idempotente, ver centroCostos.service.ts) ===
+			console.log('[NuevaVentaModal] Asegurando centro de costo del proyecto...');
+			const idCentroCosto = await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
+			if (!idCentroCosto) {
+				console.warn('[NuevaVentaModal] No se pudo crear el centro de costo del proyecto — la venta se guardó, pero las transacciones de sus cobros/pagos no van a poder generarse hasta que exista.');
+			} else {
+				console.log('[NuevaVentaModal] ✓ Centro de costo del proyecto listo, id:', idCentroCosto);
+			}
 
 			// === UPLOAD documentos ===
 			try {

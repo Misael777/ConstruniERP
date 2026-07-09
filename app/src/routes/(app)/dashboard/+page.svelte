@@ -12,13 +12,16 @@
 		BarElement,
 	} from 'chart.js';
 	import { Doughnut, Line, Bar } from 'svelte-chartjs';
+	import FinanzasCdcDashboard from '$lib/components/dashboard/FinanzasCdcDashboard.svelte';
 
 	ChartJS.register(
 		Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement
 	);
 
 	let { data } = $props();
-	
+
+	let activeTab = $state<'general' | 'finanzas'>('general');
+
 	const { kpis, charts, recientes } = $derived(data);
 
 	// Configuración del gráfico de Línea (Ingresos vs Egresos)
@@ -88,6 +91,24 @@
 		</span>
 	</div>
 </div>
+
+<!-- Tabs -->
+<div class="flex rounded-xl border border-slate-200 overflow-hidden mb-6 w-fit bg-white shadow-sm">
+	<button
+		type="button"
+		class="px-4 py-2 text-sm font-semibold transition-colors {activeTab === 'general' ? 'bg-brand-marine text-white' : 'text-slate-600 hover:bg-slate-50'}"
+		onclick={() => (activeTab = 'general')}
+	><i class="fas fa-gauge-high mr-1.5"></i>General</button>
+	<button
+		type="button"
+		class="px-4 py-2 text-sm font-semibold transition-colors {activeTab === 'finanzas' ? 'bg-brand-marine text-white' : 'text-slate-600 hover:bg-slate-50'}"
+		onclick={() => (activeTab = 'finanzas')}
+	><i class="fas fa-wallet mr-1.5"></i>Finanzas</button>
+</div>
+
+{#if activeTab === 'finanzas'}
+	<FinanzasCdcDashboard />
+{:else}
 
 <!-- KPIs Grid -->
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
@@ -298,3 +319,5 @@
 		</div>
 	</div>
 </div>
+
+{/if}

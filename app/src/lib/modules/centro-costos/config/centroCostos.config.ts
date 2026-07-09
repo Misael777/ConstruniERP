@@ -20,8 +20,16 @@
  *     nombre           VARCHAR(200) NOT NULL,
  *     tipo             VARCHAR(20) NOT NULL,
  *     monto_actual     NUMERIC,
- *     created_at       TIMESTAMPTZ DEFAULT NOW()
+ *     created_at       TIMESTAMPTZ DEFAULT NOW(),
+ *     id_proyecto      BIGINT REFERENCES proyecto(id_proyecto)   ON DELETE CASCADE,
+ *     id_cliente       BIGINT REFERENCES cliente(id_cliente)     ON DELETE CASCADE,
+ *     id_proveedor     BIGINT REFERENCES proveedor(id_proveedor) ON DELETE CASCADE
  *   );
+ * Las tres últimas columnas se agregaron vía centro_costo_vinculacion_migration.sql — reemplazan un
+ * intento anterior (columna "id_referencia") que NuevaVentaModal.svelte usaba pero que NUNCA existió
+ * realmente en la BD; ese upsert fallaba en silencio (no revisaba el resultado). Como mucho una de
+ * las tres puede ser no-nula por fila (chk_centro_costo_una_entidad) — se completan solas vía
+ * getOrCrearCentroCostoParaEntidad en centroCostos.service.ts, nunca a mano.
  *
  * OJO: DER2.sql y DB_reset_withoutacces.sql tienen la columna mal escrita como "monto_ctual"
  * (typo, falta la "a" de "actual"). La base de datos real en Supabase SÍ tiene el nombre correcto
@@ -166,14 +174,22 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		label: 'Tipo',
 		tipo: 'select',
 		required: true,
-		// Debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla centro_costo.
+		// Debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla centro_costo — ver
+		// centro_costo_vinculacion_migration.sql. 'proyecto'/'cliente'/'proveedor' se completan solos
+		// (getOrCrearCentroCostoParaEntidad en este mismo service) cuando se crea esa entidad; se
+		// listan aquí solo para que se vean con su label correcto en esta tabla, no para elegirlos a
+		// mano — un centro con uno de esos 3 tipos sin su id_proyecto/id_cliente/id_proveedor
+		// correspondiente no tiene sentido (ver chk_centro_costo_una_entidad).
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
 			{ value: 'area', label: 'Área' },
-			{ value: 'otro', label: 'Otro' }
+			{ value: 'otro', label: 'Otro' },
+			{ value: 'proyecto', label: 'Proyecto (automático)' },
+			{ value: 'cliente', label: 'Cliente (automático)' },
+			{ value: 'proveedor', label: 'Proveedor (automático)' }
 		],
-		helpText: 'Clasificación del centro de costo (debe coincidir con el CHECK de la tabla en BD).',
+		helpText: 'Clasificación del centro de costo. "Proyecto/Cliente/Proveedor" se generan solos al crear esa entidad — no los selecciones a mano aquí.',
 		showInTable: true,
 		showInForm: true,
 		sortable: true

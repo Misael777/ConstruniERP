@@ -428,7 +428,7 @@ export async function createPago(
 
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
+		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, proveedor:id_proveedor(razon_social)')
 		.eq(PK_COLUMN, idCuentaPagar)
 		.single();
 	if (!cuenta?.id_centro_costo) {
@@ -449,7 +449,7 @@ export async function createPago(
 	const { data, error } = await client.from(PAGO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
 
-	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, cuenta, {
+	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, { ...cuenta, proveedorNombre: (cuenta as any).proveedor?.razon_social }, {
 		id_pago: data.id_pago,
 		monto: Number(data.monto),
 		fecha_pago: data.fecha_pago,
@@ -532,7 +532,7 @@ export async function updatePago(
 	// si cancela ese paso, este pago se queda tal como estaba (todavía NO 'pagado', ver arriba).
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, id_centro_costo, tipo_documento, num_documento, fotma_pago')
+		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, proveedor:id_proveedor(razon_social)')
 		.eq(PK_COLUMN, data.id_cuenta_pagar)
 		.single();
 
@@ -545,7 +545,7 @@ export async function updatePago(
 		};
 	}
 
-	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, cuenta, {
+	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, { ...cuenta, proveedorNombre: (cuenta as any).proveedor?.razon_social }, {
 		id_pago: data.id_pago,
 		monto: Number(data.monto),
 		fecha_pago: data.fecha_pago,

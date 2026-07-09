@@ -365,7 +365,7 @@ export async function createCobro(
 
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+		.select('id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre)')
 		.eq(PK_COLUMN, idCuentaCobrar)
 		.single();
 	if (!cuenta?.id_centro_costo) {
@@ -386,7 +386,7 @@ export async function createCobro(
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
-	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, cuenta, {
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, { ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre }, {
 		id_cobro: data.id_cobro,
 		monto: Number(data.monto),
 		fecha_cobro: data.fecha_cobro,
@@ -471,7 +471,7 @@ export async function updateCobro(
 	// si cancela ese paso, este cobro se queda tal como estaba (todavía NO 'cobrado', ver arriba).
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_cobrar, id_centro_costo, tipo_documento, num_documento, forma_pago')
+		.select('id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre)')
 		.eq(PK_COLUMN, data.id_cuenta_cobrar)
 		.single();
 
@@ -484,7 +484,7 @@ export async function updateCobro(
 		};
 	}
 
-	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, cuenta, {
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, { ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre }, {
 		id_cobro: data.id_cobro,
 		monto: Number(data.monto),
 		fecha_cobro: data.fecha_cobro,

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
+	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, proveedorEdit = null, onClose = () => {}, onSave = () => {} } = $props<{
 		isOpen?: boolean;
@@ -72,10 +73,22 @@
 				if (error) throw error;
 			} else {
 				// Insert
-				const { error } = await supabase
+				const { data: nuevoProveedor, error } = await supabase
 					.from('proveedor')
-					.insert([payload]);
+					.insert([payload])
+					.select('id_proveedor')
+					.single();
 				if (error) throw error;
+
+				// Centro de costo del proveedor — secundario: si falla, el proveedor ya quedó guardado
+				// (se puede reintentar más tarde vía getOrCrearCentroCostoParaEntidad, p.ej. al generar
+				// la primera transacción de un pago suyo).
+				if (nuevoProveedor) {
+					const idCentroCosto = await getOrCrearCentroCostoParaEntidad(supabase, 'proveedor', nuevoProveedor.id_proveedor, razonSocial);
+					if (!idCentroCosto) {
+						console.warn('[ProveedorModal] No se pudo crear el centro de costo del proveedor recién creado.');
+					}
+				}
 			}
 
 			onSave();
