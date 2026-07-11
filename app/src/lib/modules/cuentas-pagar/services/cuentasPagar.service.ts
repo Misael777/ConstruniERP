@@ -217,7 +217,8 @@ async function autoCorregirVencidos(client: SupabaseClient, items: CuentaPagar[]
 export async function createCuentaPagar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
-	usuarioRegistro: string | null
+	usuarioRegistro: string | null,
+	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaPagar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -236,26 +237,23 @@ export async function createCuentaPagar(
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, proveedor(razon_social)').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta por pagar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
-	await resincronizarCuotasProgramadas(client, data.id_cuenta_pagar, saldoInicial, Number(insertData.condicion_pago), data.fecha_emision, data.fecha_vencimiento);
+	await sincronizarCuotasProgramadas(client, data.id_cuenta_pagar, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por pagar creada correctamente', data: data as CuentaPagar };
 }
 
 /**
- * Borra las cuotas 'programado' que ya existan para la cuenta (nunca toca las 'pagado', esas son
- * reales) y las vuelve a generar según el Número de Cuotas / monto / fechas ACTUALES. Se llama tanto
- * al crear como al actualizar la cuenta, para que un cambio en "Número de Cuotas" (o en el monto o
- * las fechas, que afectan el reparto) siempre deje las cuotas programadas al día — de más (genera
- * las que falten) o de menos (anula las que ya no correspondan). Si numCuotas <= 1 simplemente no
- * regenera nada (quedan borradas): un pago de 1 sola cuota no necesita programación aparte.
+ * Sustituye el calendario de cuotas 'programado' de la cuenta por EXACTAMENTE las fracciones que el
+ * usuario configuró en la ventana "Fraccionar este pago" (fecha + monto libres, ver
+ * FraccionamientoModal.svelte) — ya no se autogeneran por partes iguales acá: esa validación (que la
+ * suma cuadre con monto_comprometido) se hizo del lado del cliente antes de llegar a este punto. Nunca
+ * toca las cuotas 'pagado' (esas son reales). Si `fracciones` viene vacío (Forma de Pago = Contado, o
+ * el usuario eliminó el fraccionamiento), simplemente deja la cuenta sin cuotas programadas.
  */
-async function resincronizarCuotasProgramadas(
+async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaPagar: number,
-	montoComprometido: number,
-	numCuotas: number,
-	fechaEmision: string,
-	fechaVencimiento: string | null
+	fracciones: { fecha: string; monto: number }[]
 ): Promise<void> {
 	// No se revienta la creación/edición de la cuenta si esto falla — pero SÍ se deja constancia en
 	// consola: antes fallaba en silencio y la cuenta se guardaba "bien" sin que aparecieran las cuotas.
@@ -264,77 +262,21 @@ async function resincronizarCuotasProgramadas(
 		console.error('No se pudieron limpiar las cuotas programadas anteriores:', deleteError);
 		return;
 	}
+	if (fracciones.length === 0) return;
 
-	if (Number.isFinite(numCuotas) && numCuotas > 1) {
-		const { error: insertError } = await generarCuotasProgramadas(client, idCuentaPagar, montoComprometido, numCuotas, fechaEmision, fechaVencimiento);
-		if (insertError) {
-			console.error('No se pudieron generar las cuotas programadas:', insertError);
-		}
+	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaPagar, monto: f.monto, fecha_pago: f.fecha, estado_pago: 'programado' }));
+	const { error: insertError } = await client.from(PAGO_TABLE).insert(filas);
+	if (insertError) {
+		console.error('No se pudieron guardar las cuotas programadas:', insertError);
 	}
-}
-
-/** Suma meses a una fecha sin el bug clásico de "31 de enero + 1 mes = 3 de marzo" (fija el día al último válido del mes destino). */
-function addMonths(date: Date, months: number): Date {
-	const d = new Date(date);
-	const day = d.getDate();
-	d.setDate(1);
-	d.setMonth(d.getMonth() + months);
-	const diasEnMesDestino = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-	d.setDate(Math.min(day, diasEnMesDestino));
-	return d;
-}
-
-function toISODate(d: Date): string {
-	return d.toISOString().slice(0, 10);
-}
-
-/**
- * Genera N cuotas programadas (tabla pagos, estado_pago='programado') — NO se cuentan como pagos
- * reales todavía (recalcularCuentaPagar las ignora), es solo para ver cómo quedarían programados
- * los pagos futuros. Una cuota por mes desde fecha_emision, topada a fecha_vencimiento (si varias
- * cuotas caen después del vencimiento, todas esas comparten esa misma fecha tope). Monto =
- * monto_comprometido ÷ N, la última cuota absorbe el redondeo de centavos para que la suma cuadre
- * exacto. Reutiliza la columna `fecha_pago` de "pagos" como fecha programada (no existe una columna
- * de fecha aparte para cuotas futuras).
- * AJUSTAR: no hay una acción de "marcar como pagada" una cuota programada todavía — hoy solo se
- * puede eliminar (mismo botón que un pago real) o registrar el pago real aparte cuando llegue la fecha.
- */
-async function generarCuotasProgramadas(
-	client: SupabaseClient,
-	idCuentaPagar: number,
-	montoComprometido: number,
-	numCuotas: number,
-	fechaEmision: string,
-	fechaVencimiento: string | null
-): Promise<{ error: unknown | null }> {
-	const inicio = new Date(fechaEmision);
-	if (Number.isNaN(inicio.getTime())) return { error: null };
-	const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
-
-	const montoBase = Math.floor((montoComprometido / numCuotas) * 100) / 100;
-	const filas: Record<string, unknown>[] = [];
-	let acumulado = 0;
-
-	for (let i = 1; i <= numCuotas; i++) {
-		let fecha = addMonths(inicio, i);
-		if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) {
-			fecha = limite;
-		}
-		const esUltima = i === numCuotas;
-		const monto = esUltima ? Number((montoComprometido - acumulado).toFixed(2)) : montoBase;
-		acumulado += monto;
-		filas.push({ [PARENT_FK_COLUMN]: idCuentaPagar, monto, fecha_pago: toISODate(fecha), estado_pago: 'programado' });
-	}
-
-	const { error } = await client.from(PAGO_TABLE).insert(filas);
-	return { error };
 }
 
 export async function updateCuentaPagar(
 	client: SupabaseClient,
 	id: number,
 	payload: Record<string, unknown>,
-	esAdmin: boolean = false
+	esAdmin: boolean = false,
+	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaPagar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -360,14 +302,10 @@ export async function updateCuentaPagar(
 		.single();
 	if (error) return { success: false, message: `No se pudo actualizar la cuenta por pagar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
-	// Solo regenera el calendario de cuotas si el Número de Cuotas realmente cambió — si no, un
-	// pago que el usuario ya haya editado o cancelado a mano se conserva tal cual, sin que un
-	// cambio en otro campo cualquiera (ej. "responsable") lo borre y lo vuelva a armar desde cero.
-	const numCuotasAnterior = Number(current?.condicion_pago ?? 0);
-	const numCuotasNueva = Number(data.condicion_pago);
-	if (numCuotasNueva !== numCuotasAnterior) {
-		await resincronizarCuotasProgramadas(client, id, comprometido, numCuotasNueva, data.fecha_emision, data.fecha_vencimiento);
-	}
+	// El calendario de cuotas se sustituye siempre por lo que traiga `fraccionesPersonalizadas` — el
+	// modal hidrata ese arreglo desde las cuotas 'programado' actuales cuando el usuario no tocó nada
+	// (ver CuentaPagarModal.svelte), así que esto es efectivamente un no-op si no hubo cambios reales.
+	await sincronizarCuotasProgramadas(client, id, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por pagar actualizada correctamente', data: data as CuentaPagar };
 }

@@ -134,6 +134,7 @@
 									name={field.key}
 									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
 									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
+									step={field.tipo === 'number' ? 'any' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}

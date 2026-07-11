@@ -65,8 +65,13 @@ export interface FieldConfig {
 	/**
 	 * Valor que toma el campo mientras está bloqueado por disabledWhen (en vez de vaciarse a null).
 	 * Ej.: cuotas.disabledValue = '1' -> Contado siempre queda en "1 cuota" en vez de vacío.
+	 * También puede ser una función del payload completo, para un "computeValue condicional": se
+	 * recalcula en vivo mientras el campo está bloqueado (a diferencia de `computeValue`, que bloquea
+	 * el campo SIEMPRE — aquí el campo se habilita/bloquea según `disabledWhen` y solo se calcula
+	 * cuando está bloqueado). Ej.: cuentaCobrar.monto.disabledValue = (v) => Number(v.monto_dolares) *
+	 * Number(v.tipo_cambio), bloqueado solo cuando moneda === 'USD'.
 	 */
-	disabledValue?: string | number;
+	disabledValue?: string | number | ((payload: Record<string, unknown>) => string | number | null);
 	/**
 	 * Convierte el campo en "calculado": se muestra deshabilitado (no se escribe a mano), su valor
 	 * se recalcula en vivo a partir del resto del payload, no se valida, y al guardar SIEMPRE se usa
@@ -74,6 +79,21 @@ export interface FieldConfig {
 	 * Ej.: monto_imponible.computeValue = (v) => Number(v.monto_comprometido) / 1.18.
 	 */
 	computeValue?: (payload: Record<string, unknown>) => string | number | null;
+	/**
+	 * Cuando viene, el <select> del formulario usa ESTAS opciones (calculadas a partir del payload
+	 * completo, para depender de OTRO campo) en vez de `options`. `options` sigue siendo la lista
+	 * COMPLETA — se usa para validar y para traducir cualquier valor ya guardado a su label bonito
+	 * (tabla, badges), aunque ya no aparezca como elegible en el formulario para el valor actual de
+	 * ese otro campo. Ej.: transaccion.categoria.optionsWhen = (v) => catálogo según v.tipo.
+	 */
+	optionsWhen?: (payload: Record<string, unknown>) => FieldOption[];
+	/**
+	 * Exige el campo (además de/en vez de `required` estático) solo cuando esta función devuelve
+	 * true, evaluada contra el payload completo — para un campo que solo es obligatorio bajo cierta
+	 * condición de OTRO campo. Ej.: cuentaCobrar.monto_dolares.requiredWhen = (v) => v.moneda === 'USD'.
+	 * No aplica si el campo está bloqueado por disabledWhen (ver validatePayload).
+	 */
+	requiredWhen?: (payload: Record<string, unknown>) => boolean;
 }
 
 /** Valida un único campo según su definición. Devuelve el mensaje de error o null. */
@@ -122,7 +142,13 @@ export function validatePayload(fields: FieldConfig[], payload: Record<string, u
 		if (field.disabledWhen?.(payload)) continue; // campo bloqueado: no se exige ni se valida
 		if (field.computeValue) continue; // campo calculado: lo controla el sistema, no el usuario
 		const message = validateField(field, payload[field.key]);
-		if (message) errors[field.key] = message;
+		if (message) {
+			errors[field.key] = message;
+			continue;
+		}
+		if (field.requiredWhen?.(payload) && String(payload[field.key] ?? '').trim() === '') {
+			errors[field.key] = `${field.label} es obligatorio`;
+		}
 	}
 	return errors;
 }
@@ -198,9 +224,14 @@ export function buildWritablePayload(fields: FieldConfig[], payload: Record<stri
 	for (const field of fields) {
 		if (!field.showInForm) continue;
 		if (field.disabledWhen?.(payload)) {
-			// Campo bloqueado -> usa disabledValue si se definió (ej. "1"), si no queda vacío. Nunca lo
-			// que tenga el formulario, sin importar lo que el usuario haya escrito antes de bloquearse.
-			result[field.key] = field.disabledValue ?? null;
+			// Campo bloqueado -> usa disabledValue si se definió (valor fijo o calculado a partir del
+			// payload, ej. monto = monto_dolares * tipo_cambio), si no queda vacío. Nunca lo que tenga
+			// el formulario, sin importar lo que el usuario haya escrito antes de bloquearse.
+			const locked = typeof field.disabledValue === 'function' ? field.disabledValue(payload) : field.disabledValue;
+			result[field.key] =
+				locked !== null && locked !== undefined && locked !== '' && (field.tipo === 'number' || field.tipo === 'currency')
+					? Number(locked)
+					: (locked ?? null);
 			continue;
 		}
 		if (field.computeValue) {

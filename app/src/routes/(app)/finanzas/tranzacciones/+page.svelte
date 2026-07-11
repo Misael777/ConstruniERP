@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
@@ -230,9 +230,14 @@
 				<p class="text-sm text-slate-500">Movimientos económicos entre centros de costo y su detalle</p>
 			</div>
 		</div>
-		<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
-			<Plus size={16} /> Nueva Transacción
-		</button>
+		<div class="flex items-center gap-2">
+			<button type="button" onclick={() => goto('/finanzas/tranzacciones/movimientos-caja')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
+				<Wallet size={16} /> Movimientos de Caja
+			</button>
+			<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+				<Plus size={16} /> Nueva Transacción
+			</button>
+		</div>
 	</div>
 
 	{#if loadError}

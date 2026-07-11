@@ -31,7 +31,7 @@
 		 * (ver +page.svelte de cuentas-cobrar/cuentas-pagar) donde esta transacción es la prueba
 		 * obligatoria de un cobro/pago que recién pasa a 'cobrado'/'pagado' — crearla aquí Y enlazarla
 		 * es una sola operación atómica en el backend (confirmarCobroCobrado/confirmarPagoPagado). */
-		onConfirm?: ((payload: Record<string, unknown>) => Promise<{ success: boolean; message: string; errors?: Record<string, string> }>) | null;
+		onConfirm?: ((payload: Record<string, unknown>) => Promise<{ success: boolean; message: string; errors?: Record<string, string>; data?: any }>) | null;
 		confirmTitle?: string | null;
 		confirmButtonLabel?: string | null;
 	} = $props();
@@ -208,6 +208,10 @@
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
+		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) — si cambia Tipo, la
+		// categoría elegida antes puede ya no ser válida, así que se limpia para que el usuario elija
+		// de nuevo entre las opciones correctas en vez de dejar guardado un valor incoherente.
+		if (key === 'tipo') formValues.categoria = '';
 		revalidate();
 	}
 
@@ -222,6 +226,7 @@
 	const gridColsClass = $derived(formFields.length <= 4 ? 'grid-cols-1' : formFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
+		if (field.optionsWhen) return field.optionsWhen(formValues);
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
 	}
 
@@ -348,7 +353,7 @@
 
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`tr-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`tr-${field.key}`} class="block text-sm font-bold text-slate-700 mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
@@ -373,6 +378,7 @@
 									name={field.key}
 									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
 									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
+									step={field.tipo === 'number' ? 'any' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
@@ -395,7 +401,7 @@
 					{/each}
 
 					<div class="col-span-full">
-						<label for="tr-comprobante" class="block text-sm font-medium text-slate-700 mb-1">
+						<label for="tr-comprobante" class="block text-sm font-bold text-slate-700 mb-1">
 							Comprobante <span class="text-red-500">*</span>
 						</label>
 						<label

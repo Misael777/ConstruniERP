@@ -23,6 +23,8 @@
  *     fecha_emision      DATE NOT NULL,
  *     fecha_vencimiento  DATE,
  *     moneda             VARCHAR(3),
+ *     monto_dolares      NUMERIC,   -- agregada por migración, ver nota abajo
+ *     tipo_cambio        NUMERIC(12,2), -- agregada por migración, ver nota abajo (hasta entero + 2 decimales)
  *     observaciones      VARCHAR(200),
  *     estado             VARCHAR(20) DEFAULT 'pendiente', -- sin CHECK real, texto libre
  *     usuario_registro   VARCHAR(100),
@@ -41,14 +43,22 @@
  *   salvo que ya esté en "vencido" (que se preserva porque es una marca manual, no derivada del saldo).
  * - `usuario_registro` NO está en FIELDS_CONFIG: se completa server-side con el email del usuario
  *   autenticado (ver +server.ts de creación), no es editable por el usuario.
- * - `tipo_documento`, `forma_pago`, "condición_pago" son códigos SMALLINT sin tabla de referencia
- *   en el esquema actual — AJUSTAR: conviértelos a 'select' con `options` fijas (o `optionsSource`
+ * - `tipo_documento` ya tiene su propio catálogo fijo de 5 opciones (Factura/Boleta de venta/Recibo
+ *   por Honorarios/Ticket/Otro, ver el campo abajo) — distinto del catálogo de 11 de cuentas_pagar.
+ * - `forma_pago`, "condición_pago" siguen siendo códigos SMALLINT sin tabla de referencia en el
+ *   esquema actual — AJUSTAR: conviértelos a 'select' con `options` fijas (o `optionsSource`
  *   apuntando a una tabla de catálogo) en cuanto el ERP defina qué significa cada código.
  * - `id_centro_costo` se agregó vía migración manual (ALTER TABLE, ver transacciones.service.ts) para
  *   poder generar automáticamente una fila en `transaccion` (tipo 'ingreso') cada vez que se registra
  *   un cobro nuevo — ese centro de costo se usa como DESTINO de la transacción (ahí entra el ingreso).
  *   Cuentas creadas ANTES de la migración quedan con id_centro_costo NULL: en ese caso la generación
  *   automática de la transacción simplemente se omite (no bloquea el registro del cobro).
+ * - `monto_dolares`/`tipo_cambio` se agregaron vía migración manual (ver
+ *   cuentas_cobrar_dolares_migration.sql) para cuentas en USD. Se bloquean mutuamente con `monto`
+ *   según `moneda` (ver campos abajo): con moneda='PEN', `monto` es el campo libre de siempre y
+ *   estos dos quedan bloqueados/vacíos; con moneda='USD', estos dos se habilitan y `monto` se
+ *   bloquea y se recalcula solo como monto_dolares × tipo_cambio (ver `disabledValue` como función
+ *   en $lib/shared/fieldConfig.ts — un "computeValue condicional").
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -108,21 +118,16 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Tipo de Documento',
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options` (ver modal/motor genérico)
 		required: false,
-		// AJUSTAR: son códigos secuenciales (1..11) en el orden pedido, NO están verificados contra
-		// el catálogo oficial SUNAT N.º 01 (que usa otros números, ej. Factura=01, Boleta=03, etc.).
-		// Si necesitas cumplimiento SUNAT exacto, cambia los `value` de abajo por esos códigos.
+		// Catálogo propio de cuentas_cobrar (a pedido del usuario) — YA NO comparte el catálogo de
+		// 11 opciones de cuentas_pagar (ver cuentaPagar.config.ts, que no cambió). Códigos secuenciales
+		// 1-5 sin verificar contra SUNAT N.º 01. Todas las cuentas existentes ya usaban el valor '1'
+		// (Factura), así que este recorte no deja ninguna fila con un valor huérfano.
 		options: [
 			{ value: '1', label: 'Factura' },
-			{ value: '2', label: 'Boleta' },
+			{ value: '2', label: 'Boleta de venta' },
 			{ value: '3', label: 'Recibo por Honorarios' },
-			{ value: '4', label: 'Liquidación de Compras' },
-			{ value: '5', label: 'Ticket' },
-			{ value: '6', label: 'Nota de Crédito' },
-			{ value: '7', label: 'Guía de Remisión' },
-			{ value: '8', label: 'Comprobante de Retención' },
-			{ value: '9', label: 'Comprobante de Percepción' },
-			{ value: '10', label: 'Recibo de Servicios' },
-			{ value: '11', label: 'Boleta de Transporte' }
+			{ value: '4', label: 'Ticket' },
+			{ value: '5', label: 'Otro' }
 		],
 		showInTable: false,
 		showInForm: true,
@@ -138,9 +143,51 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		regex: /^\d+(\.\d{1,2})?$/,
 		regexMessage: 'Solo números, con máximo 2 decimales',
 		placeholder: '0.00',
+		// Con moneda='USD' este campo se bloquea y se calcula solo (monto_dolares × tipo_cambio) —
+		// ver disabledValue como función más abajo. Con moneda='PEN' (o vacío) queda libre como siempre.
+		disabledWhen: (values) => String(values.moneda ?? '') === 'USD',
+		disabledValue: (values) => {
+			const dolares = Number(values.monto_dolares);
+			const cambio = Number(values.tipo_cambio);
+			return dolares > 0 && cambio > 0 ? Number((dolares * cambio).toFixed(2)) : null;
+		},
+		helpText: 'Con moneda Dólares, este monto se calcula solo (Monto en Dólares × Tipo de Cambio).',
 		showInTable: true,
 		showInForm: true,
 		sortable: true
+	},
+	{
+		key: 'monto_dolares',
+		label: 'Monto en Dólares',
+		tipo: 'currency',
+		min: 0.01,
+		mask: currencyMask,
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '0.00',
+		// Bloqueado salvo que la moneda sea Dólares; obligatorio solo en ese caso (ver requiredWhen).
+		disabledWhen: (values) => String(values.moneda ?? '') !== 'USD',
+		requiredWhen: (values) => String(values.moneda ?? '') === 'USD',
+		helpText: 'Obligatorio si la moneda es Dólares.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'tipo_cambio',
+		label: 'Tipo de Cambio',
+		tipo: 'number',
+		min: 0.01,
+		mask: (raw) => raw.replace(/[^\d.]/g, '').replace(/(\..{2}).+/, '$1'), // hasta 2 decimales
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '3.75',
+		disabledWhen: (values) => String(values.moneda ?? '') !== 'USD',
+		requiredWhen: (values) => String(values.moneda ?? '') === 'USD',
+		helpText: 'Tipo de cambio del día (S/ por US$). Obligatorio si la moneda es Dólares.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
 	},
 	{
 		key: 'monto_cobrado',
@@ -162,9 +209,14 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'forma_pago',
 		label: 'Forma de Pago',
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		// Antes era Contado(1)/Crédito(2). Crédito se renombra a Fraccionado (mismo código '2', mismo
+		// comportamiento: habilita Número de Cuotas y genera cuotas iguales) y se agrega Por Porcentaje
+		// ('3') que por ahora se comporta igual que Fraccionado — el reparto por porcentaje real queda
+		// pendiente para un pedido futuro.
 		options: [
 			{ value: '1', label: 'Contado' },
-			{ value: '2', label: 'Crédito' }
+			{ value: '2', label: 'Fraccionado' },
+			{ value: '3', label: 'Por Porcentaje' }
 		],
 		showInTable: false,
 		showInForm: true,
