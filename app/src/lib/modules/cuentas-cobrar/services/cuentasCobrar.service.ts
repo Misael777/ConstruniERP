@@ -33,6 +33,8 @@ export interface CuentaCobrar {
 	fecha_emision: string;
 	fecha_vencimiento: string | null;
 	moneda: string | null;
+	monto_dolares: number | null;
+	tipo_cambio: number | null;
 	observaciones: string | null;
 	estado: string;
 	usuario_registro: string | null;
@@ -152,7 +154,8 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 export async function createCuentaCobrar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
-	usuarioRegistro: string | null
+	usuarioRegistro: string | null,
+	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -170,95 +173,37 @@ export async function createCuentaCobrar(
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto)').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
-	await resincronizarCobrosProgramados(client, data.id_cuenta_cobrar, saldoInicial, Number(insertData['condición_pago']), data.fecha_emision, data.fecha_vencimiento);
+	await sincronizarCuotasProgramadas(client, data.id_cuenta_cobrar, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por cobrar creada correctamente', data: data as CuentaCobrar };
 }
 
-/** Suma meses a una fecha sin el bug clásico de "31 de enero + 1 mes = 3 de marzo" (fija el día al último válido del mes destino). */
-function addMonths(date: Date, months: number): Date {
-	const d = new Date(date);
-	const day = d.getDate();
-	d.setDate(1);
-	d.setMonth(d.getMonth() + months);
-	const diasEnMesDestino = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-	d.setDate(Math.min(day, diasEnMesDestino));
-	return d;
-}
-
-function toISODate(d: Date): string {
-	return d.toISOString().slice(0, 10);
-}
-
 /**
- * Genera N cuotas programadas (tabla cobros, estado_cobro='programado') — NO se cuentan como cobros
- * reales todavía (recalcularCuentaCobrar las ignora), es solo para ver cómo quedarían programados los
- * cobros futuros. Una cuota por mes desde fecha_emision, topada a fecha_vencimiento (si varias cuotas
- * caen después del vencimiento, todas esas comparten esa misma fecha tope). Monto = monto ÷ N, la
- * última cuota absorbe el redondeo de centavos para que la suma cuadre exacto. Reutiliza la columna
- * `fecha_cobro` de "cobros" como fecha programada (misma técnica que cuentasPagar.service.ts).
+ * Sustituye el calendario de cuotas 'programado' de la cuenta por EXACTAMENTE las fracciones que el
+ * usuario configuró en la ventana "Fraccionar este pago" (fecha + monto libres, ver
+ * FraccionamientoModal.svelte) — ya no se autogeneran por partes iguales acá: esa validación (que la
+ * suma cuadre con el monto total) se hizo del lado del cliente antes de llegar a este punto. Nunca
+ * toca las cuotas 'cobrado' (esas son reales). Si `fracciones` viene vacío (Forma de Pago = Contado,
+ * o el usuario eliminó el fraccionamiento), simplemente deja la cuenta sin cuotas programadas.
  */
-async function generarCobrosProgramados(
+async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
-	monto: number,
-	numCuotas: number,
-	fechaEmision: string,
-	fechaVencimiento: string | null
-): Promise<{ error: unknown | null }> {
-	const inicio = new Date(fechaEmision);
-	if (Number.isNaN(inicio.getTime())) return { error: null };
-	const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
-
-	const montoBase = Math.floor((monto / numCuotas) * 100) / 100;
-	const filas: Record<string, unknown>[] = [];
-	let acumulado = 0;
-
-	for (let i = 1; i <= numCuotas; i++) {
-		let fecha = addMonths(inicio, i);
-		if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) {
-			fecha = limite;
-		}
-		const esUltima = i === numCuotas;
-		const montoCuota = esUltima ? Number((monto - acumulado).toFixed(2)) : montoBase;
-		acumulado += montoCuota;
-		filas.push({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: montoCuota, fecha_cobro: toISODate(fecha), estado_cobro: 'programado' });
-	}
-
-	const { error } = await client.from(COBRO_TABLE).insert(filas);
-	return { error };
-}
-
-/**
- * Borra las cuotas 'programado' que ya existan para la cuenta (nunca toca las 'cobrado', esas son
- * reales) y las vuelve a generar según el Número de Cuotas / monto / fechas ACTUALES. Se llama tanto
- * al crear como al actualizar la cuenta, para que un cambio en "Número de Cuotas" (condición_pago, o
- * en el monto o las fechas, que afectan el reparto) siempre deje las cuotas programadas al día. Si
- * numCuotas <= 1 simplemente no regenera nada (quedan borradas): un cobro de 1 sola cuota no necesita
- * programación aparte.
- */
-async function resincronizarCobrosProgramados(
-	client: SupabaseClient,
-	idCuentaCobrar: number,
-	monto: number,
-	numCuotas: number,
-	fechaEmision: string,
-	fechaVencimiento: string | null
+	fracciones: { fecha: string; monto: number }[]
 ): Promise<void> {
 	// No se revienta la creación/edición de la cuenta si esto falla (ej. falta la migración de
-	// estado_cobro en la BD) — pero SÍ se deja constancia en consola: antes fallaba en silencio y la
-	// cuenta se guardaba "bien" sin que nunca aparecieran las cuotas programadas.
+	// estado_cobro en la BD) — pero SÍ se deja constancia en consola.
 	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
 		return;
 	}
+	if (fracciones.length === 0) return;
 
-	if (Number.isFinite(numCuotas) && numCuotas > 1) {
-		const { error: insertError } = await generarCobrosProgramados(client, idCuentaCobrar, monto, numCuotas, fechaEmision, fechaVencimiento);
-		if (insertError) {
-			console.error('No se pudieron generar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
-		}
+	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: f.monto, fecha_cobro: f.fecha, estado_cobro: 'programado' }));
+	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);
+	if (insertError) {
+		console.error('No se pudieron guardar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
 	}
 }
 
@@ -266,7 +211,8 @@ export async function updateCuentaCobrar(
 	client: SupabaseClient,
 	id: number,
 	payload: Record<string, unknown>,
-	esAdmin: boolean = false
+	esAdmin: boolean = false,
+	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -295,16 +241,10 @@ export async function updateCuentaCobrar(
 		.single();
 	if (error) return { success: false, message: `No se pudo actualizar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
-	// Solo regenera el calendario de cuotas si el Número de Cuotas realmente cambió — si no, un cobro
-	// que el usuario ya haya editado o cancelado a mano se conserva tal cual, sin que un cambio en
-	// otro campo cualquiera (ej. "responsable") lo borre y lo vuelva a armar desde cero.
-	// (cast a `any`: el parser de tipos de select() de supabase-js no maneja bien la key acentuada)
-	const dataAny = data as any;
-	const numCuotasAnterior = Number((current as any)?.['condición_pago'] ?? 0);
-	const numCuotasNueva = Number(dataAny['condición_pago']);
-	if (numCuotasNueva !== numCuotasAnterior) {
-		await resincronizarCobrosProgramados(client, id, Number(dataAny.monto), numCuotasNueva, dataAny.fecha_emision, dataAny.fecha_vencimiento);
-	}
+	// El calendario de cuotas se sustituye siempre por lo que traiga `fraccionesPersonalizadas` — el
+	// modal hidrata ese arreglo desde las cuotas 'programado' actuales cuando el usuario no tocó nada
+	// (ver CuentaCobrarModal.svelte), así que esto es efectivamente un no-op si no hubo cambios reales.
+	await sincronizarCuotasProgramadas(client, id, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por cobrar actualizada correctamente', data: data as CuentaCobrar };
 }

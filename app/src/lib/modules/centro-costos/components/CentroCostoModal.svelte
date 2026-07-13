@@ -138,7 +138,7 @@
 									}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
-									{#each field.options ?? [] as opt}
+									{#each field.formOptions ?? field.options ?? [] as opt}
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
@@ -148,6 +148,7 @@
 									name={field.key}
 									type={field.tipo === 'number' ? 'number' : 'text'}
 									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
+									step={field.tipo === 'number' ? 'any' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}

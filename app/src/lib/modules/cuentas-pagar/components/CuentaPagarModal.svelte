@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2 } from '@lucide/svelte';
+	import { X, Loader2, ListOrdered } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
-	import { createCuentaPagar, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { createCuentaPagar, updateCuentaPagar, getPagos } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
 	let {
 		open = false,
@@ -24,7 +25,10 @@
 		onSaved: () => void;
 	} = $props();
 
-	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
+	// 'condicion_pago' (Número de Cuotas) ya no se muestra como campo inline: se configura en la
+	// ventana "Fraccionar este pago" (ver FraccionamientoModal) y su valor se sigue guardando en
+	// formValues programáticamente desde ahí (ver onFraccionesConfirmadas más abajo).
+	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm && f.key !== 'condicion_pago');
 
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
@@ -38,18 +42,59 @@
 	let formValues = $state<Record<string, string>>(buildInitialValues());
 	let fieldErrors = $state<Record<string, string>>({});
 	let submitting = $state(false);
+	let fracciones = $state<Fraccion[]>([]);
+	let fraccionamientoOpen = $state(false);
 
 	$effect(() => {
-		if (open) {
-			formValues = buildInitialValues();
-			fieldErrors = {};
+		if (!open) return;
+		formValues = buildInitialValues();
+		fieldErrors = {};
+		fracciones = [];
+		if (mode === 'edit' && cuenta) {
+			(async () => {
+				const pagos = await getPagos(supabase, cuenta.id_cuenta_pagar);
+				fracciones = pagos
+					.filter((p) => p.estado_pago === 'programado')
+					.map((p) => ({ fecha: p.fecha_pago, monto: Number(p.monto) }))
+					.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+			})();
 		}
 	});
 
+	// fotma_pago '1' = Contado (una sola cuota, sin fraccionar). Cualquier otro valor elegido (ej.
+	// Crédito) habilita la ventana "Fraccionar este pago".
+	const esFraccionable = $derived(String(formValues.fotma_pago ?? '') !== '' && String(formValues.fotma_pago ?? '') !== '1');
+
+	// 'condicion_pago' ya no se edita a mano: se mantiene igual a la cantidad de fracciones
+	// configuradas (o vacío si Forma de Pago es Contado / todavía no se configuró nada).
+	$effect(() => {
+		if (!esFraccionable) {
+			if (fracciones.length > 0) fracciones = [];
+			if (formValues.condicion_pago !== '') formValues = { ...formValues, condicion_pago: '' };
+			return;
+		}
+		const nuevo = fracciones.length > 0 ? String(fracciones.length) : '';
+		if (formValues.condicion_pago !== nuevo) formValues = { ...formValues, condicion_pago: nuevo };
+	});
+
+	// Al confirmar las cuotas (siempre con Forma de Pago distinta de Contado, único caso en que esta
+	// ventana es alcanzable), la fecha de la última cuota pasa a ser la Fecha Vencimiento de la
+	// cuenta — evita que quede desalineada con el calendario que el usuario acaba de definir a mano.
+	function onFraccionesConfirmadas(nuevas: Fraccion[]) {
+		fracciones = nuevas;
+		if (esFraccionable && nuevas.length > 0) {
+			const ultimaFecha = nuevas.reduce((max, f) => (f.fecha > max ? f.fecha : max), nuevas[0].fecha);
+			formValues = { ...formValues, fecha_vencimiento: ultimaFecha };
+		}
+	}
+
+	function onFraccionamientoEliminado() {
+		fracciones = [];
+	}
+
 	// Recalcula en vivo los campos con computeValue (monto_imponible, monto_igv, monto_retencion)
 	// cada vez que cambia algo de lo que dependen (monto_comprometido, detraccion, etc.). También
-	// fuerza los campos bloqueados por disabledWhen a su disabledValue (ej. Número de Cuotas -> "1"
-	// cuando Forma de Pago es Contado), para que lo que se VE coincida con lo que se va a guardar.
+	// fuerza los campos bloqueados por disabledWhen a su disabledValue.
 	$effect(() => {
 		for (const field of formFields) {
 			if (field.computeValue) {
@@ -93,15 +138,20 @@
 		event.preventDefault();
 		revalidate();
 		if (hasErrors) return;
+		if (esFraccionable && fracciones.length === 0) {
+			toast.error('Configura las cuotas en "Fraccionar este pago" antes de guardar.');
+			return;
+		}
 
 		submitting = true;
 		try {
+			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
 			if (mode === 'edit' && cuenta) {
-				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin());
+				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin(), fraccionesAEnviar);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
-				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null, fraccionesAEnviar);
 			}
 
 			if (result.success) {
@@ -159,6 +209,7 @@
 									name={field.key}
 									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
 									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
+									step={!field.renderAsText && field.tipo === 'number' ? 'any' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
@@ -178,6 +229,21 @@
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}
 						</div>
+
+						{#if field.key === 'fotma_pago' && esFraccionable}
+							<div>
+								<span class="block text-sm font-medium text-slate-700 mb-1">Cuotas</span>
+								<button
+									type="button"
+									onclick={() => (fraccionamientoOpen = true)}
+									class="w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
+								>
+									<ListOrdered size={16} />
+									{fracciones.length > 0 ? `Configurar Cuotas (${fracciones.length})` : 'Configurar Cuotas'}
+								</button>
+								<p class="mt-1 text-xs text-slate-400">Define fecha y monto de cada cuota.</p>
+							</div>
+						{/if}
 					{/each}
 				</div>
 
@@ -194,3 +260,14 @@
 		</div>
 	</div>
 {/if}
+
+<FraccionamientoModal
+	open={fraccionamientoOpen}
+	montoTotal={Number(formValues.monto_comprometido) || 0}
+	fechaEmision={formValues.fecha_emision}
+	fechaVencimiento={formValues.fecha_vencimiento || null}
+	fraccionesIniciales={fracciones}
+	onClose={() => (fraccionamientoOpen = false)}
+	onConfirm={onFraccionesConfirmadas}
+	onEliminar={onFraccionamientoEliminado}
+/>

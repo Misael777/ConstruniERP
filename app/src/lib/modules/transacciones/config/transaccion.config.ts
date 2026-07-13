@@ -101,8 +101,53 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		tipo: 'select',
 		options: [
 			{ value: 'ingreso', label: 'Ingreso' },
-			{ value: 'egreso', label: 'Egreso' }
+			{ value: 'egreso', label: 'Egreso' },
+			{ value: 'financiamiento', label: 'Financiamiento' }
 		],
+		showInTable: true,
+		showInForm: true,
+		sortable: true
+	},
+	{
+		// Catálogo de categorías por tipo de movimiento (definido por el usuario, ver mockup
+		// "Movimientos de Caja y Financiamiento"). `options` trae las 7 completas (para validar
+		// cualquier valor ya guardado y traducirlo a label en tabla/badges); `optionsWhen` filtra
+		// cuáles se OFRECEN en el <select> del formulario según el `tipo` elegido — ver
+		// TransaccionModal.svelte, que además limpia este campo cuando el usuario cambia `tipo`.
+		key: 'categoria',
+		label: 'Categoría',
+		tipo: 'select',
+		options: [
+			{ value: 'Consultoría', label: 'Consultoría' },
+			{ value: 'Ingresos por Servicios', label: 'Ingresos por Servicios' },
+			{ value: 'G. Operativos', label: 'G. Operativos' },
+			{ value: 'G. Administrativos', label: 'G. Administrativos' },
+			{ value: 'Servicios', label: 'Servicios' },
+			{ value: 'Materiales', label: 'Materiales' },
+			{ value: 'Préstamos', label: 'Préstamos' }
+		],
+		optionsWhen: (payload) => {
+			const tipo = String(payload.tipo ?? '');
+			if (tipo === 'ingreso') {
+				return [
+					{ value: 'Consultoría', label: 'Consultoría' },
+					{ value: 'Ingresos por Servicios', label: 'Ingresos por Servicios' }
+				];
+			}
+			if (tipo === 'egreso') {
+				return [
+					{ value: 'G. Operativos', label: 'G. Operativos' },
+					{ value: 'G. Administrativos', label: 'G. Administrativos' },
+					{ value: 'Servicios', label: 'Servicios' },
+					{ value: 'Materiales', label: 'Materiales' }
+				];
+			}
+			if (tipo === 'financiamiento') {
+				return [{ value: 'Préstamos', label: 'Préstamos' }];
+			}
+			return [];
+		},
+		helpText: 'Elige primero el Tipo — las categorías disponibles dependen de él.',
 		showInTable: true,
 		showInForm: true,
 		sortable: true

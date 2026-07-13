@@ -169,6 +169,7 @@
 									name={field.key}
 									type={field.renderAsText ? 'text' : field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
 									inputmode={field.tipo === 'currency' ? 'decimal' : field.renderAsText ? 'numeric' : undefined}
+									step={!field.renderAsText && field.tipo === 'number' ? 'any' : undefined}
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}

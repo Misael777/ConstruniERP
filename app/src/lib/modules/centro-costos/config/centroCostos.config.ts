@@ -84,6 +84,14 @@ export interface CentroCostoFieldConfig {
 	mask?: (rawValue: string) => string;
 	/** Opciones para tipo 'select' (debe reflejar el CHECK de la BD) */
 	options?: CentroCostoFieldOption[];
+	/**
+	 * Si viene, el <select> del formulario (crear/editar) usa ESTAS opciones en vez de `options` —
+	 * para poder elegir a mano solo un subconjunto, mientras `options` sigue teniendo la lista
+	 * completa (se usa para traducir cualquier valor existente a su label bonito en la tabla, aunque
+	 * ya no se pueda elegir a mano). Ver campo `tipo` más abajo: 'proyecto'/'cliente'/'proveedor' se
+	 * generan solos y no deben elegirse a mano, así que quedan fuera de `formOptions`.
+	 */
+	formOptions?: CentroCostoFieldOption[];
 	/** Placeholder del input */
 	placeholder?: string;
 	/** Texto de ayuda bajo el campo */
@@ -174,22 +182,30 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		label: 'Tipo',
 		tipo: 'select',
 		required: true,
-		// Debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla centro_costo — ver
-		// centro_costo_vinculacion_migration.sql. 'proyecto'/'cliente'/'proveedor' se completan solos
-		// (getOrCrearCentroCostoParaEntidad en este mismo service) cuando se crea esa entidad; se
-		// listan aquí solo para que se vean con su label correcto en esta tabla, no para elegirlos a
-		// mano — un centro con uno de esos 3 tipos sin su id_proyecto/id_cliente/id_proveedor
-		// correspondiente no tiene sentido (ver chk_centro_costo_una_entidad).
+		// `options` (completa) debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla
+		// centro_costo — ver centro_costo_vinculacion_migration.sql y la migración que agrega
+		// 'bolsa general'. Se usa para traducir CUALQUIER valor existente a su label bonito en la
+		// tabla. `formOptions` (más abajo) es el subconjunto que se puede elegir a mano en el
+		// formulario: 'proyecto'/'cliente'/'proveedor' se completan solos (getOrCrearCentroCostoParaEntidad
+		// en este mismo service) cuando se crea esa entidad — no se eligen a mano, por eso no están
+		// en `formOptions` — y 'area'/'otro' quedaron fuera del catálogo manual a pedido del usuario
+		// (se dejan en `options` solo por si alguna fila vieja los tuviera, no hay ninguna hoy).
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
+			{ value: 'bolsa general', label: 'Bolsa General' },
 			{ value: 'area', label: 'Área' },
 			{ value: 'otro', label: 'Otro' },
 			{ value: 'proyecto', label: 'Proyecto (automático)' },
 			{ value: 'cliente', label: 'Cliente (automático)' },
 			{ value: 'proveedor', label: 'Proveedor (automático)' }
 		],
-		helpText: 'Clasificación del centro de costo. "Proyecto/Cliente/Proveedor" se generan solos al crear esa entidad — no los selecciones a mano aquí.',
+		formOptions: [
+			{ value: 'obra', label: 'Obra' },
+			{ value: 'consultoria', label: 'Consultoría' },
+			{ value: 'bolsa general', label: 'Bolsa General' }
+		],
+		helpText: 'Clasificación del centro de costo.',
 		showInTable: true,
 		showInForm: true,
 		sortable: true
