@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import { supabase } from '$lib/supabaseClient';
+import { buildTree } from '$lib/utils/tree';
 
 export interface PartidaNode {
     id_partida: number;
@@ -109,23 +110,7 @@ export async function fetchPartidasTree() {
         const flat: PartidaNode[] = data || [];
         partidasCount.set(flat.length);
 
-        const map = new Map<number, PartidaNode>();
-        flat.forEach(n => map.set(n.id_partida, { ...n, children: [] }));
-
-        const tree: PartidaNode[] = [];
-        flat.forEach(n => {
-            const node = map.get(n.id_partida)!;
-            if (n.id_partida_padre !== null) {
-                const parent = map.get(n.id_partida_padre);
-                if (parent) {
-                    parent.children!.push(node);
-                } else {
-                    tree.push(node); // orphan → place at root
-                }
-            } else {
-                tree.push(node);
-            }
-        });
+        const tree = buildTree(flat, 'id_partida', 'id_partida_padre');
 
         errorMessage.set(null);
         partidasTree.set(tree);

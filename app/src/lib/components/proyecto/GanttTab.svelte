@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { SvelteGantt, SvelteGanttTable, SvelteGanttDependencies } from 'svelte-gantt/svelte';
+	import GanttTimeline from './GanttTimeline.svelte';
+	import { buildTree, fillMissingAncestors } from '$lib/utils/tree';
+	import {
+		diffDraft,
+		commitDraft,
+		computeBlockShift,
+		checkBlockShiftDependencyWarnings,
+	} from '$lib/modules/gantt-planning/services/ganttPlanning.service';
 
 	const { projectId, proyecto } = $props<{
 		projectId: number;
@@ -126,9 +133,17 @@
 		{ actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '', idActividad: null }
 	);
 
-	// svelte-gantt bound instance — gives access to `api` (tasks.on.changed/select, etc.)
-	// See https://github.com/ANovokmet/svelte-gantt
-	let ganttApi = $state<any>(null);
+	// Local draft of pending schedule edits (drag/resize/block-move), keyed by
+	// actividad id. Nothing here touches Supabase until "Guardar cambios" —
+	// see ganttPlanning.service.ts's reconstruction checklist item 9.
+	let draftDates = $state(new Map<number, { inicio: string; fin: string }>());
+	let draftWarnings = $state<string[]>([]);
+
+	// Full, unscoped partida catalog — needed to walk ancestor chains when
+	// auto-creating group activities (see ensureAncestorChain below). Kept
+	// separate from `partidas` (the sidebar-scoped list) so the sidebar's
+	// existing "only show budgeted partidas" behavior is unchanged.
+	let catalogAll = $state<PartidaItem[]>([]);
 
 	// ── DERIVED ────────────────────────────────────────────────────────────────
 	const timelineStart = $derived.by(() => {
@@ -173,20 +188,18 @@
 		);
 	});
 
-	const partidaTree = $derived.by((): PartidaNode[] => {
-		const map = new Map<number, PartidaNode>();
-		for (const p of filteredPartidas) map.set(p.id_partida, { ...p, children: [] });
-		const roots: PartidaNode[] = [];
-		for (const p of filteredPartidas) {
-			const node = map.get(p.id_partida)!;
-			if (p.id_partida_padre && map.has(p.id_partida_padre)) {
-				map.get(p.id_partida_padre)!.children.push(node);
-			} else {
-				roots.push(node);
-			}
-		}
-		return roots;
-	});
+	// `partidas` is scoped to whatever's already in the project's
+	// presupuesto_detalle, which can legitimately be missing an ancestor group
+	// (e.g. legacy rows added before ensureAncestorChain existed) — fill those
+	// in from the full catalog so a leaf never renders as a stray root instead
+	// of nested under its real parent.
+	const partidaTree = $derived.by((): PartidaNode[] =>
+		buildTree(
+			fillMissingAncestors(filteredPartidas, catalogAll, 'id_partida', 'id_partida_padre'),
+			'id_partida',
+			'id_partida_padre'
+		)
+	);
 
 	// ── RESTRICCIONES ↔ ACTIVIDAD LINK ─────────────────────────────────────────
 	// Restricciones with id_cronograma_actividad set are tied to a specific
@@ -202,120 +215,49 @@
 		return m;
 	});
 
-	// ── SVELTE-GANTT ROWS / TASKS / DEPENDENCIES ──────────────────────────────
-	// One row + at most one task per actividad (id shared between the two).
-	const ganttRows = $derived.by(() => {
-		const childMap = new Map<number | null, Actividad[]>();
-		for (const a of actividades) {
-			const key = a.id_actividad_padre ?? null;
-			if (!childMap.has(key)) childMap.set(key, []);
-			childMap.get(key)!.push(a);
-		}
-		for (const [, arr] of childMap) arr.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
-
-		function build(pid: number | null): any[] {
-			return (childMap.get(pid) ?? []).map(a => {
-				const tieneRestriccion = restriccionesAbiertasPorActividad.has(a.id_cronograma_actividad);
-				const nombre = a.partida?.codigo ? `${a.partida.codigo} · ${a.nombre_actividad}` : a.nombre_actividad;
-				return {
-					id: a.id_cronograma_actividad,
-					label: tieneRestriccion ? `⚠ ${nombre}` : nombre,
-					children: build(a.id_cronograma_actividad),
-					expanded: true,
-				};
-			});
-		}
-		return build(null);
+	// ── SCHEDULE DRAFT (local-only until "Guardar cambios") ────────────────────
+	// GanttTimeline renders `draftActividades`, never `actividades` directly,
+	// so every drag/resize/block-move is visible immediately but nothing hits
+	// Supabase until the user explicitly commits it.
+	const draftActividades = $derived.by((): Actividad[] => {
+		if (draftDates.size === 0) return actividades;
+		return actividades.map(a => {
+			const d = draftDates.get(a.id_cronograma_actividad);
+			return d ? { ...a, fecha_inicio_plan: d.inicio, fecha_fin_plan: d.fin } : a;
+		});
 	});
+	const hasDraftChanges = $derived(draftDates.size > 0);
 
-	const ganttTasks = $derived.by(() => {
-		const today = new Date(); today.setHours(0, 0, 0, 0);
-		return actividades
-			.filter(a => a.fecha_inicio_plan && a.fecha_fin_plan)
-			.map(a => {
-				const completada = a.porcentaje_avance_real >= 100;
-				const atrasada = !completada
-					&& new Date(a.fecha_fin_plan!) < today
-					&& a.porcentaje_avance_real < 100 - tolerancia;
-				const classes = [
-					`crono-nivel-${Math.min(a.nivel, 3)}`,
-					atrasada ? 'crono-atrasada' : '',
-					completada ? 'crono-completada' : '',
-					restriccionesAbiertasPorActividad.has(a.id_cronograma_actividad) ? 'crono-restriccion' : '',
-				].filter(Boolean);
-				return {
-					id: a.id_cronograma_actividad,
-					resourceId: a.id_cronograma_actividad,
-					from: +new Date(a.fecha_inicio_plan!),
-					to: +addDays(new Date(a.fecha_fin_plan!), 1), // exclusive end (spans through the last day)
-					label: a.nombre_actividad,
-					amountDone: showAvanceReal ? (a.porcentaje_avance_real || undefined) : undefined,
-					classes,
-				};
-			});
-	});
-
-	const ganttDependencies = $derived(
-		showDeps
-			? dependencias.map(d => ({
-					id: d.id_dependencia,
-					fromId: d.id_actividad_origen,
-					toId: d.id_actividad_destino,
-					stroke: '#94a3b8',
-					strokeWidth: 1.5,
-					arrowSize: 6,
-				}))
-			: []
-	);
-
-	const ganttTableModules = [SvelteGanttTable];
-	const ganttBodyModules  = [SvelteGanttDependencies];
-	const ganttTableHeaders = [{ title: 'Actividad', property: 'label', width: 280, type: 'tree' }];
-	const ganttHeaders = [
-		{ unit: 'month', format: 'MMMM YYYY' },
-		{ unit: 'week', format: 'WW' },
-	];
-
-	// Applies a per-actividad custom color (a.color) as an inline override on
-	// top of the nivel-based CSS classes — svelte-gantt tasks only support
-	// `classes`, not inline styles, so this fills that gap via its
-	// `taskElementHook` extension point.
-	function ganttTaskElementHook(node: HTMLElement, model: any) {
-		function apply(m: any) {
-			const id = Number(m.id);
-			const a = actividades.find(x => x.id_cronograma_actividad === id);
-			if (a?.color) node.style.setProperty('background-color', a.color, 'important');
-			else node.style.removeProperty('background-color');
-
-			const restrs = restriccionesAbiertasPorActividad.get(id);
-			node.title = restrs?.length
-				? `Restricción: ${restrs.map(r => r.descripcion || r.tipo_restriccion || 'sin detalle').join(' · ')}`
-				: '';
-		}
-		apply(model);
-		return { update: apply, destroy() {} };
+	function handleLeafChange(id: number, inicio: string, fin: string) {
+		if (new Date(fin) < new Date(inicio)) return; // ignore invalid ranges
+		draftDates = new Map(draftDates).set(id, { inicio, fin });
 	}
 
-	// ── CREATE TASK BY CLICK-DRAG (on an empty row, i.e. an actividad with no
-	//    dates yet) ────────────────────────────────────────────────────────────
-	// The row id IS the actividad id (see ganttRows/ganttTasks), so the newly
-	// created task must reuse that same id instead of svelte-gantt's random one.
-	function ganttOnCreateTask(e: { resourceId: PropertyKey; from: number; to: number }) {
-		const a = actividades.find(x => x.id_cronograma_actividad === Number(e.resourceId));
-		return {
-			id: e.resourceId,
-			resourceId: e.resourceId,
-			from: e.from,
-			to: e.to,
-			label: a?.nombre_actividad ?? '',
-			classes: a ? [`crono-nivel-${Math.min(a.nivel, 3)}`] : [],
-		};
+	function handleBlockMove(rootId: number, deltaDays: number) {
+		const shift = computeBlockShift(draftActividades, rootId, deltaDays);
+		if (shift.size === 0) return;
+		draftWarnings = checkBlockShiftDependencyWarnings(draftActividades, dependencias, shift);
+		const next = new Map(draftDates);
+		for (const [id, dates] of shift) next.set(id, dates);
+		draftDates = next;
 	}
 
-	function ganttOnCreatedTask(task: any) {
-		const id = Number(task.model.id);
-		if (Number.isNaN(id)) return;
-		saveTaskDates(id, new Date(task.model.from), new Date(task.model.to));
+	async function guardarCambios() {
+		const diff = diffDraft(actividades, draftActividades);
+		if (!diff.length) return;
+		const res = await commitDraft(supabase, diff);
+		if (res.ok) {
+			actividades = draftActividades;
+			draftDates = new Map();
+			draftWarnings = [];
+		} else {
+			alert('No se pudieron guardar los cambios: ' + res.error);
+		}
+	}
+
+	function descartarCambios() {
+		draftDates = new Map();
+		draftWarnings = [];
 	}
 
 	// ── DATE UTILS ─────────────────────────────────────────────────────────────
@@ -363,6 +305,11 @@
 	}
 
 	async function loadPartidas() {
+		// Full catalog (unscoped), needed to walk ancestor chains in
+		// ensureAncestorChain regardless of what's shown in the sidebar below.
+		const { data: allCats } = await supabase.from('partida').select('*').order('codigo');
+		catalogAll = (allCats ?? []) as PartidaItem[];
+
 		// Try to get the project's presupuesto (use id_pres_inicial or the latest one)
 		const { data: pres } = await supabase.from('presupuesto')
 			.select('id_presupuesto')
@@ -388,27 +335,14 @@
 			}
 		}
 		// Fallback: load the full catalog
-		const { data: cats } = await supabase.from('partida').select('*').order('codigo');
-		partidas = (cats ?? []) as PartidaItem[];
+		partidas = catalogAll;
 	}
 
-	// ── SET / SAVE DATES (shared by manual inputs, svelte-gantt drag/resize,
-	//    and click-drag task creation) ─────────────────────────────────────────
-	async function setFechas(id: number, inicioStr: string, finStr: string) {
+	// Manual toolbar date/duration edits go through the same draft path as
+	// gantt drag/resize (see draftDates above) — one persistence model, not two.
+	function setFechasManual(id: number, inicioStr: string, finStr: string) {
 		if (!inicioStr || !finStr) return;
-		if (new Date(finStr) < new Date(inicioStr)) return; // ignore invalid ranges
-		await supabase.from('cronograma_actividad').update({ fecha_inicio_plan: inicioStr, fecha_fin_plan: finStr })
-			.eq('id_cronograma_actividad', id);
-		actividades = actividades.map(a =>
-			a.id_cronograma_actividad === id ? { ...a, fecha_inicio_plan: inicioStr, fecha_fin_plan: finStr } : a
-		);
-	}
-
-	// svelte-gantt's `to` is exclusive (spans through midnight of the day after
-	// fecha_fin_plan — see ganttTasks below), so drag/resize/create events need
-	// to shift the end back by one day before persisting.
-	async function saveTaskDates(id: number, start: Date, endExclusive: Date) {
-		await setFechas(id, fmt(start), fmt(addDays(endExclusive, -1)));
+		handleLeafChange(id, inicioStr, finStr);
 	}
 
 	function duracionDias(inicio: string | null | undefined, fin: string | null | undefined): number {
@@ -419,32 +353,6 @@
 	function finFromDuracion(inicioStr: string, dias: number): string {
 		return fmt(addDays(new Date(inicioStr + 'T00:00:00'), Math.max(dias, 1) - 1));
 	}
-
-	// svelte-gantt's event bus wraps handler args in a tuple; be defensive about
-	// whether we get the payload directly or wrapped in a 1-element array.
-	function unwrapGanttEvent(args: any[]): any {
-		const raw = args.length === 1 ? args[0] : args;
-		return Array.isArray(raw) ? raw[0] : raw;
-	}
-
-	$effect(() => {
-		if (!ganttApi) return;
-		const offChanged = ganttApi.tasks.on.changed((...args: any[]) => {
-			const payload = unwrapGanttEvent(args);
-			const task = payload?.task;
-			if (!task) return;
-			const id = Number(task.model.id);
-			if (Number.isNaN(id)) return;
-			saveTaskDates(id, new Date(task.model.from), new Date(task.model.to));
-		});
-		const offSelect = ganttApi.tasks.on.select((...args: any[]) => {
-			const payload = unwrapGanttEvent(args);
-			const model = payload?.model ?? payload;
-			const id = Number(model?.id);
-			selectedId = Number.isNaN(id) ? null : id;
-		});
-		return () => { offChanged?.(); offSelect?.(); };
-	});
 
 	// ── DEPENDENCY CREATION (via dropdown, replaces old drag-to-link) ─────────
 	async function createDep(srcId: number, dstId: number) {
@@ -505,16 +413,71 @@
 		}
 	}
 
+	// Walks p.id_partida_padre up the catalog and creates/reuses group
+	// activities (id_partida set, no dates — rollup-only, see
+	// ganttPlanning.service.ts) so the schedule's own hierarchy mirrors the
+	// partida catalog's hierarchy instead of a flat/ad hoc placement — this is
+	// the direct fix for "no mantienen la estructura anidada". If the user
+	// explicitly picked a parent activity (explicitParentId), that choice wins
+	// so a partida can still be nested under a custom phase grouping.
+	async function ensureAncestorChain(p: PartidaItem, explicitParentId: number | null): Promise<number | null> {
+		if (explicitParentId != null) return explicitParentId;
+		const chain: PartidaItem[] = [];
+		let currentParentId = p.id_partida_padre;
+		let guard = 0;
+		while (currentParentId != null && guard++ < 20) {
+			const anc = catalogAll.find(x => x.id_partida === currentParentId);
+			if (!anc) break;
+			chain.unshift(anc);
+			currentParentId = anc.id_partida_padre;
+		}
+		let parentActId: number | null = null;
+		for (const anc of chain) {
+			const existing = actividades.find(a => a.id_partida === anc.id_partida);
+			if (existing) {
+				parentActId = existing.id_cronograma_actividad;
+				continue;
+			}
+			const parentIdForInsert: number | null = parentActId;
+			const parentActRow: Actividad | undefined = parentIdForInsert ? actividades.find(a => a.id_cronograma_actividad === parentIdForInsert) : undefined;
+			const nivelNuevo: number = parentActRow ? parentActRow.nivel + 1 : 1;
+			const siblingsAnc: Actividad[] = actividades.filter(a => a.id_actividad_padre === parentIdForInsert);
+			const payload = {
+				id_proyecto: projectId,
+				nombre_actividad: anc.descripcion,
+				nivel: nivelNuevo,
+				id_actividad_padre: parentIdForInsert,
+				orden: siblingsAnc.length + 1,
+				porcentaje_avance_real: 0,
+				id_partida: anc.id_partida,
+			};
+			const insertRes = await supabase
+				.from('cronograma_actividad')
+				.insert(payload)
+				.select('*, partida:id_partida(codigo, descripcion, unidad)')
+				.single();
+			const nuevaAct = insertRes.data;
+			if (nuevaAct) {
+				const nuevaActTyped = nuevaAct as Actividad;
+				actividades = [...actividades, nuevaActTyped];
+				parentActId = nuevaActTyped.id_cronograma_actividad;
+			}
+			await syncPartidaToBudget(anc.id_partida);
+		}
+		return parentActId;
+	}
+
 	// ── ADD FROM PARTIDA (sidebar "+") ─────────────────────────────────────────
 	async function addFromPartida(p: PartidaItem, parentId: number | null = selectedId) {
-		const siblings = actividades.filter(a => a.id_actividad_padre === parentId);
-		const parent   = parentId ? actividades.find(a => a.id_cronograma_actividad === parentId) : null;
+		const finalParentId = await ensureAncestorChain(p, parentId);
+		const siblings = actividades.filter(a => a.id_actividad_padre === finalParentId);
+		const parent   = finalParentId ? actividades.find(a => a.id_cronograma_actividad === finalParentId) : null;
 		const nivel    = parent ? parent.nivel + 1 : 1;
 		const { data } = await supabase.from('cronograma_actividad').insert({
 			id_proyecto: projectId,
 			nombre_actividad: p.descripcion,
 			nivel,
-			id_actividad_padre: parentId,
+			id_actividad_padre: finalParentId,
 			orden: siblings.length + 1,
 			porcentaje_avance_real: 0,
 			id_partida: p.id_partida,
@@ -733,7 +696,7 @@
 
 			<!-- Selected activity actions + manual date/duration editing -->
 			{#if selectedId}
-				{@const selAct = actividades.find(a => a.id_cronograma_actividad === selectedId)}
+				{@const selAct = draftActividades.find(a => a.id_cronograma_actividad === selectedId)}
 				<div class="flex items-center gap-1.5 ml-1 px-2 py-1 bg-white border border-slate-200 rounded-lg flex-wrap">
 					<button
 						class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-blue-500 hover:bg-blue-50"
@@ -748,7 +711,7 @@
 
 					<span class="text-slate-300">|</span>
 
-					<!-- Manual fecha inicio/fin + duración — same setFechas() path the gantt drag/resize/create use -->
+					<!-- Manual fecha inicio/fin + duración — same draft path as gantt drag/resize -->
 					<span class="text-slate-400">Inicio:</span>
 					<input
 						type="date"
@@ -756,7 +719,7 @@
 						value={selAct?.fecha_inicio_plan ?? ''}
 						onchange={(e) => {
 							const v = (e.target as HTMLInputElement).value;
-							if (selectedId && v) setFechas(selectedId, v, selAct?.fecha_fin_plan && selAct.fecha_fin_plan >= v ? selAct.fecha_fin_plan : v);
+							if (selectedId && v) setFechasManual(selectedId, v, selAct?.fecha_fin_plan && selAct.fecha_fin_plan >= v ? selAct.fecha_fin_plan : v);
 						}}
 					/>
 					<span class="text-slate-400">Fin:</span>
@@ -766,7 +729,7 @@
 						value={selAct?.fecha_fin_plan ?? ''}
 						onchange={(e) => {
 							const v = (e.target as HTMLInputElement).value;
-							if (selectedId && v) setFechas(selectedId, selAct?.fecha_inicio_plan && selAct.fecha_inicio_plan <= v ? selAct.fecha_inicio_plan : v, v);
+							if (selectedId && v) setFechasManual(selectedId, selAct?.fecha_inicio_plan && selAct.fecha_inicio_plan <= v ? selAct.fecha_inicio_plan : v, v);
 						}}
 					/>
 					<span class="text-slate-400">Duración (d):</span>
@@ -778,7 +741,7 @@
 						onchange={(e) => {
 							const dias = Number((e.target as HTMLInputElement).value);
 							const inicio = selAct?.fecha_inicio_plan ?? fmt(new Date());
-							if (selectedId && dias > 0) setFechas(selectedId, inicio, finFromDuracion(inicio, dias));
+							if (selectedId && dias > 0) setFechasManual(selectedId, inicio, finFromDuracion(inicio, dias));
 						}}
 					/>
 
@@ -802,6 +765,21 @@
 			{/if}
 
 			<div class="flex-1"></div>
+
+			<!-- Draft save/discard — nothing above hits Supabase until "Guardar cambios" -->
+			{#if hasDraftChanges}
+				<span class="flex items-center gap-1 text-amber-600 font-semibold">
+					<i class="fas fa-circle text-[6px]"></i> Cambios sin guardar
+				</span>
+				<button
+					class="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg font-semibold transition-colors"
+					onclick={descartarCambios}
+				><i class="fas fa-undo text-xs"></i> Descartar</button>
+				<button
+					class="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors"
+					onclick={guardarCambios}
+				><i class="fas fa-check text-xs"></i> Guardar cambios</button>
+			{/if}
 
 			<!-- Plan base date -->
 			{#if planBaseDate}
@@ -837,6 +815,15 @@
 			</button>
 		{/if}
 	</div>
+
+	<!-- ── BLOCK-MOVE DEPENDENCY WARNINGS (advisory only, never blocks) ────── -->
+	{#if draftWarnings.length > 0}
+		<div class="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-700 space-y-0.5">
+			{#each draftWarnings as w}
+				<div><i class="fas fa-triangle-exclamation mr-1"></i>{w}</div>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- ── PLAN vs REAL SUMMARY (gantt only) ─────────────────────────────── -->
 	{#if activeSection === 'gantt' && actividades.length > 0}
@@ -1001,36 +988,24 @@
 				><i class="fas fa-plus mr-2"></i>Agregar primera actividad</button>
 			</div>
 		{:else}
-			<div class="flex-1 min-h-0" style="max-height:calc(100vh - 280px)">
-				<SvelteGantt
-					bind:api={ganttApi}
-					rows={ganttRows}
-					tasks={ganttTasks}
-					dependencies={ganttDependencies}
-					from={+timelineStart}
-					to={+timelineEnd}
-					fitWidth={false}
-					minWidth={800}
-					rowHeight={44}
-					rowPadding={6}
-					columnUnit="day"
-					columnOffset={1}
-					magnetUnit="day"
-					magnetOffset={1}
-					headers={ganttHeaders}
-					tableHeaders={ganttTableHeaders}
-					tableWidth={280}
-					ganttTableModules={ganttTableModules}
-					ganttBodyModules={ganttBodyModules}
-					taskElementHook={ganttTaskElementHook}
-					enableCreateTask={true}
-					onCreateTask={ganttOnCreateTask}
-					onCreatedTask={ganttOnCreatedTask}
+			<div class="flex-1 min-h-0">
+				<GanttTimeline
+					actividades={draftActividades}
+					{dependencias}
+					{restriccionesAbiertasPorActividad}
+					{timelineStart}
+					{timelineEnd}
+					{showAvanceReal}
+					{showDeps}
+					{tolerancia}
+					bind:selectedId
+					onLeafChange={handleLeafChange}
+					onBlockMove={handleBlockMove}
 				/>
 			</div>
 			<p class="px-4 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
 				<i class="fas fa-info-circle mr-1"></i>
-				Actividades sin fecha aparecen sin barra — arrastra sobre su fila para crear una, o usa "Seleccionar actividad" arriba para poner las fechas manualmente.
+				Actividades sin fecha aparecen con un recuadro punteado — arrastra sobre su fila para definir inicio y fin, o usa "Seleccionar actividad" arriba para ponerle fechas manualmente. Arrastra una barra existente para moverla o desde sus bordes para redimensionarla; arrastra una barra con hijos (grupo) para mover todo el bloque. Nada se guarda hasta pulsar "Guardar cambios".
 			</p>
 		{/if}
 
@@ -1265,33 +1240,3 @@
 	{/if}
 {/snippet}
 
-<style>
-	:global(.crono-nivel-1) { background: #f97316; color: #fff; }
-	:global(.crono-nivel-2) { background: #3b82f6; color: #fff; }
-	:global(.crono-nivel-3) { background: #14b8a6; color: #fff; }
-	:global(.crono-atrasada) { background: #e11d48 !important; }
-	:global(.crono-completada) { opacity: 0.55; }
-
-	/* Restricción vinculada: dashed amber outline + a small ⚠ badge in the
-	   top-right corner of the bar (Task.svelte's .sg-task is position:absolute
-	   with overflow visible, so the badge sits just outside the bar). */
-	:global(.crono-restriccion) {
-		outline: 2px dashed #d97706;
-		outline-offset: 2px;
-	}
-	:global(.crono-restriccion::after) {
-		content: '⚠';
-		position: absolute;
-		top: -8px;
-		right: -8px;
-		width: 15px;
-		height: 15px;
-		border-radius: 50%;
-		background: #d97706;
-		color: #fff;
-		font-size: 9px;
-		line-height: 15px;
-		text-align: center;
-		z-index: 5;
-	}
-</style>
