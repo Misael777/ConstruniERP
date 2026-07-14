@@ -29,7 +29,7 @@ import type { FieldOption } from '$lib/shared/fieldConfig';
 export const PANORAMA_IDS = [1, 2] as const;
 export type PanoramaId = (typeof PANORAMA_IDS)[number];
 
-export type Prioridad = 'alta' | 'media' | 'baja';
+export type Prioridad = 'alto' | 'media' | 'bajo';
 export type EstadoVencimiento = 'vencido' | 'por_vencer';
 
 export interface PagoPendienteItem {
@@ -43,6 +43,7 @@ export interface PagoPendienteItem {
 	idProyecto: number | null;
 	panoramaId: number | null;
 	panoramaOrden: number | null;
+	prioridad: Prioridad;
 }
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
@@ -57,13 +58,15 @@ function diasHastaVencimiento(fechaVencimiento: string | null): number | null {
 	return Math.round((venc.getTime() - hoy.getTime()) / MS_POR_DIA);
 }
 
-/** Heurística por defecto: sin fecha o >15 días = baja, 8-15 días = media, ≤7 días o vencido = alta. AJUSTAR umbrales si se necesita otra regla. */
+/** Heurística por defecto (solo cuando la cuenta no tiene `prioridad` asignada a mano — ver
+ * mapRow): sin fecha o >15 días = bajo, 8-15 días = media, ≤7 días o vencido = alto. AJUSTAR
+ * umbrales si se necesita otra regla. */
 export function computePrioridad(fechaVencimiento: string | null): Prioridad {
 	const dias = diasHastaVencimiento(fechaVencimiento);
-	if (dias === null) return 'baja';
-	if (dias <= 7) return 'alta';
+	if (dias === null) return 'bajo';
+	if (dias <= 7) return 'alto';
 	if (dias <= 15) return 'media';
-	return 'baja';
+	return 'bajo';
 }
 
 /** Ya pasó la fecha de vencimiento -> 'vencido'; si no, 'por_vencer'. */
@@ -84,11 +87,13 @@ function mapRow(row: any): PagoPendienteItem {
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
 		panoramaId: row.panorama_id,
-		panoramaOrden: row.panorama_orden
+		panoramaOrden: row.panorama_orden,
+		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento)
 	};
 }
 
-/** Pagos pendientes SIN panorama asignado todavía (la "bandeja"). */
+/** Pagos pendientes SIN panorama asignado todavía (la "bandeja"). Incluye 'vencido' además de
+ * 'pendiente' (antes solo traía 'pendiente') — un pago vencido es justo el que más urge planear. */
 export async function getPagosPendientes(
 	client: SupabaseClient,
 	filters: { idProyecto?: number | null; prioridad?: Prioridad | null } = {}
@@ -96,7 +101,7 @@ export async function getPagosPendientes(
 	let query = client
 		.from('cuentas_pagar')
 		.select(SELECT_CON_JOINS)
-		.eq('estado', 'pendiente')
+		.in('estado', ['pendiente', 'vencido'])
 		.is('panorama_id', null)
 		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
 
@@ -105,7 +110,7 @@ export async function getPagosPendientes(
 
 	let items = (data ?? []).map(mapRow);
 	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
-	if (filters.prioridad) items = items.filter((i) => computePrioridad(i.fechaVencimiento) === filters.prioridad);
+	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
 	return items;
 }
 
@@ -153,9 +158,14 @@ export async function reorderPanorama(
 	return { success: true, message: 'Orden actualizado' };
 }
 
-/** Suma saldo_pendiente de cuentas_cobrar (pendiente + vencido) — ver nota de "Proyección de ingresos" arriba. */
-export async function getProyeccionIngresos(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client.from('cuentas_cobrar').select('saldo_pendiente').in('estado', ['pendiente', 'vencido']);
+/** Suma saldo_pendiente de cuentas_cobrar (pendiente + vencido) — ver nota de "Proyección de ingresos"
+ * arriba. Si se pasan `desde`/`hasta`, solo cuenta lo que vence en ese rango (mismo motivo que
+ * getProyeccionPagos: comparar el mismo período en vez de "todo el tiempo" contra "un mes"). */
+export async function getProyeccionIngresos(client: SupabaseClient, desde?: string, hasta?: string): Promise<number> {
+	let query = client.from('cuentas_cobrar').select('saldo_pendiente').in('estado', ['pendiente', 'vencido']);
+	if (desde) query = query.gte('fecha_vencimiento', desde);
+	if (hasta) query = query.lte('fecha_vencimiento', hasta);
+	const { data, error } = await query;
 	if (error) throw error;
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_pendiente), 0);
 }
@@ -164,4 +174,158 @@ export async function getProyectoOptions(client: SupabaseClient): Promise<FieldO
 	const { data, error } = await client.from('proyecto').select('id_proyecto, nombre_proyecto').order('nombre_proyecto');
 	if (error) throw error;
 	return (data ?? []).map((p: any) => ({ value: String(p.id_proyecto), label: p.nombre_proyecto }));
+}
+
+/**
+ * =============================================================
+ * Lado "Panoramas de Cobro" (cuentas_cobrar) — contraparte de todo lo de arriba, mismo patrón:
+ * bandeja/panoramas 100% de sesión (no se persiste `panorama_id`/`panorama_orden`, no se agregaron
+ * esas columnas a cuentas_cobrar todavía — si más adelante se decide persistir esto, replicar la
+ * migración que ya existe en cuentas_pagar).
+ *
+ * A diferencia de cuentas_pagar (que no tiene un campo de prioridad manual y por eso la calcula sola
+ * desde fecha_vencimiento), cuentas_cobrar SÍ tiene una columna real `prioridad` ('alto'|'medio'|'bajo',
+ * ver cuentaCobrar.config.ts) elegida a mano por el usuario — se usa esa como fuente de verdad, y solo
+ * se cae a un cálculo por fecha (mismos umbrales que computePrioridad, pero en masculino para calzar
+ * con los valores reales de la columna) cuando la cuenta no tiene prioridad asignada.
+ * =============================================================
+ */
+
+export type PrioridadCobro = 'alto' | 'medio' | 'bajo';
+
+/** Fallback cuando la cuenta no tiene `prioridad` asignada a mano — mismos umbrales que computePrioridad. */
+function prioridadCobroPorDefecto(fechaVencimiento: string | null): PrioridadCobro {
+	const dias = diasHastaVencimiento(fechaVencimiento);
+	if (dias === null) return 'bajo';
+	if (dias <= 7) return 'alto';
+	if (dias <= 15) return 'medio';
+	return 'bajo';
+}
+
+export interface IngresoPendienteItem {
+	/** Alias de id_cuenta_cobrar: svelte-dnd-action exige que cada ítem tenga una propiedad `id`. */
+	id: number;
+	id_cuenta_cobrar: number;
+	titulo: string;
+	clienteNombre: string;
+	proyectoNombre: string | null;
+	monto: number;
+	fechaVencimiento: string | null;
+	idProyecto: number | null;
+	idCliente: number | null;
+	prioridad: PrioridadCobro;
+}
+
+const SELECT_COBRO_CON_JOINS = '*, cliente(nombre), proyecto(nombre_proyecto)';
+
+function mapCobroRow(row: any): IngresoPendienteItem {
+	return {
+		id: row.id_cuenta_cobrar,
+		id_cuenta_cobrar: row.id_cuenta_cobrar,
+		titulo: row.num_documento || row.observaciones || row.responsable || 'Cuenta por cobrar sin descripción',
+		clienteNombre: row.cliente?.nombre ?? 'Sin cliente',
+		proyectoNombre: row.proyecto?.nombre_proyecto ?? null,
+		monto: Number(row.saldo_pendiente),
+		fechaVencimiento: row.fecha_vencimiento,
+		idProyecto: row.id_proyecto,
+		idCliente: row.id_cliente,
+		prioridad: (row.prioridad as PrioridadCobro) || prioridadCobroPorDefecto(row.fecha_vencimiento)
+	};
+}
+
+/** Cuentas por cobrar con saldo pendiente (pendiente + vencido) — la "bandeja" del tablero de cobro. */
+export async function getCobrosPendientes(
+	client: SupabaseClient,
+	filters: { idProyecto?: number | null; idCliente?: number | null; prioridad?: PrioridadCobro | null; estado?: 'pendiente' | 'vencido' | null } = {}
+): Promise<IngresoPendienteItem[]> {
+	let query = client
+		.from('cuentas_cobrar')
+		.select(SELECT_COBRO_CON_JOINS)
+		.in('estado', ['pendiente', 'vencido'])
+		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+
+	const { data, error } = await query;
+	if (error) throw error;
+
+	let items = (data ?? []).map(mapCobroRow);
+	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
+	if (filters.idCliente) items = items.filter((i) => i.idCliente === filters.idCliente);
+	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
+	if (filters.estado) items = items.filter((i) => (filters.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
+	return items;
+}
+
+/** Suma saldo_pendiente de cuentas_pagar (pendiente + vencido) — inverso de getProyeccionIngresos, para
+ * poder mostrar "Cobertura" (caja disponible ÷ compromisos de pago) en el tablero de cobro. Si se pasan
+ * `desde`/`hasta`, solo cuenta los pagos cuya fecha_vencimiento cae en ese rango — así "Cobertura" compara
+ * el mismo período en ambos lados (caja+cobros DEL MES ÷ pagos QUE VENCEN ESE MISMO MES), en vez de
+ * comparar la caja de un mes contra TODA la deuda pendiente sin importar cuándo vence (lo que hacía que
+ * el indicador se viera artificialmente peor de lo que es en la práctica). */
+export async function getProyeccionPagos(client: SupabaseClient, desde?: string, hasta?: string): Promise<number> {
+	let query = client.from('cuentas_pagar').select('saldo_pendiente').in('estado', ['pendiente', 'vencido']);
+	if (desde) query = query.gte('fecha_vencimiento', desde);
+	if (hasta) query = query.lte('fecha_vencimiento', hasta);
+	const { data, error } = await query;
+	if (error) throw error;
+	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_pendiente), 0);
+}
+
+/** Suma de cobros reales (estado_cobro='cobrado') con fecha_cobro dentro del rango [desde, hasta]. */
+export async function getCobradoEnRango(client: SupabaseClient, desde: string, hasta: string): Promise<number> {
+	const { data, error } = await client.from('cobros').select('monto').eq('estado_cobro', 'cobrado').gte('fecha_cobro', desde).lte('fecha_cobro', hasta);
+	if (error) throw error;
+	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.monto), 0);
+}
+
+export interface ResumenCobros {
+	totalPendiente: number;
+	vencidoTotal: number;
+	vencidoCount: number;
+	clientesConVentas: number;
+}
+
+/** Agregados para la tarjeta "Resumen general" del tablero de cobro — sobre TODAS las cuentas
+ * pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas en esta sesión. */
+export async function getResumenCobros(client: SupabaseClient): Promise<ResumenCobros> {
+	const { data, error } = await client.from('cuentas_cobrar').select('saldo_pendiente, estado, id_cliente').in('estado', ['pendiente', 'vencido']);
+	if (error) throw error;
+
+	const rows = (data ?? []) as any[];
+	const totalPendiente = rows.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
+	const vencidos = rows.filter((r) => r.estado === 'vencido');
+	const vencidoTotal = vencidos.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
+	const clientesConVentas = new Set(rows.map((r) => r.id_cliente)).size;
+
+	return { totalPendiente, vencidoTotal, vencidoCount: vencidos.length, clientesConVentas };
+}
+
+/** Suma de pagos reales (estado_pago='pagado') con fecha_pago dentro del rango [desde, hasta] —
+ * inverso de getCobradoEnRango, para el KPI "Pagado del mes" del tablero de Panoramas de Pago. */
+export async function getPagadoEnRango(client: SupabaseClient, desde: string, hasta: string): Promise<number> {
+	const { data, error } = await client.from('pagos').select('monto').eq('estado_pago', 'pagado').gte('fecha_pago', desde).lte('fecha_pago', hasta);
+	if (error) throw error;
+	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.monto), 0);
+}
+
+export interface ResumenPagos {
+	totalPendiente: number;
+	vencidoTotal: number;
+	vencidoCount: number;
+	proveedoresConCompras: number;
+}
+
+/** Agregados para "Resumen general" del tablero de Panoramas de Pago — sobre TODAS las cuentas por
+ * pagar pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas en esta sesión.
+ * Inverso de getResumenCobros. */
+export async function getResumenPagos(client: SupabaseClient): Promise<ResumenPagos> {
+	const { data, error } = await client.from('cuentas_pagar').select('saldo_pendiente, estado, id_proveedor').in('estado', ['pendiente', 'vencido']);
+	if (error) throw error;
+
+	const rows = (data ?? []) as any[];
+	const totalPendiente = rows.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
+	const vencidos = rows.filter((r) => r.estado === 'vencido');
+	const vencidoTotal = vencidos.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
+	const proveedoresConCompras = new Set(rows.map((r) => r.id_proveedor)).size;
+
+	return { totalPendiente, vencidoTotal, vencidoCount: vencidos.length, proveedoresConCompras };
 }

@@ -26,6 +26,7 @@
  *     monto_dolares      NUMERIC,   -- agregada por migración, ver nota abajo
  *     tipo_cambio        NUMERIC(12,2), -- agregada por migración, ver nota abajo (hasta entero + 2 decimales)
  *     observaciones      VARCHAR(200),
+ *     prioridad          VARCHAR(10), -- agregada por migración, ver nota abajo ('alto'|'medio'|'bajo')
  *     estado             VARCHAR(20) DEFAULT 'pendiente', -- sin CHECK real, texto libre
  *     usuario_registro   VARCHAR(100),
  *     created_at         TIMESTAMPTZ DEFAULT NOW()
@@ -279,6 +280,25 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Observaciones',
 		tipo: 'text',
 		maxLength: 200,
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Agregada por migración manual (ver cuentas_cobrar_prioridad_migration.sql).
+		key: 'prioridad',
+		label: 'Prioridad',
+		tipo: 'select',
+		options: [
+			{ value: 'alto', label: 'Alto' },
+			{ value: 'medio', label: 'Medio' },
+			{ value: 'bajo', label: 'Bajo' }
+		],
+		optionColors: {
+			alto: '#dc2626', // red-600
+			medio: '#d97706', // amber-600
+			bajo: '#16a34a' // green-600
+		},
 		showInTable: false,
 		showInForm: true,
 		sortable: false

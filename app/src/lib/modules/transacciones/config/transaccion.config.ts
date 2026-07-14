@@ -39,10 +39,10 @@
  *   elija de la lista real de centros de costo (mejor UX), aunque la BD no lo obligue.
  * - `tipo` SÍ tiene CHECK real ('ingreso' | 'egreso'), confirmado insertando un valor inválido (Postgres
  *   lo rechazó con error 23514).
- * - `tipo_documento` y `forma_pago` reutilizan EXACTAMENTE los mismos catálogos ya usados en
- *   cuentas_cobrar/cuentas_pagar para los campos del mismo nombre (mismo criterio que se usó al
- *   construir cuentas_pagar: reusar el catálogo ya definido en vez de inventar uno nuevo). Aquí la
- *   columna es VARCHAR(2) en vez de SMALLINT, así que se guardan como texto ('1'..'11') igual.
+ * - `tipo_documento` reutiliza EXACTAMENTE el catálogo de cuentas_pagar.tipo_documento (6 opciones:
+ *   Factura/Boleta de venta/Recibo por Honorarios/Ticket/Autodetracción/Otros — ver cuentaPagar.config.ts).
+ *   `forma_pago` también reutiliza su propio catálogo compartido. Aquí la columna es VARCHAR(2) en vez
+ *   de SMALLINT, así que se guardan como texto ('1'..'6') igual.
  * - `medio_pago` reutiliza el catálogo de 4 opciones recién definido para `pagos.medio_pago`
  *   (Efectivo/Transferencia bancaria/Depósito bancario/Yape o Plin), pero codificado '1'-'4' porque
  *   aquí la columna es VARCHAR(2) (código), no texto libre como en `pagos.medio_pago`.
@@ -169,20 +169,16 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'tipo_documento',
 		label: 'Tipo de Documento',
-		tipo: 'text', // columna VARCHAR(2); mismo catálogo que cuentas_cobrar/cuentas_pagar
+		tipo: 'text', // columna VARCHAR(2); mismo catálogo que cuentas_pagar.tipo_documento (ver
+		// cuentaPagar.config.ts) — recortado a pedido del usuario, mantener sincronizado si se ajusta allá.
 		maxLength: 2,
 		options: [
 			{ value: '1', label: 'Factura' },
-			{ value: '2', label: 'Boleta' },
+			{ value: '2', label: 'Boleta de venta' },
 			{ value: '3', label: 'Recibo por Honorarios' },
-			{ value: '4', label: 'Liquidación de Compras' },
-			{ value: '5', label: 'Ticket' },
-			{ value: '6', label: 'Nota de Crédito' },
-			{ value: '7', label: 'Guía de Remisión' },
-			{ value: '8', label: 'Comprobante de Retención' },
-			{ value: '9', label: 'Comprobante de Percepción' },
-			{ value: '10', label: 'Recibo de Servicios' },
-			{ value: '11', label: 'Boleta de Transporte' }
+			{ value: '4', label: 'Ticket' },
+			{ value: '5', label: 'Autodetracción' },
+			{ value: '6', label: 'Otros' }
 		],
 		showInTable: false,
 		showInForm: true,

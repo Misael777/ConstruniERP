@@ -303,40 +303,52 @@
 		</button>
 	</div>
 
-	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-		{#each items as item (item.id_cuenta_pagar)}
-			<div
-				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
-					selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
-				}`}
-				onclick={() => selectRow(item)}
-			>
-				<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-					<FileText size={18} />
-				</div>
-				<div class="flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
-					<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
-				</div>
-				<div class="text-right shrink-0">
-					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</p>
-					<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-						{getOptionLabel(estadoField, item.estado)}
-					</span>
-				</div>
-				<div class="flex items-center gap-1 shrink-0 ml-2">
-					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-						<Pencil size={16} />
-					</button>
-					<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-						<Trash2 size={16} />
-					</button>
-				</div>
+	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
+		<div class="min-w-[760px]">
+			<div class="grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+				<span>Proveedor</span>
+				<span>N° Documento</span>
+				<span class="text-right">Monto</span>
+				<span>Estado</span>
+				<span class="text-right">Acciones</span>
 			</div>
-		{:else}
-			<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por pagar.'}</p>
-		{/each}
+
+			{#each items as item (item.id_cuenta_pagar)}
+				<div
+					class={`grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+					}`}
+					onclick={() => selectRow(item)}
+				>
+					<div class="flex items-center gap-3 min-w-0">
+						<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+							<FileText size={18} />
+						</div>
+						<div class="min-w-0">
+							<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
+							<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
+						</div>
+					</div>
+					<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
+					<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+					<div>
+						<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+							{getOptionLabel(estadoField, item.estado)}
+						</span>
+					</div>
+					<div class="flex items-center gap-1 justify-end">
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+							<Pencil size={16} />
+						</button>
+						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+							<Trash2 size={16} />
+						</button>
+					</div>
+				</div>
+			{:else}
+				<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por pagar.'}</p>
+			{/each}
+		</div>
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
 			<span>{total} resultado{total === 1 ? '' : 's'} · Página {pageNum} de {totalPages}</span>

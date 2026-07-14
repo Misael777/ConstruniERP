@@ -94,6 +94,12 @@ export interface FieldConfig {
 	 * No aplica si el campo está bloqueado por disabledWhen (ver validatePayload).
 	 */
 	requiredWhen?: (payload: Record<string, unknown>) => boolean;
+	/**
+	 * Color (hex) por opción de un select, para dar contexto visual inmediato (ej. Prioridad:
+	 * Alto=rojo, Medio=ámbar, Bajo=verde). El motor lo usa para pintar un punto de color junto al
+	 * <select> según el valor elegido y el texto de cada <option> en el desplegable.
+	 */
+	optionColors?: Record<string, string>;
 }
 
 /** Valida un único campo según su definición. Devuelve el mensaje de error o null. */

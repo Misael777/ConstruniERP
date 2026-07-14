@@ -31,6 +31,7 @@
  *     monto_retencion     NUMERIC,
  *     estado              VARCHAR(20) DEFAULT 'pendiente', -- sin CHECK real, texto libre
  *     observacion         VARCHAR(200),    -- OJO: singular (distinto de "observaciones" en cuentas_cobrar)
+ *     prioridad           VARCHAR(10),     -- agregada por migración, ver nota abajo ('alto'|'media'|'bajo')
  *     usuario_registro    VARCHAR(100),
  *     created_at          TIMESTAMPTZ DEFAULT NOW()
  *   );
@@ -126,20 +127,17 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'tipo_documento',
 		label: 'Tipo de Documento',
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
-		// Mismos códigos/orden que cuentaCobrar.config.ts (tipo_documento) — mantenerlos sincronizados
-		// si se ajustan allá. AJUSTAR: son códigos secuenciales (1..11), no verificados contra SUNAT.
+		// Catálogo recortado a pedido del usuario (antes tenía 11 opciones) — mantenerlo sincronizado
+		// con transaccion.config.ts, que reutiliza EXACTAMENTE este mismo catálogo (ver nota ahí).
+		// Verificado contra datos reales: solo el código '1' (Factura) estaba en uso, así que este
+		// recorte no deja ninguna fila existente con un valor huérfano.
 		options: [
 			{ value: '1', label: 'Factura' },
-			{ value: '2', label: 'Boleta' },
+			{ value: '2', label: 'Boleta de venta' },
 			{ value: '3', label: 'Recibo por Honorarios' },
-			{ value: '4', label: 'Liquidación de Compras' },
-			{ value: '5', label: 'Ticket' },
-			{ value: '6', label: 'Nota de Crédito' },
-			{ value: '7', label: 'Guía de Remisión' },
-			{ value: '8', label: 'Comprobante de Retención' },
-			{ value: '9', label: 'Comprobante de Percepción' },
-			{ value: '10', label: 'Recibo de Servicios' },
-			{ value: '11', label: 'Boleta de Transporte' }
+			{ value: '4', label: 'Ticket' },
+			{ value: '5', label: 'Autodetracción' },
+			{ value: '6', label: 'Otros' }
 		],
 		showInTable: false,
 		showInForm: true,
@@ -353,6 +351,25 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Observación',
 		tipo: 'text',
 		maxLength: 200,
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Agregada por migración manual (ver cuentas_pagar_prioridad_migration.sql).
+		key: 'prioridad',
+		label: 'Prioridad',
+		tipo: 'select',
+		options: [
+			{ value: 'alto', label: 'Alto' },
+			{ value: 'media', label: 'Media' },
+			{ value: 'bajo', label: 'Bajo' }
+		],
+		optionColors: {
+			alto: '#dc2626', // red-600
+			media: '#d97706', // amber-600
+			bajo: '#16a34a' // green-600
+		},
 		showInTable: false,
 		showInForm: true,
 		sortable: false

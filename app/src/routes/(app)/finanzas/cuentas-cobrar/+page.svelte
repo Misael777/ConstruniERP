@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText, Lock, ShieldCheck } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
@@ -41,6 +41,18 @@
 	const estadoCardClass: Record<string, string> = {
 		vencido: 'bg-red-50/60'
 	};
+
+	const prioridadField = FIELDS_CONFIG.find((f) => f.key === 'prioridad')!;
+	const prioridadBadgeClass: Record<string, string> = {
+		alto: 'bg-red-100 text-red-700',
+		medio: 'bg-amber-100 text-amber-700',
+		bajo: 'bg-green-100 text-green-700'
+	};
+
+	const usdFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	function formatUSD(value: number | null | undefined): string {
+		return value === null || value === undefined || Number.isNaN(Number(value)) ? '—' : usdFormatter.format(Number(value));
+	}
 
 	let items = $state<CuentaCobrar[]>([]);
 	let total = $state(0);
@@ -254,9 +266,14 @@
 				<p class="text-sm text-slate-500">Cuentas pendientes de clientes y sus cobros registrados</p>
 			</div>
 		</div>
-		<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
-			<Plus size={16} /> Nueva Cuenta
-		</button>
+		<div class="flex items-center gap-2">
+			<button type="button" onclick={() => goto('/finanzas/cuentas-cobrar/panoramas')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
+				<LayoutGrid size={16} /> Ver Panoramas de Cobro
+			</button>
+			<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+				<Plus size={16} /> Nueva Cuenta
+			</button>
+		</div>
 	</div>
 
 	{#if loadError}
@@ -300,40 +317,73 @@
 		</button>
 	</div>
 
-	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-		{#each items as item (item.id_cuenta_cobrar)}
-			<div
-				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
-					selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
-				}`}
-				onclick={() => selectRow(item)}
-			>
-				<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-					<FileText size={18} />
+	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
+		<div class="min-w-[860px]">
+			<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+				<span>Proyecto</span>
+				<span>N° Documento</span>
+				<span class="text-center">Montos</span>
+				<div class="flex gap-2 pl-4">
+					<span class="flex-1">Prioridad</span>
+					<span class="flex-1">Estado</span>
 				</div>
-				<div class="flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 truncate">{item.cliente?.nombre ?? 'Sin cliente'}</p>
-					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
-					<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
-				</div>
-				<div class="text-right shrink-0">
-					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
-					<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-						{getOptionLabel(estadoField, item.estado)}
-					</span>
-				</div>
-				<div class="flex items-center gap-1 shrink-0 ml-2">
-					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-						<Pencil size={16} />
-					</button>
-					<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-						<Trash2 size={16} />
-					</button>
-				</div>
+				<span class="text-right">Acciones</span>
 			</div>
-		{:else}
-			<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por cobrar.'}</p>
-		{/each}
+
+			{#each items as item (item.id_cuenta_cobrar)}
+				<div
+					class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+					}`}
+					onclick={() => selectRow(item)}
+				>
+					<div class="flex items-center gap-3 min-w-0">
+						<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+							<FileText size={18} />
+						</div>
+						<div class="min-w-0">
+							<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
+							<div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+								<span class="truncate">{item.cliente?.nombre ?? 'Sin cliente'}</span>
+								<span class="text-slate-300">·</span>
+								<span class="shrink-0">{formatDate(item.fecha_vencimiento)}</span>
+							</div>
+						</div>
+					</div>
+					<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
+					<div class="text-center leading-tight">
+						<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
+						{#if item.moneda === 'USD'}
+							<p class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</p>
+						{/if}
+					</div>
+					<div class="flex items-center gap-2 pl-4">
+						<div class="flex-1">
+							{#if item.prioridad}
+								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(prioridadField, item.prioridad)}
+								</span>
+							{/if}
+						</div>
+						<div class="flex-1">
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
+							</span>
+						</div>
+					</div>
+					<div class="flex items-center gap-1 justify-end">
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+							<Pencil size={16} />
+						</button>
+						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+							<Trash2 size={16} />
+						</button>
+					</div>
+				</div>
+			{:else}
+				<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por cobrar.'}</p>
+			{/each}
+		</div>
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
 			<span>{total} resultado{total === 1 ? '' : 's'} · Página {pageNum} de {totalPages}</span>

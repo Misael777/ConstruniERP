@@ -49,6 +49,7 @@ export interface CuentaPagar {
 	monto_retencion: number | null;
 	estado: string;
 	observacion: string | null;
+	prioridad: string | null;
 	usuario_registro: string | null;
 	created_at: string;
 	proveedor?: { razon_social: string } | null;
@@ -249,8 +250,11 @@ export async function createCuentaPagar(
  * suma cuadre con monto_comprometido) se hizo del lado del cliente antes de llegar a este punto. Nunca
  * toca las cuotas 'pagado' (esas son reales). Si `fracciones` viene vacío (Forma de Pago = Contado, o
  * el usuario eliminó el fraccionamiento), simplemente deja la cuenta sin cuotas programadas.
+ *
+ * Exportada (no solo interna a create/updateCuentaPagar) para que el popup de cuotas también se
+ * pueda abrir y guardar directo desde /finanzas/cuentas-pagar/panoramas.
  */
-async function sincronizarCuotasProgramadas(
+export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaPagar: number,
 	fracciones: { fecha: string; monto: number }[]

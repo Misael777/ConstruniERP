@@ -36,6 +36,7 @@ export interface CuentaCobrar {
 	monto_dolares: number | null;
 	tipo_cambio: number | null;
 	observaciones: string | null;
+	prioridad: string | null;
 	estado: string;
 	usuario_registro: string | null;
 	created_at: string;
@@ -185,8 +186,12 @@ export async function createCuentaCobrar(
  * suma cuadre con el monto total) se hizo del lado del cliente antes de llegar a este punto. Nunca
  * toca las cuotas 'cobrado' (esas son reales). Si `fracciones` viene vacío (Forma de Pago = Contado,
  * o el usuario eliminó el fraccionamiento), simplemente deja la cuenta sin cuotas programadas.
+ *
+ * Exportada (no solo interna a create/updateCuentaCobrar) para que el popup de cuotas también se
+ * pueda abrir y guardar directo desde /finanzas/cuentas-cobrar/panoramas (tablero de Panoramas de
+ * Cobro), sin pasar por el formulario completo de Editar Cuenta por Cobrar.
  */
-async function sincronizarCuotasProgramadas(
+export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
 	fracciones: { fecha: string; monto: number }[]

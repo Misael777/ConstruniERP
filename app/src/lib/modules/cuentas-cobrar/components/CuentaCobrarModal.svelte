@@ -185,19 +185,27 @@
 							</label>
 
 							{#if field.tipo === 'select' || field.options}
-								<select
-									id={`ccb-${field.key}`}
-									name={field.key}
-									value={formValues[field.key]}
-									disabled={isDisabled(field)}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each optionsFor(field) as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+								<div class="relative">
+									{#if field.optionColors}
+										<span
+											class="absolute left-3 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full pointer-events-none"
+											style={`background-color:${field.optionColors[formValues[field.key]] ?? '#cbd5e1'}`}
+										></span>
+									{/if}
+									<select
+										id={`ccb-${field.key}`}
+										name={field.key}
+										value={formValues[field.key]}
+										disabled={isDisabled(field)}
+										onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
+										class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${field.optionColors ? 'pl-7' : ''} ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									>
+										<option value="" disabled>Selecciona una opción</option>
+										{#each optionsFor(field) as opt}
+											<option value={opt.value} style={field.optionColors?.[opt.value] ? `color:${field.optionColors[opt.value]}` : undefined}>{opt.label}</option>
+										{/each}
+									</select>
+								</div>
 							{:else}
 								<input
 									id={`ccb-${field.key}`}
@@ -258,6 +266,7 @@
 
 <FraccionamientoModal
 	open={fraccionamientoOpen}
+	titulo="Fraccionar Cobros"
 	montoTotal={Number(formValues.monto) || 0}
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}

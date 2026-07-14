@@ -22,6 +22,7 @@
 
 	let {
 		open = false,
+		titulo = 'Fraccionar este pago',
 		montoTotal,
 		fechaEmision,
 		fechaVencimiento = null,
@@ -31,6 +32,9 @@
 		onEliminar
 	}: {
 		open: boolean;
+		/** Título del encabezado — cada módulo pasa el suyo (ej. "Fraccionar Cobros" en cuentas por
+		 * cobrar) para que el popup se identifique con lo que realmente está fraccionando. */
+		titulo?: string;
 		montoTotal: number;
 		fechaEmision: string;
 		fechaVencimiento?: string | null;
@@ -154,7 +158,7 @@
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
-				<h2 class="text-lg font-semibold text-[#0f3b5e]">Fraccionar este pago</h2>
+				<h2 class="text-lg font-semibold text-[#0f3b5e]">{titulo}</h2>
 				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
 					<X size={20} />
 				</button>
@@ -162,11 +166,11 @@
 
 			<div class="p-6 space-y-4">
 				<div class="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
-					<span class="text-sm font-bold text-slate-700">Fraccionar este pago</span>
+					<span class="text-sm font-bold text-slate-700">{titulo}</span>
 					<button
 						type="button"
 						role="switch"
-						aria-label="Fraccionar este pago"
+						aria-label={titulo}
 						aria-checked={activo}
 						onclick={() => (activo = !activo)}
 						class={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${activo ? 'bg-blue-600' : 'bg-slate-300'}`}
