@@ -5,7 +5,8 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Receipt, GripVertical, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users } from '@lucide/svelte';
+	import { ArrowLeft, Receipt, GripVertical, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays } from '@lucide/svelte';
+	import PanoramaCalendarView, { type CalendarPanorama } from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
 	import {
 		getCobrosPendientes,
 		getProyeccionPagos,
@@ -102,6 +103,27 @@
 	let resumen = $state<ResumenCobros>({ totalPendiente: 0, vencidoTotal: 0, vencidoCount: 0, clientesConVentas: 0 });
 
 	let cuentaModalOpen = $state(false);
+
+	// Tab "Calendario" — misma información que el tablero Kanban de abajo, solo
+	// una presentación visual alternativa (ver PanoramaCalendarView.svelte).
+	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
+	let calendarPanoramas = $derived<CalendarPanorama[]>(
+		PANORAMAS.map((p) => ({
+			id: p.id,
+			nombre: p.nombre,
+			subtitulo: p.subtitulo,
+			eventos: panoramaItems(p.id)
+				.filter((i) => i.fechaVencimiento)
+				.map((i) => ({
+					id: i.id,
+					titulo: `Cobro cliente – ${i.titulo}`,
+					subtitulo: i.clienteNombre,
+					monto: i.monto,
+					fecha: i.fechaVencimiento as string,
+					tipo: 'ingreso' as const
+				}))
+		}))
+	);
 
 	// Popup de cuotas: se abre haciendo clic en el icono de arrastrar (⋮⋮) de cualquier tarjeta —
 	// de la Bandeja o de un Panorama — para ver/editar el calendario de cuotas 'programado' de esa
@@ -336,6 +358,18 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
+			<div class="flex rounded-lg border border-slate-200 overflow-hidden mr-1">
+				<button
+					type="button"
+					onclick={() => (vistaActiva = 'tablero')}
+					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'tablero' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				><LayoutGrid size={15} /> Tablero</button>
+				<button
+					type="button"
+					onclick={() => (vistaActiva = 'calendario')}
+					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'calendario' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				><CalendarDays size={15} /> Calendario</button>
+			</div>
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
 			</button>
@@ -384,6 +418,9 @@
 		</div>
 	</div>
 
+	{#if vistaActiva === 'calendario'}
+		<PanoramaCalendarView panoramas={calendarPanoramas} egresosProyectados={proyeccionPagos} />
+	{:else}
 	<div class="grid grid-cols-1 xl:grid-cols-[280px_1fr_1fr_300px] gap-4 items-start">
 		<!-- Bandeja -->
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
@@ -607,6 +644,7 @@
 		<Info size={16} class="shrink-0 mt-0.5" />
 		<p>Las proyecciones te permiten simular escenarios de cobro, ordenar prioridades y optimizar tu flujo de caja antes de que se ejecuten los ingresos. El orden de cada panorama no se guarda: se reinicia al recargar la página.</p>
 	</div>
+	{/if}
 </div>
 
 <CuentaCobrarModal

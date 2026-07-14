@@ -6,7 +6,8 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Package, GripVertical, MoreVertical, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users } from '@lucide/svelte';
+	import { ArrowLeft, Package, GripVertical, MoreVertical, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays } from '@lucide/svelte';
+	import PanoramaCalendarView, { type CalendarPanorama } from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
 	import {
 		getPagosPendientes,
 		getProyeccionIngresos,
@@ -92,6 +93,27 @@
 
 	let pagoModalOpen = $state(false);
 	let cuentaCobrarModalOpen = $state(false);
+
+	// Tab "Calendario" — misma información que el tablero Kanban de abajo, solo
+	// una presentación visual alternativa (ver PanoramaCalendarView.svelte).
+	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
+	let calendarPanoramas = $derived<CalendarPanorama[]>(
+		PANORAMAS.map((p) => ({
+			id: p.id,
+			nombre: p.nombre,
+			subtitulo: p.subtitulo,
+			eventos: panoramaItems(p.id)
+				.filter((i) => i.fechaVencimiento)
+				.map((i) => ({
+					id: i.id,
+					titulo: `Pago proveedor – ${i.titulo}`,
+					subtitulo: i.proveedorNombre,
+					monto: i.monto,
+					fecha: i.fechaVencimiento as string,
+					tipo: 'egreso' as const
+				}))
+		}))
+	);
 
 	function panoramaItems(id: 1 | 2) {
 		return id === 1 ? panorama1 : panorama2;
@@ -348,6 +370,18 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
+			<div class="flex rounded-lg border border-slate-200 overflow-hidden mr-1">
+				<button
+					type="button"
+					onclick={() => (vistaActiva = 'tablero')}
+					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'tablero' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				><LayoutGrid size={15} /> Tablero</button>
+				<button
+					type="button"
+					onclick={() => (vistaActiva = 'calendario')}
+					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'calendario' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				><CalendarDays size={15} /> Calendario</button>
+			</div>
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
 			</button>
@@ -396,6 +430,9 @@
 		</div>
 	</div>
 
+	{#if vistaActiva === 'calendario'}
+		<PanoramaCalendarView panoramas={calendarPanoramas} ingresosProyectados={proyeccionIngresos} />
+	{:else}
 	<div class="grid grid-cols-1 xl:grid-cols-[280px_1fr_1fr_300px] gap-4 items-start">
 		<!-- Bandeja -->
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
@@ -632,6 +669,7 @@
 		<Info size={16} class="shrink-0 mt-0.5" />
 		<p>Las proyecciones te permiten simular escenarios de pago, ordenar prioridades y optimizar tu flujo de caja antes de ejecutar los pagos. El orden de cada panorama no se guarda: se reinicia al recargar la página.</p>
 	</div>
+	{/if}
 </div>
 
 <CuentaPagarModal
