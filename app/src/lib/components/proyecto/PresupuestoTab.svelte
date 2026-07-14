@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { buildTree, type WithChildren } from '$lib/utils/tree';
 
 	const { projectId, proyecto } = $props<{
 		projectId: number;
@@ -49,11 +50,28 @@
 	let saving      = $state(new Set<number>());
 
 	// ── DERIVED ────────────────────────────────────────────────────────────────
-	let sorted = $derived(
-		[...detalles].sort((a, b) =>
-			(a.partida?.codigo ?? '').localeCompare(b.partida?.codigo ?? '', 'es', { numeric: true })
-		)
-	);
+	// Nested tree honoring the partida catalog's own nivel/id_partida_padre —
+	// previously this was a flat codigo-sorted list, which is what dropped the
+	// hierarchical structure the user relies on to read the budget.
+	type DetalleNode = WithChildren<Detalle & { id_partida_padre: number | null }>;
+
+	function sortNodes(nodes: DetalleNode[]): DetalleNode[] {
+		return [...nodes]
+			.sort((a, b) => (a.partida?.codigo ?? '').localeCompare(b.partida?.codigo ?? '', 'es', { numeric: true }))
+			.map(n => ({ ...n, children: sortNodes(n.children as DetalleNode[]) }));
+	}
+
+	let budgetTree = $derived.by((): DetalleNode[] => {
+		const mapped = detalles.map(d => ({ ...d, id_partida_padre: d.partida?.id_partida_padre ?? null }));
+		return sortNodes(buildTree(mapped, 'id_partida', 'id_partida_padre'));
+	});
+
+	// A node with children is a rollup/summary row (its own cantidad/precio are
+	// not directly editable here — the total is the sum of its descendants).
+	function rollupTotal(node: DetalleNode): number {
+		if (node.children.length === 0) return node.cantidad * (node.precio_mo + node.precio_mat);
+		return node.children.reduce((s, c) => s + rollupTotal(c as DetalleNode), 0);
+	}
 
 	let grandTotal = $derived(
 		detalles.reduce((s, d) => s + d.cantidad * (d.precio_mo + d.precio_mat), 0)
@@ -110,6 +128,19 @@
 			ganttIds = new Set(
 				(acts ?? []).map((a: any) => a.id_partida).filter(Boolean)
 			);
+
+			// Full catalog, loaded eagerly (not lazily on modal-open) so it's
+			// available for backfillMissingAncestors below regardless of whether
+			// the user ever opens the "Agregar del Catálogo" modal.
+			const { data: cats } = await supabase.from('partida').select('*').order('codigo');
+			catalog = (cats ?? []) as PartidaCatalog[];
+			catLoaded = true;
+
+			// Self-heal legacy rows: a presupuesto_detalle added before
+			// addAncestorChain existed can have a leaf whose parent group was
+			// never inserted, which renders as a stray root instead of nested
+			// under its real parent — backfill those ancestors now.
+			if (presupuestoId) await backfillMissingAncestors();
 		} finally {
 			isLoading = false;
 		}
@@ -150,12 +181,50 @@
 		detalles = detalles.filter(d => d.id_presupuesto_detalle !== id);
 	}
 
-	async function openModal() {
+	function openModal() {
 		showModal = true;
-		if (!catLoaded) {
-			const { data } = await supabase.from('partida').select('*').order('codigo');
-			catalog = (data ?? []) as PartidaCatalog[];
-			catLoaded = true;
+	}
+
+	// Walks a partida's id_partida_padre chain up the catalog and inserts a
+	// zero-cost "grupo" row for any ancestor not yet in the budget, so the
+	// tree is always connected root→hoja instead of showing an orphaned leaf.
+	async function addAncestorChain(startPadreId: number | null, pid: number) {
+		const chain: PartidaCatalog[] = [];
+		let currentParentId = startPadreId;
+		let guard = 0;
+		while (currentParentId != null && guard++ < 20) {
+			const anc = catalog.find(c => c.id_partida === currentParentId);
+			if (!anc) break;
+			chain.unshift(anc);
+			currentParentId = anc.id_partida_padre;
+		}
+		let known = existingIds;
+		for (const anc of chain) {
+			if (known.has(anc.id_partida)) continue;
+			const { data } = await supabase
+				.from('presupuesto_detalle')
+				.insert({ id_presupuesto: pid, id_partida: anc.id_partida, cantidad: 0, precio_mo: 0, precio_mat: 0 })
+				.select(
+					'id_presupuesto_detalle, id_partida, cantidad, precio_mo, precio_mat, precio_unitario, total, partida:id_partida(codigo, descripcion, nivel, id_partida_padre, unidad)'
+				)
+				.single();
+			if (data && (data as any).partida) {
+				detalles = [...detalles, data as unknown as Detalle];
+				known = new Set([...known, anc.id_partida]);
+			}
+		}
+	}
+
+	// Runs addAncestorChain for every already-loaded detalle — repairs gaps
+	// left by rows that were inserted before this auto-ancestor behavior
+	// existed (each call is idempotent: it skips ancestors already present,
+	// including ones a previous iteration of this same pass just added).
+	async function backfillMissingAncestors() {
+		if (!presupuestoId) return;
+		for (const d of [...detalles]) {
+			if (d.partida?.id_partida_padre != null) {
+				await addAncestorChain(d.partida.id_partida_padre, presupuestoId);
+			}
 		}
 	}
 
@@ -164,6 +233,7 @@
 		const pid = await ensurePresupuesto();
 		if (!pid) return;
 		adding = p.id_partida;
+		await addAncestorChain(p.id_partida_padre, pid);
 		const { data } = await supabase
 			.from('presupuesto_detalle')
 			.insert({
@@ -264,82 +334,8 @@
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
-					{#each sorted as det (det.id_presupuesto_detalle)}
-						{@const pUnit = det.precio_mo + det.precio_mat}
-						{@const rowTotal = det.cantidad * pUnit}
-						{@const isSaving = saving.has(det.id_presupuesto_detalle)}
-						{@const inGantt  = ganttIds.has(det.id_partida)}
-						<tr
-							class="hover:bg-slate-50/70 transition-colors"
-							class:opacity-60={isSaving}
-						>
-							<td class="px-4 py-2.5 font-mono text-xs text-slate-500 font-medium">
-								{det.partida?.codigo ?? '—'}
-							</td>
-							<td class="px-4 py-2.5 text-slate-700 font-medium">
-								{det.partida?.descripcion ?? '—'}
-							</td>
-							<td class="px-3 py-2.5 text-center text-slate-500 text-xs">
-								{det.partida?.unidad ?? '—'}
-							</td>
-							<td class="px-2 py-2.5 text-center">
-								{#if inGantt}
-									<i class="fas fa-chart-gantt text-orange-500 text-xs" title="Programado en Gantt"></i>
-								{/if}
-							</td>
-							<td class="px-3 py-2.5 text-right">
-								<input
-									type="number"
-									min="0"
-									step="0.0001"
-									bind:value={det.cantidad}
-									onblur={() => saveDetalle(det)}
-									disabled={isSaving}
-									class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
-								/>
-							</td>
-							<td class="px-3 py-2.5 text-right">
-								<input
-									type="number"
-									min="0"
-									step="0.01"
-									bind:value={det.precio_mo}
-									onblur={() => saveDetalle(det)}
-									disabled={isSaving}
-									class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
-								/>
-							</td>
-							<td class="px-3 py-2.5 text-right">
-								<input
-									type="number"
-									min="0"
-									step="0.01"
-									bind:value={det.precio_mat}
-									onblur={() => saveDetalle(det)}
-									disabled={isSaving}
-									class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
-								/>
-							</td>
-							<td class="px-3 py-2.5 text-right text-xs text-slate-600 font-semibold tabular-nums">
-								{fmtN(pUnit)}
-							</td>
-							<td class="px-3 py-2.5 text-right text-xs font-bold text-slate-800 tabular-nums">
-								{fmtN(rowTotal)}
-							</td>
-							<td class="px-3 py-2.5 text-center">
-								{#if isSaving}
-									<i class="fas fa-circle-notch fa-spin text-orange-400 text-xs"></i>
-								{:else}
-									<button
-										onclick={() => deleteDetalle(det.id_presupuesto_detalle)}
-										class="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors text-xs"
-										title="Quitar partida"
-									>
-										<i class="fas fa-trash-alt"></i>
-									</button>
-								{/if}
-							</td>
-						</tr>
+					{#each budgetTree as node (node.id_presupuesto_detalle)}
+						{@render DetalleRow(node, 0)}
 					{/each}
 				</tbody>
 				<tfoot class="bg-slate-50 border-t-2 border-slate-200">
@@ -361,6 +357,94 @@
 		</p>
 	{/if}
 {/if}
+
+<!-- ── BUDGET ROW (recursive: renders a <tr> per node, then its children) ── -->
+{#snippet DetalleRow(node: DetalleNode, depth: number)}
+	{@const isGroup   = node.children.length > 0}
+	{@const pUnit     = node.precio_mo + node.precio_mat}
+	{@const rowTotal  = isGroup ? rollupTotal(node) : node.cantidad * pUnit}
+	{@const isSaving  = saving.has(node.id_presupuesto_detalle)}
+	{@const inGantt   = ganttIds.has(node.id_partida)}
+	<tr
+		class="hover:bg-slate-50/70 transition-colors"
+		class:opacity-60={isSaving}
+		class:bg-slate-50={isGroup}
+	>
+		<td class="px-4 py-2.5 font-mono text-xs text-slate-500 font-medium" style="padding-left:{16 + depth * 18}px">
+			{node.partida?.codigo ?? '—'}
+		</td>
+		<td class="px-4 py-2.5 text-slate-700" class:font-bold={isGroup} class:font-medium={!isGroup}>
+			{node.partida?.descripcion ?? '—'}
+		</td>
+		<td class="px-3 py-2.5 text-center text-slate-500 text-xs">
+			{node.partida?.unidad ?? '—'}
+		</td>
+		<td class="px-2 py-2.5 text-center">
+			{#if inGantt}
+				<i class="fas fa-chart-gantt text-orange-500 text-xs" title="Programado en Gantt"></i>
+			{/if}
+		</td>
+		{#if isGroup}
+			<td class="px-3 py-2.5 text-right text-xs text-slate-400" colspan="3">subtotal de {node.children.length} partida{node.children.length !== 1 ? 's' : ''}</td>
+		{:else}
+			<td class="px-3 py-2.5 text-right">
+				<input
+					type="number"
+					min="0"
+					step="0.0001"
+					bind:value={node.cantidad}
+					onblur={() => saveDetalle(node)}
+					disabled={isSaving}
+					class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
+				/>
+			</td>
+			<td class="px-3 py-2.5 text-right">
+				<input
+					type="number"
+					min="0"
+					step="0.01"
+					bind:value={node.precio_mo}
+					onblur={() => saveDetalle(node)}
+					disabled={isSaving}
+					class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
+				/>
+			</td>
+			<td class="px-3 py-2.5 text-right">
+				<input
+					type="number"
+					min="0"
+					step="0.01"
+					bind:value={node.precio_mat}
+					onblur={() => saveDetalle(node)}
+					disabled={isSaving}
+					class="w-24 px-2 py-1 text-right text-xs bg-white border border-slate-200 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-400 outline-none font-medium disabled:bg-slate-50"
+				/>
+			</td>
+		{/if}
+		<td class="px-3 py-2.5 text-right text-xs text-slate-600 font-semibold tabular-nums">
+			{isGroup ? '—' : fmtN(pUnit)}
+		</td>
+		<td class="px-3 py-2.5 text-right text-xs font-bold text-slate-800 tabular-nums">
+			{fmtN(rowTotal)}
+		</td>
+		<td class="px-3 py-2.5 text-center">
+			{#if isSaving}
+				<i class="fas fa-circle-notch fa-spin text-orange-400 text-xs"></i>
+			{:else}
+				<button
+					onclick={() => deleteDetalle(node.id_presupuesto_detalle)}
+					class="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 text-slate-400 transition-colors text-xs"
+					title="Quitar partida"
+				>
+					<i class="fas fa-trash-alt"></i>
+				</button>
+			{/if}
+		</td>
+	</tr>
+	{#each node.children as child (child.id_presupuesto_detalle)}
+		{@render DetalleRow(child as DetalleNode, depth + 1)}
+	{/each}
+{/snippet}
 
 <!-- Add-from-catalog modal -->
 {#if showModal}

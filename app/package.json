@@ -10,6 +10,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
 		"tauri": "tauri"
 	},
 	"devDependencies": {
@@ -22,7 +23,8 @@
 		"svelte": "^5.55.2",
 		"svelte-check": "^4.4.6",
 		"typescript": "^6.0.2",
-		"vite": "^8.0.7"
+		"vite": "^8.0.7",
+		"vitest": "^3.2.4"
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.22.0",
@@ -32,7 +34,6 @@
 		"chart.js": "^4.5.1",
 		"svelte-chartjs": "^4.0.1",
 		"svelte-dnd-action": "^0.9.70",
-		"svelte-gantt": "^4.5.0",
 		"tailwindcss": "^4.3.0"
 	}
 }
