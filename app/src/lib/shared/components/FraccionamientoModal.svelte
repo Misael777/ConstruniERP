@@ -1,18 +1,20 @@
 <script lang="ts">
 	/**
 	 * Ventana reutilizable "Fraccionar este pago" — reemplaza al viejo campo inline "Número de Cuotas"
-	 * en Cuentas por Cobrar y Cuentas por Pagar. A diferencia del reparto automático que hacía antes el
-	 * servidor (montos iguales fijos, sin poder tocarlos), acá el usuario ve y edita cada fracción
-	 * (fecha + monto) a mano; el único requisito al guardar es que la suma cuadre con `montoTotal`. El
-	 * método "Montos iguales" (única opción por ahora, ver AskUserQuestion) solo sirve para generar un
-	 * punto de partida — no se vuelve a aplicar solo, el usuario lo dispara con "Repartir en partes
-	 * iguales" cada vez que lo quiera.
+	 * en Cuentas por Cobrar y Cuentas por Pagar. El "Método de fraccionamiento" tiene dos modos reales:
+	 * - Montos iguales: el monto de cada fracción se calcula solo (montoTotal ÷ N, la última absorbe el
+	 *   redondeo) y el campo de monto queda BLOQUEADO — no se puede tocar a mano mientras este modo
+	 *   esté activo. Cualquier cambio en el número de fracciones (o en montoTotal) recalcula solo.
+	 * - Montos desiguales: los campos de monto se DESBLOQUEAN para que el usuario los edite libremente.
+	 * En ambos modos, al guardar se exige que la suma de las fracciones sea EXACTAMENTE igual a
+	 * `montoTotal` (ni más ni menos) — si no cuadra, se bloquea "Guardar" y se muestra un mensaje de
+	 * error (ver `sumaOk`/`handleGuardar`); en Montos iguales esto siempre se cumple por construcción.
 	 *
 	 * No inserta/edita nada en BD directamente: solo junta el arreglo final y lo devuelve vía onConfirm
 	 * para que el formulario padre (CuentaCobrarModal/CuentaPagarModal) lo mande junto con el resto del
 	 * payload al guardar la cuenta — ver sincronizarCuotasProgramadas en cada servicio.
 	 */
-	import { X, Trash2, Plus, Minus } from '@lucide/svelte';
+	import { X, Trash2, Plus, Minus, Loader2 } from '@lucide/svelte';
 	import { currencyMask, formatCurrency } from '$lib/shared/fieldConfig';
 
 	export interface Fraccion {
@@ -40,8 +42,11 @@
 		fechaVencimiento?: string | null;
 		fraccionesIniciales?: Fraccion[];
 		onClose: () => void;
-		onConfirm: (fracciones: Fraccion[]) => void;
-		onEliminar: () => void;
+		/** Puede ser async (ej. escribe en BD desde el tablero de Panoramas) — se espera antes de
+		 * cerrar la ventana, para no decirle "listo" al usuario antes de que realmente se haya
+		 * guardado (ver `guardando`/handleGuardar). Si lanza un error, la ventana se queda abierta. */
+		onConfirm: (fracciones: Fraccion[]) => void | Promise<void>;
+		onEliminar: () => void | Promise<void>;
 	} = $props();
 
 	/** Igual que addMonths en cuentasCobrar.service.ts/cuentasPagar.service.ts: fija el día al último
@@ -81,6 +86,16 @@
 
 	let activo = $state(fraccionesIniciales.length > 0);
 	let filas = $state<Fraccion[]>([]);
+	let metodo = $state<'montos_iguales' | 'montos_desiguales'>('montos_iguales');
+
+	/** ¿Los montos de `filas` calzan con lo que daría un reparto en partes iguales? (con tolerancia de
+	 * un centavo por redondeo). Se usa solo para decidir con qué método abrir una cuenta YA fraccionada
+	 * — si sus cuotas no son iguales, se respeta como "Montos desiguales" en vez de forzarlas a calzar. */
+	function pareceMontosIguales(candidatas: Fraccion[]): boolean {
+		if (candidatas.length <= 1) return true;
+		const esperado = repartirEnPartesIguales(candidatas.length);
+		return candidatas.every((f, i) => Math.abs(f.monto - esperado[i].monto) < 0.01);
+	}
 
 	// La ventana solo es alcanzable cuando Forma de Pago ya es Fraccionado/Por Porcentaje/Crédito (ver
 	// botón "Configurar Cuotas" en CuentaCobrarModal/CuentaPagarModal) — así que siempre abre con el
@@ -89,7 +104,25 @@
 	$effect(() => {
 		if (!open) return;
 		activo = true;
-		filas = fraccionesIniciales.length > 0 ? fraccionesIniciales.map((f) => ({ ...f })) : repartirEnPartesIguales(3);
+		// OJO: se usa una variable local (`nuevasFilas`) para decidir el método, NO se vuelve a leer
+		// `filas` (el $state) — leerla acá la dejaría "suscrita" a los cambios que hace el otro efecto
+		// (el que recalcula montos iguales más abajo), disparando este efecto de nuevo, que resetea
+		// `filas` a su valor inicial, disparando otra vez al otro efecto... un loop infinito real que
+		// nunca deja guardar (ver Svelte error "effect_update_depth_exceeded").
+		const nuevasFilas = fraccionesIniciales.length > 0 ? fraccionesIniciales.map((f) => ({ ...f })) : repartirEnPartesIguales(3);
+		filas = nuevasFilas;
+		metodo = pareceMontosIguales(nuevasFilas) ? 'montos_iguales' : 'montos_desiguales';
+	});
+
+	// Mientras el método sea "Montos iguales", el monto de cada fracción se recalcula solo (montoTotal
+	// ÷ N, última absorbe el redondeo) cada vez que cambia el número de fracciones o montoTotal — el
+	// campo queda bloqueado en el template (ver `disabled={metodo === 'montos_iguales'}`). El chequeo
+	// de "¿cambió algo?" evita un loop infinito (este efecto lee Y escribe `filas`).
+	$effect(() => {
+		if (metodo !== 'montos_iguales' || filas.length === 0) return;
+		const esperado = repartirEnPartesIguales(filas.length);
+		const cambio = filas.some((f, i) => Math.abs(f.monto - esperado[i].monto) > 0.001);
+		if (cambio) filas = filas.map((f, i) => ({ ...f, monto: esperado[i].monto }));
 	});
 
 	const sumaFilas = $derived(filas.reduce((sum, f) => sum + (Number.isFinite(f.monto) ? f.monto : 0), 0));
@@ -118,10 +151,6 @@
 		filas = filas.map((f, i) => (i === index ? { ...f, monto: masked === '' ? 0 : Number(masked) } : f));
 	}
 
-	function recalcularPartesIguales() {
-		filas = repartirEnPartesIguales(Math.max(filas.length, 1));
-	}
-
 	function incrementarNumero() {
 		if (filas.length === 0) {
 			filas = repartirEnPartesIguales(3);
@@ -135,22 +164,51 @@
 		filas = filas.slice(0, -1);
 	}
 
-	function handleGuardar() {
+	/** true mientras se espera a que onConfirm/onEliminar terminen (pueden ser async, ej. escriben en
+	 * BD) — bloquea los botones para evitar doble clic y evita que la ventana se cierre "de mentira"
+	 * antes de que el guardado realmente haya terminado. */
+	let guardando = $state(false);
+	let errorGuardado = $state('');
+
+	async function handleGuardar() {
+		errorGuardado = '';
 		if (!activo || filas.length === 0) {
-			onEliminar();
-			onClose();
+			guardando = true;
+			try {
+				await onEliminar();
+				onClose();
+			} catch (err: any) {
+				errorGuardado = err?.message ?? 'No se pudo guardar el fraccionamiento.';
+			} finally {
+				guardando = false;
+			}
 			return;
 		}
 		if (!sumaOk) return;
-		onConfirm(filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto) })));
-		onClose();
+		guardando = true;
+		try {
+			await onConfirm(filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto) })));
+			onClose();
+		} catch (err: any) {
+			errorGuardado = err?.message ?? 'No se pudo guardar el fraccionamiento.';
+		} finally {
+			guardando = false;
+		}
 	}
 
-	function handleEliminarFraccionamiento() {
+	async function handleEliminarFraccionamiento() {
+		errorGuardado = '';
 		activo = false;
 		filas = [];
-		onEliminar();
-		onClose();
+		guardando = true;
+		try {
+			await onEliminar();
+			onClose();
+		} catch (err: any) {
+			errorGuardado = err?.message ?? 'No se pudo eliminar el fraccionamiento.';
+		} finally {
+			guardando = false;
+		}
 	}
 </script>
 
@@ -195,14 +253,17 @@
 
 					<div>
 						<span class="block text-sm font-bold text-slate-700 mb-1">Método de fraccionamiento</span>
-						<div class="flex items-center gap-2">
-							<select disabled class="flex-1 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-500">
-								<option>Montos iguales</option>
-							</select>
-							<button type="button" onclick={recalcularPartesIguales} class="whitespace-nowrap text-xs font-medium text-blue-600 hover:text-blue-700">
-								Repartir en partes iguales
-							</button>
-						</div>
+						<select
+							value={metodo}
+							onchange={(e) => (metodo = (e.target as HTMLSelectElement).value as 'montos_iguales' | 'montos_desiguales')}
+							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+						>
+							<option value="montos_iguales">Montos iguales</option>
+							<option value="montos_desiguales">Montos desiguales</option>
+						</select>
+						{#if metodo === 'montos_iguales'}
+							<p class="mt-1 text-xs text-slate-400">El monto de cada fracción se calcula solo y no se puede editar.</p>
+						{/if}
 					</div>
 
 					<div class="space-y-2">
@@ -219,8 +280,9 @@
 									type="text"
 									inputmode="decimal"
 									value={fila.monto}
+									disabled={metodo === 'montos_iguales'}
 									oninput={(e) => actualizarMonto(i, (e.target as HTMLInputElement).value)}
-									class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200"
+									class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
 								/>
 								<button type="button" onclick={() => eliminarFraccion(i)} class="p-1.5 rounded-lg text-red-500 hover:bg-red-50" aria-label="Eliminar fracción">
 									<Trash2 size={16} />
@@ -241,22 +303,26 @@
 						<p class="text-xs text-red-600">La suma de las fracciones debe ser igual al monto total antes de guardar.</p>
 					{/if}
 				{/if}
+				{#if errorGuardado}
+					<p class="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{errorGuardado}</p>
+				{/if}
 			</div>
 
 			<div class="sticky bottom-0 flex items-center justify-between gap-2 bg-white px-6 py-4 border-t border-slate-200">
-				<button type="button" onclick={handleEliminarFraccionamiento} class="px-3 py-2 text-sm font-medium rounded-lg text-red-600 hover:bg-red-50 flex items-center gap-1">
+				<button type="button" onclick={handleEliminarFraccionamiento} disabled={guardando} class="px-3 py-2 text-sm font-medium rounded-lg text-red-600 hover:bg-red-50 flex items-center gap-1 disabled:opacity-50">
 					<Trash2 size={16} /> Eliminar fraccionamiento
 				</button>
 				<div class="flex gap-2">
-					<button type="button" onclick={onClose} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">
+					<button type="button" onclick={onClose} disabled={guardando} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
 						Cancelar
 					</button>
 					<button
 						type="button"
 						onclick={handleGuardar}
-						disabled={activo && (filas.length === 0 || !sumaOk)}
-						class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50"
+						disabled={guardando || (activo && (filas.length === 0 || !sumaOk))}
+						class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2"
 					>
+						{#if guardando}<Loader2 size={16} class="animate-spin" />{/if}
 						Guardar
 					</button>
 				</div>

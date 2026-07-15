@@ -253,26 +253,31 @@ export async function createCuentaPagar(
  *
  * Exportada (no solo interna a create/updateCuentaPagar) para que el popup de cuotas también se
  * pueda abrir y guardar directo desde /finanzas/cuentas-pagar/panoramas.
+ *
+ * Devuelve {success,message} en vez de fallar en silencio: create/updateCuentaPagar (donde esto es
+ * un efecto SECUNDARIO del guardado principal) siguen ignorando el resultado a propósito para no
+ * revertir el guardado de la cuenta por esto — pero el popup de cuotas standalone (donde esto es la
+ * ÚNICA acción) SÍ necesita saber si falló para no decirle al usuario "guardado" cuando no se guardó.
  */
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaPagar: number,
 	fracciones: { fecha: string; monto: number }[]
-): Promise<void> {
-	// No se revienta la creación/edición de la cuenta si esto falla — pero SÍ se deja constancia en
-	// consola: antes fallaba en silencio y la cuenta se guardaba "bien" sin que aparecieran las cuotas.
+): Promise<{ success: boolean; message: string }> {
 	const { error: deleteError } = await client.from(PAGO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaPagar).eq('estado_pago', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores:', deleteError);
-		return;
+		return { success: false, message: `No se pudieron guardar las cuotas: ${deleteError.message}` };
 	}
-	if (fracciones.length === 0) return;
+	if (fracciones.length === 0) return { success: true, message: 'Cuotas eliminadas' };
 
 	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaPagar, monto: f.monto, fecha_pago: f.fecha, estado_pago: 'programado' }));
 	const { error: insertError } = await client.from(PAGO_TABLE).insert(filas);
 	if (insertError) {
 		console.error('No se pudieron guardar las cuotas programadas:', insertError);
+		return { success: false, message: `No se pudieron guardar las cuotas: ${insertError.message}` };
 	}
+	return { success: true, message: 'Cuotas guardadas' };
 }
 
 export async function updateCuentaPagar(

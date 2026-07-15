@@ -190,26 +190,31 @@ export async function createCuentaCobrar(
  * Exportada (no solo interna a create/updateCuentaCobrar) para que el popup de cuotas también se
  * pueda abrir y guardar directo desde /finanzas/cuentas-cobrar/panoramas (tablero de Panoramas de
  * Cobro), sin pasar por el formulario completo de Editar Cuenta por Cobrar.
+ *
+ * Devuelve {success,message} en vez de fallar en silencio: create/updateCuentaCobrar (donde esto es
+ * un efecto SECUNDARIO del guardado principal) siguen ignorando el resultado a propósito para no
+ * revertir el guardado de la cuenta por esto — pero el popup de cuotas standalone (donde esto es la
+ * ÚNICA acción) SÍ necesita saber si falló para no decirle al usuario "guardado" cuando no se guardó.
  */
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
 	fracciones: { fecha: string; monto: number }[]
-): Promise<void> {
-	// No se revienta la creación/edición de la cuenta si esto falla (ej. falta la migración de
-	// estado_cobro en la BD) — pero SÍ se deja constancia en consola.
+): Promise<{ success: boolean; message: string }> {
 	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
-		return;
+		return { success: false, message: `No se pudieron guardar las cuotas: ${deleteError.message}` };
 	}
-	if (fracciones.length === 0) return;
+	if (fracciones.length === 0) return { success: true, message: 'Cuotas eliminadas' };
 
 	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: f.monto, fecha_cobro: f.fecha, estado_cobro: 'programado' }));
 	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);
 	if (insertError) {
 		console.error('No se pudieron guardar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
+		return { success: false, message: `No se pudieron guardar las cuotas: ${insertError.message}` };
 	}
+	return { success: true, message: 'Cuotas guardadas' };
 }
 
 export async function updateCuentaCobrar(

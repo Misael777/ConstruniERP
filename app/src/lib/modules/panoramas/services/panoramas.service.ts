@@ -44,6 +44,11 @@ export interface PagoPendienteItem {
 	panoramaId: number | null;
 	panoramaOrden: number | null;
 	prioridad: Prioridad;
+	/** monto_comprometido (monto total de la cuenta, no el saldo) y fecha_emision — ya venían en el
+	 * `select('*')` de abajo, solo no se exponían. Se agregan para que el popup de cuotas (ver
+	 * abrirCuotasDe en +page.svelte) pueda abrir SIN una consulta extra a cuentas_pagar. */
+	montoTotal: number;
+	fechaEmision: string;
 }
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
@@ -88,7 +93,9 @@ function mapRow(row: any): PagoPendienteItem {
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
 		panoramaId: row.panorama_id,
 		panoramaOrden: row.panorama_orden,
-		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento)
+		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento),
+		montoTotal: Number(row.monto_comprometido),
+		fechaEmision: row.fecha_emision
 	};
 }
 
@@ -170,6 +177,18 @@ export async function getProyeccionIngresos(client: SupabaseClient, desde?: stri
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_pendiente), 0);
 }
 
+/** Reprograma fecha_vencimiento de una o más cuentas por pagar (drag-and-drop en la vista Calendario
+ * de Panoramas de Pago) — 1 update por fila, igual patrón que reorderPanorama. */
+export async function actualizarFechasVencimientoPago(
+	client: SupabaseClient,
+	cambios: { id: number; fecha: string }[]
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(cambios.map((c) => client.from('cuentas_pagar').update({ fecha_vencimiento: c.fecha }).eq('id_cuenta_pagar', c.id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas: ${failed.error.message}` };
+	return { success: true, message: 'Fechas actualizadas' };
+}
+
 export async function getProyectoOptions(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client.from('proyecto').select('id_proyecto, nombre_proyecto').order('nombre_proyecto');
 	if (error) throw error;
@@ -214,6 +233,11 @@ export interface IngresoPendienteItem {
 	idProyecto: number | null;
 	idCliente: number | null;
 	prioridad: PrioridadCobro;
+	/** monto (total de la cuenta, no el saldo_pendiente de arriba) y fecha_emision — ya venían en el
+	 * `select('*')` de abajo, solo no se exponían. Se agregan para que el popup de cuotas (ver
+	 * abrirCuotasDe en +page.svelte) pueda abrir SIN una consulta extra a cuentas_cobrar. */
+	montoTotal: number;
+	fechaEmision: string;
 }
 
 const SELECT_COBRO_CON_JOINS = '*, cliente(nombre), proyecto(nombre_proyecto)';
@@ -229,7 +253,9 @@ function mapCobroRow(row: any): IngresoPendienteItem {
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.id_proyecto,
 		idCliente: row.id_cliente,
-		prioridad: (row.prioridad as PrioridadCobro) || prioridadCobroPorDefecto(row.fecha_vencimiento)
+		prioridad: (row.prioridad as PrioridadCobro) || prioridadCobroPorDefecto(row.fecha_vencimiento),
+		montoTotal: Number(row.monto),
+		fechaEmision: row.fecha_emision
 	};
 }
 
@@ -328,4 +354,16 @@ export async function getResumenPagos(client: SupabaseClient): Promise<ResumenPa
 	const proveedoresConCompras = new Set(rows.map((r) => r.id_proveedor)).size;
 
 	return { totalPendiente, vencidoTotal, vencidoCount: vencidos.length, proveedoresConCompras };
+}
+
+/** Reprograma fecha_vencimiento de una o más cuentas por cobrar (drag-and-drop en la vista Calendario
+ * de Panoramas de Cobro) — inverso de actualizarFechasVencimientoPago. */
+export async function actualizarFechasVencimientoCobro(
+	client: SupabaseClient,
+	cambios: { id: number; fecha: string }[]
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(cambios.map((c) => client.from('cuentas_cobrar').update({ fecha_vencimiento: c.fecha }).eq('id_cuenta_cobrar', c.id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas: ${failed.error.message}` };
+	return { success: true, message: 'Fechas actualizadas' };
 }
