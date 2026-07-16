@@ -6,8 +6,7 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Package, GripVertical, MoreVertical, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays } from '@lucide/svelte';
-	import PanoramaCalendarView, { type CalendarPanorama } from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
+	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays } from '@lucide/svelte';
 	import {
 		getPagosPendientes,
 		getProyeccionIngresos,
@@ -16,6 +15,7 @@
 		getResumenPagos,
 		getProyectoOptions,
 		computeEstadoVencimiento,
+		actualizarFechasVencimientoPago,
 		type PagoPendienteItem,
 		type Prioridad,
 		type ResumenPagos
@@ -27,6 +27,7 @@
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
+	import PanoramaCalendarView from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
 
 	// Tablero de planeación de flujo de caja: reutiliza cuentas_pagar para leer los pagos pendientes,
 	// pero la organización en Panorama 1 / Panorama 2 es 100% de la sesión actual — NO se guarda en
@@ -93,27 +94,7 @@
 
 	let pagoModalOpen = $state(false);
 	let cuentaCobrarModalOpen = $state(false);
-
-	// Tab "Calendario" — misma información que el tablero Kanban de abajo, solo
-	// una presentación visual alternativa (ver PanoramaCalendarView.svelte).
 	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
-	let calendarPanoramas = $derived<CalendarPanorama[]>(
-		PANORAMAS.map((p) => ({
-			id: p.id,
-			nombre: p.nombre,
-			subtitulo: p.subtitulo,
-			eventos: panoramaItems(p.id)
-				.filter((i) => i.fechaVencimiento)
-				.map((i) => ({
-					id: i.id,
-					titulo: `Pago proveedor – ${i.titulo}`,
-					subtitulo: i.proveedorNombre,
-					monto: i.monto,
-					fecha: i.fechaVencimiento as string,
-					tipo: 'egreso' as const
-				}))
-		}))
-	);
 
 	function panoramaItems(id: 1 | 2) {
 		return id === 1 ? panorama1 : panorama2;
@@ -270,6 +251,21 @@
 		toast.success('Panorama 1 copiado a Panorama 2');
 	}
 
+	/** Atajo para la vista Calendario: si el usuario todavía no arrastró nada desde la Bandeja al
+	 * Tablero, Panorama 1 y 2 se ven vacíos ahí — este botón carga TODOS los pagos pendientes en
+	 * ambos panoramas de una vez (Panorama 2 arranca como copia de Panorama 1, mismo criterio que
+	 * copiarPanorama1a2) para poder empezar a comparar escenarios arrastrando fechas de inmediato. */
+	function sembrarPanoramasDesdeBandeja() {
+		if (bandeja.length === 0) return;
+		panorama1 = bandeja.map((i) => ({ ...i }));
+		panorama2 = bandeja.map((i) => ({ ...i }));
+		bandeja = [];
+		bandejaVersion++;
+		panorama1Version++;
+		panorama2Version++;
+		toast.success('Pagos pendientes cargados en Panorama 1 y Panorama 2');
+	}
+
 	/** Botón de puntos (⋮) junto al número de cada cuota: copia (no mueve, se queda también en el
 	 * actual) esa cuenta puntual al otro panorama — como solo hay 2, "el siguiente" siempre es el otro. */
 	function copiarItemAOtroPanorama(item: PagoPendienteItem, panoramaActual: 1 | 2) {
@@ -316,45 +312,60 @@
 	// de la Bandeja o de un Panorama — para ver/editar el calendario de cuotas 'programado' de esa
 	// cuenta puntual, sin salir de este tablero.
 	let cuotasModalOpen = $state(false);
-	let cuotasCargando = $state(false);
+	/** id_cuenta_pagar del ítem cuyo botón de cuotas está cargando (o null) — muestra un spinner justo
+	 * en ese botón para que el clic se sienta inmediato aunque la consulta tarde un poco. */
+	let cuotasCargandoId = $state<number | null>(null);
 	let cuotasCuentaActual = $state<{ id: number; monto: number; fechaEmision: string; fechaVencimiento: string | null } | null>(null);
 	let cuotasFraccionesIniciales = $state<Fraccion[]>([]);
 
+	// item.montoTotal/fechaEmision ya vienen del select('*') que ya se hizo al cargar la bandeja/panorama
+	// (ver panoramas.service.ts) — evita una consulta extra a cuentas_pagar, solo falta traer los pagos
+	// 'programado' reales.
 	async function abrirCuotasDe(item: PagoPendienteItem) {
-		cuotasCargando = true;
+		cuotasCargandoId = item.id;
 		try {
-			const { data: cuenta, error } = await supabase
-				.from('cuentas_pagar')
-				.select('monto_comprometido, fecha_emision, fecha_vencimiento')
-				.eq('id_cuenta_pagar', item.id_cuenta_pagar)
-				.single();
-			if (error || !cuenta) throw error ?? new Error('Cuenta no encontrada');
-
 			const pagos = await getPagos(supabase, item.id_cuenta_pagar);
 			cuotasFraccionesIniciales = pagos
 				.filter((p) => p.estado_pago === 'programado')
 				.map((p) => ({ fecha: p.fecha_pago, monto: Number(p.monto) }))
 				.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
-			cuotasCuentaActual = { id: item.id_cuenta_pagar, monto: Number(cuenta.monto_comprometido), fechaEmision: cuenta.fecha_emision, fechaVencimiento: cuenta.fecha_vencimiento };
+			cuotasCuentaActual = { id: item.id_cuenta_pagar, monto: item.montoTotal, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
 			cuotasModalOpen = true;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar las cuotas de esta cuenta');
 		} finally {
-			cuotasCargando = false;
+			cuotasCargandoId = null;
 		}
 	}
 
+	// Lanza si falla para que FraccionamientoModal (ver handleGuardar) NO cierre la ventana y muestre
+	// el error — antes esto se tragaba en silencio y el popup se cerraba como si hubiera guardado.
 	async function handleCuotasConfirmadas(fracciones: Fraccion[]) {
 		if (!cuotasCuentaActual) return;
-		await sincronizarCuotasProgramadas(supabase, cuotasCuentaActual.id, fracciones);
+		const result = await sincronizarCuotasProgramadas(supabase, cuotasCuentaActual.id, fracciones);
+		if (!result.success) throw new Error(result.message);
 		toast.success('Cuotas actualizadas');
 		cuotasCuentaActual = null;
 	}
 	async function handleCuotasEliminadas() {
 		if (!cuotasCuentaActual) return;
-		await sincronizarCuotasProgramadas(supabase, cuotasCuentaActual.id, []);
+		const result = await sincronizarCuotasProgramadas(supabase, cuotasCuentaActual.id, []);
+		if (!result.success) throw new Error(result.message);
 		toast.success('Cuotas eliminadas');
 		cuotasCuentaActual = null;
+	}
+
+	/** Persiste las fechas reprogramadas por drag-and-drop en la vista Calendario y actualiza los
+	 * arreglos locales para que el tablero Kanban y el propio calendario queden en sincro sin recargar. */
+	async function handleGuardarFechasCalendario(cambios: { id: number; fechaNueva: string }[]) {
+		const result = await actualizarFechasVencimientoPago(supabase, cambios.map((c) => ({ id: c.id, fecha: c.fechaNueva })));
+		if (!result.success) throw new Error(result.message);
+		const mapa = new Map(cambios.map((c) => [c.id, c.fechaNueva]));
+		panorama1 = panorama1.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
+		panorama2 = panorama2.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
+		panorama1Version++;
+		panorama2Version++;
+		toast.success('Fechas actualizadas');
 	}
 </script>
 
@@ -370,17 +381,26 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
-			<div class="flex rounded-lg border border-slate-200 overflow-hidden mr-1">
+			<div class="flex rounded-lg border border-slate-200 overflow-hidden">
 				<button
 					type="button"
 					onclick={() => (vistaActiva = 'tablero')}
-					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'tablero' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
-				><LayoutGrid size={15} /> Tablero</button>
+					class={`flex items-center gap-1.5 px-3 h-9 text-sm font-medium ${vistaActiva === 'tablero' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+				>
+					<LayoutGrid size={15} /> Tablero
+				</button>
 				<button
 					type="button"
-					onclick={() => (vistaActiva = 'calendario')}
-					class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium {vistaActiva === 'calendario' ? 'bg-[#0f3b5e] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
-				><CalendarDays size={15} /> Calendario</button>
+					onclick={() => {
+						console.log('[Panoramas de Pago] abriendo Calendario — panorama1:', panorama1.length, 'ítem(s):', panorama1);
+						console.log('[Panoramas de Pago] abriendo Calendario — panorama2:', panorama2.length, 'ítem(s):', panorama2);
+						console.log('[Panoramas de Pago] abriendo Calendario — bandeja (sin asignar):', bandeja.length, 'ítem(s)');
+						vistaActiva = 'calendario';
+					}}
+					class={`flex items-center gap-1.5 px-3 h-9 text-sm font-medium ${vistaActiva === 'calendario' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+				>
+					<CalendarDays size={15} /> Calendario
+				</button>
 			</div>
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
@@ -395,6 +415,28 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
+	{#if vistaActiva === 'calendario'}
+		{#if panorama1.length === 0 && panorama2.length === 0}
+			<div class="mb-4 flex items-center justify-between gap-3 bg-blue-50 text-blue-700 px-4 py-3 rounded-lg text-sm">
+				<p>{bandeja.length > 0 ? 'Panorama 1 y Panorama 2 todavía no tienen pagos asignados.' : 'No hay pagos pendientes por mostrar.'}</p>
+				{#if bandeja.length > 0}
+					<button type="button" onclick={sembrarPanoramasDesdeBandeja} class="shrink-0 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700">
+						Cargar pendientes en ambos panoramas
+					</button>
+				{/if}
+			</div>
+		{/if}
+		{#key panorama1Version + panorama2Version}
+			<PanoramaCalendarView
+				panoramas={PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, items: panoramaItems(p.id) }))}
+				tipo="egreso"
+				subtituloDe={(i: PagoPendienteItem) => `Proveedor: ${i.proveedorNombre}`}
+				onAbrirCuotas={abrirCuotasDe}
+				{cuotasCargandoId}
+				onGuardarFechas={handleGuardarFechasCalendario}
+			/>
+		{/key}
+	{:else}
 	<!-- KPIs -->
 	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
@@ -430,9 +472,6 @@
 		</div>
 	</div>
 
-	{#if vistaActiva === 'calendario'}
-		<PanoramaCalendarView panoramas={calendarPanoramas} ingresosProyectados={proyeccionIngresos} />
-	{:else}
 	<div class="grid grid-cols-1 xl:grid-cols-[280px_1fr_1fr_300px] gap-4 items-start">
 		<!-- Bandeja -->
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
@@ -477,7 +516,11 @@
 								title="Ver/editar cuotas de esta cuenta"
 								aria-label="Ver/editar cuotas de esta cuenta"
 							>
-								<GripVertical size={14} />
+								{#if cuotasCargandoId === item.id}
+									<Loader2 size={14} class="animate-spin" />
+								{:else}
+									<GripVertical size={14} />
+								{/if}
 							</button>
 							<div class="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
 								<Package size={16} />
@@ -543,7 +586,11 @@
 									title="Ver/editar cuotas de esta cuenta"
 									aria-label="Ver/editar cuotas de esta cuenta"
 								>
-									<GripVertical size={14} />
+									{#if cuotasCargandoId === item.id}
+										<Loader2 size={14} class="animate-spin" />
+									{:else}
+										<GripVertical size={14} />
+									{/if}
 								</button>
 								<span class={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${panoramaBadgeClass[panorama.id]}`}>{index + 1}</span>
 								<button

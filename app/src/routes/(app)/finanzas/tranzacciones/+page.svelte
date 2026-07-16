@@ -3,12 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet, LayoutGrid, CalendarDays } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
 		getTransacciones,
+		getTransaccionesCalendario,
+		actualizarFechasTransacciones,
 		deleteTransaccion,
 		getTransDetalles,
 		deleteTransDetalle,
@@ -17,6 +19,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import TransDetalleModal from '$lib/modules/transacciones/components/TransDetalleModal.svelte';
+	import TransaccionCalendarView from '$lib/modules/transacciones/components/TransaccionCalendarView.svelte';
 	import type { Transaccion, TransDetalle } from '$lib/modules/transacciones/services/transacciones.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -62,6 +65,51 @@
 	let editingTransaccion = $state<Transaccion | null>(null);
 	let detalleModalOpen = $state(false);
 	let editingDetalle = $state<TransDetalle | null>(null);
+
+	// Tab "Calendario" — muestra las transacciones reales (no las cuotas pendientes de
+	// Panoramas de Cobro/Pago) distribuidas por fecha, ver TransaccionCalendarView.svelte.
+	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
+	let calendarItems = $state<Transaccion[]>([]);
+	let calendarLoading = $state(false);
+	let calendarCargado = $state(false);
+	/** Fuerza un remonte de <TransaccionCalendarView> (ver {#key} donde se usa) cada vez que
+	 * calendarItems cambia por fuera de un arrastre real (fetch inicial, guardar/eliminar una
+	 * transacción, o confirmar fechas arrastradas) — mismo motivo que en Panoramas: el estado interno
+	 * de drag-and-drop puede desincronizarse si el arreglo se reemplaza de un tirón desde afuera. */
+	let calendarVersion = $state(0);
+
+	async function fetchCalendarData() {
+		calendarLoading = true;
+		try {
+			calendarItems = await getTransaccionesCalendario(supabase);
+			calendarCargado = true;
+			calendarVersion++;
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudieron cargar las transacciones del calendario');
+		} finally {
+			calendarLoading = false;
+		}
+	}
+
+	function abrirVistaCalendario() {
+		vistaActiva = 'calendario';
+		if (!calendarCargado) fetchCalendarData();
+	}
+
+	function handleVerTransaccionCalendario(t: Transaccion) {
+		openEdit(t);
+	}
+
+	/** Persiste las fechas reprogramadas por drag-and-drop en la vista Calendario y actualiza
+	 * calendarItems localmente para no depender de un refetch completo. */
+	async function handleGuardarFechasCalendario(cambios: { id: number; fechaNueva: string }[]) {
+		const result = await actualizarFechasTransacciones(supabase, cambios.map((c) => ({ id: c.id, fecha: c.fechaNueva })));
+		if (!result.success) throw new Error(result.message);
+		const mapa = new Map(cambios.map((c) => [c.id, c.fechaNueva]));
+		calendarItems = calendarItems.map((t) => (mapa.has(t.id_transaccion) ? { ...t, fecha: mapa.get(t.id_transaccion)! } : t));
+		calendarVersion++;
+		toast.success('Fechas actualizadas');
+	}
 
 	async function fetchList() {
 		loading = true;
@@ -183,6 +231,7 @@
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
 			await fetchList();
+			if (calendarCargado) await fetchCalendarData();
 		}
 	}
 
@@ -214,6 +263,7 @@
 
 	async function handleSaved() {
 		await fetchList();
+		if (calendarCargado) await fetchCalendarData();
 	}
 
 	async function handleDetalleSaved() {
@@ -231,6 +281,22 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
+			<div class="flex rounded-lg border border-slate-200 overflow-hidden">
+				<button
+					type="button"
+					onclick={() => (vistaActiva = 'tablero')}
+					class="flex items-center gap-1.5 px-3 h-[38px] text-sm font-medium {vistaActiva === 'tablero' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				>
+					<LayoutGrid size={14} /> Tablero
+				</button>
+				<button
+					type="button"
+					onclick={abrirVistaCalendario}
+					class="flex items-center gap-1.5 px-3 h-[38px] text-sm font-medium {vistaActiva === 'calendario' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}"
+				>
+					<CalendarDays size={14} /> Calendario
+				</button>
+			</div>
 			<button type="button" onclick={() => goto('/finanzas/tranzacciones/movimientos-caja')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
 				<Wallet size={16} /> Movimientos de Caja
 			</button>
@@ -243,6 +309,16 @@
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
+
+	{#if vistaActiva === 'calendario'}
+		{#if calendarLoading && !calendarCargado}
+			<div class="bg-white rounded-xl border border-slate-200 p-10 text-center text-sm text-slate-400">Cargando calendario…</div>
+		{:else}
+			{#key calendarVersion}
+				<TransaccionCalendarView transacciones={calendarItems} onVer={handleVerTransaccionCalendario} onGuardarFechas={handleGuardarFechasCalendario} />
+			{/key}
+		{/if}
+	{:else}
 
 	<div class="mb-4 flex flex-wrap items-center gap-3">
 		<div class="relative flex-1 min-w-[220px] max-w-sm">
@@ -412,6 +488,7 @@
 				</table>
 			{/if}
 		</div>
+	{/if}
 	{/if}
 </div>
 

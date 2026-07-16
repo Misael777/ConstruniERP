@@ -138,6 +138,29 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 	};
 }
 
+/** Trae TODAS las transacciones activas (sin paginar) — solo para la vista Calendario de
+ * /finanzas/tranzacciones, que necesita ver el mes/semana completos de un vistazo, no una página a
+ * la vez. Mismo criterio de volumen que movimientosCaja.service.ts: al tamaño actual del ERP esto es
+ * instantáneo; si el histórico crece mucho, esto debería acotarse a un rango de fechas en el servidor. */
+export async function getTransaccionesCalendario(client: SupabaseClient): Promise<Transaccion[]> {
+	const { data, error } = await client.from(TABLE_NAME).select('*').eq('estado', 'activo').order('fecha', { ascending: true });
+	if (error) throw error;
+	return (data ?? []) as Transaccion[];
+}
+
+/** Reprograma la fecha de una o más transacciones (drag-and-drop en la vista Calendario de
+ * /finanzas/tranzacciones) — 1 update por fila, mismo patrón que actualizarFechasVencimientoCobro/Pago
+ * en panoramas.service.ts. Solo cambia `fecha`; no recalcula cobros/pagos vinculados. */
+export async function actualizarFechasTransacciones(
+	client: SupabaseClient,
+	cambios: { id: number; fecha: string }[]
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(cambios.map((c) => client.from(TABLE_NAME).update({ fecha: c.fecha }).eq(PK_COLUMN, c.id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas: ${failed.error.message}` };
+	return { success: true, message: 'Fechas actualizadas' };
+}
+
 export async function createTransaccion(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
