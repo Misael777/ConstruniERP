@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
 	import GanttTimeline from './GanttTimeline.svelte';
-	import { buildTree, fillMissingAncestors } from '$lib/utils/tree';
+	import { buildTree, fillMissingAncestors, flattenSubtree } from '$lib/utils/tree';
 	import {
 		diffDraft,
 		commitDraft,
@@ -49,29 +49,6 @@
 		precio_unitario: number | null;
 	};
 
-	type PartidaNode = PartidaItem & { children: PartidaNode[] };
-
-	type PlantillaActividad = {
-		id_plantilla_actividad: number;
-		id_plantilla: number;
-		id_partida: number | null;
-		nombre_actividad: string;
-		nivel: number;
-		id_actividad_padre_template: number | null;
-		duracion_dias: number;
-		lag_inicio_dias: number;
-		orden: number;
-		partida?: { codigo: string; descripcion: string; unidad: string | null } | null;
-	};
-
-	type Plantilla = {
-		id_plantilla: number;
-		nombre: string;
-		descripcion: string | null;
-		categoria: string | null;
-		actividades?: PlantillaActividad[];
-	};
-
 	type Dependencia = {
 		id_dependencia: number;
 		id_actividad_origen: number;
@@ -107,20 +84,9 @@
 
 	let planBaseDate = $state<string | null>(null);
 
-	// Budget sync: presupuesto ID for this project (stored so sidebar-drag can upsert)
+	// Budget sync: presupuesto ID for this project
 	let presupuestoId  = $state<number | null>(null);
-
-	// Partidas sidebar
-	let showSidebar    = $state(true);
-	let sidebarTab     = $state<'partidas' | 'plantillas'>('partidas');
 	let partidas       = $state<PartidaItem[]>([]);
-	let plantillas     = $state<Plantilla[]>([]);
-	let buscarPartida  = $state('');
-	let partidaExpIds  = $state(new Set<number>());
-
-	// Plantilla application
-	let applyingPlantId  = $state<number | null>(null);
-	let plantStartDate   = $state(new Date().toISOString().slice(0, 10));
 
 	// Inline add
 	let showAddForm    = $state(false);
@@ -139,10 +105,9 @@
 	let draftDates = $state(new Map<number, { inicio: string; fin: string }>());
 	let draftWarnings = $state<string[]>([]);
 
-	// Full, unscoped partida catalog — needed to walk ancestor chains when
-	// auto-creating group activities (see ensureAncestorChain below). Kept
-	// separate from `partidas` (the sidebar-scoped list) so the sidebar's
-	// existing "only show budgeted partidas" behavior is unchanged.
+	// Full, unscoped partida catalog — used only to repair a legacy
+	// presupuesto_detalle that's missing an ancestor group (see
+	// syncActividadesFromPresupuesto below via fillMissingAncestors).
 	let catalogAll = $state<PartidaItem[]>([]);
 
 	// ── DERIVED ────────────────────────────────────────────────────────────────
@@ -178,28 +143,6 @@
 		}
 		return { atrasadas, enTiempo, completadas, total: actividades.length };
 	});
-
-	// ── PARTIDA TREE (filtered) ────────────────────────────────────────────────
-	const filteredPartidas = $derived.by(() => {
-		if (!buscarPartida.trim()) return partidas;
-		const q = buscarPartida.toLowerCase();
-		return partidas.filter(p =>
-			p.descripcion.toLowerCase().includes(q) || p.codigo.toLowerCase().includes(q)
-		);
-	});
-
-	// `partidas` is scoped to whatever's already in the project's
-	// presupuesto_detalle, which can legitimately be missing an ancestor group
-	// (e.g. legacy rows added before ensureAncestorChain existed) — fill those
-	// in from the full catalog so a leaf never renders as a stray root instead
-	// of nested under its real parent.
-	const partidaTree = $derived.by((): PartidaNode[] =>
-		buildTree(
-			fillMissingAncestors(filteredPartidas, catalogAll, 'id_partida', 'id_partida_padre'),
-			'id_partida',
-			'id_partida_padre'
-		)
-	);
 
 	// ── RESTRICCIONES ↔ ACTIVIDAD LINK ─────────────────────────────────────────
 	// Restricciones with id_cronograma_actividad set are tied to a specific
@@ -272,7 +215,7 @@
 	async function load() {
 		isLoading = true;
 
-		const [{ data: acts }, { data: rests }, { data: pb }, { data: plantas }] = await Promise.all([
+		const [{ data: acts }, { data: rests }, { data: pb }] = await Promise.all([
 			// Join partida so each activity carries its catalog code+unit
 			supabase.from('cronograma_actividad')
 				.select('*, partida:id_partida(codigo, descripcion, unidad)')
@@ -282,15 +225,11 @@
 				.order('created_at', { ascending: false }),
 			supabase.from('cronograma_plan_base').select('fecha_snapshot').eq('id_proyecto', projectId)
 				.order('created_at', { ascending: false }).limit(1).maybeSingle(),
-			supabase.from('plantilla_cronograma')
-				.select('*, actividades:plantilla_actividad(*, partida:id_partida(codigo, descripcion, unidad))')
-				.order('nombre'),
 		]);
 
 		actividades   = (acts ?? []) as Actividad[];
 		restricciones = (rests ?? []) as Restriccion[];
 		planBaseDate  = pb?.fecha_snapshot ?? null;
-		plantillas    = (plantas ?? []) as Plantilla[];
 
 		if (actividades.length) {
 			const ids = actividades.map(a => a.id_cronograma_actividad);
@@ -299,43 +238,86 @@
 			dependencias = (deps ?? []) as Dependencia[];
 		}
 
-		// Load partidas: prefer project's presupuesto_detalle, fall back to full catalog
 		await loadPartidas();
+		await syncActividadesFromPresupuesto();
 		isLoading = false;
 	}
 
 	async function loadPartidas() {
-		// Full catalog (unscoped), needed to walk ancestor chains in
-		// ensureAncestorChain regardless of what's shown in the sidebar below.
+		// Full catalog (unscoped) — only used to repair a legacy
+		// presupuesto_detalle missing an ancestor group, see below.
 		const { data: allCats } = await supabase.from('partida').select('*').order('codigo');
 		catalogAll = (allCats ?? []) as PartidaItem[];
 
-		// Try to get the project's presupuesto (use id_pres_inicial or the latest one)
 		const { data: pres } = await supabase.from('presupuesto')
 			.select('id_presupuesto')
 			.eq('id_proyecto', projectId)
 			.order('created_at', { ascending: false })
 			.limit(1).maybeSingle();
 
-		if (pres) {
-			presupuestoId = pres.id_presupuesto;
-			// Load partidas instanciadas en el presupuesto del proyecto
-			const { data: pd } = await supabase.from('presupuesto_detalle')
-				.select('id_partida, partida:id_partida(id_partida, codigo, descripcion, nivel, id_partida_padre, unidad, precio_unitario)')
-				.eq('id_presupuesto', pres.id_presupuesto)
-				.order('id_partida');
-			if (pd && pd.length > 0) {
-				partidas = pd
-					.map((row: any) => row.partida)
-					.filter(Boolean)
-					.filter((p: any, i: number, arr: any[]) =>
-						arr.findIndex(x => x.id_partida === p.id_partida) === i
-					) as PartidaItem[];
-				return;
+		if (!pres) { presupuestoId = null; partidas = []; return; }
+		presupuestoId = pres.id_presupuesto;
+
+		const { data: pd } = await supabase.from('presupuesto_detalle')
+			.select('id_partida, partida:id_partida(id_partida, codigo, descripcion, nivel, id_partida_padre, unidad, precio_unitario)')
+			.eq('id_presupuesto', pres.id_presupuesto)
+			.order('id_partida');
+		partidas = (pd ?? [])
+			.map((row: any) => row.partida)
+			.filter(Boolean)
+			.filter((p: any, i: number, arr: any[]) => arr.findIndex(x => x.id_partida === p.id_partida) === i) as PartidaItem[];
+	}
+
+	// Mirrors every partida already in the project's presupuesto (backlog) into
+	// cronograma_actividad, preserving the catalog's parent/child hierarchy —
+	// no manual drag/select needed, the schedule always reflects the budget.
+	// Existing activities are left untouched (matched by id_partida); this
+	// only ever adds what's missing, in parent-before-child order.
+	async function syncActividadesFromPresupuesto() {
+		if (!presupuestoId || partidas.length === 0) return;
+		const completos = fillMissingAncestors(partidas, catalogAll, 'id_partida', 'id_partida_padre');
+		const tree = buildTree(completos, 'id_partida', 'id_partida_padre');
+		// Parent-before-child order, so a just-repaired parent's nivel is
+		// already correct by the time we compute its children's nivel below.
+		const ordenados = tree.flatMap(root => flattenSubtree(root));
+
+		for (const p of ordenados) {
+			const parentAct = p.id_partida_padre ? actividades.find(a => a.id_partida === p.id_partida_padre) : undefined;
+			const parentActId = parentAct?.id_cronograma_actividad ?? null;
+			const nivel = parentAct ? parentAct.nivel + 1 : 1;
+
+			const existing = actividades.find(a => a.id_partida === p.id_partida);
+			if (!existing) {
+				const siblings = actividades.filter(a => a.id_actividad_padre === parentActId);
+				const { data } = await supabase.from('cronograma_actividad').insert({
+					id_proyecto: projectId,
+					nombre_actividad: p.descripcion,
+					nivel,
+					id_actividad_padre: parentActId,
+					orden: siblings.length + 1,
+					porcentaje_avance_real: 0,
+					id_partida: p.id_partida,
+				}).select('*, partida:id_partida(codigo, descripcion, unidad)').single();
+				if (data) actividades = [...actividades, data as Actividad];
+				continue;
+			}
+
+			// Repair an activity created by the old manual "arrastrar al Gantt"
+			// flow (before this auto-sync existed), whose id_actividad_padre no
+			// longer matches the partida catalog's real hierarchy — e.g. a "2
+			// PISO" child that ended up nested under "1 PISO" because its actual
+			// parent activity didn't exist yet at the time it was created.
+			if (existing.id_actividad_padre !== parentActId || existing.nivel !== nivel) {
+				await supabase.from('cronograma_actividad')
+					.update({ id_actividad_padre: parentActId, nivel })
+					.eq('id_cronograma_actividad', existing.id_cronograma_actividad);
+				actividades = actividades.map(a =>
+					a.id_cronograma_actividad === existing.id_cronograma_actividad
+						? { ...a, id_actividad_padre: parentActId, nivel }
+						: a
+				);
 			}
 		}
-		// Fallback: load the full catalog
-		partidas = catalogAll;
 	}
 
 	// Manual toolbar date/duration edits go through the same draft path as
@@ -381,149 +363,6 @@
 		}).select().single();
 		if (data) actividades = [...actividades, data as Actividad];
 		newActName = ''; showAddForm = false; addingParentId = null;
-	}
-
-	// ── BUDGET SYNC ───────────────────────────────────────────────────────────
-	// Ensures id_partida appears in presupuesto_detalle so the Presupuesto tab shows it.
-	async function syncPartidaToBudget(idPartida: number) {
-		if (!presupuestoId) {
-			const { data: newPres } = await supabase.from('presupuesto').insert({
-				id_proyecto: projectId,
-				nombre: `Presupuesto - ${proyecto.nombre_proyecto}`,
-				tipo: 'obra',
-			}).select('id_presupuesto').single();
-			presupuestoId = newPres?.id_presupuesto ?? null;
-		}
-		if (!presupuestoId) return;
-
-		const { data: existing } = await supabase.from('presupuesto_detalle')
-			.select('id_presupuesto_detalle')
-			.eq('id_presupuesto', presupuestoId)
-			.eq('id_partida', idPartida)
-			.maybeSingle();
-
-		if (!existing) {
-			await supabase.from('presupuesto_detalle').insert({
-				id_presupuesto: presupuestoId,
-				id_partida: idPartida,
-				cantidad: 1,
-				precio_mo: 0,
-				precio_mat: 0,
-			});
-		}
-	}
-
-	// Walks p.id_partida_padre up the catalog and creates/reuses group
-	// activities (id_partida set, no dates — rollup-only, see
-	// ganttPlanning.service.ts) so the schedule's own hierarchy mirrors the
-	// partida catalog's hierarchy instead of a flat/ad hoc placement — this is
-	// the direct fix for "no mantienen la estructura anidada". If the user
-	// explicitly picked a parent activity (explicitParentId), that choice wins
-	// so a partida can still be nested under a custom phase grouping.
-	async function ensureAncestorChain(p: PartidaItem, explicitParentId: number | null): Promise<number | null> {
-		if (explicitParentId != null) return explicitParentId;
-		const chain: PartidaItem[] = [];
-		let currentParentId = p.id_partida_padre;
-		let guard = 0;
-		while (currentParentId != null && guard++ < 20) {
-			const anc = catalogAll.find(x => x.id_partida === currentParentId);
-			if (!anc) break;
-			chain.unshift(anc);
-			currentParentId = anc.id_partida_padre;
-		}
-		let parentActId: number | null = null;
-		for (const anc of chain) {
-			const existing = actividades.find(a => a.id_partida === anc.id_partida);
-			if (existing) {
-				parentActId = existing.id_cronograma_actividad;
-				continue;
-			}
-			const parentIdForInsert: number | null = parentActId;
-			const parentActRow: Actividad | undefined = parentIdForInsert ? actividades.find(a => a.id_cronograma_actividad === parentIdForInsert) : undefined;
-			const nivelNuevo: number = parentActRow ? parentActRow.nivel + 1 : 1;
-			const siblingsAnc: Actividad[] = actividades.filter(a => a.id_actividad_padre === parentIdForInsert);
-			const payload = {
-				id_proyecto: projectId,
-				nombre_actividad: anc.descripcion,
-				nivel: nivelNuevo,
-				id_actividad_padre: parentIdForInsert,
-				orden: siblingsAnc.length + 1,
-				porcentaje_avance_real: 0,
-				id_partida: anc.id_partida,
-			};
-			const insertRes = await supabase
-				.from('cronograma_actividad')
-				.insert(payload)
-				.select('*, partida:id_partida(codigo, descripcion, unidad)')
-				.single();
-			const nuevaAct = insertRes.data;
-			if (nuevaAct) {
-				const nuevaActTyped = nuevaAct as Actividad;
-				actividades = [...actividades, nuevaActTyped];
-				parentActId = nuevaActTyped.id_cronograma_actividad;
-			}
-			await syncPartidaToBudget(anc.id_partida);
-		}
-		return parentActId;
-	}
-
-	// ── ADD FROM PARTIDA (sidebar "+") ─────────────────────────────────────────
-	async function addFromPartida(p: PartidaItem, parentId: number | null = selectedId) {
-		const finalParentId = await ensureAncestorChain(p, parentId);
-		const siblings = actividades.filter(a => a.id_actividad_padre === finalParentId);
-		const parent   = finalParentId ? actividades.find(a => a.id_cronograma_actividad === finalParentId) : null;
-		const nivel    = parent ? parent.nivel + 1 : 1;
-		const { data } = await supabase.from('cronograma_actividad').insert({
-			id_proyecto: projectId,
-			nombre_actividad: p.descripcion,
-			nivel,
-			id_actividad_padre: finalParentId,
-			orden: siblings.length + 1,
-			porcentaje_avance_real: 0,
-			id_partida: p.id_partida,
-		}).select('*, partida:id_partida(codigo, descripcion, unidad)').single();
-		if (data) actividades = [...actividades, data as Actividad];
-		// Mirror to budget so user can set quantities/prices in Presupuesto tab
-		await syncPartidaToBudget(p.id_partida);
-	}
-
-	// ── APPLY PLANTILLA ────────────────────────────────────────────────────────
-	async function applyPlantilla(plant: Plantilla) {
-		if (!plant.actividades?.length) return;
-		const startDate = new Date(plantStartDate + 'T00:00:00');
-		const idMap = new Map<number, number>(); // template id → new cronograma_actividad id
-		const sorted = [...plant.actividades].sort((a, b) =>
-			a.lag_inicio_dias - b.lag_inicio_dias || a.orden - b.orden
-		);
-		for (const ta of sorted) {
-			const inicio    = addDays(startDate, ta.lag_inicio_dias);
-			const fin       = addDays(inicio, Math.max(ta.duracion_dias - 1, 0));
-			const parentAct = ta.id_actividad_padre_template ? idMap.get(ta.id_actividad_padre_template) ?? null : null;
-			const siblings  = actividades.filter(a => a.id_actividad_padre === parentAct);
-			const { data }  = await supabase.from('cronograma_actividad').insert({
-				id_proyecto: projectId,
-				nombre_actividad: ta.nombre_actividad,
-				nivel: ta.nivel,
-				id_actividad_padre: parentAct,
-				orden: actividades.length + siblings.length + 1,
-				porcentaje_avance_real: 0,
-				id_partida: ta.id_partida ?? null,
-				fecha_inicio_plan: fmt(inicio),
-				fecha_fin_plan: fmt(fin),
-			}).select('*, partida:id_partida(codigo, descripcion, unidad)').single();
-			if (data) {
-				actividades = [...actividades, data as Actividad];
-				idMap.set(ta.id_plantilla_actividad, (data as Actividad).id_cronograma_actividad);
-			}
-			if (ta.id_partida) await syncPartidaToBudget(ta.id_partida);
-		}
-		applyingPlantId = null;
-	}
-
-	function togglePartidaExp(id: number) {
-		const s = new Set(partidaExpIds);
-		s.has(id) ? s.delete(id) : s.add(id);
-		partidaExpIds = s;
 	}
 
 	// ── DELETE ─────────────────────────────────────────────────────────────────
@@ -640,13 +479,6 @@
 		</div>
 
 		{#if activeSection === 'gantt'}
-			<!-- Sidebar toggle -->
-			<button
-				class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors font-medium {showSidebar ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-slate-200 text-slate-500'}"
-				onclick={() => showSidebar = !showSidebar}
-				title="Mostrar/ocultar panel de partidas"
-			><i class="fas fa-layer-group text-[10px]"></i> Partidas</button>
-
 			<!-- Avance real toggle -->
 			<button
 				class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors font-medium {showAvanceReal ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-500'}"
@@ -854,123 +686,6 @@
 
 	<!-- ── GANTT SECTION ──────────────────────────────────────────────────── -->
 	{:else if activeSection === 'gantt'}
-		<!-- Two-column layout: partidas sidebar + gantt area -->
-		<div class="flex flex-1 min-h-0 overflow-hidden">
-
-		<!-- ════ PARTIDAS / PLANTILLAS SIDEBAR ════════════════════════════════ -->
-		{#if showSidebar}
-		<div class="flex flex-col border-r border-slate-200 bg-slate-50" style="width:240px;flex-shrink:0;min-width:200px">
-			<!-- Sidebar header -->
-			<div class="flex items-center border-b border-slate-200 bg-white">
-				<button
-					class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider transition-colors
-						{sidebarTab === 'partidas' ? 'text-orange-600 border-b-2 border-orange-500' : 'text-slate-400 hover:text-slate-600'}"
-					onclick={() => sidebarTab = 'partidas'}
-				>Partidas</button>
-				<button
-					class="flex-1 py-2 text-[11px] font-bold uppercase tracking-wider transition-colors
-						{sidebarTab === 'plantillas' ? 'text-orange-600 border-b-2 border-orange-500' : 'text-slate-400 hover:text-slate-600'}"
-					onclick={() => sidebarTab = 'plantillas'}
-				>Plantillas</button>
-				<button
-					class="px-2 py-2 text-slate-300 hover:text-slate-600"
-					onclick={() => showSidebar = false}
-					title="Ocultar panel"
-				><i class="fas fa-chevron-left text-xs"></i></button>
-			</div>
-
-			{#if sidebarTab === 'partidas'}
-				<!-- Search -->
-				<div class="px-2 py-2 border-b border-slate-100">
-					<div class="flex items-center gap-1.5 px-2 py-1.5 bg-white rounded-lg border border-slate-200">
-						<i class="fas fa-search text-slate-300 text-[10px]"></i>
-						<input
-							class="flex-1 text-xs bg-transparent outline-none placeholder-slate-300"
-							placeholder="Buscar partida…"
-							bind:value={buscarPartida}
-						/>
-						{#if buscarPartida}<button class="text-slate-300 hover:text-slate-500 text-[10px]" onclick={() => buscarPartida = ''}><i class="fas fa-times"></i></button>{/if}
-					</div>
-				</div>
-				<!-- Partida tree -->
-				<div class="flex-1 overflow-y-auto text-xs">
-					{#if partidas.length === 0}
-						<div class="px-3 py-6 text-center text-slate-400 text-[11px]">
-							<i class="fas fa-box-open text-xl mb-2 block text-slate-300"></i>
-							Sin partidas en el presupuesto.<br>Agrega partidas al presupuesto del proyecto primero.
-						</div>
-					{:else}
-						{#each partidaTree as node}
-							{@render PartidaNodeRow(node, 0)}
-						{/each}
-					{/if}
-				</div>
-				<div class="px-2 py-2 border-t border-slate-100 text-[10px] text-slate-400 text-center">
-					Presiona <strong>+</strong> para agregar al cronograma
-					{#if selectedId}(como sub-actividad de la seleccionada){/if}
-				</div>
-
-			{:else}
-				<!-- Plantillas tab -->
-				<div class="flex-1 overflow-y-auto p-2 space-y-2">
-					{#if plantillas.length === 0}
-						<div class="py-6 text-center text-slate-400 text-[11px]">
-							<i class="fas fa-layer-group text-xl mb-2 block text-slate-300"></i>
-							Sin plantillas disponibles.
-						</div>
-					{:else}
-						{#each plantillas as plant (plant.id_plantilla)}
-							<div class="bg-white rounded-lg border border-slate-200 p-2.5 text-xs">
-								<div class="font-bold text-slate-700 mb-0.5">{plant.nombre}</div>
-								{#if plant.descripcion}
-									<div class="text-slate-400 text-[10px] mb-1.5">{plant.descripcion}</div>
-								{/if}
-								<div class="text-slate-400 text-[10px] mb-2">
-									{plant.actividades?.length ?? 0} actividades
-									{#if plant.categoria}· <span class="text-orange-500">{plant.categoria}</span>{/if}
-								</div>
-
-								{#if applyingPlantId === plant.id_plantilla}
-									<div class="flex gap-1 items-center mt-1">
-										<input
-											type="date"
-											class="flex-1 px-1.5 py-1 border border-slate-200 rounded text-[10px] bg-white focus:outline-none focus:ring-1 focus:ring-orange-300"
-											bind:value={plantStartDate}
-										/>
-										<button
-											class="px-2 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded text-[10px] font-bold transition-colors whitespace-nowrap"
-											onclick={() => applyPlantilla(plant)}
-										>Aplicar</button>
-										<button
-											class="px-1.5 py-1 text-slate-400 hover:text-slate-600 text-[10px]"
-											onclick={() => applyingPlantId = null}
-										><i class="fas fa-times"></i></button>
-									</div>
-								{:else}
-									<button
-										class="w-full py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-600 border border-orange-200 rounded text-[10px] font-bold transition-colors"
-										onclick={() => applyingPlantId = plant.id_plantilla}
-									><i class="fas fa-magic mr-1"></i>Aplicar plantilla</button>
-								{/if}
-							</div>
-						{/each}
-					{/if}
-				</div>
-			{/if}
-		</div>
-		{:else}
-			<!-- Collapsed sidebar: show toggle button -->
-			<div class="flex flex-col items-center py-3 border-r border-slate-200 bg-slate-50" style="width:28px;flex-shrink:0">
-				<button
-					class="text-slate-400 hover:text-orange-500 transition-colors"
-					onclick={() => showSidebar = true}
-					title="Mostrar partidas"
-				><i class="fas fa-layer-group text-xs"></i></button>
-				<div class="mt-2 text-slate-300 text-[9px] font-bold uppercase tracking-widest" style="writing-mode:vertical-rl;transform:rotate(180deg)">Partidas</div>
-			</div>
-		{/if}
-
-		<!-- ════ GANTT MAIN AREA (svelte-gantt) ═══════════════════════════════ -->
 		<div class="flex-1 flex flex-col min-w-0 min-h-0">
 
 		{#if actividades.length === 0 && !showAddForm}
@@ -980,12 +695,12 @@
 				</div>
 				<h4 class="font-bold text-slate-700 mb-1">Sin actividades aún</h4>
 				<p class="text-slate-400 text-sm mb-4">
-					Agrega partidas desde el panel izquierdo o crea actividades manualmente
+					Agrega partidas en el tab <strong>Presupuesto / Partidas</strong> — aparecerán aquí automáticamente, o crea una actividad manual.
 				</p>
 				<button
 					class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-semibold transition-colors"
 					onclick={() => { addingParentId = null; showAddForm = true; }}
-				><i class="fas fa-plus mr-2"></i>Agregar primera actividad</button>
+				><i class="fas fa-plus mr-2"></i>Agregar actividad manual</button>
 			</div>
 		{:else}
 			<div class="flex-1 min-h-0">
@@ -1037,7 +752,6 @@
 		{/if}
 
 		</div><!-- /gantt main area -->
-		</div><!-- /two-column layout -->
 
 	<!-- ── RESTRICCIONES SECTION ──────────────────────────────────────────── -->
 	{:else}
@@ -1185,58 +899,4 @@
 		</div>
 	{/if}
 </div>
-
-<!-- ── PARTIDA NODE SNIPPET (recursive tree) ─────────────────────────────── -->
-{#snippet PartidaNodeRow(node: PartidaNode, depth: number)}
-	{@const hasKids = node.children.length > 0}
-	{@const expanded = partidaExpIds.has(node.id_partida)}
-	{@const alreadyInGantt = actividades.some(a => a.id_partida === node.id_partida)}
-	<div
-		class="flex items-center gap-1 border-b border-slate-100 hover:bg-white group/pn select-none"
-		style="padding-left:{8 + depth * 10}px;padding-right:4px;min-height:32px"
-		role="treeitem"
-		tabindex="0"
-	>
-		<!-- Expand toggle for parent nodes -->
-		{#if hasKids}
-			<button
-				class="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700 shrink-0"
-				onclick={() => togglePartidaExp(node.id_partida)}
-			><i class="fas fa-chevron-{expanded ? 'down' : 'right'} text-[8px]"></i></button>
-		{:else}
-			<div class="w-4 shrink-0"></div>
-		{/if}
-
-		<!-- Content -->
-		<div class="flex-1 min-w-0 py-1">
-			{#if node.codigo}
-				<div class="text-[9px] font-mono text-orange-500 font-bold leading-none">{node.codigo}</div>
-			{/if}
-			<div class="text-[10px] text-slate-600 truncate leading-tight">{node.descripcion}</div>
-			{#if node.unidad}
-				<div class="text-[9px] text-slate-300">{node.unidad}</div>
-			{/if}
-		</div>
-
-		<!-- Add button -->
-		{#if !hasKids}
-			<button
-				class="w-6 h-6 rounded flex items-center justify-center text-slate-300
-					{alreadyInGantt ? 'text-emerald-400 hover:text-emerald-600' : 'hover:text-orange-500 hover:bg-orange-50'}
-					opacity-0 group-hover/pn:opacity-100 transition-opacity shrink-0"
-				title={alreadyInGantt ? 'Ya está en el cronograma — agregar otra instancia' : 'Agregar al cronograma'}
-				onclick={() => addFromPartida(node)}
-			>
-				<i class="fas {alreadyInGantt ? 'fa-plus-circle' : 'fa-plus'} text-[10px]"></i>
-			</button>
-		{/if}
-	</div>
-
-	<!-- Children (recursive) -->
-	{#if hasKids && expanded}
-		{#each node.children as child}
-			{@render PartidaNodeRow(child, depth + 1)}
-		{/each}
-	{/if}
-{/snippet}
 
