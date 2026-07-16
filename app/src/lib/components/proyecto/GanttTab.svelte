@@ -6,7 +6,9 @@
 		diffDraft,
 		commitDraft,
 		computeBlockShift,
-		checkBlockShiftDependencyWarnings,
+		resolveConstraints,
+		computeRollup,
+		type ConstraintEdge,
 	} from '$lib/modules/gantt-planning/services/ganttPlanning.service';
 
 	const { projectId, proyecto } = $props<{
@@ -66,6 +68,10 @@
 		tipo_restriccion: string | null;
 		descripcion: string | null;
 		id_cronograma_actividad: number | null;
+		/** Actividad cuyo fin (evento de fin) satisface esta restricción — la
+		 * "condición de inicio" de id_cronograma_actividad. Null = restricción
+		 * externa/manual, no ligada a otra actividad del cronograma. */
+		id_actividad_origen: number | null;
 		created_at: string;
 	};
 
@@ -79,6 +85,10 @@
 	let showDeps        = $state(true);
 	let tolerancia      = $state(0);
 	let activeSection   = $state<'gantt' | 'restricciones'>('gantt');
+	// Plegar el toolbar del Gantt para ver más área del cronograma — solo
+	// "Guardar cambios"/"Descartar" (cuando hay cambios sin guardar) quedan
+	// siempre visibles, el resto de controles se ocultan.
+	let toolbarCollapsed = $state(false);
 
 	let selectedId   = $state<number | null>(null);
 
@@ -99,11 +109,19 @@
 		{ actividad: '', responsable: '', fecha: '', tipo: '', descripcion: '', idActividad: null }
 	);
 
+	// Alta rápida de restricción — se abre con el icono ⚑ al pasar el cursor
+	// sobre una barra en GanttTimeline, ya vinculada a esa actividad sin tener
+	// que ir a la sección "Restricciones" y llenar el formulario completo.
+	let quickR = $state<{ idActividad: number; nombre: string; idOrigen: number | null; nombreOrigen: string | null; clientX: number; clientY: number; fecha: string; tipo: string; descripcion: string } | null>(null);
+
 	// Local draft of pending schedule edits (drag/resize/block-move), keyed by
 	// actividad id. Nothing here touches Supabase until "Guardar cambios" —
 	// see ganttPlanning.service.ts's reconstruction checklist item 9.
 	let draftDates = $state(new Map<number, { inicio: string; fin: string }>());
-	let draftWarnings = $state<string[]>([]);
+	// Set only when resolveConstraints finds an unsolvable cycle — replaces the
+	// old advisory-only draftWarnings (removed): the solver is now a hard
+	// constraint engine, so the only "warning" left is a full rejection.
+	let draftConflict = $state<string | null>(null);
 
 	// Full, unscoped partida catalog — used only to repair a legacy
 	// presupuesto_detalle that's missing an ancestor group (see
@@ -158,6 +176,33 @@
 		return m;
 	});
 
+	// Restricciones que además funcionan como "wait condition" ligada al fin de
+	// otra actividad (id_actividad_origen) — se dibujan como conectores en el
+	// Gantt, distintos de una dependencia normal (ver GanttTimeline).
+	const restriccionLinks = $derived.by(() => {
+		const links: { idOrigen: number; idDestino: number }[] = [];
+		for (const r of restricciones) {
+			if (r.estado === 'resuelta' || !r.id_actividad_origen || !r.id_cronograma_actividad) continue;
+			links.push({ idOrigen: r.id_actividad_origen, idDestino: r.id_cronograma_actividad });
+		}
+		return links;
+	});
+
+	// Unified constraint graph fed to resolveConstraints: every FS dependency
+	// plus every connected restricción (implicit lag 0), see
+	// ganttPlanning.service.ts checklist item 8.
+	const constraintEdges = $derived.by((): ConstraintEdge[] => {
+		const edges: ConstraintEdge[] = [];
+		for (const d of dependencias) {
+			if (d.tipo_dependencia !== 'FS') continue;
+			edges.push({ origenId: d.id_actividad_origen, destinoId: d.id_actividad_destino, lagDias: d.lag_dias, kind: 'dependencia' });
+		}
+		for (const r of restriccionLinks) {
+			edges.push({ origenId: r.idOrigen, destinoId: r.idDestino, lagDias: 0, kind: 'restriccion' });
+		}
+		return edges;
+	});
+
 	// ── SCHEDULE DRAFT (local-only until "Guardar cambios") ────────────────────
 	// GanttTimeline renders `draftActividades`, never `actividades` directly,
 	// so every drag/resize/block-move is visible immediately but nothing hits
@@ -171,18 +216,50 @@
 	});
 	const hasDraftChanges = $derived(draftDates.size > 0);
 
+	// Fechas "efectivas" por actividad, iguales a lo que GanttTimeline realmente
+	// dibuja: para una actividad con hijos (grupo), NO son fecha_inicio_plan/
+	// fecha_fin_plan propias (esas quedan vacías/vestigiales, ver
+	// ganttPlanning.service.ts) sino el rollup calculado de sus descendientes.
+	// El panel "Inicio/Fin/Duración" del toolbar leía directo de la actividad
+	// y por eso mostraba vacío/duración 1 al seleccionar una barra padre que
+	// en el Gantt sí se ve con fechas — este rollup es lo que lo sincroniza.
+	const draftRollup = $derived(computeRollup(buildTree(draftActividades, 'id_cronograma_actividad', 'id_actividad_padre')));
+
+	// Runs the hard constraint solver seeded from a proposed change and applies
+	// its FULL result (every downstream activity it moved, not just the one the
+	// user touched) into draftDates. On an unsolvable cycle, rejects the whole
+	// change — draftDates is left untouched — and surfaces draftConflict.
+	function applyResolution(seed: Map<number, { inicio: string; fin: string }>) {
+		const res = resolveConstraints(draftActividades, constraintEdges, seed);
+		if (!res.ok) {
+			draftConflict = res.message;
+			return;
+		}
+		draftConflict = null;
+		const next = new Map(draftDates);
+		for (const [id, dates] of res.shifted) next.set(id, dates);
+		draftDates = next;
+	}
+
 	function handleLeafChange(id: number, inicio: string, fin: string) {
 		if (new Date(fin) < new Date(inicio)) return; // ignore invalid ranges
-		draftDates = new Map(draftDates).set(id, { inicio, fin });
+		applyResolution(new Map([[id, { inicio, fin }]]));
 	}
 
 	function handleBlockMove(rootId: number, deltaDays: number) {
 		const shift = computeBlockShift(draftActividades, rootId, deltaDays);
 		if (shift.size === 0) return;
-		draftWarnings = checkBlockShiftDependencyWarnings(draftActividades, dependencias, shift);
-		const next = new Map(draftDates);
-		for (const [id, dates] of shift) next.set(id, dates);
-		draftDates = next;
+		applyResolution(shift);
+	}
+
+	// After a dependency/restricción edge is written (immediate-write, see
+	// checklist item 10), pushes the cascade it now implies into draftDates —
+	// origenId itself stays fixed (it's the anchor resolveConstraints defaults
+	// to), only what depends on it moves.
+	function cascadeFromOrigen(origenId: number) {
+		const eff = draftRollup.get(origenId);
+		if (!eff?.inicio || !eff?.fin) return;
+		applyResolution(new Map([[origenId, { inicio: eff.inicio, fin: eff.fin }]]));
 	}
 
 	async function guardarCambios() {
@@ -192,7 +269,7 @@
 		if (res.ok) {
 			actividades = draftActividades;
 			draftDates = new Map();
-			draftWarnings = [];
+			draftConflict = null;
 		} else {
 			alert('No se pudieron guardar los cambios: ' + res.error);
 		}
@@ -200,7 +277,7 @@
 
 	function descartarCambios() {
 		draftDates = new Map();
-		draftWarnings = [];
+		draftConflict = null;
 	}
 
 	// ── DATE UTILS ─────────────────────────────────────────────────────────────
@@ -240,7 +317,33 @@
 
 		await loadPartidas();
 		await syncActividadesFromPresupuesto();
+		validateProjectOnLoad();
 		isLoading = false;
+	}
+
+	// Resolves the ENTIRE constraint graph on load, per explicit user decision:
+	// a pre-existing violation (e.g. edited outside the app, or from data that
+	// predates the solver) must surface immediately as a reviewable draft
+	// correction — not only forward from the next edit the user happens to make.
+	// Every dated activity with incoming edges is always re-derived regardless
+	// of being seeded here (see resolveConstraints), so this naturally corrects
+	// anything already out of alignment.
+	function validateProjectOnLoad() {
+		const seed = new Map<number, { inicio: string; fin: string }>();
+		for (const a of actividades) {
+			if (a.fecha_inicio_plan && a.fecha_fin_plan) {
+				seed.set(a.id_cronograma_actividad, { inicio: a.fecha_inicio_plan, fin: a.fecha_fin_plan });
+			}
+		}
+		if (seed.size === 0) return;
+		const res = resolveConstraints(actividades, constraintEdges, seed);
+		if (!res.ok) {
+			draftConflict = res.message;
+			return;
+		}
+		if (res.shifted.size > 0) {
+			draftDates = new Map(res.shifted);
+		}
 	}
 
 	async function loadPartidas() {
@@ -336,15 +439,32 @@
 		return fmt(addDays(new Date(inicioStr + 'T00:00:00'), Math.max(dias, 1) - 1));
 	}
 
-	// ── DEPENDENCY CREATION (via dropdown, replaces old drag-to-link) ─────────
-	async function createDep(srcId: number, dstId: number) {
+	// ── DEPENDENCY CREATION/EDIT/DELETE — vía el dropdown "Depende de…" del
+	//    toolbar (lag 0) o arrastrando desde el handle circular del borde de
+	//    una barra en GanttTimeline (con offset editable en un popover). ─────
+	async function createDep(srcId: number, dstId: number, lagDias = 0) {
 		if (srcId === dstId) return;
 		const exists = dependencias.some(d => d.id_actividad_origen === srcId && d.id_actividad_destino === dstId);
 		if (exists) return;
 		const { data } = await supabase.from('cronograma_dependencia')
-			.insert({ id_actividad_origen: srcId, id_actividad_destino: dstId, tipo_dependencia: 'FS', lag_dias: 0 })
+			.insert({ id_actividad_origen: srcId, id_actividad_destino: dstId, tipo_dependencia: 'FS', lag_dias: lagDias })
 			.select().single();
-		if (data) dependencias = [...dependencias, data as Dependencia];
+		if (data) {
+			dependencias = [...dependencias, data as Dependencia];
+			cascadeFromOrigen(srcId);
+		}
+	}
+
+	async function editDepLag(depId: number, lagDias: number) {
+		await supabase.from('cronograma_dependencia').update({ lag_dias: lagDias }).eq('id_dependencia', depId);
+		const dep = dependencias.find(d => d.id_dependencia === depId);
+		dependencias = dependencias.map(d => d.id_dependencia === depId ? { ...d, lag_dias: lagDias } : d);
+		if (dep) cascadeFromOrigen(dep.id_actividad_origen);
+	}
+
+	async function deleteDep(depId: number) {
+		await supabase.from('cronograma_dependencia').delete().eq('id_dependencia', depId);
+		dependencias = dependencias.filter(d => d.id_dependencia !== depId);
 	}
 
 	// ── ADD ACTIVITY ───────────────────────────────────────────────────────────
@@ -426,6 +546,41 @@
 		showRestrictForm = false;
 	}
 
+	// idOrigen: si viene de arrastrar el icono ⚑ de una barra hasta otra (en
+	// vez de un simple clic), esa barra de origen queda como "evento de fin"
+	// que resuelve la condición de inicio de idActividad.
+	function abrirQuickRestriccion(idActividad: number, clientX: number, clientY: number, idOrigen: number | null = null) {
+		const act = actividades.find(a => a.id_cronograma_actividad === idActividad);
+		const origenAct = idOrigen ? actividades.find(a => a.id_cronograma_actividad === idOrigen) : null;
+		quickR = {
+			idActividad,
+			nombre: act?.nombre_actividad ?? '',
+			idOrigen,
+			nombreOrigen: origenAct?.nombre_actividad ?? null,
+			clientX, clientY,
+			fecha: '', tipo: '', descripcion: '',
+		};
+	}
+
+	async function guardarQuickRestriccion() {
+		if (!quickR || !quickR.fecha) return;
+		const { data } = await supabase.from('restriccion').insert({
+			id_proyecto: projectId,
+			actividad_relacionada: quickR.nombre,
+			fecha_maxima: quickR.fecha,
+			tipo_restriccion: quickR.tipo || null,
+			descripcion: quickR.descripcion || null,
+			id_cronograma_actividad: quickR.idActividad,
+			id_actividad_origen: quickR.idOrigen,
+			estado: 'abierta',
+		}).select().single();
+		if (data) {
+			restricciones = [data as Restriccion, ...restricciones];
+			if (quickR.idOrigen) cascadeFromOrigen(quickR.idOrigen);
+		}
+		quickR = null;
+	}
+
 	// Jump to the gantt and select the actividad linked to a restricción
 	function verEnGantt(id: number) {
 		activeSection = 'gantt';
@@ -479,6 +634,14 @@
 		</div>
 
 		{#if activeSection === 'gantt'}
+			<!-- Collapse toggle: oculta el resto del toolbar para ver el Gantt más grande -->
+			<button
+				class="flex items-center justify-center w-7 h-7 rounded-lg border transition-colors {toolbarCollapsed ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}"
+				onclick={() => toolbarCollapsed = !toolbarCollapsed}
+				title={toolbarCollapsed ? 'Mostrar controles' : 'Ocultar controles (más espacio para el Gantt)'}
+			><i class="fas fa-chevron-{toolbarCollapsed ? 'down' : 'up'} text-[10px]"></i></button>
+
+		{#if !toolbarCollapsed}
 			<!-- Avance real toggle -->
 			<button
 				class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors font-medium {showAvanceReal ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-500'}"
@@ -529,6 +692,10 @@
 			<!-- Selected activity actions + manual date/duration editing -->
 			{#if selectedId}
 				{@const selAct = draftActividades.find(a => a.id_cronograma_actividad === selectedId)}
+				{@const selIsGroup = draftActividades.some(a => a.id_actividad_padre === selectedId)}
+				{@const selRollup = draftRollup.get(selectedId)}
+				{@const selInicio = selIsGroup ? (selRollup?.inicio ?? null) : (selAct?.fecha_inicio_plan ?? null)}
+				{@const selFin = selIsGroup ? (selRollup?.fin ?? null) : (selAct?.fecha_fin_plan ?? null)}
 				<div class="flex items-center gap-1.5 ml-1 px-2 py-1 bg-white border border-slate-200 rounded-lg flex-wrap">
 					<button
 						class="w-5 h-5 flex items-center justify-center rounded text-slate-300 hover:text-blue-500 hover:bg-blue-50"
@@ -543,39 +710,45 @@
 
 					<span class="text-slate-300">|</span>
 
-					<!-- Manual fecha inicio/fin + duración — same draft path as gantt drag/resize -->
-					<span class="text-slate-400">Inicio:</span>
-					<input
-						type="date"
-						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
-						value={selAct?.fecha_inicio_plan ?? ''}
-						onchange={(e) => {
-							const v = (e.target as HTMLInputElement).value;
-							if (selectedId && v) setFechasManual(selectedId, v, selAct?.fecha_fin_plan && selAct.fecha_fin_plan >= v ? selAct.fecha_fin_plan : v);
-						}}
-					/>
-					<span class="text-slate-400">Fin:</span>
-					<input
-						type="date"
-						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
-						value={selAct?.fecha_fin_plan ?? ''}
-						onchange={(e) => {
-							const v = (e.target as HTMLInputElement).value;
-							if (selectedId && v) setFechasManual(selectedId, selAct?.fecha_inicio_plan && selAct.fecha_inicio_plan <= v ? selAct.fecha_inicio_plan : v, v);
-						}}
-					/>
-					<span class="text-slate-400">Duración (d):</span>
-					<input
-						type="number"
-						min="1"
-						class="w-14 border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
-						value={duracionDias(selAct?.fecha_inicio_plan, selAct?.fecha_fin_plan)}
-						onchange={(e) => {
-							const dias = Number((e.target as HTMLInputElement).value);
-							const inicio = selAct?.fecha_inicio_plan ?? fmt(new Date());
-							if (selectedId && dias > 0) setFechasManual(selectedId, inicio, finFromDuracion(inicio, dias));
-						}}
-					/>
+					{#if selIsGroup}
+						<span class="text-slate-400" title="Es una actividad grupo — sus fechas se calculan de sus hijos, arrastra el bloque en el Gantt para moverlas">
+							<i class="fas fa-layer-group text-[9px] mr-1"></i>{fmtDisp(selInicio)} → {fmtDisp(selFin)} (calculado)
+						</span>
+					{:else}
+						<!-- Manual fecha inicio/fin + duración — same draft path as gantt drag/resize -->
+						<span class="text-slate-400">Inicio:</span>
+						<input
+							type="date"
+							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							value={selInicio ?? ''}
+							onchange={(e) => {
+								const v = (e.target as HTMLInputElement).value;
+								if (selectedId && v) setFechasManual(selectedId, v, selFin && selFin >= v ? selFin : v);
+							}}
+						/>
+						<span class="text-slate-400">Fin:</span>
+						<input
+							type="date"
+							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							value={selFin ?? ''}
+							onchange={(e) => {
+								const v = (e.target as HTMLInputElement).value;
+								if (selectedId && v) setFechasManual(selectedId, selInicio && selInicio <= v ? selInicio : v, v);
+							}}
+						/>
+						<span class="text-slate-400">Duración (d):</span>
+						<input
+							type="number"
+							min="1"
+							class="w-14 border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							value={duracionDias(selInicio, selFin)}
+							onchange={(e) => {
+								const dias = Number((e.target as HTMLInputElement).value);
+								const inicio = selInicio ?? fmt(new Date());
+								if (selectedId && dias > 0) setFechasManual(selectedId, inicio, finFromDuracion(inicio, dias));
+							}}
+						/>
+					{/if}
 
 					<span class="text-slate-300">|</span>
 
@@ -595,10 +768,12 @@
 					<button class="text-slate-300 hover:text-slate-500" onclick={() => selectedId = null}><i class="fas fa-times text-[10px]"></i></button>
 				</div>
 			{/if}
+		{/if}
 
 			<div class="flex-1"></div>
 
-			<!-- Draft save/discard — nothing above hits Supabase until "Guardar cambios" -->
+			<!-- Draft save/discard — nothing above hits Supabase until "Guardar cambios";
+			     siempre visible aunque el resto del toolbar esté plegado. -->
 			{#if hasDraftChanges}
 				<span class="flex items-center gap-1 text-amber-600 font-semibold">
 					<i class="fas fa-circle text-[6px]"></i> Cambios sin guardar
@@ -613,6 +788,7 @@
 				><i class="fas fa-check text-xs"></i> Guardar cambios</button>
 			{/if}
 
+		{#if !toolbarCollapsed}
 			<!-- Plan base date -->
 			{#if planBaseDate}
 				<span class="text-slate-400 flex items-center gap-1">
@@ -637,6 +813,7 @@
 			>
 				<i class="fas fa-plus text-xs"></i> Actividad
 			</button>
+		{/if}
 		{:else}
 			<div class="flex-1"></div>
 			<button
@@ -648,12 +825,18 @@
 		{/if}
 	</div>
 
-	<!-- ── BLOCK-MOVE DEPENDENCY WARNINGS (advisory only, never blocks) ────── -->
-	{#if draftWarnings.length > 0}
-		<div class="px-4 py-2 bg-amber-50 border-b border-amber-100 text-xs text-amber-700 space-y-0.5">
-			{#each draftWarnings as w}
-				<div><i class="fas fa-triangle-exclamation mr-1"></i>{w}</div>
-			{/each}
+	<!-- ── CONSTRAINT CONFLICT (hard solver found an unsolvable cycle) ─────── -->
+	{#if draftConflict}
+		<div class="flex items-center gap-2 px-4 py-2 bg-rose-50 border-b border-rose-200 text-xs text-rose-700">
+			<i class="fas fa-circle-exclamation"></i>
+			<span class="flex-1">{draftConflict}</span>
+			<button
+				class="px-2 py-1 bg-white border border-rose-200 rounded-lg text-rose-600 hover:bg-rose-100 font-medium transition-colors"
+				onclick={() => activeSection = 'restricciones'}
+			>Ver restricciones</button>
+			<button class="text-rose-400 hover:text-rose-600 px-1" onclick={() => draftConflict = null}>
+				<i class="fas fa-xmark"></i>
+			</button>
 		</div>
 	{/if}
 
@@ -708,6 +891,7 @@
 					actividades={draftActividades}
 					{dependencias}
 					{restriccionesAbiertasPorActividad}
+					restrictionLinks={restriccionLinks}
 					{timelineStart}
 					{timelineEnd}
 					{showAvanceReal}
@@ -716,11 +900,15 @@
 					bind:selectedId
 					onLeafChange={handleLeafChange}
 					onBlockMove={handleBlockMove}
+					onQuickRestriction={abrirQuickRestriccion}
+					onCreateDependency={createDep}
+					onEditDependencyLag={editDepLag}
+					onDeleteDependency={deleteDep}
 				/>
 			</div>
 			<p class="px-4 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
 				<i class="fas fa-info-circle mr-1"></i>
-				Actividades sin fecha aparecen con un recuadro punteado — arrastra sobre su fila para definir inicio y fin, o usa "Seleccionar actividad" arriba para ponerle fechas manualmente. Arrastra una barra existente para moverla o desde sus bordes para redimensionarla; arrastra una barra con hijos (grupo) para mover todo el bloque. Nada se guarda hasta pulsar "Guardar cambios".
+				Actividades sin fecha aparecen con un recuadro punteado — arrastra sobre su fila para definir inicio y fin, o usa "Seleccionar actividad" arriba para ponerle fechas manualmente. Arrastra una barra existente para moverla o desde sus bordes para redimensionarla; arrastra una barra con hijos (grupo) para mover todo el bloque. Pasa el cursor sobre una barra para ver el punto de conexión del borde derecho: clic = restricción rápida; arrastra hasta otra barra (se resalta en verde) para elegir dependencia o restricción entre ambas. Nada se guarda hasta pulsar "Guardar cambios".
 			</p>
 		{/if}
 
@@ -899,4 +1087,49 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Popover de alta rápida de restricción (icono ⚑ al pasar el cursor sobre una barra) -->
+{#if quickR}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 z-40" onclick={() => quickR = null}></div>
+	<div
+		class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3.5 w-64"
+		style="left:{Math.min(quickR.clientX, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 272)}px;top:{quickR.clientY + 12}px"
+	>
+		<p class="text-xs font-bold text-slate-700 mb-0.5"><i class="fas fa-flag mr-1 text-orange-500"></i>Restricción rápida</p>
+		<p class="text-[10px] text-slate-400 {quickR.nombreOrigen ? 'mb-1' : 'mb-2.5'} truncate">{quickR.nombre}</p>
+		{#if quickR.nombreOrigen}
+			<p class="text-[10px] text-amber-600 mb-2.5 flex items-center gap-1">
+				<i class="fas fa-link"></i> Se resuelve cuando termine: <strong class="truncate">{quickR.nombreOrigen}</strong>
+			</p>
+		{/if}
+		<div class="space-y-2">
+			<div>
+				<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Fecha Máxima *</label>
+				<input type="date" class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" bind:value={quickR.fecha} autofocus />
+			</div>
+			<div>
+				<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Tipo</label>
+				<select class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" bind:value={quickR.tipo}>
+					<option value="">Sin clasificar</option>
+					<option value="Diseño">Diseño / Ingeniería</option>
+					<option value="Materiales">Materiales</option>
+					<option value="Equipos">Equipos</option>
+					<option value="Mano de Obra">Mano de Obra</option>
+					<option value="Permisos">Permisos / Legal</option>
+					<option value="Financiero">Financiero</option>
+					<option value="Externo">Externo</option>
+				</select>
+			</div>
+			<div>
+				<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Descripción</label>
+				<input class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" placeholder="Qué se necesita hacer…" bind:value={quickR.descripcion} />
+			</div>
+		</div>
+		<div class="flex gap-1.5 mt-3">
+			<button class="flex-1 px-2 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50" disabled={!quickR.fecha} onclick={guardarQuickRestriccion}>Guardar</button>
+			<button class="px-2 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors" onclick={() => quickR = null}>Cancelar</button>
+		</div>
+	</div>
+{/if}
 

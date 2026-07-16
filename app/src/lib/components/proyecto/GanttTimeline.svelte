@@ -22,6 +22,7 @@
 		actividades,
 		dependencias,
 		restriccionesAbiertasPorActividad,
+		restrictionLinks = [],
 		timelineStart,
 		timelineEnd,
 		showAvanceReal = true,
@@ -31,10 +32,17 @@
 		onLeafChange,
 		onBlockMove,
 		onWarning,
+		onQuickRestriction,
+		onCreateDependency,
+		onEditDependencyLag,
+		onDeleteDependency,
 	}: {
 		actividades: TimelineActividad[];
 		dependencias: PlanningDependencia[];
 		restriccionesAbiertasPorActividad: Map<number, any[]>;
+		/** Restricciones que además son wait-condition de otra actividad (ver
+		 * GanttTab) — se dibujan como conectores ámbar entre las dos barras. */
+		restrictionLinks?: { idOrigen: number; idDestino: number }[];
 		timelineStart: Date;
 		timelineEnd: Date;
 		showAvanceReal?: boolean;
@@ -44,6 +52,14 @@
 		onLeafChange: (id: number, inicio: string, fin: string) => void;
 		onBlockMove: (rootId: number, deltaDays: number) => void;
 		onWarning?: (messages: string[]) => void;
+		/** Clic en el icono ⚑ (sin arrastrar) — alta rápida de una restricción
+		 * externa/manual sobre esa actividad. Si viene de arrastrar el icono
+		 * hasta otra barra, `origenId` es la actividad cuyo fin la resuelve. */
+		onQuickRestriction?: (activityId: number, clientX: number, clientY: number, origenId?: number | null) => void;
+		/** Arrastraste desde el handle circular del borde derecho de una barra hasta otra — el offset se confirma en un popover antes de crear la dependencia. */
+		onCreateDependency?: (srcId: number, dstId: number, lagDias: number) => void;
+		onEditDependencyLag?: (depId: number, lagDias: number) => void;
+		onDeleteDependency?: (depId: number) => void;
 	} = $props();
 
 	const DAY_MS = 864e5;
@@ -89,6 +105,15 @@
 		if (!canvasEl) return 0;
 		return clientX - canvasEl.getBoundingClientRect().left;
 	}
+	function clientYToCanvasY(clientY: number): number {
+		if (!canvasEl) return 0;
+		return clientY - canvasEl.getBoundingClientRect().top;
+	}
+
+	// Barra bajo el cursor — controla la aparición del icono de restricción y
+	// el handle de dependencia (solo se muestran al pasar el mouse, para no
+	// saturar la grilla con controles todo el tiempo).
+	let hoveredId = $state<number | null>(null);
 
 	let tree = $derived(buildTree(actividades, 'id_cronograma_actividad', 'id_actividad_padre'));
 	let rollup = $derived(computeRollup(tree));
@@ -157,11 +182,12 @@
 		return new Date(bar.fin) < today && bar.avance < 100 - tolerancia;
 	}
 
-	// ── DEPENDENCY ARROWS (render-only — creation stays on the existing
-	//    "Depende de…" dropdown in GanttTab, see plan) ─────────────────────
+	// ── DEPENDENCY ARROWS — rendered from `dependencias`; creation also
+	//    happens via drag-and-drop from a bar's connection point (see
+	//    connectDrag below), in addition to the toolbar dropdown in GanttTab. ──
 	let depLines = $derived.by(() => {
-		if (!showDeps) return [] as { id: number; d: string }[];
-		const lines: { id: number; d: string }[] = [];
+		if (!showDeps) return [] as { id: number; d: string; midX: number; midY: number; lag: number; dep: PlanningDependencia }[];
+		const lines: { id: number; d: string; midX: number; midY: number; lag: number; dep: PlanningDependencia }[] = [];
 		for (const dep of dependencias) {
 			const oi = rowIndexById.get(dep.id_actividad_origen);
 			const di = rowIndexById.get(dep.id_actividad_destino);
@@ -175,7 +201,30 @@
 			const y2 = HEADER_H + di * ROW_H + ROW_H / 2;
 			const midX = x1 + Math.max(10, (x2 - x1) / 2);
 			const path = `M ${x1},${y1} H ${midX} V ${y2} H ${x2}`;
-			lines.push({ id: dep.id_dependencia ?? oi * 100000 + di, d: path });
+			lines.push({ id: dep.id_dependencia ?? oi * 100000 + di, d: path, midX, midY: (y1 + y2) / 2, lag: dep.lag_dias, dep });
+		}
+		return lines;
+	});
+
+	// ── RESTRICTION LINKS — conectores ámbar entre una actividad y la que
+	//    resuelve su condición de inicio (ver restrictionLinks arriba). Sin
+	//    badge de offset: las restricciones no tienen lag_dias, se editan
+	//    desde la sección "Restricciones" del tab. ──────────────────────────
+	let restrictionLines = $derived.by(() => {
+		const lines: { id: string; d: string }[] = [];
+		for (const link of restrictionLinks) {
+			const oi = rowIndexById.get(link.idOrigen);
+			const di = rowIndexById.get(link.idDestino);
+			if (oi === undefined || di === undefined) continue;
+			const oRow = flatRows[oi];
+			const dRow = flatRows[di];
+			if (!oRow.bar || !dRow.bar) continue;
+			const x1 = dateToX(oRow.bar.fin) + pixelsPerDay;
+			const y1 = HEADER_H + oi * ROW_H + ROW_H / 2;
+			const x2 = dateToX(dRow.bar.inicio);
+			const y2 = HEADER_H + di * ROW_H + ROW_H / 2;
+			const midX = x1 + Math.max(10, (x2 - x1) / 2);
+			lines.push({ id: `${link.idOrigen}-${link.idDestino}`, d: `M ${x1},${y1} H ${midX} V ${y2} H ${x2}` });
 		}
 		return lines;
 	});
@@ -269,6 +318,110 @@
 		else fin = addDaysISO(origFin, deltaDays);
 		if (new Date(fin) < new Date(inicio)) return; // ignore invalid ranges, matches setFechas guard
 		onLeafChange(id, inicio, fin);
+	}
+
+	// ── CONNECT (estilo draw.io): un único punto de conexión por barra.
+	//    Clic (sin mover) = restricción externa sobre esa misma barra.
+	//    Arrastrar hasta OTRA barra = mientras arrastras, la barra bajo el
+	//    cursor se resalta (hoverTargetId) y al soltar se pregunta qué crear
+	//    (dependencia o restricción) — ver connectChooser más abajo. ─────────
+	type ConnectDragState = {
+		srcId: number;
+		pointerId: number;
+		startClientX: number;
+		startClientY: number;
+		x: number;
+		y: number;
+		moved: boolean;
+		hoverTargetId: number | null;
+	};
+	let connectDrag = $state<ConnectDragState | null>(null);
+
+	type ConnectChooserState = { srcId: number; dstId: number; clientX: number; clientY: number };
+	let connectChooser = $state<ConnectChooserState | null>(null);
+
+	type DepPopoverState =
+		| { mode: 'create'; srcId: number; dstId: number; lag: number; clientX: number; clientY: number }
+		| { mode: 'edit'; depId: number; lag: number; clientX: number; clientY: number };
+	let depPopover = $state<DepPopoverState | null>(null);
+
+	function targetActivityIdAt(clientX: number, clientY: number): number | null {
+		const el = (document.elementFromPoint(clientX, clientY) as HTMLElement | null)?.closest('[data-activity-id]') as HTMLElement | null;
+		return el ? Number(el.dataset.activityId) : null;
+	}
+
+	function onConnectPointerDown(e: PointerEvent, row: FlatRow) {
+		if (e.button !== 0) return;
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		connectDrag = {
+			srcId: row.node.id_cronograma_actividad,
+			pointerId: e.pointerId,
+			startClientX: e.clientX,
+			startClientY: e.clientY,
+			x: clientXToCanvasX(e.clientX),
+			y: clientYToCanvasY(e.clientY),
+			moved: false,
+			hoverTargetId: null,
+		};
+		e.stopPropagation();
+	}
+	function onConnectPointerMove(e: PointerEvent) {
+		if (!connectDrag || e.pointerId !== connectDrag.pointerId) return;
+		connectDrag.x = clientXToCanvasX(e.clientX);
+		connectDrag.y = clientYToCanvasY(e.clientY);
+		if (!connectDrag.moved && Math.hypot(e.clientX - connectDrag.startClientX, e.clientY - connectDrag.startClientY) > 5) {
+			connectDrag.moved = true;
+		}
+		if (connectDrag.moved) {
+			const targetId = targetActivityIdAt(e.clientX, e.clientY);
+			connectDrag.hoverTargetId = targetId !== null && targetId !== connectDrag.srcId ? targetId : null;
+		}
+	}
+	function onConnectPointerUp(e: PointerEvent) {
+		if (!connectDrag || e.pointerId !== connectDrag.pointerId) return;
+		const { srcId, moved, hoverTargetId } = connectDrag;
+		connectDrag = null;
+		if (!moved) {
+			onQuickRestriction?.(srcId, e.clientX, e.clientY, null);
+			return;
+		}
+		if (hoverTargetId && hoverTargetId !== srcId) {
+			connectChooser = { srcId, dstId: hoverTargetId, clientX: e.clientX, clientY: e.clientY };
+		}
+	}
+
+	function chooseDependencia() {
+		if (!connectChooser) return;
+		depPopover = { mode: 'create', srcId: connectChooser.srcId, dstId: connectChooser.dstId, lag: 0, clientX: connectChooser.clientX, clientY: connectChooser.clientY };
+		connectChooser = null;
+	}
+	function chooseRestriccion() {
+		if (!connectChooser) return;
+		onQuickRestriction?.(connectChooser.dstId, connectChooser.clientX, connectChooser.clientY, connectChooser.srcId);
+		connectChooser = null;
+	}
+
+	function onDepBadgeClick(e: MouseEvent, dep: PlanningDependencia) {
+		e.stopPropagation();
+		if (dep.id_dependencia == null) return;
+		depPopover = { mode: 'edit', depId: dep.id_dependencia, lag: dep.lag_dias, clientX: e.clientX, clientY: e.clientY };
+	}
+
+	function confirmDepPopover() {
+		if (!depPopover) return;
+		if (depPopover.mode === 'create') onCreateDependency?.(depPopover.srcId, depPopover.dstId, depPopover.lag);
+		else onEditDependencyLag?.(depPopover.depId, depPopover.lag);
+		depPopover = null;
+	}
+	function deleteDepPopover() {
+		if (depPopover?.mode === 'edit') onDeleteDependency?.(depPopover.depId);
+		depPopover = null;
+	}
+
+	function popoverLeft(clientX: number): number {
+		const width = 224; // w-56
+		const max = (typeof window !== 'undefined' ? window.innerWidth : 1000) - width - 8;
+		return Math.min(clientX, Math.max(8, max));
 	}
 
 	// ── DRAG-TO-CREATE: define fecha_inicio/fecha_fin for a leaf that doesn't
@@ -416,6 +569,21 @@
 					</div>
 				{/if}
 
+				<!-- Restriction links (siempre visibles — no depende del toggle
+				     "Dependencias", igual que la insignia ⚠ de restricción) -->
+				{#if restrictionLines.length > 0}
+					<svg class="absolute top-0 left-0 pointer-events-none" style="width:{totalWidth}px;height:{HEADER_H + flatRows.length * ROW_H}px">
+						<defs>
+							<marker id="gantt-restriction-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+								<path d="M0,0 L6,3 L0,6 Z" fill="#d97706" />
+							</marker>
+						</defs>
+						{#each restrictionLines as line (line.id)}
+							<path d={line.d} fill="none" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#gantt-restriction-arrow)" />
+						{/each}
+					</svg>
+				{/if}
+
 				<!-- Dependency arrows -->
 				{#if showDeps}
 					<svg class="absolute top-0 left-0 pointer-events-none" style="width:{totalWidth}px;height:{HEADER_H + flatRows.length * ROW_H}px">
@@ -428,6 +596,35 @@
 							<path d={line.d} fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#gantt-arrow)" />
 						{/each}
 					</svg>
+
+					<!-- Offset (lag_dias) badges — clic para editar/eliminar la dependencia -->
+					{#each depLines as line (line.id)}
+						<button
+							type="button"
+							class="absolute -translate-x-1/2 -translate-y-1/2 px-1.5 h-4 min-w-[22px] rounded-full bg-white border border-slate-300 text-[9px] font-bold text-slate-500 hover:border-blue-400 hover:text-blue-600 z-10 shadow-sm"
+							style="left:{line.midX}px;top:{line.midY}px"
+							title="Editar offset de la dependencia"
+							onclick={(e) => onDepBadgeClick(e, line.dep)}
+						>{line.lag > 0 ? `+${line.lag}d` : `${line.lag}d`}</button>
+					{/each}
+				{/if}
+
+				<!-- Vista previa del drag-to-connect (estilo draw.io): flecha en vivo
+				     desde la barra de origen hasta el cursor; el color cambia a
+				     verde cuando hay una barra destino válida bajo el cursor
+				     (misma señal que el resaltado de esa barra, ver Bars abajo). -->
+				{#if connectDrag?.moved}
+					{@const csIdx = rowIndexById.get(connectDrag.srcId) ?? -1}
+					{@const csRow = flatRows[csIdx]}
+					{#if csRow?.bar}
+						{@const cx1 = dateToX(csRow.bar.inicio) + barVisualOffset(csRow) + Math.max(pixelsPerDay * 0.5, dateToX(addDaysISO(csRow.bar.fin, 1)) - dateToX(csRow.bar.inicio))}
+						{@const cy1 = HEADER_H + csIdx * ROW_H + ROW_H / 2}
+						{@const previewColor = connectDrag.hoverTargetId ? '#10b981' : '#94a3b8'}
+						<svg class="absolute top-0 left-0 pointer-events-none z-30" style="width:{totalWidth}px;height:{HEADER_H + flatRows.length * ROW_H}px">
+							<path d="M {cx1},{cy1} L {connectDrag.x},{connectDrag.y}" stroke={previewColor} stroke-width="2.5" stroke-dasharray="5 4" fill="none" />
+							<circle cx={connectDrag.x} cy={connectDrag.y} r="5" fill={previewColor} />
+						</svg>
+					{/if}
 				{/if}
 
 				<!-- Bars -->
@@ -438,24 +635,41 @@
 						{@const atrasada = isAtrasada(row.bar)}
 						{@const completada = row.bar.avance >= 100}
 						{@const baseColor = row.node.color ?? colorForNode(row.rootId, row.depth)}
+						{@const isDropTarget = connectDrag?.moved && connectDrag.hoverTargetId === row.node.id_cronograma_actividad}
+						{@const isConnectSource = connectDrag?.srcId === row.node.id_cronograma_actividad}
 						<div
 							role="button"
 							tabindex="0"
-							class="absolute rounded-md shadow-sm cursor-grab active:cursor-grabbing select-none flex items-center overflow-visible"
+							data-activity-id={row.node.id_cronograma_actividad}
+							class="absolute rounded-md shadow-sm cursor-grab active:cursor-grabbing select-none flex items-center overflow-visible transition-shadow"
 							class:ring-2={selectedId === row.node.id_cronograma_actividad}
 							class:ring-slate-800={selectedId === row.node.id_cronograma_actividad}
 							class:opacity-55={completada}
-							style="top:{HEADER_H + i * ROW_H + 4}px;left:{x}px;width:{w}px;height:{ROW_H - 8}px;background:{atrasada ? '#e11d48' : baseColor}"
+							style="top:{HEADER_H + i * ROW_H + 4}px;left:{x}px;width:{w}px;height:{ROW_H - 8}px;background:{atrasada ? '#e11d48' : baseColor};{isDropTarget ? 'box-shadow:0 0 0 3px #10b981, 0 0 14px 3px rgba(16,185,129,0.65);' : isConnectSource ? 'box-shadow:0 0 0 2px #3b82f6;' : ''}"
 							title={restriccionesAbiertasPorActividad.get(row.node.id_cronograma_actividad)?.map((r: any) => r.descripcion || r.tipo_restriccion || 'Restricción').join(' · ') ?? ''}
 							onpointerdown={(e) => onBarPointerDown(e, row)}
 							onpointermove={onBarPointerMove}
 							onpointerup={onBarPointerUp}
+							onmouseenter={() => (hoveredId = row.node.id_cronograma_actividad)}
+							onmouseleave={() => { if (hoveredId === row.node.id_cronograma_actividad) hoveredId = null; }}
 						>
 							{#if showAvanceReal && row.bar.avance > 0}
 								<div class="absolute inset-y-0 left-0 bg-black/25 rounded-l-md" style="width:{Math.min(100, row.bar.avance)}%"></div>
 							{/if}
 							{#if restriccionesAbiertasPorActividad.has(row.node.id_cronograma_actividad)}
 								<span class="absolute -top-2 -right-2 w-3.5 h-3.5 rounded-full bg-amber-500 text-white text-[8px] flex items-center justify-center z-10">⚠</span>
+							{/if}
+							{#if hoveredId === row.node.id_cronograma_actividad && !drag && !resize && !connectDrag}
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<div
+									role="button"
+									tabindex="0"
+									class="absolute -right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-white border-2 border-blue-500 text-blue-600 flex items-center justify-center shadow-md cursor-crosshair z-20 hover:scale-125 hover:bg-blue-50 transition-transform"
+									title="Clic: restricción externa en esta actividad · Arrastra hasta otra barra: crear dependencia o restricción"
+									onpointerdown={(e) => onConnectPointerDown(e, row)}
+									onpointermove={onConnectPointerMove}
+									onpointerup={onConnectPointerUp}
+								><i class="fas fa-arrow-right text-[9px]"></i></div>
 							{/if}
 							{#if !row.isGroup}
 								<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
@@ -479,4 +693,63 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Popover de dependencia (crear / editar offset / eliminar) -->
+	{#if depPopover}
+		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-40" onclick={() => (depPopover = null)}></div>
+		<div
+			class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3 w-56"
+			style="left:{popoverLeft(depPopover.clientX)}px;top:{depPopover.clientY + 12}px"
+		>
+			<p class="text-xs font-bold text-slate-700 mb-2">
+				{depPopover.mode === 'create' ? 'Nueva dependencia' : 'Editar dependencia'}
+			</p>
+			<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Offset (días)</label>
+			<input
+				type="number"
+				class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-300"
+				bind:value={depPopover.lag}
+				autofocus
+			/>
+			<div class="flex gap-1.5">
+				<button class="flex-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors" onclick={confirmDepPopover}>
+					{depPopover.mode === 'create' ? 'Crear' : 'Guardar'}
+				</button>
+				{#if depPopover.mode === 'edit'}
+					<button class="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold transition-colors" onclick={deleteDepPopover}>
+						Eliminar
+					</button>
+				{/if}
+				<button class="px-2 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition-colors" onclick={() => (depPopover = null)}>
+					Cancelar
+				</button>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Popover "¿qué quieres crear?" — aparece al soltar el drag-to-connect
+	     sobre otra barra (ver connectDrag), antes de abrir el popover de
+	     dependencia o el de restricción según lo que elija el usuario. -->
+	{#if connectChooser}
+		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-40" onclick={() => (connectChooser = null)}></div>
+		<div
+			class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3 w-56"
+			style="left:{popoverLeft(connectChooser.clientX)}px;top:{connectChooser.clientY + 12}px"
+		>
+			<p class="text-xs font-bold text-slate-700 mb-2">¿Qué quieres crear?</p>
+			<div class="flex flex-col gap-1.5">
+				<button class="flex items-center gap-2 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors" onclick={chooseDependencia}>
+					<i class="fas fa-link"></i> Dependencia
+				</button>
+				<button class="flex items-center gap-2 px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-xs font-bold transition-colors" onclick={chooseRestriccion}>
+					<i class="fas fa-flag"></i> Restricción
+				</button>
+			</div>
+			<button class="w-full mt-2 px-2 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 rounded-lg text-xs font-medium transition-colors" onclick={() => (connectChooser = null)}>
+				Cancelar
+			</button>
+		</div>
+	{/if}
 </div>

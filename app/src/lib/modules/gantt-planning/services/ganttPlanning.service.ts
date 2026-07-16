@@ -29,9 +29,20 @@
 //  7. cronograma_dependencia (FS/SS/FF/SF + lag_dias) has NO "siblings only"
 //     restriction by design decision — do not add one without checking with
 //     the user first (explicitly declined once already).
-//  8. checkBlockShiftDependencyWarnings is advisory only (returns strings to
-//     show the user) — it must never block a save, mirroring how
-//     restricciones are cosmetic-only elsewhere in this module.
+//  8. resolveConstraints is a HARD solver, not advisory (this replaced an
+//     earlier advisory-only design — checkBlockShiftDependencyWarnings/
+//     checkRestrictionWarnings, deliberately removed). Explicit user request:
+//     behave like a CAD constraint solver (Inventor/SolidWorks/MATLAB) — a
+//     dependency/restricción's offset is a fixed distance, not a minimum: a
+//     destino is ALWAYS exactly origen.fin + lag + 1 day, enforced in both
+//     directions (a predecessor moving earlier pulls the destino back too,
+//     not just forward), and regardless of whether the destino itself was
+//     the one just dragged — dragging a constrained bar away from its
+//     required position gets silently overridden back onto it; the only way
+//     to change that distance is editing the edge's lag. If the constraint
+//     graph has a cycle, resolveConstraints returns `ok:false` naming the
+//     cycle and NOTHING is applied — never silently partial-apply a
+//     resolution.
 //  9. All schedule edits (drag/resize/block-move) mutate a local draft copy
 //     in GanttTab.svelte's `$state`, never write to Supabase directly. Only
 //     an explicit "Guardar cambios" action calls diffDraft()+commitDraft().
@@ -46,7 +57,7 @@
 //     through console.debug with the prefixes below — keep them when editing
 //     so issues are greppable in the browser console.
 //
-// Logging prefixes: [GANTT_DATE_CALC] [GANTT_ROLLUP] [GANTT_BLOCK_MOVE] [GANTT_DRAFT]
+// Logging prefixes: [GANTT_DATE_CALC] [GANTT_ROLLUP] [GANTT_BLOCK_MOVE] [GANTT_DRAFT] [GANTT_CONSTRAINT_SOLVE]
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { buildTree, flattenSubtree, type WithChildren } from '$lib/utils/tree';
@@ -185,42 +196,246 @@ export function computeBlockShift<T extends PlanningActividad>(
 	return result;
 }
 
-// ── ADVISORY DEPENDENCY WARNINGS ────────────────────────────────────────────
-// Cross-branch FS dependencies aren't enforced (see checklist item 7) — this
-// only surfaces a warning string when a block move would push the shifted
-// end of the relationship earlier than its lag_dias allows. Never blocks.
-export function checkBlockShiftDependencyWarnings<T extends PlanningActividad>(
-	all: T[],
-	deps: PlanningDependencia[],
-	shift: Map<number, { inicio: string; fin: string }>
-): string[] {
-	const warnings: string[] = [];
-	const byId = new Map(all.map((a) => [a.id_cronograma_actividad, a]));
+// ── CONSTRAINT SOLVER (CAD-style, hard enforcement) ─────────────────────────
+// Unifies cronograma_dependencia (FS + lag_dias) and restricción wait-conditions
+// (id_actividad_origen, implicit lag 0) into one graph: origen --(lag)--> destino
+// means destino.inicio ≥ origen.fin + lag + 1 day. Given a seed of "these
+// activities just moved (or are being validated)", propagates forward through
+// the graph — exactly the forward pass of the Critical Path Method — using
+// Kahn's algorithm for topological order so a cycle (A→B→C→A) is detected
+// instead of looping forever or silently picking an arbitrary order.
+export interface ConstraintEdge {
+	origenId: number;
+	destinoId: number;
+	lagDias: number;
+	kind: 'dependencia' | 'restriccion';
+}
 
-	const effective = (id: number): { inicio: string | null; fin: string | null } =>
-		shift.get(id) ?? {
-			inicio: byId.get(id)?.fecha_inicio_plan ?? null,
-			fin: byId.get(id)?.fecha_fin_plan ?? null,
-		};
+export type ConstraintResolution =
+	| { ok: true; shifted: Map<number, { inicio: string; fin: string }> }
+	| { ok: false; cycle: number[]; message: string };
 
-	for (const dep of deps) {
-		if (dep.tipo_dependencia !== 'FS') continue; // only FS is reachable from the UI today
-		const movedOrigin = shift.has(dep.id_actividad_origen);
-		const movedDest = shift.has(dep.id_actividad_destino);
-		if (movedOrigin === movedDest) continue; // both or neither moved together → relative offset intact
+function extractCycle(stuck: number[], outAdj: Map<number, number[]>): number[] {
+	const stuckSet = new Set(stuck);
+	const visited = new Set<number>();
+	const onStack = new Set<number>();
+	const stack: number[] = [];
 
-		const origen = effective(dep.id_actividad_origen);
-		const destino = effective(dep.id_actividad_destino);
-		if (!origen.fin || !destino.inicio) continue;
+	function dfs(id: number): number[] | null {
+		visited.add(id);
+		stack.push(id);
+		onStack.add(id);
+		for (const next of outAdj.get(id) ?? []) {
+			if (!stuckSet.has(next)) continue;
+			if (onStack.has(next)) {
+				const idx = stack.indexOf(next);
+				return [...stack.slice(idx), next];
+			}
+			if (!visited.has(next)) {
+				const found = dfs(next);
+				if (found) return found;
+			}
+		}
+		stack.pop();
+		onStack.delete(id);
+		return null;
+	}
 
-		const minInicio = addDaysISO(origen.fin, dep.lag_dias + 1);
-		if (destino.inicio < minInicio) {
-			warnings.push(
-				`La actividad #${dep.id_actividad_destino} debería iniciar después de #${dep.id_actividad_origen} (dependencia FS, lag ${dep.lag_dias}d) — este movimiento la deja antes.`
-			);
+	for (const id of stuck) {
+		if (!visited.has(id)) {
+			const found = dfs(id);
+			if (found) return found;
 		}
 	}
-	return warnings;
+	return stuck; // fallback — Kahn's already guarantees a cycle exists among `stuck`
+}
+
+/**
+ * Shifts a node by deltaDays inside a working `effective` position map: a
+ * leaf just moves itself; a group moves every leaf descendant (rigid block
+ * shift, same rule as computeBlockShift) plus its own rollup entry, so a
+ * later edge reading FROM this group as an origen sees its shifted fin.
+ */
+function applyShiftToEffective<T extends PlanningActividad>(
+	nodeById: Map<number, WithChildren<T>>,
+	effective: Map<number, { inicio: string | null; fin: string | null }>,
+	id: number,
+	deltaDays: number
+): void {
+	const node = nodeById.get(id);
+	if (!node) return;
+	if (node.children.length === 0) {
+		const cur = effective.get(id);
+		if (cur?.inicio && cur?.fin) {
+			effective.set(id, { inicio: addDaysISO(cur.inicio, deltaDays), fin: addDaysISO(cur.fin, deltaDays) });
+		}
+		return;
+	}
+	for (const leaf of flattenSubtree(node)) {
+		if (leaf.children.length > 0) continue;
+		const cur = effective.get(leaf.id_cronograma_actividad);
+		if (cur?.inicio && cur?.fin) {
+			effective.set(leaf.id_cronograma_actividad, { inicio: addDaysISO(cur.inicio, deltaDays), fin: addDaysISO(cur.fin, deltaDays) });
+		}
+	}
+	const curGroup = effective.get(id);
+	if (curGroup?.inicio && curGroup?.fin) {
+		effective.set(id, { inicio: addDaysISO(curGroup.inicio, deltaDays), fin: addDaysISO(curGroup.fin, deltaDays) });
+	}
+}
+
+/**
+ * Resolves the constraint graph starting from `seedChanges` (activities whose
+ * position is now known — either just-edited by the user, or "their current
+ * stored position" when validating a whole project on load).
+ *
+ * Any activity that is the destino of a constraint edge is DERIVED, not
+ * free — its position is always exactly origen.fin + lag + 1 day (the max
+ * across multiple incoming edges), enforced regardless of whether that
+ * activity itself was in `seedChanges`. This is what makes it a real CAD-style
+ * "distance" constraint instead of a one-directional minimum: if the origen
+ * moves earlier (shrinking the gap) the destino is pulled back too, and a
+ * direct drag of a constrained destino away from its required position is
+ * silently overridden back onto it — the only legal way to change that
+ * distance is editing the edge's lag (see cascadeFromOrigen in GanttTab).
+ * A seeded activity only "sticks" at its given position when it has no
+ * incoming edges of its own (it's a true root of its constraint chain).
+ */
+export function resolveConstraints<T extends PlanningActividad>(
+	all: T[],
+	edges: ConstraintEdge[],
+	seedChanges: Map<number, { inicio: string; fin: string }>
+): ConstraintResolution {
+	console.debug('[GANTT_CONSTRAINT_SOLVE] start', { seeds: [...seedChanges.keys()], edges: edges.length });
+
+	const tree = buildTree(all, 'id_cronograma_actividad', 'id_actividad_padre');
+	const byId = new Map(all.map((a) => [a.id_cronograma_actividad, a]));
+	const nodeById = new Map<number, WithChildren<T>>();
+	(function index(nodes: WithChildren<T>[]) {
+		for (const n of nodes) {
+			nodeById.set(n.id_cronograma_actividad, n);
+			index(n.children);
+		}
+	})(tree);
+
+	const rollupBaseline = computeRollup(tree);
+	const effective = new Map<number, { inicio: string | null; fin: string | null }>();
+	for (const a of all) {
+		const r = rollupBaseline.get(a.id_cronograma_actividad);
+		effective.set(a.id_cronograma_actividad, r ?? { inicio: a.fecha_inicio_plan, fin: a.fecha_fin_plan });
+	}
+	for (const [id, dates] of seedChanges) effective.set(id, dates);
+
+	const adjBoth = new Map<number, number[]>();
+	for (const e of edges) {
+		if (!adjBoth.has(e.origenId)) adjBoth.set(e.origenId, []);
+		adjBoth.get(e.origenId)!.push(e.destinoId);
+		if (!adjBoth.has(e.destinoId)) adjBoth.set(e.destinoId, []);
+		adjBoth.get(e.destinoId)!.push(e.origenId);
+	}
+
+	// Connected component containing the seeds, walked in BOTH directions —
+	// not just forward. A seeded node's own incoming edges must be found even
+	// when its origen isn't forward-reachable FROM it (e.g. the user dragged
+	// the destino of a constraint directly): otherwise that edge would never
+	// be seen below and the drag would silently keep an invalid position.
+	const reachable = new Set<number>(seedChanges.keys());
+	const bfsQueue = [...seedChanges.keys()];
+	while (bfsQueue.length) {
+		const cur = bfsQueue.shift()!;
+		for (const next of adjBoth.get(cur) ?? []) {
+			if (!reachable.has(next)) {
+				reachable.add(next);
+				bfsQueue.push(next);
+			}
+		}
+	}
+
+	const subEdges = edges.filter((e) => reachable.has(e.origenId) && reachable.has(e.destinoId));
+	const outAdj = new Map<number, number[]>();
+	const incomingByDest = new Map<number, ConstraintEdge[]>();
+	const indegree = new Map<number, number>();
+	for (const id of reachable) indegree.set(id, 0);
+	for (const e of subEdges) {
+		if (!outAdj.has(e.origenId)) outAdj.set(e.origenId, []);
+		outAdj.get(e.origenId)!.push(e.destinoId);
+		if (!incomingByDest.has(e.destinoId)) incomingByDest.set(e.destinoId, []);
+		incomingByDest.get(e.destinoId)!.push(e);
+		indegree.set(e.destinoId, (indegree.get(e.destinoId) ?? 0) + 1);
+	}
+
+	// Kahn's algorithm — topological order, or proof a cycle exists.
+	const topoQueue: number[] = [...reachable].filter((id) => (indegree.get(id) ?? 0) === 0);
+	const topoOrder: number[] = [];
+	while (topoQueue.length) {
+		const n = topoQueue.shift()!;
+		topoOrder.push(n);
+		for (const m of outAdj.get(n) ?? []) {
+			indegree.set(m, (indegree.get(m) ?? 0) - 1);
+			if (indegree.get(m) === 0) topoQueue.push(m);
+		}
+	}
+
+	if (topoOrder.length !== reachable.size) {
+		const stuck = [...reachable].filter((id) => !topoOrder.includes(id));
+		const cycle = extractCycle(stuck, outAdj);
+		const message = `No se puede resolver: ciclo de dependencias/restricciones entre ${cycle.map((id) => `#${id}`).join(' → ')}. Elimina o edita una de estas conexiones para continuar.`;
+		console.error('[GANTT_CONSTRAINT_SOLVE] cycle detected', cycle);
+		return { ok: false, cycle, message };
+	}
+
+	// Forward pass in topological order — CPM-style, but EXACT, not a minimum:
+	// any node with incoming edges is derived and always snapped to exactly
+	// max(every predecessor's fin + lag + 1) — never left "at least" that far,
+	// so widening the gap (moving the origen earlier, or dragging the destino
+	// itself further away) gets pulled back onto the constraint just as surely
+	// as narrowing it gets pushed forward. Nodes with no incoming edges are
+	// never touched here — their seeded/baseline position is the source of
+	// truth for everything downstream.
+	for (const id of topoOrder) {
+		const incoming = incomingByDest.get(id);
+		if (!incoming || incoming.length === 0) continue;
+
+		let requiredInicio: string | null = null;
+		for (const e of incoming) {
+			const originEff = effective.get(e.origenId);
+			if (!originEff?.fin) continue;
+			const min = addDaysISO(originEff.fin, e.lagDias + 1);
+			if (!requiredInicio || min > requiredInicio) requiredInicio = min;
+		}
+		if (!requiredInicio) continue;
+
+		const cur = effective.get(id);
+		if (!cur?.inicio || !cur?.fin) continue;
+		if (cur.inicio !== requiredInicio) {
+			const deltaDays = Math.round(
+				(+new Date(requiredInicio + 'T00:00:00') - +new Date(cur.inicio + 'T00:00:00')) / 864e5
+			);
+			applyShiftToEffective(nodeById, effective, id, deltaDays);
+			console.debug('[GANTT_CONSTRAINT_SOLVE] shifted', id, { deltaDays, requiredInicio });
+		}
+	}
+
+	// Only leaves carry real fecha_inicio_plan/fecha_fin_plan columns — group
+	// rows are rollup-only (checklist item 3), so only report leaf changes.
+	// Iterate every activity, not just `reachable`: a group destino's shift is
+	// applied to its descendant leaves via applyShiftToEffective, but those
+	// leaves aren't necessarily edge-BFS-reachable themselves — reachable is
+	// derived from constraint-graph edges, not the actividad tree.
+	const shifted = new Map<number, { inicio: string; fin: string }>();
+	for (const a of all) {
+		const id = a.id_cronograma_actividad;
+		const node = nodeById.get(id);
+		if (!node || node.children.length > 0) continue;
+		const eff = effective.get(id);
+		const base = { inicio: byId.get(id)?.fecha_inicio_plan ?? null, fin: byId.get(id)?.fecha_fin_plan ?? null };
+		if (eff?.inicio && eff?.fin && (eff.inicio !== base.inicio || eff.fin !== base.fin)) {
+			shifted.set(id, { inicio: eff.inicio, fin: eff.fin });
+		}
+	}
+
+	console.debug('[GANTT_CONSTRAINT_SOLVE] resolved', { changed: shifted.size });
+	return { ok: true, shifted };
 }
 
 // ── DRAFT DIFF / COMMIT ──────────────────────────────────────────────────────

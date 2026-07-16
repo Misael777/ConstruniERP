@@ -4,10 +4,10 @@ import {
 	computeRollup,
 	computeProgress,
 	computeBlockShift,
-	checkBlockShiftDependencyWarnings,
+	resolveConstraints,
 	diffDraft,
 	type PlanningActividad,
-	type PlanningDependencia,
+	type ConstraintEdge,
 } from './ganttPlanning.service';
 
 function act(overrides: Partial<PlanningActividad> & { id_cronograma_actividad: number }): PlanningActividad {
@@ -98,23 +98,148 @@ describe('computeBlockShift', () => {
 	});
 });
 
-describe('checkBlockShiftDependencyWarnings', () => {
-	it('warns when a block move pushes the dependent activity before its required lag', () => {
-		const deps: PlanningDependencia[] = [
-			{ id_actividad_origen: 3, id_actividad_destino: 4, tipo_dependencia: 'FS', lag_dias: 0 },
-		];
-		const shift = computeBlockShift(sample, 1, 3); // moves 2 & 3, leaves 4 in place
-		const warnings = checkBlockShiftDependencyWarnings(sample, deps, shift);
-		expect(warnings).toHaveLength(1);
+describe('resolveConstraints', () => {
+	// Two independent leaves: A (10) already placed, B (11) currently overlaps
+	// A's tail. A single FS edge with lag 0 should push B to start the day
+	// right after A finishes.
+	const twoLeaves: PlanningActividad[] = [
+		act({ id_cronograma_actividad: 10, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-05' }),
+		act({ id_cronograma_actividad: 11, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-03' }),
+	];
+
+	it('cascades a destino to start the day after its origen finishes (0d lag)', () => {
+		const edges: ConstraintEdge[] = [{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' }];
+		const seed = new Map([[10, { inicio: '2024-01-01', fin: '2024-01-05' }]]);
+		const res = resolveConstraints(twoLeaves, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-06', fin: '2024-01-08' });
+		expect(res.shifted.has(10)).toBe(false); // origen has no incoming edges — never touched
 	});
 
-	it('does not warn when both ends of the dependency move together', () => {
-		const deps: PlanningDependencia[] = [
-			{ id_actividad_origen: 2, id_actividad_destino: 3, tipo_dependencia: 'FS', lag_dias: 0 },
+	it('honors a non-zero day offset (Nd lag)', () => {
+		const edges: ConstraintEdge[] = [{ origenId: 10, destinoId: 11, lagDias: 3, kind: 'restriccion' }];
+		const seed = new Map([[10, { inicio: '2024-01-01', fin: '2024-01-05' }]]);
+		const res = resolveConstraints(twoLeaves, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-09', fin: '2024-01-11' });
+	});
+
+	it('propagates transitively through a chain (A→B→C)', () => {
+		const chain: PlanningActividad[] = [
+			act({ id_cronograma_actividad: 10, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-05' }),
+			act({ id_cronograma_actividad: 11, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-03' }),
+			act({ id_cronograma_actividad: 12, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-02' }),
 		];
-		const shift = computeBlockShift(sample, 1, 3); // moves both 2 and 3
-		const warnings = checkBlockShiftDependencyWarnings(sample, deps, shift);
-		expect(warnings).toHaveLength(0);
+		const edges: ConstraintEdge[] = [
+			{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' },
+			{ origenId: 11, destinoId: 12, lagDias: 0, kind: 'dependencia' },
+		];
+		const seed = new Map([[10, { inicio: '2024-01-01', fin: '2024-01-05' }]]);
+		const res = resolveConstraints(chain, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-06', fin: '2024-01-08' });
+		expect(res.shifted.get(12)).toEqual({ inicio: '2024-01-09', fin: '2024-01-10' });
+	});
+
+	it('takes the max of multiple predecessors (diamond)', () => {
+		const diamond: PlanningActividad[] = [
+			act({ id_cronograma_actividad: 10, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-05' }),
+			act({ id_cronograma_actividad: 11, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-08' }),
+			act({ id_cronograma_actividad: 12, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-02' }),
+		];
+		const edges: ConstraintEdge[] = [
+			{ origenId: 10, destinoId: 12, lagDias: 0, kind: 'dependencia' },
+			{ origenId: 11, destinoId: 12, lagDias: 0, kind: 'dependencia' },
+		];
+		const seed = new Map([
+			[10, { inicio: '2024-01-01', fin: '2024-01-05' }],
+			[11, { inicio: '2024-01-01', fin: '2024-01-08' }],
+		]);
+		const res = resolveConstraints(diamond, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		// max(10.fin+1, 11.fin+1) = max(01-06, 01-09) = 01-09
+		expect(res.shifted.get(12)).toEqual({ inicio: '2024-01-09', fin: '2024-01-10' });
+	});
+
+	it('rigidly shifts an entire group (and every leaf descendant) when the group is the destino', () => {
+		const withGroup: PlanningActividad[] = [
+			...sample, // group 1 with leaves 2 (01-01→05) and 3 (01-06→10)
+			act({ id_cronograma_actividad: 20, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-03' }),
+		];
+		const edges: ConstraintEdge[] = [{ origenId: 20, destinoId: 1, lagDias: 0, kind: 'dependencia' }];
+		const seed = new Map([[20, { inicio: '2024-01-01', fin: '2024-01-03' }]]);
+		const res = resolveConstraints(withGroup, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		// group's rollup inicio (01-01) must become 01-04 → delta of 3 days,
+		// applied rigidly to every leaf descendant of the group.
+		expect(res.shifted.get(2)).toEqual({ inicio: '2024-01-04', fin: '2024-01-08' });
+		expect(res.shifted.get(3)).toEqual({ inicio: '2024-01-09', fin: '2024-01-13' });
+	});
+
+	it('reports an unsolvable cycle and applies nothing', () => {
+		const cyclic: PlanningActividad[] = [
+			act({ id_cronograma_actividad: 10, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-05' }),
+			act({ id_cronograma_actividad: 11, fecha_inicio_plan: '2024-01-06', fecha_fin_plan: '2024-01-10' }),
+		];
+		const edges: ConstraintEdge[] = [
+			{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' },
+			{ origenId: 11, destinoId: 10, lagDias: 0, kind: 'dependencia' },
+		];
+		const seed = new Map([[10, { inicio: '2024-01-01', fin: '2024-01-05' }]]);
+		const res = resolveConstraints(cyclic, edges, seed);
+		expect(res.ok).toBe(false);
+		if (res.ok) return;
+		expect(res.cycle).toEqual(expect.arrayContaining([10, 11]));
+		expect(res.message.toLowerCase()).toContain('ciclo');
+	});
+
+	it('corrects an already-violated edge when validating a whole project on load', () => {
+		const edges: ConstraintEdge[] = [{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' }];
+		// Both activities seeded at their current (already-violating) stored
+		// positions, as done when validating a whole project on load.
+		const seed = new Map([
+			[10, { inicio: '2024-01-01', fin: '2024-01-05' }],
+			[11, { inicio: '2024-01-01', fin: '2024-01-03' }],
+		]);
+		const res = resolveConstraints(twoLeaves, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-06', fin: '2024-01-08' });
+	});
+
+	it('pulls the destino BACKWARD when the origen moves earlier, shrinking the gap exactly (not just a minimum)', () => {
+		// Baseline: 10 finishes 01-05, 11 already starts 01-10 — a much wider
+		// gap than the 0d lag requires. Moving 10 earlier must pull 11 back to
+		// sit exactly the day after 10's NEW finish, not leave it floating.
+		const wideGap: PlanningActividad[] = [
+			act({ id_cronograma_actividad: 10, fecha_inicio_plan: '2024-01-01', fecha_fin_plan: '2024-01-05' }),
+			act({ id_cronograma_actividad: 11, fecha_inicio_plan: '2024-01-10', fecha_fin_plan: '2024-01-12' }),
+		];
+		const edges: ConstraintEdge[] = [{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' }];
+		// Origen moves 3 days earlier: 2024-01-01→05 becomes 2023-12-29→2024-01-02.
+		const seed = new Map([[10, { inicio: '2023-12-29', fin: '2024-01-02' }]]);
+		const res = resolveConstraints(wideGap, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-03', fin: '2024-01-05' });
+	});
+
+	it('overrides a direct drag of a constrained destino back onto its required position', () => {
+		// The user drags 11 (which has an incoming 0d-lag edge from 10) further
+		// into the future, trying to widen the gap by hand — the constraint is a
+		// fixed distance, not a minimum, so that drag must be rejected/snapped
+		// back to exactly 10.fin + 1, as if the drag never happened.
+		const edges: ConstraintEdge[] = [{ origenId: 10, destinoId: 11, lagDias: 0, kind: 'dependencia' }];
+		const seed = new Map([[11, { inicio: '2024-01-20', fin: '2024-01-22' }]]);
+		const res = resolveConstraints(twoLeaves, edges, seed);
+		expect(res.ok).toBe(true);
+		if (!res.ok) return;
+		expect(res.shifted.get(11)).toEqual({ inicio: '2024-01-06', fin: '2024-01-08' });
 	});
 });
 
