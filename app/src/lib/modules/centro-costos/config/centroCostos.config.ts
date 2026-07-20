@@ -23,13 +23,18 @@
  *     created_at       TIMESTAMPTZ DEFAULT NOW(),
  *     id_proyecto      BIGINT REFERENCES proyecto(id_proyecto)   ON DELETE CASCADE,
  *     id_cliente       BIGINT REFERENCES cliente(id_cliente)     ON DELETE CASCADE,
- *     id_proveedor     BIGINT REFERENCES proveedor(id_proveedor) ON DELETE CASCADE
+ *     id_proveedor     BIGINT REFERENCES proveedor(id_proveedor) ON DELETE CASCADE,
+ *     id_empleado      BIGINT REFERENCES empleados(id)           ON DELETE CASCADE
  *   );
- * Las tres últimas columnas se agregaron vía centro_costo_vinculacion_migration.sql — reemplazan un
- * intento anterior (columna "id_referencia") que NuevaVentaModal.svelte usaba pero que NUNCA existió
- * realmente en la BD; ese upsert fallaba en silencio (no revisaba el resultado). Como mucho una de
- * las tres puede ser no-nula por fila (chk_centro_costo_una_entidad) — se completan solas vía
- * getOrCrearCentroCostoParaEntidad en centroCostos.service.ts, nunca a mano.
+ * Las columnas id_proyecto/id_cliente/id_proveedor se agregaron vía centro_costo_vinculacion_migration.sql
+ * — reemplazan un intento anterior (columna "id_referencia") que NuevaVentaModal.svelte usaba pero que
+ * NUNCA existió realmente en la BD; ese upsert fallaba en silencio (no revisaba el resultado).
+ * id_empleado se agregó después vía centro_costo_empleado_migration.sql, mismo patrón. Como mucho UNA
+ * de las cuatro puede ser no-nula por fila (chk_centro_costo_una_entidad) — se completan solas vía
+ * getOrCrearCentroCostoParaEntidad en centroCostos.service.ts (proyecto/cliente/proveedor) o su
+ * equivalente en supabase/functions/user-admin/index.ts (empleado, corre en Deno), nunca a mano.
+ * deleteCentroCosto rechaza borrar directamente cualquier fila vinculada a una de las cuatro — solo se
+ * borra en cascada cuando se elimina la entidad dueña (ON DELETE CASCADE de cada FK).
  *
  * OJO: DER2.sql y DB_reset_withoutacces.sql tienen la columna mal escrita como "monto_ctual"
  * (typo, falta la "a" de "actual"). La base de datos real en Supabase SÍ tiene el nombre correcto
@@ -183,13 +188,14 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		tipo: 'select',
 		required: true,
 		// `options` (completa) debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla
-		// centro_costo — ver centro_costo_vinculacion_migration.sql y la migración que agrega
-		// 'bolsa general'. Se usa para traducir CUALQUIER valor existente a su label bonito en la
-		// tabla. `formOptions` (más abajo) es el subconjunto que se puede elegir a mano en el
-		// formulario: 'proyecto'/'cliente'/'proveedor' se completan solos (getOrCrearCentroCostoParaEntidad
-		// en este mismo service) cuando se crea esa entidad — no se eligen a mano, por eso no están
-		// en `formOptions` — y 'area'/'otro' quedaron fuera del catálogo manual a pedido del usuario
-		// (se dejan en `options` solo por si alguna fila vieja los tuviera, no hay ninguna hoy).
+		// centro_costo — ver centro_costo_vinculacion_migration.sql, centro_costo_empleado_migration.sql
+		// y la migración que agrega 'bolsa general'. Se usa para traducir CUALQUIER valor existente a
+		// su label bonito en la tabla. `formOptions` (más abajo) es el subconjunto que se puede elegir
+		// a mano en el formulario: 'proyecto'/'cliente'/'proveedor'/'empleado' se completan solos
+		// (getOrCrearCentroCostoParaEntidad o su equivalente en user-admin) cuando se crea esa entidad
+		// — no se eligen a mano, por eso no están en `formOptions` — y 'area'/'otro' quedaron fuera del
+		// catálogo manual a pedido del usuario (se dejan en `options` solo por si alguna fila vieja los
+		// tuviera, no hay ninguna hoy).
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
@@ -198,7 +204,8 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 			{ value: 'otro', label: 'Otro' },
 			{ value: 'proyecto', label: 'Proyecto (automático)' },
 			{ value: 'cliente', label: 'Cliente (automático)' },
-			{ value: 'proveedor', label: 'Proveedor (automático)' }
+			{ value: 'proveedor', label: 'Proveedor (automático)' },
+			{ value: 'empleado', label: 'Empleado (automático)' }
 		],
 		formOptions: [
 			{ value: 'obra', label: 'Obra' },

@@ -31,6 +31,12 @@
 			? '¿Anular este centro de costo? Podrás revertirlo desde la base de datos si fue un error.'
 			: '¿Eliminar este centro de costo de forma permanente? Esta acción no se puede deshacer.';
 
+	// El submódulo tiene dos vistas sobre la MISMA tabla centro_costo, separadas por si la fila
+	// está vinculada a una entidad (proyecto/cliente/proveedor/empleado, ver centroCostos.service.ts):
+	// "centros" = creadas a mano desde este submódulo (sin vínculo), "cuentas" = generadas solas al
+	// crear esa entidad. Cambiar de tab reconsulta con un `vinculado` distinto, no filtra en memoria.
+	let activeTab = $state<'centros' | 'cuentas'>('centros');
+
 	let items = $state<CentroCosto[]>([]);
 	let total = $state(0);
 	let pageNum = $state(1);
@@ -51,7 +57,14 @@
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getCentroCostos(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			const result = await getCentroCostos(supabase, {
+				page: pageNum,
+				pageSize: DEFAULT_PAGE_SIZE,
+				search,
+				sortBy,
+				sortDir,
+				vinculado: activeTab === 'cuentas'
+			});
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -61,6 +74,13 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function switchTab(tab: 'centros' | 'cuentas') {
+		if (activeTab === tab) return;
+		activeTab = tab;
+		pageNum = 1;
+		fetchList();
 	}
 
 	onMount(() => {
@@ -148,16 +168,48 @@
 		<div class="flex items-center gap-3">
 			<Building2 class="text-[#0f3b5e]" size={28} />
 			<div>
-				<h1 class="text-xl font-bold text-[#0f3b5e]">Centros de Costos</h1>
-				<p class="text-sm text-slate-500">Administra los centros de costo del ERP</p>
+				<h1 class="text-xl font-bold text-[#0f3b5e]">Centro de Costos y Cuentas Internas</h1>
+				<p class="text-sm text-slate-500">
+					{activeTab === 'centros'
+						? 'Centros de costo creados manualmente, sin vínculo a ninguna entidad'
+						: 'Cuentas generadas automáticamente al crear un proyecto, cliente, proveedor o empleado'}
+				</p>
 			</div>
 		</div>
+		{#if activeTab === 'centros'}
+			<button
+				type="button"
+				onclick={openCreate}
+				class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]"
+			>
+				<Plus size={16} /> Nuevo Centro de Costo
+			</button>
+		{/if}
+	</div>
+
+	<!-- Tabs -->
+	<div class="mb-4 flex gap-1 border-b border-slate-200">
 		<button
 			type="button"
-			onclick={openCreate}
-			class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]"
+			onclick={() => switchTab('centros')}
+			class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+				activeTab === 'centros'
+					? 'border-[#0f3b5e] text-[#0f3b5e]'
+					: 'border-transparent text-slate-500 hover:text-slate-700'
+			}`}
 		>
-			<Plus size={16} /> Nuevo Centro de Costo
+			Centros de Costos
+		</button>
+		<button
+			type="button"
+			onclick={() => switchTab('cuentas')}
+			class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+				activeTab === 'cuentas'
+					? 'border-[#0f3b5e] text-[#0f3b5e]'
+					: 'border-transparent text-slate-500 hover:text-slate-700'
+			}`}
+		>
+			Cuentas Internas
 		</button>
 	</div>
 
@@ -214,6 +266,7 @@
 				</thead>
 				<tbody>
 					{#each items as item (item.id_centro_costo)}
+						{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
 						<tr class="border-b border-slate-100 hover:bg-slate-50">
 							{#each tableFields as field}
 								<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
@@ -232,9 +285,10 @@
 									<button
 										type="button"
 										onclick={() => handleDelete(item)}
-										class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600"
-										title={deleteLabel}
-										aria-label={deleteLabel}
+										disabled={isLinked}
+										class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500 disabled:cursor-not-allowed"
+										title={isLinked ? 'Vinculado a una entidad — elimínala a ella, no este centro de costo' : deleteLabel}
+										aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
 									>
 										{#if DELETE_STRATEGY === 'soft'}
 											<Ban size={16} />
@@ -248,7 +302,11 @@
 					{:else}
 						<tr>
 							<td colspan={tableFields.length + 1} class="px-4 py-10 text-center text-slate-400">
-								{loading ? 'Cargando...' : 'No se encontraron centros de costo.'}
+								{loading
+									? 'Cargando...'
+									: activeTab === 'centros'
+										? 'No se encontraron centros de costo.'
+										: 'No se encontraron cuentas internas.'}
 							</td>
 						</tr>
 					{/each}

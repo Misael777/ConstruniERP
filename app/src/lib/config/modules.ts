@@ -51,7 +51,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     icon: 'fas fa-chart-line', 
     permiso: 'ver_finanzas',
     subItems: [
-      { path: '/finanzas/centros-de-costos', label: 'Centros de Costos', permiso: 'ver_finanzas_centros_costos' },
+      { path: '/finanzas/centros-de-costos', label: 'Centro de Costos y Cuentas Internas', permiso: 'ver_finanzas_centros_costos' },
       { path: '/finanzas/cuentas-cobrar', label: 'Cuentas por Cobrar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/cuentas-pagar', label: 'Cuentas por Pagar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/tranzacciones', label: 'Tranzacciones', permiso: 'ver_finanzas_transacciones' }

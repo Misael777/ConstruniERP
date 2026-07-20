@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2 } from '@lucide/svelte';
+	import { X, Loader2, Link } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import {
 		FIELDS_CONFIG,
@@ -40,11 +40,56 @@
 	let fieldErrors = $state<Record<string, string>>({});
 	let submitting = $state(false);
 
+	// La vinculación (id_proyecto/id_cliente/id_proveedor) existe en la fila de `centro` pero
+	// FIELDS_CONFIG no la expone como campo de formulario (se completa sola, nunca a mano — ver
+	// centroCostos.service.ts), así que el modal nunca mostraba a qué entidad pertenecía este centro
+	// de costo. Este banner de solo lectura resuelve eso: busca el nombre ACTUAL de la entidad
+	// vinculada (no el `centro.nombre` guardado, que podría haber quedado desactualizado si la
+	// entidad se renombró después) y lo muestra arriba del formulario.
+	let linkedEntity = $state<{ tipo: string; id: number; nombre: string } | null>(null);
+	let loadingLink = $state(false);
+	const hasLink = $derived(
+		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado)
+	);
+
+	async function loadLinkedEntity() {
+		linkedEntity = null;
+		if (!centro) return;
+		loadingLink = true;
+		try {
+			if (centro.id_proyecto) {
+				const { data } = await supabase
+					.from('proyecto')
+					.select('nombre_proyecto')
+					.eq('id_proyecto', centro.id_proyecto)
+					.maybeSingle();
+				linkedEntity = { tipo: 'Proyecto', id: centro.id_proyecto, nombre: data?.nombre_proyecto ?? centro.nombre };
+			} else if (centro.id_cliente) {
+				const { data } = await supabase.from('cliente').select('nombre').eq('id_cliente', centro.id_cliente).maybeSingle();
+				linkedEntity = { tipo: 'Cliente', id: centro.id_cliente, nombre: data?.nombre ?? centro.nombre };
+			} else if (centro.id_proveedor) {
+				const { data } = await supabase
+					.from('proveedor')
+					.select('razon_social')
+					.eq('id_proveedor', centro.id_proveedor)
+					.maybeSingle();
+				linkedEntity = { tipo: 'Proveedor', id: centro.id_proveedor, nombre: data?.razon_social ?? centro.nombre };
+			} else if (centro.id_empleado) {
+				const { data } = await supabase.from('empleados').select('nombre').eq('id', centro.id_empleado).maybeSingle();
+				linkedEntity = { tipo: 'Empleado', id: centro.id_empleado, nombre: data?.nombre ?? centro.nombre };
+			}
+		} finally {
+			loadingLink = false;
+		}
+	}
+
 	// Reconstruye el formulario cada vez que se abre el modal o cambia el registro a editar.
 	$effect(() => {
 		if (open) {
 			formValues = buildInitialValues();
 			fieldErrors = {};
+			if (mode === 'edit') loadLinkedEntity();
+			else linkedEntity = null;
 		}
 	});
 
@@ -114,6 +159,26 @@
 					<X size={20} />
 				</button>
 			</div>
+
+			{#if mode === 'edit'}
+				{#if loadingLink}
+					<div class="mx-6 mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400">
+						Buscando entidad vinculada...
+					</div>
+				{:else if linkedEntity}
+					<div class="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+						<Link size={16} class="shrink-0" />
+						<span
+							>Vinculado a <strong>{linkedEntity.tipo}</strong>: {linkedEntity.nombre}
+							<span class="text-blue-500">(#{linkedEntity.id})</span></span
+						>
+					</div>
+				{:else if !hasLink}
+					<div class="mx-6 mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+						Centro de costo manual — no está vinculado a ningún proyecto, cliente ni proveedor.
+					</div>
+				{/if}
+			{/if}
 
 			<form onsubmit={handleSubmit}>
 				<!-- Content: grid_cols escala con la cantidad de campos (ver modalWidthClass/gridColsClass) -->

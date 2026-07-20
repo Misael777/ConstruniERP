@@ -35,6 +35,45 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+// Equivalente a getOrCrearCentroCostoParaEntidad (app/src/lib/modules/centro-costos/services/
+// centroCostos.service.ts) para la entidad "empleado" — duplicado aquí (no adaptado) a propósito:
+// esta Edge Function corre en Deno con su propio resolvedor de módulos, no puede importar el
+// archivo de SvelteKit directamente. Idempotente (busca antes de insertar) y protegido además por
+// el índice único parcial uq_centro_costo_empleado (centro_costo_empleado_migration.sql) ante una
+// carrera entre dos llamadas casi simultáneas. Nunca lanza: crear el centro de costo es secundario
+// al flujo principal de crear el empleado, un fallo aquí se loguea y devuelve null.
+async function getOrCrearCentroCostoEmpleado(idEmpleado: number, nombre: string): Promise<number | null> {
+  const { data: existente } = await supabase
+    .from('centro_costo')
+    .select('id_centro_costo')
+    .eq('id_empleado', idEmpleado)
+    .maybeSingle();
+  if (existente) return existente.id_centro_costo;
+
+  const codigo = `EMP-${idEmpleado}`;
+  const { data: creado, error } = await supabase
+    .from('centro_costo')
+    .insert({ codigo, nombre: (nombre ?? '').slice(0, 200), tipo: 'empleado', id_empleado: idEmpleado, monto_actual: 0 })
+    .select('id_centro_costo')
+    .single();
+
+  if (error) {
+    if (error.code === '23505') {
+      // Carrera: otra llamada ya insertó el centro de costo de este empleado justo antes.
+      const { data: reintento } = await supabase
+        .from('centro_costo')
+        .select('id_centro_costo')
+        .eq('id_empleado', idEmpleado)
+        .maybeSingle();
+      if (reintento) return reintento.id_centro_costo;
+    }
+    console.error(`[user-admin] No se pudo crear el centro de costo para empleado #${idEmpleado}:`, error);
+    return null;
+  }
+
+  return creado?.id_centro_costo ?? null;
+}
+
 // --- CONTROLADORES API ---
 
 async function listUsers() {
@@ -116,6 +155,15 @@ async function createUser(body: any) {
   if (empleadoError) {
     await supabase.auth.admin.deleteUser(authUserId);
     return buildJsonResponse({ success: false, error: empleadoError.message }, 500);
+  }
+
+  // Centro de costo del empleado — secundario: si falla, el empleado ya quedó creado (se puede
+  // reintentar más tarde, mismo criterio que ClienteModal.svelte/ProveedorModal.svelte).
+  if (empleadoData) {
+    const idCentroCosto = await getOrCrearCentroCostoEmpleado(empleadoData.id, nombre ?? email);
+    if (!idCentroCosto) {
+      console.warn(`[user-admin] No se pudo crear/vincular el centro de costo del empleado #${empleadoData.id}.`);
+    }
   }
 
   return buildJsonResponse({ success: true, user: authData.user, empleado: empleadoData });

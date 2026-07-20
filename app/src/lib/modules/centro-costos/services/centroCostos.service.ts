@@ -37,26 +37,31 @@ export interface CentroCosto {
 	tipo: string;
 	monto_actual: number; // nombre real de la columna en BD (los .sql locales tienen un typo, ver centroCostos.config.ts)
 	created_at: string;
-	/** Vinculación a la entidad dueña de este centro de costo — como mucho UNA de las tres no-nula
-	 * (ver chk_centro_costo_una_entidad, centro_costo_vinculacion_migration.sql). Se completan solas
-	 * vía getOrCrearCentroCostoParaEntidad, nunca a mano desde el formulario genérico. */
+	/** Vinculación a la entidad dueña de este centro de costo — como mucho UNA de las cuatro no-nula
+	 * (ver chk_centro_costo_una_entidad, centro_costo_vinculacion_migration.sql +
+	 * centro_costo_empleado_migration.sql). Se completan solas vía getOrCrearCentroCostoParaEntidad
+	 * (o su equivalente en supabase/functions/user-admin para empleados, que corre en Deno y no puede
+	 * importar este archivo), nunca a mano desde el formulario genérico. */
 	id_proyecto: number | null;
 	id_cliente: number | null;
 	id_proveedor: number | null;
+	id_empleado: number | null;
 }
 
-export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor';
+export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor' | 'empleado';
 
 const PREFIJO_CODIGO_POR_TIPO: Record<EntidadCentroCosto, string> = {
 	proyecto: 'PROY',
 	cliente: 'CLI',
-	proveedor: 'PROV'
+	proveedor: 'PROV',
+	empleado: 'EMP'
 };
 
-const COLUMNA_POR_TIPO: Record<EntidadCentroCosto, 'id_proyecto' | 'id_cliente' | 'id_proveedor'> = {
+const COLUMNA_POR_TIPO: Record<EntidadCentroCosto, 'id_proyecto' | 'id_cliente' | 'id_proveedor' | 'id_empleado'> = {
 	proyecto: 'id_proyecto',
 	cliente: 'id_cliente',
-	proveedor: 'id_proveedor'
+	proveedor: 'id_proveedor',
+	empleado: 'id_empleado'
 };
 
 export interface ListParams {
@@ -65,6 +70,16 @@ export interface ListParams {
 	search?: string;
 	sortBy?: string;
 	sortDir?: 'asc' | 'desc';
+	/**
+	 * Separa el módulo en sus dos tabs ("Centro de Costos y Cuentas Internas"). OJO: proyecto NO
+	 * cuenta como "Cuentas Internas" pese a estar vinculado — un proyecto ES un centro de costo real
+	 * (ahí se sigue el presupuesto/gasto de la obra), a diferencia de cliente/proveedor/empleado que
+	 * son cuentas de seguimiento (cobros, pagos, planilla), no centros de costo de obra.
+	 *   - true  -> solo filas vinculadas a cliente/proveedor/empleado = "Cuentas Internas"
+	 *   - false -> todo lo demás: sin vincular (creadas a mano) O vinculadas a proyecto = "Centros de Costos"
+	 *   - undefined -> sin filtrar (todas)
+	 */
+	vinculado?: boolean;
 }
 
 export interface ListResult {
@@ -99,6 +114,14 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		.select('*', { count: 'exact' })
 		.order(sortField, { ascending: sortDir === 'asc' })
 		.range(from, to);
+
+	if (params.vinculado === true) {
+		// "Cuentas Internas" — proyecto queda fuera a propósito, ver doc de ListParams.vinculado.
+		query = query.or('id_cliente.not.is.null,id_proveedor.not.is.null,id_empleado.not.is.null');
+	} else if (params.vinculado === false) {
+		// "Centros de Costos" — manuales + los vinculados a proyecto.
+		query = query.is('id_cliente', null).is('id_proveedor', null).is('id_empleado', null);
+	}
 
 	const search = params.search?.trim();
 	if (search) {
@@ -167,6 +190,32 @@ export async function updateCentroCosto(
 }
 
 export async function deleteCentroCosto(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	// Un centro de costo creado automáticamente para una entidad (proyecto/cliente/proveedor/
+	// empleado) no se borra directo — su ciclo de vida lo dicta la entidad dueña (ver el FK
+	// "ON DELETE CASCADE" de cada columna en las migraciones). Si se permitiera borrarlo aquí,
+	// quedaría un huérfano en el otro sentido: la entidad sigue existiendo pero su próxima
+	// transacción/pago dispararía un getOrCrear que le crea uno NUEVO, duplicando el concepto.
+	const { data: existente, error: fetchError } = await client
+		.from(TABLE_NAME)
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado')
+		.eq(PK_COLUMN, id)
+		.maybeSingle();
+
+	if (fetchError) {
+		return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
+	}
+
+	const entidadVinculada = existente
+		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
+		: undefined;
+
+	if (entidadVinculada) {
+		return {
+			success: false,
+			message: `Este centro de costo se creó automáticamente para un ${entidadVinculada} y no se puede eliminar directamente. Elimina ese ${entidadVinculada} si de verdad quieres quitarlo — su centro de costo se borra solo, en cascada.`
+		};
+	}
+
 	if (DELETE_STRATEGY === 'soft') {
 		if (!SOFT_DELETE_COLUMN) {
 			return {
