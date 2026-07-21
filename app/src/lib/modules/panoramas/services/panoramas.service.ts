@@ -1,23 +1,31 @@
 /**
- * Servicio de acceso a datos para el tablero de "Panoramas de Pago" (planeación de flujo de caja).
+ * Servicio de acceso a datos para los tableros de "Panoramas de Pago" y "Panoramas de Cobro"
+ * (planeación de flujo de caja).
  *
- * Reutiliza la tabla cuentas_pagar existente (no se creó una tabla de "ítems" nueva, por decisión
- * explícita): cada tarjeta de la bandeja/panorama ES una fila de cuentas_pagar. Se le agregaron dos
- * columnas nuevas:
- *   ALTER TABLE cuentas_pagar ADD COLUMN panorama_id SMALLINT NULL;      -- 1, 2, o NULL = en bandeja
- *   ALTER TABLE cuentas_pagar ADD COLUMN panorama_orden INTEGER NULL;   -- posición al arrastrar/reordenar
+ * Reutiliza las tablas existentes cuentas_pagar/cuentas_cobrar (no se creó una tabla de "ítems"
+ * nueva, por decisión explícita): cada tarjeta de la bandeja/panorama ES una fila de esas tablas —
+ * salvo que esté "fraccionada" (ver más abajo), en cuyo caso son sus cuotas (pagos/cobros) las que
+ * se arrastran. Columnas agregadas vía panorama_persistencia_migration.sql:
+ *   cuentas_pagar / cuentas_cobrar: panorama_id SMALLINT NULL, panorama_orden INTEGER NULL
+ *   pagos / cobros:                 panorama_id SMALLINT NULL, panorama_orden INTEGER NULL
  *
  * Hay exactamente 2 panoramas fijos (no CRUD de panoramas, por decisión explícita) — sus nombres
  * ("Panorama 1"/"Panorama 2") y subtítulos están hardcodeados en el +page.svelte, no en la BD.
  *
- * "Prioridad" (Alta/Media/Baja) y "Vencido/Por vencer" NO son columnas de la BD — se calculan al
- * vuelo desde fecha_vencimiento (ver computePrioridad/computeEstadoVencimiento más abajo), porque
- * no existe ese campo en el esquema real. Los umbrales (7/15 días) son un criterio razonable por
- * defecto, AJUSTAR si el ERP define otra regla.
- *
- * "Proyección de ingresos" tampoco tiene tabla propia: se decidió sumar el saldo_pendiente de
- * cuentas_cobrar (pendiente + vencido) — es el mismo número para ambos panoramas, ya que hoy no
- * hay forma de asociar cobros a un panorama específico.
+ * FRACCIONAMIENTO (clusters arrastrables) — pedido explícito del usuario: si una cuenta tiene 2+
+ * cuotas 'programado' en pagos/cobros, se considera "fraccionada" y se muestra como un CLUSTER: una
+ * tarjeta contenedora con una sub-tarjeta arrastrable por cuota, agrupadas bajo la cuenta. El
+ * usuario puede:
+ *   (a) arrastrar la tarjeta del cluster completa -> mueve TODAS las cuotas visibles en esa tarjeta
+ *       juntas (mismo panorama_id + panorama_orden para todas) — "en bloque".
+ *   (b) arrastrar una sub-tarjeta de una cuota individual -> mueve solo esa fila de pagos/cobros,
+ *       independiente de sus hermanas.
+ * Como consecuencia directa de (b), las cuotas de una misma cuenta pueden terminar repartidas entre
+ * la Bandeja y ambos Panoramas — cada columna muestra únicamente el subconjunto de cuotas de esa
+ * cuenta que le corresponde a ELLA (panorama_id de la cuota = el de esa columna), agrupadas bajo el
+ * mismo encabezado de cuenta. Una cuenta con 0-1 cuota 'programado' NO se considera fraccionada: se
+ * sigue mostrando y arrastrando como una tarjeta simple de toda la vida, vía el panorama_id propio
+ * de la fila de cuentas_pagar/cuentas_cobrar (sin cambios de comportamiento).
  *
  * Se invoca client-side con el cliente anon, igual que el resto de módulos de finanzas — funciona
  * igual en web y en Tauri (Windows/Android) sin servidor embebido.
@@ -31,6 +39,20 @@ export type PanoramaId = (typeof PANORAMA_IDS)[number];
 
 export type Prioridad = 'alto' | 'media' | 'bajo';
 export type EstadoVencimiento = 'vencido' | 'por_vencer';
+
+/** Una cuota individual ('programado') de una cuenta fraccionada — arrastrable por separado.
+ * `id` = id_pago/id_cobro, único dentro de la lista de fracciones de ESA tarjeta (suficiente para
+ * svelte-dnd-action, que solo exige unicidad dentro de cada dndzone). */
+export interface FraccionPanorama {
+	id: number;
+	idCuenta: number;
+	numeroCuota: number;
+	totalCuotas: number;
+	monto: number;
+	fecha: string;
+	panoramaId: number | null;
+	panoramaOrden: number | null;
+}
 
 export interface PagoPendienteItem {
 	/** Alias de id_cuenta_pagar: svelte-dnd-action exige que cada ítem tenga una propiedad `id`. */
@@ -49,7 +71,14 @@ export interface PagoPendienteItem {
 	 * abrirCuotasDe en +page.svelte) pueda abrir SIN una consulta extra a cuentas_pagar. */
 	montoTotal: number;
 	fechaEmision: string;
+	/** 2+ elementos = esta cuenta está fraccionada, la tarjeta se dibuja como cluster con una
+	 * sub-tarjeta arrastrable por cuota (ver nota de arriba). 0 elementos = tarjeta simple normal. */
+	fracciones: FraccionPanorama[];
 }
+
+/** Entrada del orden final de una columna (Bandeja/Panorama) tras arrastrar-soltar en la zona
+ * EXTERNA — mezcla cuentas simples y clusters completos (ver reorderPanorama). */
+export type PanoramaEntry = { tipo: 'cuenta'; id: number } | { tipo: 'cluster'; idsFraccion: number[] };
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
@@ -82,58 +111,137 @@ export function computeEstadoVencimiento(fechaVencimiento: string | null): Estad
 
 const SELECT_CON_JOINS = '*, proveedor(razon_social), presupuesto(id_proyecto, proyecto(nombre_proyecto))';
 
-function mapRow(row: any): PagoPendienteItem {
+function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 	return {
 		id: row.id_cuenta_pagar,
 		id_cuenta_pagar: row.id_cuenta_pagar,
 		titulo: row.observacion || row.num_documento || row.responsable || 'Pago sin descripción',
 		proveedorNombre: row.proveedor?.razon_social ?? 'Sin proveedor',
-		monto: Number(row.monto_comprometido),
+		// Si está fraccionada, `monto` es la suma de SOLO las cuotas visibles en ESTA tarjeta (no el
+		// total de la cuenta) — se usa para sumar totales por columna (proyeccionPagos, CSV, etc.);
+		// usar el total completo sobre-contaría cuando las cuotas de una cuenta terminan repartidas
+		// entre Bandeja/Panorama 1/Panorama 2. `montoTotal` (abajo) sigue siendo el total real de la
+		// cuenta completa, para el popup de cuotas.
+		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.monto_comprometido),
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
 		panoramaId: row.panorama_id,
 		panoramaOrden: row.panorama_orden,
 		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento),
 		montoTotal: Number(row.monto_comprometido),
-		fechaEmision: row.fecha_emision
+		fechaEmision: row.fecha_emision,
+		fracciones
 	};
 }
 
+/** Trae TODAS las cuotas 'programado' de las cuentas dadas y las agrupa por id_cuenta_pagar. Una
+ * cuenta con menos de 2 cuotas no se agrega al mapa (no se considera "fraccionada" — ver nota de
+ * arriba), para que el llamador la trate como tarjeta simple sin tener que repetir esa condición. */
+async function fraccionesPagoPorCuenta(client: SupabaseClient, idsCuenta: number[]): Promise<Map<number, FraccionPanorama[]>> {
+	const resultado = new Map<number, FraccionPanorama[]>();
+	if (idsCuenta.length === 0) return resultado;
+
+	const { data, error } = await client
+		.from('pagos')
+		.select('id_pago, id_cuenta_pagar, monto, fecha_pago, panorama_id, panorama_orden')
+		.in('id_cuenta_pagar', idsCuenta)
+		.eq('estado_pago', 'programado')
+		.order('fecha_pago', { ascending: true });
+	if (error) throw error;
+
+	const porCuenta = new Map<number, any[]>();
+	for (const fila of data ?? []) {
+		const lista = porCuenta.get(fila.id_cuenta_pagar) ?? [];
+		lista.push(fila);
+		porCuenta.set(fila.id_cuenta_pagar, lista);
+	}
+
+	for (const [idCuenta, filas] of porCuenta) {
+		if (filas.length < 2) continue;
+		resultado.set(
+			idCuenta,
+			filas.map((f, i) => ({
+				id: f.id_pago,
+				idCuenta: f.id_cuenta_pagar,
+				numeroCuota: i + 1,
+				totalCuotas: filas.length,
+				monto: Number(f.monto),
+				fecha: f.fecha_pago,
+				panoramaId: f.panorama_id,
+				panoramaOrden: f.panorama_orden
+			}))
+		);
+	}
+	return resultado;
+}
+
+/** Trae todas las cuentas por pagar pendientes/vencidas + sus fracciones (si las tiene) — base
+ * compartida de getPagosPendientes y getPanoramaItems, que solo difieren en QUÉ subconjunto de cada
+ * cuenta/cluster le corresponde a su columna. */
+async function cuentasPagarConFracciones(client: SupabaseClient): Promise<{ cuentas: any[]; fracciones: Map<number, FraccionPanorama[]> }> {
+	const { data, error } = await client
+		.from('cuentas_pagar')
+		.select(SELECT_CON_JOINS)
+		.in('estado', ['pendiente', 'vencido'])
+		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+	if (error) throw error;
+
+	const cuentas = (data ?? []) as any[];
+	const fracciones = await fraccionesPagoPorCuenta(client, cuentas.map((c) => c.id_cuenta_pagar));
+	return { cuentas, fracciones };
+}
+
 /** Pagos pendientes SIN panorama asignado todavía (la "bandeja"). Incluye 'vencido' además de
- * 'pendiente' (antes solo traía 'pendiente') — un pago vencido es justo el que más urge planear. */
+ * 'pendiente'. Una cuenta fraccionada aparece aquí como cluster mostrando SOLO sus cuotas todavía
+ * sin panorama — si ya las movió todas, la cuenta deja de aparecer en la bandeja por completo. */
 export async function getPagosPendientes(
 	client: SupabaseClient,
 	filters: { idProyecto?: number | null; prioridad?: Prioridad | null } = {}
 ): Promise<PagoPendienteItem[]> {
-	let query = client
-		.from('cuentas_pagar')
-		.select(SELECT_CON_JOINS)
-		.in('estado', ['pendiente', 'vencido'])
-		.is('panorama_id', null)
-		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+	const { cuentas, fracciones } = await cuentasPagarConFracciones(client);
 
-	const { data, error } = await query;
-	if (error) throw error;
+	let items: PagoPendienteItem[] = [];
+	for (const row of cuentas) {
+		const propias = fracciones.get(row.id_cuenta_pagar);
+		if (propias) {
+			const sinAsignar = propias.filter((f) => f.panoramaId === null);
+			if (sinAsignar.length === 0) continue;
+			items.push(mapRow(row, sinAsignar));
+		} else {
+			if (row.panorama_id !== null) continue;
+			items.push(mapRow(row, []));
+		}
+	}
 
-	let items = (data ?? []).map(mapRow);
 	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
 	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
 	return items;
 }
 
-/** Pagos ya asignados a un panorama, ordenados por su posición (panorama_orden). */
+/** Pagos ya asignados a un panorama. Una cuenta fraccionada aparece como cluster mostrando SOLO las
+ * cuotas que están en ESTE panorama específico — sus demás cuotas pueden estar en la bandeja o en
+ * el otro panorama, se muestran ahí respectivamente (ver nota de arriba del archivo). */
 export async function getPanoramaItems(client: SupabaseClient, panoramaId: PanoramaId): Promise<PagoPendienteItem[]> {
-	const { data, error } = await client
-		.from('cuentas_pagar')
-		.select(SELECT_CON_JOINS)
-		.eq('panorama_id', panoramaId)
-		.order('panorama_orden', { ascending: true, nullsFirst: false });
+	const { cuentas, fracciones } = await cuentasPagarConFracciones(client);
 
-	if (error) throw error;
-	return (data ?? []).map(mapRow);
+	const items: PagoPendienteItem[] = [];
+	for (const row of cuentas) {
+		const propias = fracciones.get(row.id_cuenta_pagar);
+		if (propias) {
+			const enEstaColumna = propias.filter((f) => f.panoramaId === panoramaId).sort((a, b) => (a.panoramaOrden ?? 0) - (b.panoramaOrden ?? 0));
+			if (enEstaColumna.length === 0) continue;
+			items.push(mapRow(row, enEstaColumna));
+		} else {
+			if (row.panorama_id !== panoramaId) continue;
+			items.push(mapRow(row, []));
+		}
+	}
+	items.sort((a, b) => (a.panoramaOrden ?? Infinity) - (b.panoramaOrden ?? Infinity));
+	return items;
 }
 
-/** Asigna un pago a un panorama (o lo regresa a la bandeja si panoramaId es null), en la posición dada. */
+/** Asigna una cuenta SIMPLE (no fraccionada) a un panorama (o la regresa a la bandeja si
+ * panoramaId es null), en la posición dada. */
 export async function assignToPanorama(
 	client: SupabaseClient,
 	idCuentaPagar: number,
@@ -149,23 +257,67 @@ export async function assignToPanorama(
 	return { success: true, message: 'Pago movido correctamente' };
 }
 
-/** Reescribe panorama_orden para toda una columna tras arrastrar-reordenar (1 update por fila). */
-export async function reorderPanorama(
+/**
+ * Mueve UNA O VARIAS cuotas (pagos.id_pago) al mismo panorama y con el mismo orden — cubre los dos
+ * casos de arrastre de un cluster con UNA sola función: arrastrar la tarjeta completa del cluster
+ * (idsFraccion = todas las cuotas visibles en esa tarjeta, "en bloque") y arrastrar una sola
+ * sub-tarjeta de cuota individual (idsFraccion = un solo id). `panoramaId=null` las regresa a la
+ * bandeja.
+ */
+export async function assignFraccionesToPanorama(
 	client: SupabaseClient,
-	panoramaId: PanoramaId,
-	orderedIds: number[]
+	idsFraccion: number[],
+	panoramaId: PanoramaId | null,
+	orden: number | null
 ): Promise<{ success: boolean; message: string }> {
-	const results = await Promise.all(
-		orderedIds.map((id, index) =>
-			client.from('cuentas_pagar').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_cuenta_pagar', id)
-		)
-	);
+	const results = await Promise.all(idsFraccion.map((id) => client.from('pagos').update({ panorama_id: panoramaId, panorama_orden: orden }).eq('id_pago', id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudo mover la cuota: ${failed.error.message}` };
+	return { success: true, message: idsFraccion.length > 1 ? 'Cuotas movidas correctamente' : 'Cuota movida correctamente' };
+}
+
+/** Reescribe panorama_orden para toda una columna tras arrastrar-reordenar en la zona EXTERNA
+ * (mezcla cuentas simples y clusters completos — un cluster escribe el mismo orden en TODAS sus
+ * cuotas, ya que se mueve en bloque). 1 update por fila afectada, igual patrón que antes. */
+export async function reorderPanorama(client: SupabaseClient, panoramaId: PanoramaId | null, entradas: PanoramaEntry[]): Promise<{ success: boolean; message: string }> {
+	const ops: PromiseLike<{ error: any }>[] = [];
+	entradas.forEach((entrada, index) => {
+		if (entrada.tipo === 'cuenta') {
+			ops.push(client.from('cuentas_pagar').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_cuenta_pagar', entrada.id));
+		} else {
+			for (const idPago of entrada.idsFraccion) {
+				ops.push(client.from('pagos').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_pago', idPago));
+			}
+		}
+	});
+	const results = await Promise.all(ops);
 	const failed = results.find((r) => r.error);
 	if (failed?.error) return { success: false, message: `No se pudo reordenar: ${failed.error.message}` };
 	return { success: true, message: 'Orden actualizado' };
 }
 
-/** Suma saldo_pendiente de cuentas_cobrar (pendiente + vencido) — ver nota de "Proyección de ingresos"
+/** Reescribe panorama_id/panorama_orden de una lista de cuotas tras arrastrar-soltar en la zona
+ * INTERNA de un cluster (reordenar dentro del mismo cluster, o mover una cuota a OTRO cluster ya
+ * existente de otra columna) — se llama una vez por cada zona interna que cambió, con su lista
+ * final completa, igual criterio que reorderPanorama/handleBandejaFinalize. */
+export async function reorderFracciones(client: SupabaseClient, panoramaId: PanoramaId | null, idsFraccion: number[]): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(idsFraccion.map((id, index) => client.from('pagos').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_pago', id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudo reordenar la cuota: ${failed.error.message}` };
+	return { success: true, message: 'Orden actualizado' };
+}
+
+/** Atajo de un clic (sin arrastrar) para mover UNA cuota a un panorama — respaldo para el caso en
+ * que todavía no existe ningún cluster de esa cuenta en la columna destino (no hay dónde soltarla
+ * arrastrando). Siempre disponible además del arrastre, nunca lo reemplaza. */
+export async function moverFraccionAPanorama(client: SupabaseClient, idPago: number, panoramaId: PanoramaId | null): Promise<{ success: boolean; message: string }> {
+	const { error } = await client.from('pagos').update({ panorama_id: panoramaId }).eq('id_pago', idPago);
+	if (error) return { success: false, message: `No se pudo mover la cuota: ${error.message}` };
+	return { success: true, message: 'Cuota movida correctamente' };
+}
+
+/** Reescribe panorama_orden para toda una columna tras arrastrar-reordenar (1 update por fila).
+ * Suma saldo_pendiente de cuentas_cobrar (pendiente + vencido) — ver nota de "Proyección de ingresos"
  * arriba. Si se pasan `desde`/`hasta`, solo cuenta lo que vence en ese rango (mismo motivo que
  * getProyeccionPagos: comparar el mismo período en vez de "todo el tiempo" contra "un mes"). */
 export async function getProyeccionIngresos(client: SupabaseClient, desde?: string, hasta?: string): Promise<number> {
@@ -197,10 +349,10 @@ export async function getProyectoOptions(client: SupabaseClient): Promise<FieldO
 
 /**
  * =============================================================
- * Lado "Panoramas de Cobro" (cuentas_cobrar) — contraparte de todo lo de arriba, mismo patrón:
- * bandeja/panoramas 100% de sesión (no se persiste `panorama_id`/`panorama_orden`, no se agregaron
- * esas columnas a cuentas_cobrar todavía — si más adelante se decide persistir esto, replicar la
- * migración que ya existe en cuentas_pagar).
+ * Lado "Panoramas de Cobro" (cuentas_cobrar) — contraparte de todo lo de arriba, mismo patrón y
+ * ahora YA PERSISTE en BD igual que Panoramas de Pago (antes era 100% de sesión — se agregaron
+ * panorama_id/panorama_orden a cuentas_cobrar y a cobros vía panorama_persistencia_migration.sql,
+ * decisión explícita del usuario para tener paridad real entre ambos tableros).
  *
  * A diferencia de cuentas_pagar (que no tiene un campo de prioridad manual y por eso la calcula sola
  * desde fecha_vencimiento), cuentas_cobrar SÍ tiene una columna real `prioridad` ('alto'|'medio'|'bajo',
@@ -232,53 +384,202 @@ export interface IngresoPendienteItem {
 	fechaVencimiento: string | null;
 	idProyecto: number | null;
 	idCliente: number | null;
+	panoramaId: number | null;
+	panoramaOrden: number | null;
 	prioridad: PrioridadCobro;
 	/** monto (total de la cuenta, no el saldo_pendiente de arriba) y fecha_emision — ya venían en el
 	 * `select('*')` de abajo, solo no se exponían. Se agregan para que el popup de cuotas (ver
 	 * abrirCuotasDe en +page.svelte) pueda abrir SIN una consulta extra a cuentas_cobrar. */
 	montoTotal: number;
 	fechaEmision: string;
+	/** Ver FraccionPanorama/PagoPendienteItem.fracciones — mismo criterio, sobre "cobros" en vez de "pagos". */
+	fracciones: FraccionPanorama[];
 }
 
 const SELECT_COBRO_CON_JOINS = '*, cliente(nombre), proyecto(nombre_proyecto)';
 
-function mapCobroRow(row: any): IngresoPendienteItem {
+function mapCobroRow(row: any, fracciones: FraccionPanorama[]): IngresoPendienteItem {
 	return {
 		id: row.id_cuenta_cobrar,
 		id_cuenta_cobrar: row.id_cuenta_cobrar,
 		titulo: row.num_documento || row.observaciones || row.responsable || 'Cuenta por cobrar sin descripción',
 		clienteNombre: row.cliente?.nombre ?? 'Sin cliente',
 		proyectoNombre: row.proyecto?.nombre_proyecto ?? null,
-		monto: Number(row.saldo_pendiente),
+		// Ver nota equivalente en mapRow: si está fraccionada, `monto` es la suma de solo las cuotas
+		// visibles en esta tarjeta, no el saldo pendiente completo de la cuenta.
+		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.saldo_pendiente),
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.id_proyecto,
 		idCliente: row.id_cliente,
+		panoramaId: row.panorama_id,
+		panoramaOrden: row.panorama_orden,
 		prioridad: (row.prioridad as PrioridadCobro) || prioridadCobroPorDefecto(row.fecha_vencimiento),
 		montoTotal: Number(row.monto),
-		fechaEmision: row.fecha_emision
+		fechaEmision: row.fecha_emision,
+		fracciones
 	};
 }
 
-/** Cuentas por cobrar con saldo pendiente (pendiente + vencido) — la "bandeja" del tablero de cobro. */
-export async function getCobrosPendientes(
-	client: SupabaseClient,
-	filters: { idProyecto?: number | null; idCliente?: number | null; prioridad?: PrioridadCobro | null; estado?: 'pendiente' | 'vencido' | null } = {}
-): Promise<IngresoPendienteItem[]> {
-	let query = client
+/** Contraparte de fraccionesPagoPorCuenta, sobre "cobros". */
+async function fraccionesCobroPorCuenta(client: SupabaseClient, idsCuenta: number[]): Promise<Map<number, FraccionPanorama[]>> {
+	const resultado = new Map<number, FraccionPanorama[]>();
+	if (idsCuenta.length === 0) return resultado;
+
+	const { data, error } = await client
+		.from('cobros')
+		.select('id_cobro, id_cuenta_cobrar, monto, fecha_cobro, panorama_id, panorama_orden')
+		.in('id_cuenta_cobrar', idsCuenta)
+		.eq('estado_cobro', 'programado')
+		.order('fecha_cobro', { ascending: true });
+	if (error) throw error;
+
+	const porCuenta = new Map<number, any[]>();
+	for (const fila of data ?? []) {
+		const lista = porCuenta.get(fila.id_cuenta_cobrar) ?? [];
+		lista.push(fila);
+		porCuenta.set(fila.id_cuenta_cobrar, lista);
+	}
+
+	for (const [idCuenta, filas] of porCuenta) {
+		if (filas.length < 2) continue;
+		resultado.set(
+			idCuenta,
+			filas.map((f, i) => ({
+				id: f.id_cobro,
+				idCuenta: f.id_cuenta_cobrar,
+				numeroCuota: i + 1,
+				totalCuotas: filas.length,
+				monto: Number(f.monto),
+				fecha: f.fecha_cobro,
+				panoramaId: f.panorama_id,
+				panoramaOrden: f.panorama_orden
+			}))
+		);
+	}
+	return resultado;
+}
+
+async function cuentasCobrarConFracciones(client: SupabaseClient): Promise<{ cuentas: any[]; fracciones: Map<number, FraccionPanorama[]> }> {
+	const { data, error } = await client
 		.from('cuentas_cobrar')
 		.select(SELECT_COBRO_CON_JOINS)
 		.in('estado', ['pendiente', 'vencido'])
 		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
-
-	const { data, error } = await query;
 	if (error) throw error;
 
-	let items = (data ?? []).map(mapCobroRow);
+	const cuentas = (data ?? []) as any[];
+	const fracciones = await fraccionesCobroPorCuenta(client, cuentas.map((c) => c.id_cuenta_cobrar));
+	return { cuentas, fracciones };
+}
+
+/** Cuentas por cobrar con saldo pendiente SIN panorama asignado (la "bandeja" del tablero de cobro)
+ * — mismo criterio de clustering por fraccionamiento que getPagosPendientes. */
+export async function getCobrosPendientes(
+	client: SupabaseClient,
+	filters: { idProyecto?: number | null; idCliente?: number | null; prioridad?: PrioridadCobro | null; estado?: 'pendiente' | 'vencido' | null } = {}
+): Promise<IngresoPendienteItem[]> {
+	const { cuentas, fracciones } = await cuentasCobrarConFracciones(client);
+
+	let items: IngresoPendienteItem[] = [];
+	for (const row of cuentas) {
+		const propias = fracciones.get(row.id_cuenta_cobrar);
+		if (propias) {
+			const sinAsignar = propias.filter((f) => f.panoramaId === null);
+			if (sinAsignar.length === 0) continue;
+			items.push(mapCobroRow(row, sinAsignar));
+		} else {
+			if (row.panorama_id !== null) continue;
+			items.push(mapCobroRow(row, []));
+		}
+	}
+
 	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
 	if (filters.idCliente) items = items.filter((i) => i.idCliente === filters.idCliente);
 	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
 	if (filters.estado) items = items.filter((i) => (filters.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
 	return items;
+}
+
+/** Cobros ya asignados a un panorama — contraparte de getPanoramaItems. */
+export async function getPanoramaItemsCobro(client: SupabaseClient, panoramaId: PanoramaId): Promise<IngresoPendienteItem[]> {
+	const { cuentas, fracciones } = await cuentasCobrarConFracciones(client);
+
+	const items: IngresoPendienteItem[] = [];
+	for (const row of cuentas) {
+		const propias = fracciones.get(row.id_cuenta_cobrar);
+		if (propias) {
+			const enEstaColumna = propias.filter((f) => f.panoramaId === panoramaId).sort((a, b) => (a.panoramaOrden ?? 0) - (b.panoramaOrden ?? 0));
+			if (enEstaColumna.length === 0) continue;
+			items.push(mapCobroRow(row, enEstaColumna));
+		} else {
+			if (row.panorama_id !== panoramaId) continue;
+			items.push(mapCobroRow(row, []));
+		}
+	}
+	items.sort((a, b) => (a.panoramaOrden ?? Infinity) - (b.panoramaOrden ?? Infinity));
+	return items;
+}
+
+/** Asigna una cuenta por cobrar SIMPLE (no fraccionada) a un panorama — contraparte de assignToPanorama. */
+export async function assignToPanoramaCobro(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	panoramaId: PanoramaId | null,
+	orden: number | null
+): Promise<{ success: boolean; message: string }> {
+	const { error } = await client
+		.from('cuentas_cobrar')
+		.update({ panorama_id: panoramaId, panorama_orden: orden })
+		.eq('id_cuenta_cobrar', idCuentaCobrar);
+
+	if (error) return { success: false, message: `No se pudo mover el cobro: ${error.message}` };
+	return { success: true, message: 'Cobro movido correctamente' };
+}
+
+/** Contraparte de assignFraccionesToPanorama, sobre "cobros". */
+export async function assignFraccionesToPanoramaCobro(
+	client: SupabaseClient,
+	idsFraccion: number[],
+	panoramaId: PanoramaId | null,
+	orden: number | null
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(idsFraccion.map((id) => client.from('cobros').update({ panorama_id: panoramaId, panorama_orden: orden }).eq('id_cobro', id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudo mover la cuota: ${failed.error.message}` };
+	return { success: true, message: idsFraccion.length > 1 ? 'Cuotas movidas correctamente' : 'Cuota movida correctamente' };
+}
+
+/** Contraparte de reorderPanorama, sobre cuentas_cobrar/cobros. */
+export async function reorderPanoramaCobro(client: SupabaseClient, panoramaId: PanoramaId | null, entradas: PanoramaEntry[]): Promise<{ success: boolean; message: string }> {
+	const ops: PromiseLike<{ error: any }>[] = [];
+	entradas.forEach((entrada, index) => {
+		if (entrada.tipo === 'cuenta') {
+			ops.push(client.from('cuentas_cobrar').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_cuenta_cobrar', entrada.id));
+		} else {
+			for (const idCobro of entrada.idsFraccion) {
+				ops.push(client.from('cobros').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_cobro', idCobro));
+			}
+		}
+	});
+	const results = await Promise.all(ops);
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudo reordenar: ${failed.error.message}` };
+	return { success: true, message: 'Orden actualizado' };
+}
+
+/** Contraparte de reorderFracciones, sobre "cobros". */
+export async function reorderFraccionesCobro(client: SupabaseClient, panoramaId: PanoramaId | null, idsFraccion: number[]): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(idsFraccion.map((id, index) => client.from('cobros').update({ panorama_id: panoramaId, panorama_orden: index }).eq('id_cobro', id)));
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudo reordenar la cuota: ${failed.error.message}` };
+	return { success: true, message: 'Orden actualizado' };
+}
+
+/** Contraparte de moverFraccionAPanorama, sobre "cobros". */
+export async function moverFraccionAPanoramaCobro(client: SupabaseClient, idCobro: number, panoramaId: PanoramaId | null): Promise<{ success: boolean; message: string }> {
+	const { error } = await client.from('cobros').update({ panorama_id: panoramaId }).eq('id_cobro', idCobro);
+	if (error) return { success: false, message: `No se pudo mover la cuota: ${error.message}` };
+	return { success: true, message: 'Cuota movida correctamente' };
 }
 
 /** Suma saldo_pendiente de cuentas_pagar (pendiente + vencido) — inverso de getProyeccionIngresos, para
@@ -311,7 +612,7 @@ export interface ResumenCobros {
 }
 
 /** Agregados para la tarjeta "Resumen general" del tablero de cobro — sobre TODAS las cuentas
- * pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas en esta sesión. */
+ * pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas. */
 export async function getResumenCobros(client: SupabaseClient): Promise<ResumenCobros> {
 	const { data, error } = await client.from('cuentas_cobrar').select('saldo_pendiente, estado, id_cliente').in('estado', ['pendiente', 'vencido']);
 	if (error) throw error;
@@ -341,8 +642,8 @@ export interface ResumenPagos {
 }
 
 /** Agregados para "Resumen general" del tablero de Panoramas de Pago — sobre TODAS las cuentas por
- * pagar pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas en esta sesión.
- * Inverso de getResumenCobros. */
+ * pagar pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas. Inverso de
+ * getResumenCobros. */
 export async function getResumenPagos(client: SupabaseClient): Promise<ResumenPagos> {
 	const { data, error } = await client.from('cuentas_pagar').select('saldo_pendiente, estado, id_proveedor').in('estado', ['pendiente', 'vencido']);
 	if (error) throw error;

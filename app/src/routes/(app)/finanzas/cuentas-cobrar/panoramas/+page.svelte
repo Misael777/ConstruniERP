@@ -5,15 +5,19 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Receipt, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays } from '@lucide/svelte';
+	import { ArrowLeft, Receipt, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers } from '@lucide/svelte';
 	import {
 		getCobrosPendientes,
+		getPanoramaItemsCobro,
 		getProyeccionPagos,
 		getCobradoEnRango,
 		getResumenCobros,
 		getProyectoOptions,
 		actualizarFechasVencimientoCobro,
+		reorderPanoramaCobro,
+		moverFraccionAPanoramaCobro,
 		type IngresoPendienteItem,
+		type PanoramaEntry,
 		type PrioridadCobro,
 		type ResumenCobros
 	} from '$lib/modules/panoramas/services/panoramas.service';
@@ -25,9 +29,13 @@
 	import PanoramaCalendarView from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
 
 	// Tablero de planeación de flujo de cobro: contraparte de /finanzas/cuentas-pagar/panoramas,
-	// mismo patrón (bandeja + 2 panoramas fijos, 100% de la sesión actual, NO se persiste el orden
-	// en la BD — ver panoramas.service.ts). Reutiliza cuentas_cobrar (con su columna real `prioridad`)
-	// en vez de crear una tabla de "proyecciones" nueva.
+	// mismo patrón (bandeja + 2 panoramas fijos) y AHORA TAMBIÉN persiste en la BD
+	// (panorama_id/panorama_orden — ver panoramas.service.ts, panorama_persistencia_migration.sql),
+	// antes era 100% de la sesión. Reutiliza cuentas_cobrar (con su columna real `prioridad`) en vez
+	// de crear una tabla de "proyecciones" nueva.
+	//
+	// FRACCIONAMIENTO: una cuenta con 2+ cuotas 'programado' se dibuja como CLUSTER — ver la nota
+	// equivalente en cuentas-pagar/panoramas/+page.svelte, mismo criterio sobre "cobros".
 	//
 	// Drag-and-drop con svelte-dnd-action (funciona con mouse Y touch), igual que en cuentas_pagar.
 
@@ -173,8 +181,8 @@
 		else panorama2 = items;
 	}
 
-	/** Trae la bandeja desde la BD, excluyendo lo que YA está en un panorama en esta sesión (si no,
-	 * al cambiar un filtro reaparecería en la bandeja una cuenta que el usuario ya arrastró). */
+	/** Trae la bandeja desde la BD — ya viene filtrada server-side, no hace falta excluir nada a
+	 * mano en el cliente (ver nota equivalente en cuentas-pagar/panoramas/+page.svelte). */
 	async function fetchBandeja() {
 		loading = true;
 		try {
@@ -184,8 +192,7 @@
 				prioridad: filtroPrioridad || null,
 				estado: filtroEstado || null
 			});
-			const idsAsignados = new Set([...panorama1, ...panorama2].map((i) => i.id));
-			bandeja = data.filter((i) => !idsAsignados.has(i.id));
+			bandeja = data;
 			bandejaVersion++;
 			loadError = '';
 		} catch (err: any) {
@@ -193,6 +200,37 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	/** Trae Panorama 1 y 2 desde la BD (ya persisten, ver nota de arriba). */
+	async function fetchPanoramas() {
+		try {
+			const [p1, p2] = await Promise.all([getPanoramaItemsCobro(supabase, 1), getPanoramaItemsCobro(supabase, 2)]);
+			panorama1 = p1;
+			panorama2 = p2;
+			panorama1Version++;
+			panorama2Version++;
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudieron cargar los panoramas');
+		}
+	}
+
+	/** Ver nota equivalente en cuentas-pagar/panoramas/+page.svelte (aEntradas). */
+	function aEntradas(items: IngresoPendienteItem[]): PanoramaEntry[] {
+		return items.map((item) =>
+			item.fracciones.length > 0 ? { tipo: 'cluster' as const, idsFraccion: item.fracciones.map((f) => f.id) } : { tipo: 'cuenta' as const, id: item.id_cuenta_cobrar }
+		);
+	}
+
+	/** Ver nota equivalente en cuentas-pagar/panoramas/+page.svelte (moverFraccion). */
+	async function moverFraccion(idCobro: number, destino: 1 | 2 | null) {
+		const result = await moverFraccionAPanoramaCobro(supabase, idCobro, destino);
+		if (!result.success) {
+			toast.error(result.message);
+			return;
+		}
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
+		toast.success(result.message);
 	}
 
 	async function fetchResumenYCaja() {
@@ -224,7 +262,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar obras/clientes');
 		}
-		await Promise.all([fetchBandeja(), fetchResumenYCaja()]);
+		await Promise.all([fetchBandeja(), fetchPanoramas(), fetchResumenYCaja()]);
 	});
 
 	function refetchOnFilterChange() {
@@ -271,18 +309,23 @@
 	function handleBandejaConsider(e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		bandeja = e.detail.items;
 	}
-	function handleBandejaFinalize(e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
+	async function handleBandejaFinalize(e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		bandeja = e.detail.items;
+		const result = await reorderPanoramaCobro(supabase, null, aEntradas(bandeja));
+		if (!result.success) toast.error(result.message);
 	}
 	function handlePanoramaConsider(id: 1 | 2, e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		setPanoramaItems(id, e.detail.items);
 	}
-	function handlePanoramaFinalize(id: 1 | 2, e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
+	async function handlePanoramaFinalize(id: 1 | 2, e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		setPanoramaItems(id, e.detail.items);
+		const result = await reorderPanoramaCobro(supabase, id, aEntradas(panoramaItems(id)));
+		if (!result.success) toast.error(result.message);
 	}
 
 	// --- Acciones rápidas ---
-	function vaciarPanorama(id: 1 | 2) {
+	/** "Vaciar" es un movimiento real (destino = bandeja) -> se persiste igual que un arrastre. */
+	async function vaciarPanorama(id: 1 | 2) {
 		const items = panoramaItems(id);
 		if (items.length === 0) return;
 		bandeja = [...bandeja, ...items];
@@ -290,8 +333,15 @@
 		bandejaVersion++;
 		if (id === 1) panorama1Version++;
 		else panorama2Version++;
+		const result = await reorderPanoramaCobro(supabase, null, aEntradas(bandeja));
+		if (!result.success) {
+			toast.error(result.message);
+			return;
+		}
 		toast.success(`${PANORAMAS[id - 1].nombre} vaciado`);
 	}
+	/** "Copiar" es a propósito solo visual/de la sesión, NO se persiste — ver nota equivalente en
+	 * cuentas-pagar/panoramas/+page.svelte (copiarPanorama1a2). */
 	function copiarPanorama1a2() {
 		if (panorama1.length === 0) {
 			toast.error('Panorama 1 está vacío');
@@ -299,13 +349,14 @@
 		}
 		panorama2 = panorama1.map((i) => ({ ...i }));
 		panorama2Version++;
-		toast.success('Panorama 1 copiado a Panorama 2');
+		toast.success('Panorama 1 copiado a Panorama 2 (solo en esta sesión — no se guarda)');
 	}
 
 	/** Atajo para la vista Calendario: si el usuario todavía no arrastró nada desde la Bandeja al
 	 * Tablero, Panorama 1 y 2 se ven vacíos ahí — este botón carga TODOS los ingresos pendientes en
 	 * ambos panoramas de una vez (Panorama 2 arranca como copia de Panorama 1, mismo criterio que
-	 * copiarPanorama1a2) para poder empezar a comparar escenarios arrastrando fechas de inmediato. */
+	 * copiarPanorama1a2) para poder empezar a comparar escenarios arrastrando fechas de inmediato.
+	 * Igual que copiarPanorama1a2: solo visual/de la sesión, no se persiste. */
 	function sembrarPanoramasDesdeBandeja() {
 		if (bandeja.length === 0) return;
 		panorama1 = bandeja.map((i) => ({ ...i }));
@@ -314,11 +365,12 @@
 		bandejaVersion++;
 		panorama1Version++;
 		panorama2Version++;
-		toast.success('Ingresos pendientes cargados en Panorama 1 y Panorama 2');
+		toast.success('Ingresos pendientes cargados en Panorama 1 y Panorama 2 (solo en esta sesión — no se guarda)');
 	}
 
 	/** Botón de puntos (⋮) junto al número de cada cuota: copia (no mueve, se queda también en el
-	 * actual) esa cuenta puntual al otro panorama — como solo hay 2, "el siguiente" siempre es el otro. */
+	 * actual) esa cuenta puntual al otro panorama — como solo hay 2, "el siguiente" siempre es el otro.
+	 * Solo visual/de la sesión, no se persiste (mismo motivo que copiarPanorama1a2). */
 	function copiarItemAOtroPanorama(item: IngresoPendienteItem, panoramaActual: 1 | 2) {
 		const destino: 1 | 2 = panoramaActual === 1 ? 2 : 1;
 		if (panoramaItems(destino).some((i) => i.id === item.id)) {
@@ -539,10 +591,33 @@
 								<p class="text-xs text-slate-500 truncate">Proyecto: {item.proyectoNombre ?? 'Sin proyecto'}</p>
 								<p class="text-xs text-slate-500 truncate">Cliente: {item.clienteNombre}</p>
 								<p class="text-[11px] text-slate-400">Vencimiento: {item.fechaVencimiento ?? '—'}</p>
-								<div class="flex items-center justify-between mt-1">
-									<span class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</span>
-									<span class={`px-2 py-0.5 rounded-full text-[10px] font-medium ${prioridadBadgeClass[item.prioridad]}`}>{prioridadLabel[item.prioridad]}</span>
-								</div>
+
+								{#if item.fracciones.length > 0}
+									<div class="mt-1.5 flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
+										<Layers size={11} /> Fraccionada · {item.fracciones.length} cuota{item.fracciones.length === 1 ? '' : 's'} aquí
+									</div>
+									<div class="mt-1 space-y-1 border-t border-slate-100 pt-1.5">
+										{#each item.fracciones as fraccion (fraccion.id)}
+											<div class="flex items-center justify-between gap-1.5 text-[11px]">
+												<span class="text-slate-500 truncate">Cuota {fraccion.numeroCuota}/{fraccion.totalCuotas} · {fraccion.fecha}</span>
+												<div class="flex items-center gap-1 shrink-0">
+													<span class="font-semibold text-slate-700">{formatCurrency(fraccion.monto)}</span>
+													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, 1); }} title="Mover solo esta cuota a Panorama 1" class="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-600 hover:bg-blue-100">P1</button>
+													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, 2); }} title="Mover solo esta cuota a Panorama 2" class="px-1 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100">P2</button>
+												</div>
+											</div>
+										{/each}
+									</div>
+									<div class="flex items-center justify-between mt-1.5 pt-1.5 border-t border-slate-100">
+										<span class="text-[10px] text-slate-400">Total de estas cuotas</span>
+										<span class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</span>
+									</div>
+								{:else}
+									<div class="flex items-center justify-between mt-1">
+										<span class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</span>
+										<span class={`px-2 py-0.5 rounded-full text-[10px] font-medium ${prioridadBadgeClass[item.prioridad]}`}>{prioridadLabel[item.prioridad]}</span>
+									</div>
+								{/if}
 							</div>
 						</div>
 					{:else}
@@ -573,40 +648,61 @@
 					>
 						{#each panoramaItems(panorama.id) as item, index (item.id)}
 							{@const venc = estadoVencimiento(item.fechaVencimiento)}
-							<div class={`flex items-center gap-2 p-3 rounded-lg border cursor-grab active:cursor-grabbing ${venc === 'vencido' ? 'bg-red-50/60 border-red-100' : 'border-slate-200 bg-white'}`}>
-								<button
-									type="button"
-									onclick={(e) => { e.stopPropagation(); abrirCuotasDe(item); }}
-									class="p-1 -m-1 rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-600 shrink-0"
-									title="Ver/editar cuotas de esta cuenta"
-									aria-label="Ver/editar cuotas de esta cuenta"
-								>
-									{#if cuotasCargandoId === item.id}
-										<Loader2 size={14} class="animate-spin" />
-									{:else}
-										<GripVertical size={14} />
-									{/if}
-								</button>
-								<span class={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${panoramaBadgeClass[panorama.id]}`}>{index + 1}</span>
-								<button
-									type="button"
-									onclick={(e) => { e.stopPropagation(); copiarItemAOtroPanorama(item, panorama.id); }}
-									class="p-1 -m-1 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 shrink-0"
-									title={`Copiar a ${panorama.id === 1 ? 'Panorama 2' : 'Panorama 1'}`}
-									aria-label={`Copiar a ${panorama.id === 1 ? 'Panorama 2' : 'Panorama 1'}`}
-								>
-									<MoreVertical size={14} />
-								</button>
-								<div class="flex-1 min-w-0">
-									<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
-									<p class="text-xs text-slate-500 truncate">Proyecto: {item.proyectoNombre ?? 'Sin proyecto'}</p>
-									<p class="text-xs text-slate-500 truncate">Cliente: {item.clienteNombre}</p>
+							{@const otroPanorama = panorama.id === 1 ? 2 : 1}
+							<div class={`p-3 rounded-lg border cursor-grab active:cursor-grabbing ${venc === 'vencido' ? 'bg-red-50/60 border-red-100' : 'border-slate-200 bg-white'}`}>
+								<div class="flex items-center gap-2">
+									<button
+										type="button"
+										onclick={(e) => { e.stopPropagation(); abrirCuotasDe(item); }}
+										class="p-1 -m-1 rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-600 shrink-0"
+										title="Ver/editar cuotas de esta cuenta"
+										aria-label="Ver/editar cuotas de esta cuenta"
+									>
+										{#if cuotasCargandoId === item.id}
+											<Loader2 size={14} class="animate-spin" />
+										{:else}
+											<GripVertical size={14} />
+										{/if}
+									</button>
+									<span class={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${panoramaBadgeClass[panorama.id]}`}>{index + 1}</span>
+									<button
+										type="button"
+										onclick={(e) => { e.stopPropagation(); copiarItemAOtroPanorama(item, panorama.id); }}
+										class="p-1 -m-1 rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 shrink-0"
+										title={`Copiar a ${panorama.id === 1 ? 'Panorama 2' : 'Panorama 1'}`}
+										aria-label={`Copiar a ${panorama.id === 1 ? 'Panorama 2' : 'Panorama 1'}`}
+									>
+										<MoreVertical size={14} />
+									</button>
+									<div class="flex-1 min-w-0">
+										<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
+										<p class="text-xs text-slate-500 truncate">Proyecto: {item.proyectoNombre ?? 'Sin proyecto'}</p>
+										<p class="text-xs text-slate-500 truncate">Cliente: {item.clienteNombre}</p>
+									</div>
+									<div class="text-right shrink-0">
+										<p class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</p>
+										<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${estadoVencBadgeClass[venc]}`}>{estadoVencLabel[venc]}</span>
+										<p class="text-[11px] text-slate-400 mt-0.5">{item.fechaVencimiento ?? '—'}</p>
+									</div>
 								</div>
-								<div class="text-right shrink-0">
-									<p class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</p>
-									<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${estadoVencBadgeClass[venc]}`}>{estadoVencLabel[venc]}</span>
-									<p class="text-[11px] text-slate-400 mt-0.5">{item.fechaVencimiento ?? '—'}</p>
-								</div>
+
+								{#if item.fracciones.length > 0}
+									<div class="mt-1.5 flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
+										<Layers size={11} /> Fraccionada · {item.fracciones.length} cuota{item.fracciones.length === 1 ? '' : 's'} aquí
+									</div>
+									<div class="mt-1 space-y-1 border-t border-slate-100 pt-1.5">
+										{#each item.fracciones as fraccion (fraccion.id)}
+											<div class="flex items-center justify-between gap-1.5 text-[11px]">
+												<span class="text-slate-500 truncate">Cuota {fraccion.numeroCuota}/{fraccion.totalCuotas} · {fraccion.fecha}</span>
+												<div class="flex items-center gap-1 shrink-0">
+													<span class="font-semibold text-slate-700">{formatCurrency(fraccion.monto)}</span>
+													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, null); }} title="Regresar solo esta cuota a la Bandeja" class="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 hover:bg-slate-200">Bandeja</button>
+													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, otroPanorama); }} title={`Mover solo esta cuota a Panorama ${otroPanorama}`} class="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-600 hover:bg-blue-100">P{otroPanorama}</button>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<p class="text-xs text-slate-400 text-center py-6">Suelta aquí un ingreso de la bandeja.</p>
@@ -712,7 +808,7 @@
 
 	<div class="mt-4 flex items-start gap-2 bg-blue-50 text-blue-700 px-4 py-3 rounded-lg text-xs">
 		<Info size={16} class="shrink-0 mt-0.5" />
-		<p>Las proyecciones te permiten simular escenarios de cobro, ordenar prioridades y optimizar tu flujo de caja antes de que se ejecuten los ingresos. El orden de cada panorama no se guarda: se reinicia al recargar la página.</p>
+		<p>Las proyecciones te permiten simular escenarios de cobro, ordenar prioridades y optimizar tu flujo de caja antes de que se ejecuten los ingresos. Arrastrar entre Bandeja/Panorama 1/Panorama 2 se guarda — sobrevive a recargar la página. Los botones "Copiar" y "Cargar pendientes en ambos" son la excepción: son solo para comparar escenarios y no se guardan.</p>
 	</div>
 	{/if}
 </div>
