@@ -13,6 +13,10 @@
 	let isLoading = $state(true);
 	let userRole = $state<string | null>(null);
 	let sidebarCollapsed = $state(false);
+	// El sidebar de escritorio (franja fija, hidden md:flex) no se ve en pantallas angostas — en
+	// vez de quedar sin forma de navegar, este estado controla el drawer móvil del Sidebar
+	// (ver mobileOpen en Sidebar.svelte) que se abre con el botón flotante de abajo.
+	let mobileMenuOpen = $state(false);
 
 	onMount(async () => {
 		console.log('[Layout] onMount initiated for (app) layout. Path:', page.url.pathname);
@@ -98,7 +102,21 @@
 {:else}
 	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Sidebar Global -->
-		<Sidebar bind:collapsed={sidebarCollapsed} />
+		<Sidebar bind:collapsed={sidebarCollapsed} bind:mobileOpen={mobileMenuOpen} />
+
+		<!-- Botón flotante para abrir el menú en móvil (el sidebar de escritorio está oculto con
+		     hidden md:flex ahí, no hay otra forma de navegar en pantallas angostas). Se oculta
+		     mientras el drawer ya está abierto, para no quedar encimado con el menú. -->
+		{#if !mobileMenuOpen}
+			<button
+				type="button"
+				onclick={() => (mobileMenuOpen = true)}
+				class="md:hidden fixed bottom-5 left-5 z-30 w-12 h-12 rounded-full bg-[#1a233a] text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+				aria-label="Abrir menú de navegación"
+			>
+				<i class="fas fa-bars text-lg"></i>
+			</button>
+		{/if}
 		
 		<!-- Main Content -->
 		<main class={`flex-1 overflow-y-auto transition-all duration-200 ${sidebarCollapsed ? 'md:ml-[76px]' : 'md:ml-[280px]'}`}>
