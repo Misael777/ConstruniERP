@@ -6,7 +6,7 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers } from '@lucide/svelte';
+	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
 	import {
 		getPagosPendientes,
 		getPanoramaItems,
@@ -23,7 +23,8 @@
 		type PagoPendienteItem,
 		type PanoramaEntry,
 		type Prioridad,
-		type ResumenPagos
+		type ResumenPagos,
+		type BandejaSortBy
 	} from '$lib/modules/panoramas/services/panoramas.service';
 	import { getProveedorOptions, getPagos, sincronizarCuotasProgramadas } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { getClienteOptions } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -96,6 +97,18 @@
 
 	let filtroObra = $state('');
 	let filtroPrioridad = $state<'' | Prioridad>('');
+	let filtroEstado = $state<'' | 'pendiente' | 'vencido'>('');
+	let bandejaSearch = $state('');
+	let bandejaSearchInput = $state('');
+	let bandejaSortBy = $state<BandejaSortBy>('fechaVencimiento');
+	let bandejaSortDir = $state<'asc' | 'desc'>('asc');
+	let bandejaPage = $state(1);
+	let bandejaTotal = $state(0);
+	let bandejaTotalPages = $state(1);
+	const BANDEJA_PAGE_SIZE = 5;
+	let bandejaSearchDebounce: ReturnType<typeof setTimeout>;
+	let filtrosExpanded = $state(false);
+	const filtrosActivos = $derived([filtroObra, filtroPrioridad, filtroEstado].filter(Boolean).length);
 
 	let ingresosEsteMes = $state(0);
 	let saldoActual = $state(0);
@@ -115,17 +128,26 @@
 		else panorama2 = items;
 	}
 
-	/** Trae la bandeja desde la BD — ya viene filtrada server-side (panorama_id null a nivel de
-	 * cuenta, o al menos una cuota sin panorama_id si está fraccionada), no hace falta excluir nada
-	 * a mano en el cliente. */
+	/** Trae la bandeja desde la BD — ya viene filtrada/buscada/ordenada/paginada server-side (bueno,
+	 * en el service — ver paginarBandeja en panoramas.service.ts), no hace falta excluir ni ordenar
+	 * nada a mano en el cliente. Paginada a propósito: sin esto la bandeja crecía sin límite con
+	 * cada cuenta pendiente de la cartera completa. */
 	async function fetchBandeja() {
 		loading = true;
 		try {
-			const data = await getPagosPendientes(supabase, {
+			const result = await getPagosPendientes(supabase, {
 				idProyecto: filtroObra ? Number(filtroObra) : null,
-				prioridad: filtroPrioridad || null
+				prioridad: filtroPrioridad || null,
+				estado: filtroEstado || null,
+				search: bandejaSearch,
+				sortBy: bandejaSortBy,
+				sortDir: bandejaSortDir,
+				page: bandejaPage,
+				pageSize: BANDEJA_PAGE_SIZE
 			});
-			bandeja = data;
+			bandeja = result.items;
+			bandejaTotal = result.total;
+			bandejaTotalPages = result.totalPages;
 			bandejaVersion++;
 			loadError = '';
 		} catch (err: any) {
@@ -133,6 +155,29 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function onBandejaSearchInput(value: string) {
+		bandejaSearchInput = value;
+		clearTimeout(bandejaSearchDebounce);
+		bandejaSearchDebounce = setTimeout(() => {
+			bandejaSearch = value;
+			bandejaPage = 1;
+			fetchBandeja();
+		}, 400);
+	}
+	function onBandejaSortChange(value: BandejaSortBy) {
+		bandejaSortBy = value;
+		fetchBandeja();
+	}
+	function toggleBandejaSortDir() {
+		bandejaSortDir = bandejaSortDir === 'asc' ? 'desc' : 'asc';
+		fetchBandeja();
+	}
+	function goToBandejaPage(p: number) {
+		if (p < 1 || p > bandejaTotalPages) return;
+		bandejaPage = p;
+		fetchBandeja();
 	}
 
 	/** Trae Panorama 1 y 2 desde la BD (ya persisten, ver nota de arriba). */
@@ -210,6 +255,7 @@
 	});
 
 	function refetchOnFilterChange() {
+		bandejaPage = 1;
 		fetchBandeja();
 	}
 
@@ -329,16 +375,23 @@
 	 * Tablero, Panorama 1 y 2 se ven vacíos ahí — este botón carga TODOS los pagos pendientes en
 	 * ambos panoramas de una vez (Panorama 2 arranca como copia de Panorama 1, mismo criterio que
 	 * copiarPanorama1a2) para poder empezar a comparar escenarios arrastrando fechas de inmediato.
-	 * Igual que copiarPanorama1a2: solo visual/de la sesión, no se persiste (ver esa nota). */
-	function sembrarPanoramasDesdeBandeja() {
-		if (bandeja.length === 0) return;
-		panorama1 = bandeja.map((i) => ({ ...i }));
-		panorama2 = bandeja.map((i) => ({ ...i }));
-		bandeja = [];
-		bandejaVersion++;
-		panorama1Version++;
-		panorama2Version++;
-		toast.success('Pagos pendientes cargados en Panorama 1 y Panorama 2 (solo en esta sesión — no se guarda)');
+	 * Igual que copiarPanorama1a2: solo visual/de la sesión, no se persiste (ver esa nota).
+	 * OJO: no usa el arreglo local `bandeja` (esa es solo la página actual, ver paginación) — trae
+	 * TODOS los pendientes con una consulta aparte de pageSize grande, para que "todos" siga
+	 * significando todos y no solo la página visible. */
+	async function sembrarPanoramasDesdeBandeja() {
+		if (bandejaTotal === 0) return;
+		try {
+			const todos = await getPagosPendientes(supabase, { pageSize: Math.max(bandejaTotal, 1000) });
+			panorama1 = todos.items.map((i) => ({ ...i }));
+			panorama2 = todos.items.map((i) => ({ ...i }));
+			panorama1Version++;
+			panorama2Version++;
+			await fetchBandeja();
+			toast.success('Pagos pendientes cargados en Panorama 1 y Panorama 2 (solo en esta sesión — no se guarda)');
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudieron cargar los pagos pendientes');
+		}
 	}
 
 	/** Botón de puntos (⋮) junto al número de cada cuota: copia (no mueve, se queda también en el
@@ -553,7 +606,7 @@
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-1">
 				<h2 class="font-bold text-slate-800 text-sm uppercase tracking-wide">Bandeja de Pagos Pendientes</h2>
-				<span class="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{bandeja.length}</span>
+				<span class="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{bandejaTotal}</span>
 			</div>
 			<p class="text-xs text-slate-400 mb-3">Arrastra los pagos para asignarlos a un panorama.</p>
 
@@ -561,19 +614,66 @@
 				+ Nuevo pago pendiente
 			</button>
 
-			<div class="flex flex-col gap-2 mb-3">
-				<select value={filtroObra} onchange={(e) => { filtroObra = (e.target as HTMLSelectElement).value; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-					<option value="">Todas las obras</option>
-					{#each proyectoOptions as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
+			<div class="relative mb-2">
+				<Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+				<input
+					type="text"
+					value={bandejaSearchInput}
+					oninput={(e) => onBandejaSearchInput((e.target as HTMLInputElement).value)}
+					placeholder="Buscar proveedor o título..."
+					class="w-full pl-8 pr-7 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+				/>
+				{#if bandejaSearchInput}
+					<button type="button" onclick={() => onBandejaSearchInput('')} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
+						<X size={13} />
+					</button>
+				{/if}
+			</div>
+
+			<button
+				type="button"
+				onclick={() => (filtrosExpanded = !filtrosExpanded)}
+				class="w-full flex items-center gap-1.5 px-2.5 py-1.5 mb-2 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+			>
+				{#if filtrosExpanded}<ChevronUp size={13} />{:else}<ChevronDown size={13} />{/if}
+				Filtros
+				{#if filtrosActivos > 0}
+					<span class="text-[10px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{filtrosActivos}</span>
+				{/if}
+			</button>
+
+			{#if filtrosExpanded}
+				<div class="flex flex-col gap-2 mb-2">
+					<select value={filtroObra} onchange={(e) => { filtroObra = (e.target as HTMLSelectElement).value; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+						<option value="">Todas las obras</option>
+						{#each proyectoOptions as opt}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+					<select value={filtroPrioridad} onchange={(e) => { filtroPrioridad = (e.target as HTMLSelectElement).value as any; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+						<option value="">Prioridad: Todas</option>
+						<option value="alto">Prioridad: Alto</option>
+						<option value="media">Prioridad: Media</option>
+						<option value="bajo">Prioridad: Bajo</option>
+					</select>
+					<select value={filtroEstado} onchange={(e) => { filtroEstado = (e.target as HTMLSelectElement).value as any; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+						<option value="">Estado: Todos</option>
+						<option value="pendiente">Estado: Pendiente</option>
+						<option value="vencido">Estado: Vencido</option>
+					</select>
+				</div>
+			{/if}
+
+			<div class="flex items-center gap-1 mb-3">
+				<select value={bandejaSortBy} onchange={(e) => onBandejaSortChange((e.target as HTMLSelectElement).value as BandejaSortBy)} class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm">
+					<option value="fechaVencimiento">Ordenar: Vencimiento</option>
+					<option value="monto">Ordenar: Monto</option>
+					<option value="nombre">Ordenar: Proveedor</option>
+					<option value="prioridad">Ordenar: Prioridad</option>
 				</select>
-				<select value={filtroPrioridad} onchange={(e) => { filtroPrioridad = (e.target as HTMLSelectElement).value as any; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-					<option value="">Prioridad: Todas</option>
-					<option value="alto">Prioridad: Alto</option>
-					<option value="media">Prioridad: Media</option>
-					<option value="bajo">Prioridad: Bajo</option>
-				</select>
+				<button type="button" onclick={toggleBandejaSortDir} class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 shrink-0" title={bandejaSortDir === 'asc' ? 'Ascendente' : 'Descendente'} aria-label="Cambiar dirección de orden">
+					{bandejaSortDir === 'asc' ? '↑' : '↓'}
+				</button>
 			</div>
 
 			{#key bandejaVersion}
@@ -639,6 +739,16 @@
 					{/each}
 				</div>
 			{/key}
+
+			{#if bandejaTotalPages > 1}
+				<div class="flex items-center justify-between mt-3 text-xs text-slate-500">
+					<span>{bandejaTotal} resultado{bandejaTotal === 1 ? '' : 's'} · Página {bandejaPage} de {bandejaTotalPages}</span>
+					<div class="flex items-center gap-1">
+						<button type="button" onclick={() => goToBandejaPage(bandejaPage - 1)} disabled={bandejaPage <= 1} class="px-2 py-1 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Anterior</button>
+						<button type="button" onclick={() => goToBandejaPage(bandejaPage + 1)} disabled={bandejaPage >= bandejaTotalPages} class="px-2 py-1 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Siguiente</button>
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Panoramas -->

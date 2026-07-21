@@ -80,6 +80,71 @@ export interface PagoPendienteItem {
  * EXTERNA — mezcla cuentas simples y clusters completos (ver reorderPanorama). */
 export type PanoramaEntry = { tipo: 'cuenta'; id: number } | { tipo: 'cluster'; idsFraccion: number[] };
 
+/** Criterio de orden de la Bandeja (pedido explícito del usuario: "un dropbox de ordenamiento") —
+ * 'nombre' es proveedor (pagos) o cliente (cobros), según corresponda. */
+export type BandejaSortBy = 'fechaVencimiento' | 'monto' | 'nombre' | 'prioridad';
+
+export interface BandejaParams {
+	idProyecto?: number | null;
+	prioridad?: string | null;
+	estado?: 'pendiente' | 'vencido' | null;
+	/** Búsqueda libre por título/proveedor (pagos) o título/cliente/proyecto (cobros), sin distinguir
+	 * mayúsculas — mismo criterio simple que el resto del ERP. */
+	search?: string;
+	sortBy?: BandejaSortBy;
+	sortDir?: 'asc' | 'desc';
+	page?: number;
+	pageSize?: number;
+}
+
+export interface BandejaResult<T> {
+	items: T[];
+	total: number;
+	page: number;
+	pageSize: number;
+	totalPages: number;
+}
+
+const RANGO_PRIORIDAD: Record<string, number> = { alto: 0, media: 1, medio: 1, bajo: 2 };
+
+/**
+ * Ordena y pagina una lista YA filtrada/clasificada de la bandeja (cuentas simples + clusters
+ * mezclados) — pedido explícito del usuario ("que la lista sea paginada... un dropbox de
+ * ordenamiento"). Se hace en memoria, sobre el resultado final (después de armar los clusters de
+ * fraccionamiento), no con un LIMIT/OFFSET de SQL: la clasificación fraccionada/no-fraccionada de
+ * cada cuenta depende de una segunda consulta (pagos/cobros) que no se puede paginar de antemano
+ * sin arriesgar cortar una cuenta a la mitad. Para la escala de cuentas pendientes de este ERP
+ * (decenas, no decenas de miles) traer todo y paginar en memoria es correcto y simple; si el
+ * volumen crece mucho, esto es lo primero que habría que mover a SQL.
+ */
+function paginarBandeja<T extends { fechaVencimiento: string | null; monto: number; prioridad: string }>(
+	items: T[],
+	params: BandejaParams,
+	nombreDe: (item: T) => string
+): BandejaResult<T> {
+	const search = params.search?.trim().toLowerCase();
+	const filtrados = search ? items.filter((i) => nombreDe(i).toLowerCase().includes(search)) : items;
+
+	const sortBy = params.sortBy ?? 'fechaVencimiento';
+	const dir = params.sortDir === 'desc' ? -1 : 1;
+	const ordenados = [...filtrados].sort((a, b) => {
+		let cmp = 0;
+		if (sortBy === 'fechaVencimiento') cmp = (a.fechaVencimiento ?? '9999-99-99').localeCompare(b.fechaVencimiento ?? '9999-99-99');
+		else if (sortBy === 'monto') cmp = a.monto - b.monto;
+		else if (sortBy === 'prioridad') cmp = (RANGO_PRIORIDAD[a.prioridad] ?? 9) - (RANGO_PRIORIDAD[b.prioridad] ?? 9);
+		else cmp = nombreDe(a).localeCompare(nombreDe(b));
+		return cmp * dir;
+	});
+
+	const total = ordenados.length;
+	const pageSize = Math.max(1, Math.floor(params.pageSize ?? 10));
+	const page = Math.max(1, Math.floor(params.page ?? 1));
+	const totalPages = Math.max(1, Math.ceil(total / pageSize));
+	const from = (page - 1) * pageSize;
+
+	return { items: ordenados.slice(from, from + pageSize), total, page, pageSize, totalPages };
+}
+
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /** Días entre hoy y la fecha de vencimiento (negativo si ya venció). */
@@ -191,13 +256,11 @@ async function cuentasPagarConFracciones(client: SupabaseClient): Promise<{ cuen
 	return { cuentas, fracciones };
 }
 
-/** Pagos pendientes SIN panorama asignado todavía (la "bandeja"). Incluye 'vencido' además de
+/** Pagos pendientes SIN panorama asignado todavía (la "bandeja"), paginada/buscable/ordenable —
+ * pedido explícito del usuario para no tener una bandeja infinita. Incluye 'vencido' además de
  * 'pendiente'. Una cuenta fraccionada aparece aquí como cluster mostrando SOLO sus cuotas todavía
  * sin panorama — si ya las movió todas, la cuenta deja de aparecer en la bandeja por completo. */
-export async function getPagosPendientes(
-	client: SupabaseClient,
-	filters: { idProyecto?: number | null; prioridad?: Prioridad | null } = {}
-): Promise<PagoPendienteItem[]> {
+export async function getPagosPendientes(client: SupabaseClient, params: BandejaParams = {}): Promise<BandejaResult<PagoPendienteItem>> {
 	const { cuentas, fracciones } = await cuentasPagarConFracciones(client);
 
 	let items: PagoPendienteItem[] = [];
@@ -213,9 +276,11 @@ export async function getPagosPendientes(
 		}
 	}
 
-	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
-	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
-	return items;
+	if (params.idProyecto) items = items.filter((i) => i.idProyecto === params.idProyecto);
+	if (params.prioridad) items = items.filter((i) => i.prioridad === params.prioridad);
+	if (params.estado) items = items.filter((i) => (params.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
+
+	return paginarBandeja(items, params, (i) => `${i.titulo} ${i.proveedorNombre}`);
 }
 
 /** Pagos ya asignados a un panorama. Una cuenta fraccionada aparece como cluster mostrando SOLO las
@@ -472,12 +537,13 @@ async function cuentasCobrarConFracciones(client: SupabaseClient): Promise<{ cue
 	return { cuentas, fracciones };
 }
 
-/** Cuentas por cobrar con saldo pendiente SIN panorama asignado (la "bandeja" del tablero de cobro)
- * — mismo criterio de clustering por fraccionamiento que getPagosPendientes. */
+/** Cuentas por cobrar con saldo pendiente SIN panorama asignado (la "bandeja" del tablero de
+ * cobro), paginada/buscable/ordenable — contraparte de getPagosPendientes, mismo criterio de
+ * clustering por fraccionamiento. */
 export async function getCobrosPendientes(
 	client: SupabaseClient,
-	filters: { idProyecto?: number | null; idCliente?: number | null; prioridad?: PrioridadCobro | null; estado?: 'pendiente' | 'vencido' | null } = {}
-): Promise<IngresoPendienteItem[]> {
+	params: BandejaParams & { idCliente?: number | null } = {}
+): Promise<BandejaResult<IngresoPendienteItem>> {
 	const { cuentas, fracciones } = await cuentasCobrarConFracciones(client);
 
 	let items: IngresoPendienteItem[] = [];
@@ -493,11 +559,12 @@ export async function getCobrosPendientes(
 		}
 	}
 
-	if (filters.idProyecto) items = items.filter((i) => i.idProyecto === filters.idProyecto);
-	if (filters.idCliente) items = items.filter((i) => i.idCliente === filters.idCliente);
-	if (filters.prioridad) items = items.filter((i) => i.prioridad === filters.prioridad);
-	if (filters.estado) items = items.filter((i) => (filters.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
-	return items;
+	if (params.idProyecto) items = items.filter((i) => i.idProyecto === params.idProyecto);
+	if (params.idCliente) items = items.filter((i) => i.idCliente === params.idCliente);
+	if (params.prioridad) items = items.filter((i) => i.prioridad === params.prioridad);
+	if (params.estado) items = items.filter((i) => (params.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
+
+	return paginarBandeja(items, params, (i) => `${i.titulo} ${i.clienteNombre} ${i.proyectoNombre ?? ''}`);
 }
 
 /** Cobros ya asignados a un panorama — contraparte de getPanoramaItems. */
