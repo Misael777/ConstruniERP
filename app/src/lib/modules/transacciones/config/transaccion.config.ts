@@ -67,7 +67,7 @@ export const DEFAULT_SORT_DIR: 'asc' | 'desc' = 'desc';
 export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'id_centro_costo_origen',
-		label: 'Centro de Costo Origen',
+		label: 'Cuenta Interna Origen',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
@@ -77,7 +77,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'id_centro_costo_destino',
-		label: 'Centro de Costo Destino',
+		label: 'Cuenta Interna Destino',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo',

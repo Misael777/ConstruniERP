@@ -215,6 +215,35 @@ export function translateSupabaseError(error: { code?: string; message?: string 
 	return error.message || 'Ocurrió un error inesperado.';
 }
 
+/**
+ * Días transcurridos desde la fecha límite más vencida hasta hoy — para la columna "Días de
+ * Retraso" de cuentas por pagar/cobrar. Devuelve null si `estado` no es 'vencido' ("días de
+ * retraso" no tiene sentido en algo que todavía no está vencido).
+ *
+ * Acepta VARIAS fechas candidatas a propósito: cuentas_pagar queda 'vencido' si pasó
+ * `fecha_vencimiento` O `fecha_pago_programada` (ver computeEstadoCuentaPagar en
+ * cuentasPagar.service.ts) — no siempre es `fecha_vencimiento` la que ya pasó. Toma el MÁXIMO de
+ * días entre las fechas que de verdad ya pasaron, para no subestimar el atraso real (ej. cuenta
+ * #28: fecha_vencimiento en el futuro pero fecha_pago_programada ya vencida — el atraso real es el
+ * de fecha_pago_programada, no cero). cuentas_cobrar solo tiene una fecha (fecha_vencimiento), se
+ * le pasa una sola.
+ *
+ * Compara por fecha local a medianoche (no por hora exacta) para que el resultado sea un número de
+ * días entero estable durante todo el día, sin importar a qué hora se abre la pantalla.
+ */
+export function diasDeRetraso(estado: string, ...fechas: (string | null | undefined)[]): number | null {
+	if (estado !== 'vencido') return null;
+	const hoy = new Date();
+	hoy.setHours(0, 0, 0, 0);
+	let max: number | null = null;
+	for (const f of fechas) {
+		if (!f) continue;
+		const dias = Math.floor((+hoy - +new Date(f + 'T00:00:00')) / 86400000);
+		if (dias > 0 && (max === null || dias > max)) max = dias;
+	}
+	return max ?? 0;
+}
+
 /** Máscara reutilizable para campos de moneda: solo dígitos + un punto decimal, máx. 2 decimales. */
 export function currencyMask(raw: string): string {
 	let value = raw.replace(/[^\d.]/g, '');
@@ -222,6 +251,96 @@ export function currencyMask(raw: string): string {
 	if (parts.length > 2) value = parts[0] + '.' + parts.slice(1).join('');
 	const [intPart, decPart] = value.split('.');
 	return decPart !== undefined ? `${intPart}.${decPart.slice(0, 2)}` : value;
+}
+
+// =================================================================
+// FILTROS POR COLUMNA (estilo Excel — combinables, uno por columna)
+// =================================================================
+// Usado por listas paginadas dirigidas por FIELDS_CONFIG (cuentas por pagar/cobrar, y cualquier
+// módulo nuevo que reutilice este motor) para dar un filtro apropiado según el tipo de cada campo:
+// texto -> "contiene", select -> multi-selección de opciones, number/currency -> rango min/max,
+// date -> rango desde/hasta. Todas las columnas con filtro activo se combinan con AND — igual que
+// el autofiltro de columnas de Excel. Ver ColumnFilterBar.svelte para el control genérico y
+// applyColumnFilters para aplicarlo a un query de supabase-js.
+
+export type ColumnFilterValue =
+	| { kind: 'text'; contains: string }
+	| { kind: 'select'; values: string[] }
+	| { kind: 'range'; min: string; max: string }
+	| { kind: 'daterange'; from: string; to: string };
+
+export type ColumnFilters = Record<string, ColumnFilterValue>;
+
+/** Determina qué tipo de control de filtro le corresponde a un campo — mismo criterio que usa el
+ * formulario para decidir <select> vs input de texto/número (ver validateField). */
+export function columnFilterKind(field: FieldConfig): ColumnFilterValue['kind'] {
+	if (field.tipo === 'select' || field.options) return 'select';
+	if (field.tipo === 'number' || field.tipo === 'currency') return 'range';
+	if (field.tipo === 'date') return 'daterange';
+	return 'text';
+}
+
+/** Arma un ColumnFilters "vacío" (todo sin filtrar) con una entrada por cada campo `showInTable`. */
+export function emptyColumnFilters(fields: FieldConfig[]): ColumnFilters {
+	const result: ColumnFilters = {};
+	for (const field of fields) {
+		if (!field.showInTable) continue;
+		const kind = columnFilterKind(field);
+		result[field.key] =
+			kind === 'text'
+				? { kind, contains: '' }
+				: kind === 'select'
+					? { kind, values: [] }
+					: kind === 'range'
+						? { kind, min: '', max: '' }
+						: { kind, from: '', to: '' };
+	}
+	return result;
+}
+
+/** true si ese filtro puntual tiene algo escrito/elegido (para saber si debe aplicarse). */
+export function isColumnFilterActive(value: ColumnFilterValue | undefined): boolean {
+	if (!value) return false;
+	if (value.kind === 'text') return value.contains.trim() !== '';
+	if (value.kind === 'select') return value.values.length > 0;
+	if (value.kind === 'range') return value.min.trim() !== '' || value.max.trim() !== '';
+	return value.from.trim() !== '' || value.to.trim() !== '';
+}
+
+/** true si HAY algún filtro de columna activo (para el badge "N filtros" y habilitar "Limpiar"). */
+export function hasActiveColumnFilters(filters: ColumnFilters): boolean {
+	return Object.values(filters).some(isColumnFilterActive);
+}
+
+/**
+ * Aplica un ColumnFilters completo a un query builder de supabase-js — un .ilike/.in/.gte/.lte por
+ * columna con filtro activo, todas combinadas con AND (comportamiento por defecto de encadenar
+ * filtros en supabase-js/PostgREST). Filtros vacíos no agregan ninguna condición.
+ *
+ * Tipado como `any` a propósito: el tipo real que devuelve `client.from(tabla).select(...)` es un
+ * genérico de supabase-js atado a esa tabla específica, y esta función necesita aceptar el de
+ * CUALQUIER tabla (cuentas_pagar, cuentas_cobrar, ...) — pelear con esos genéricos no da ninguna
+ * seguridad de tipos real aquí (las claves ya vienen validadas contra FIELDS_CONFIG en runtime).
+ */
+export function applyColumnFilters(query: any, fields: FieldConfig[], filters: ColumnFilters): any {
+	let result = query;
+	for (const field of fields) {
+		const value = filters[field.key];
+		if (!isColumnFilterActive(value)) continue;
+		if (value.kind === 'text') {
+			const escaped = value.contains.trim().replace(/[%_]/g, (m) => `\\${m}`);
+			result = result.ilike(field.key, `%${escaped}%`);
+		} else if (value.kind === 'select') {
+			result = result.in(field.key, value.values);
+		} else if (value.kind === 'range') {
+			if (value.min.trim() !== '') result = result.gte(field.key, Number(value.min));
+			if (value.max.trim() !== '') result = result.lte(field.key, Number(value.max));
+		} else if (value.kind === 'daterange') {
+			if (value.from.trim() !== '') result = result.gte(field.key, value.from);
+			if (value.to.trim() !== '') result = result.lte(field.key, value.to);
+		}
+	}
+	return result;
 }
 
 /** Convierte un payload de formulario (strings) a tipos escribibles en BD, según FIELDS_CONFIG. */

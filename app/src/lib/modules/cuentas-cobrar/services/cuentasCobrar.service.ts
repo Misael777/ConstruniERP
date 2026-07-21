@@ -6,8 +6,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { FieldOption } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency } from '$lib/shared/fieldConfig';
+import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
 import { TABLE_NAME, PK_COLUMN, SEARCHABLE_COLUMNS, DEFAULT_PAGE_SIZE, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, FIELDS_CONFIG } from '../config/cuentaCobrar.config';
 import {
 	TABLE_NAME as COBRO_TABLE,
@@ -73,6 +73,10 @@ export interface ListParams {
 	search?: string;
 	sortBy?: string;
 	sortDir?: 'asc' | 'desc';
+	/** Filtros por columna estilo Excel (ver fieldConfig.ts) — se combinan con AND entre columnas
+	 * distintas y con el `search` de arriba (independientes: search es la caja libre, columnFilters
+	 * son los filtros por columna). */
+	columnFilters?: ColumnFilters;
 }
 
 export interface ListResult<T> {
@@ -138,6 +142,7 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
 		query = query.or(orFilter);
 	}
+	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
@@ -150,6 +155,31 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 		pageSize,
 		totalPages: Math.max(1, Math.ceil(total / pageSize))
 	};
+}
+
+/** Primer campo 'currency' visible en tabla — la columna que representa "el monto" de esta lista
+ * (para cuentas_cobrar: monto). Genérico a propósito, ver nota equivalente en cuentasPagar.service.ts. */
+const CAMPO_MONTO = FIELDS_CONFIG.find((f) => f.tipo === 'currency' && f.showInTable)!.key;
+
+/**
+ * Suma `monto` de TODAS las cuentas que matchean el buscador + filtros de columna actuales (no solo
+ * la página visible) — para el KPI "Total de Filtrado" del listado. Ver nota equivalente en
+ * cuentasPagar.service.ts (getMontoFiltrado), mismo patrón.
+ */
+export async function getMontoFiltrado(client: SupabaseClient, search: string, columnFilters: ColumnFilters): Promise<number> {
+	let query = client.from(TABLE_NAME).select(CAMPO_MONTO);
+
+	const trimmed = search.trim();
+	if (trimmed) {
+		const escaped = trimmed.replace(/[%_]/g, (m) => `\\${m}`);
+		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
+		query = query.or(orFilter);
+	}
+	query = applyColumnFilters(query, FIELDS_CONFIG, columnFilters);
+
+	const { data, error } = await query;
+	if (error) throw error;
+	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r[CAMPO_MONTO] ?? 0), 0);
 }
 
 export async function createCuentaCobrar(

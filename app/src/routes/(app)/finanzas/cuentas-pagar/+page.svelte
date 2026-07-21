@@ -3,9 +3,9 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
+	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import {
 		getCuentasPagar,
@@ -13,12 +13,15 @@
 		getPagos,
 		deletePago,
 		getProveedorOptions,
-		confirmarPagoPagado
+		confirmarPagoPagado,
+		getMontoFiltrado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
+	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -54,6 +57,16 @@
 	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
+	// Paneles resumen (KPIs). Los tres primeros son totales GLOBALES (toda la cartera, no dependen de
+	// lo que esté filtrado en la tabla) — mismos agregados que ya usa el tablero de Panoramas de Pago
+	// (getResumenPagos/getPagadoEnRango), reutilizados tal cual para no duplicar esa lógica. El cuarto
+	// ("Total de Filtrado") sí depende del buscador + filtros de columna: se recalcula cada vez que
+	// cambian (ver fetchMontoFiltrado), sumando el mismo campo que ya se ve en la tabla.
+	let resumen = $state<ResumenPagos>({ totalPendiente: 0, vencidoTotal: 0, vencidoCount: 0, proveedoresConCompras: 0 });
+	let pagadoDelMes = $state(0);
+	let montoFiltrado = $state(0);
+	let columnFilters = $state<ColumnFilters>(emptyColumnFilters(FIELDS_CONFIG));
+
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
@@ -75,7 +88,7 @@
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getCuentasPagar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			const result = await getCuentasPagar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -85,6 +98,33 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function fetchMontoFiltrado() {
+		try {
+			montoFiltrado = await getMontoFiltrado(supabase, search, columnFilters);
+		} catch (err: any) {
+			console.error('[CuentasPagar] No se pudo calcular el total filtrado:', err);
+		}
+	}
+
+	async function fetchKpis() {
+		try {
+			const hoy = new Date();
+			const desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0, 10);
+			const hasta = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).toISOString().slice(0, 10);
+			const [resumenData, pagadoMes] = await Promise.all([getResumenPagos(supabase), getPagadoEnRango(supabase, desde, hasta)]);
+			resumen = resumenData;
+			pagadoDelMes = pagadoMes;
+		} catch (err: any) {
+			console.error('[CuentasPagar] No se pudo calcular el resumen KPI:', err);
+		}
+	}
+
+	function handleColumnFiltersChange() {
+		pageNum = 1;
+		fetchList();
+		fetchMontoFiltrado();
 	}
 
 	async function fetchSelectedPagos() {
@@ -114,7 +154,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
-		await fetchList();
+		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
 	function onSearchInput(value: string) {
@@ -124,6 +164,7 @@
 			search = value;
 			pageNum = 1;
 			fetchList();
+			fetchMontoFiltrado();
 		}, 400);
 	}
 
@@ -182,7 +223,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
-			await fetchList();
+			await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 		}
 	}
 
@@ -195,7 +236,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
-			await Promise.all([fetchList(), fetchSelectedPagos()]);
+			await Promise.all([fetchList(), fetchSelectedPagos(), fetchMontoFiltrado(), fetchKpis()]);
 		}
 	}
 
@@ -213,11 +254,11 @@
 	}
 
 	async function handleSaved() {
-		await fetchList();
+		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
 	async function handlePagoSaved() {
-		await Promise.all([fetchList(), fetchSelectedPagos()]);
+		await Promise.all([fetchList(), fetchSelectedPagos(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
 	function handleTransaccionSugerida(payload: Record<string, unknown>, idPago: number) {
@@ -238,7 +279,7 @@
 	async function confirmarTransaccionPago(payload: Record<string, unknown>) {
 		const { data: userData } = await supabase.auth.getUser();
 		const result = await confirmarPagoPagado(supabase, confirmandoPagoId as number, payload, userData?.user?.email ?? null, permisosState.userName || null);
-		if (result.success) await Promise.all([fetchList(), fetchSelectedPagos()]);
+		if (result.success) await Promise.all([fetchList(), fetchSelectedPagos(), fetchMontoFiltrado(), fetchKpis()]);
 		return result;
 	}
 </script>
@@ -265,6 +306,41 @@
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
+
+	<!-- KPIs -->
+	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+		<div class="bg-white rounded-xl border border-slate-200 p-4">
+			<div class="flex items-center gap-2 mb-2">
+				<div class="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center shrink-0"><CreditCard size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Pagos pendientes totales</span>
+			</div>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(resumen.totalPendiente)}</p>
+		</div>
+		<div class="bg-white rounded-xl border border-slate-200 p-4">
+			<div class="flex items-center gap-2 mb-2">
+				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><Wallet size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Pagado del mes</span>
+			</div>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(pagadoDelMes)}</p>
+		</div>
+		<div class="bg-white rounded-xl border border-slate-200 p-4">
+			<div class="flex items-center gap-2 mb-2">
+				<div class="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0"><AlertTriangle size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Pagos retrasados totales</span>
+			</div>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(resumen.vencidoTotal)}</p>
+			<p class="text-[11px] text-slate-400 mt-1">{resumen.vencidoCount} documento{resumen.vencidoCount === 1 ? '' : 's'}</p>
+		</div>
+		<div class="bg-white rounded-xl border border-slate-200 p-4">
+			<div class="flex items-center gap-2 mb-2">
+				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><Filter size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Total de filtrado</span>
+			</div>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(montoFiltrado)}</p>
+		</div>
+	</div>
+
+	<ColumnFilterBar fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
 
 	<div class="mb-4 flex flex-wrap items-center gap-3">
 		<div class="relative flex-1 min-w-[220px] max-w-sm">
@@ -304,18 +380,20 @@
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
-		<div class="min-w-[760px]">
-			<div class="grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+		<div class="min-w-[880px]">
+			<div class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
 				<span>Proveedor</span>
 				<span>N° Documento</span>
 				<span class="text-right">Monto</span>
 				<span>Estado</span>
+				<span class="text-right">Días de Retraso</span>
 				<span class="text-right">Acciones</span>
 			</div>
 
 			{#each items as item (item.id_cuenta_pagar)}
+				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 				<div
-					class={`grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+					class={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 						selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
 					}`}
 					onclick={() => selectRow(item)}
@@ -335,6 +413,13 @@
 						<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 							{getOptionLabel(estadoField, item.estado)}
 						</span>
+					</div>
+					<div class="text-right text-sm">
+						{#if retraso !== null}
+							<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
+						{:else}
+							<span class="text-slate-300">—</span>
+						{/if}
 					</div>
 					<div class="flex items-center gap-1 justify-end">
 						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
@@ -458,4 +543,5 @@
 	onConfirm={confirmandoPagoId ? confirmarTransaccionPago : null}
 	confirmTitle={confirmandoPagoId ? 'Confirmar Pago — Transacción de Respaldo' : null}
 	confirmButtonLabel={confirmandoPagoId ? 'Confirmar Pago' : null}
+	lockedFields={confirmandoPagoId ? ['id_centro_costo_origen', 'id_centro_costo_destino'] : []}
 />

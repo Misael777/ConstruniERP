@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, Paperclip, ShieldCheck, ShieldOff } from '@lucide/svelte';
+	import { X, Loader2, Paperclip, ShieldCheck, ShieldOff, Lock } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -19,7 +19,8 @@
 		onSaved,
 		onConfirm = null,
 		confirmTitle = null,
-		confirmButtonLabel = null
+		confirmButtonLabel = null,
+		lockedFields = []
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
@@ -34,6 +35,14 @@
 		onConfirm?: ((payload: Record<string, unknown>) => Promise<{ success: boolean; message: string; errors?: Record<string, string>; data?: any }>) | null;
 		confirmTitle?: string | null;
 		confirmButtonLabel?: string | null;
+		/** Claves de FIELDS_CONFIG que llegan pre-determinadas y no deben poder tocarse — hoy usado
+		 * para id_centro_costo_origen/id_centro_costo_destino en el flujo de confirmar un pago/cobro:
+		 * esos dos ya los decide la cuenta por pagar/cobrar (su propio centro de costo + el del
+		 * proveedor/cliente, ver construirPayloadTransaccionPorPago/Cobro en transacciones.service.ts)
+		 * — dejarlos editables permitiría registrar la transacción contra un centro de costo distinto
+		 * al que la cuenta dice, descuadrando el reporte de esa cuenta. Se siguen viendo (no se ocultan),
+		 * solo quedan deshabilitados con una explicación. */
+		lockedFields?: string[];
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -352,10 +361,13 @@
 					{/if}
 
 					{#each formFields as field (field.key)}
+						{@const isLocked = lockedFields.includes(field.key)}
+						{@const isDisabled = bloqueadaPorAprobacion || isLocked}
 						<div>
-							<label for={`tr-${field.key}`} class="block text-sm font-bold text-slate-700 mb-1">
+							<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-slate-700 mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
+								{#if isLocked}<Lock size={12} class="text-slate-400" />{/if}
 							</label>
 
 							{#if field.tipo === 'select' || field.options}
@@ -363,7 +375,7 @@
 									id={`tr-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
-									disabled={bloqueadaPorAprobacion}
+									disabled={isDisabled}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
 									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
@@ -382,7 +394,7 @@
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
-									disabled={bloqueadaPorAprobacion}
+									disabled={isDisabled}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
 									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
@@ -394,6 +406,8 @@
 
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
+							{:else if isLocked}
+								<p class="mt-1 text-xs text-slate-400">Ya lo determina la cuenta — no se puede cambiar aquí.</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}

@@ -232,7 +232,7 @@
 
 	function exportarCSV() {
 		if (!resultado) return;
-		const encabezados = ['Fecha', 'Tipo', 'Código', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Categoría', 'Ingresos', 'Egresos', 'Financiamientos', 'Saldo Acumulado'];
+		const encabezados = ['Fecha', 'Tipo', 'Código', 'Concepto', 'Cuenta Interna Origen', 'Cuenta Interna Destino', 'Categoría', 'Ingresos', 'Egresos', 'Financiamientos', 'Saldo Acumulado'];
 		const filas = filasFiltradas.map((f) => [
 			formatDate(f.fecha),
 			TIPO_LABEL[f.tipo] ?? f.tipo,
@@ -411,8 +411,8 @@
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Tipo</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Código</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600">Concepto</th>
-					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Centro de Costo Origen</th>
-					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Centro de Costo Destino</th>
+					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Cuenta Interna Origen</th>
+					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Cuenta Interna Destino</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Categoría</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Ingresos (S/)</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Egresos (S/)</th>
