@@ -266,35 +266,48 @@
 	function handleBandejaConsider(e: CustomEvent<{ items: PagoPendienteItem[] }>) {
 		bandeja = e.detail.items;
 	}
+	// Tras SOLTAR (no durante el arrastre, ver handleBandejaConsider) hay que recargar de la BD en
+	// vez de confiar en e.detail.items: si la cuenta arrastrada ya tenía OTRA tarjeta en esta misma
+	// columna (sus demás cuotas, repartidas ahí por un movimiento individual anterior), las dos
+	// tarjetas quedarían con el mismo `id` (= id_cuenta_pagar) en el mismo arreglo — Svelte/
+	// svelte-dnd-action solo puede mostrar una de las dos con esa clave duplicada, la otra
+	// "desaparecía" visualmente aunque sus cuotas seguían ahí en la BD. Recargar reconstruye cada
+	// columna desde cero con una sola tarjeta por cuenta, agrupando TODAS sus cuotas de esa columna.
 	async function handleBandejaFinalize(e: CustomEvent<{ items: PagoPendienteItem[] }>) {
-		bandeja = e.detail.items;
-		const result = await reorderPanorama(supabase, null, aEntradas(bandeja));
+		bandeja = e.detail.items; // feedback visual inmediato mientras se persiste
+		const result = await reorderPanorama(supabase, null, aEntradas(e.detail.items));
 		if (!result.success) toast.error(result.message);
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 	}
 	function handlePanoramaConsider(id: 1 | 2, e: CustomEvent<{ items: PagoPendienteItem[] }>) {
 		setPanoramaItems(id, e.detail.items);
 	}
 	async function handlePanoramaFinalize(id: 1 | 2, e: CustomEvent<{ items: PagoPendienteItem[] }>) {
-		setPanoramaItems(id, e.detail.items);
-		const result = await reorderPanorama(supabase, id, aEntradas(panoramaItems(id)));
+		setPanoramaItems(id, e.detail.items); // feedback visual inmediato mientras se persiste
+		const result = await reorderPanorama(supabase, id, aEntradas(e.detail.items));
 		if (!result.success) toast.error(result.message);
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 	}
 
 	// --- Acciones rápidas ---
-	/** "Vaciar" es un movimiento real (destino = bandeja) -> se persiste igual que un arrastre. */
+	/** "Vaciar" es un movimiento real (destino = bandeja) -> se persiste igual que un arrastre. Se
+	 * persiste solo `items` (lo que había en este panorama), no la bandeja concatenada a mano — y se
+	 * recarga después, mismo motivo que handleBandejaFinalize (evitar tarjetas duplicadas si alguna
+	 * de estas cuentas ya tenía otra tarjeta en la bandeja con sus demás cuotas). */
 	async function vaciarPanorama(id: 1 | 2) {
 		const items = panoramaItems(id);
 		if (items.length === 0) return;
-		bandeja = [...bandeja, ...items];
+		bandeja = [...bandeja, ...items]; // feedback visual inmediato mientras se persiste
 		setPanoramaItems(id, []);
 		bandejaVersion++;
 		if (id === 1) panorama1Version++;
 		else panorama2Version++;
-		const result = await reorderPanorama(supabase, null, aEntradas(bandeja));
+		const result = await reorderPanorama(supabase, null, aEntradas(items));
 		if (!result.success) {
 			toast.error(result.message);
 			return;
 		}
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 		toast.success(`${PANORAMAS[id - 1].nombre} vaciado`);
 	}
 	/** "Copiar" (a diferencia de "vaciar") es a propósito solo visual/de la sesión actual, NO se

@@ -303,41 +303,49 @@
 
 	const deltaCobradoMes = $derived(cobradoMesAnterior > 0 ? ((cobradoDelMes - cobradoMesAnterior) / cobradoMesAnterior) * 100 : null);
 
-	// --- Drag and drop: 100% local, no toca la BD (ver nota de sesión arriba) ---
 	const FLIP_MS = 150;
 
 	function handleBandejaConsider(e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		bandeja = e.detail.items;
 	}
+	// Tras SOLTAR (no durante el arrastre, ver handleBandejaConsider) hay que recargar de la BD en
+	// vez de confiar en e.detail.items — ver nota equivalente en cuentas-pagar/panoramas/+page.svelte:
+	// si la cuenta arrastrada ya tenía otra tarjeta en esta columna (sus demás cuotas), ambas
+	// quedarían con el mismo `id` en el mismo arreglo y una "desaparecía" visualmente.
 	async function handleBandejaFinalize(e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
-		bandeja = e.detail.items;
-		const result = await reorderPanoramaCobro(supabase, null, aEntradas(bandeja));
+		bandeja = e.detail.items; // feedback visual inmediato mientras se persiste
+		const result = await reorderPanoramaCobro(supabase, null, aEntradas(e.detail.items));
 		if (!result.success) toast.error(result.message);
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 	}
 	function handlePanoramaConsider(id: 1 | 2, e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
 		setPanoramaItems(id, e.detail.items);
 	}
 	async function handlePanoramaFinalize(id: 1 | 2, e: CustomEvent<{ items: IngresoPendienteItem[] }>) {
-		setPanoramaItems(id, e.detail.items);
-		const result = await reorderPanoramaCobro(supabase, id, aEntradas(panoramaItems(id)));
+		setPanoramaItems(id, e.detail.items); // feedback visual inmediato mientras se persiste
+		const result = await reorderPanoramaCobro(supabase, id, aEntradas(e.detail.items));
 		if (!result.success) toast.error(result.message);
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 	}
 
 	// --- Acciones rápidas ---
-	/** "Vaciar" es un movimiento real (destino = bandeja) -> se persiste igual que un arrastre. */
+	/** "Vaciar" es un movimiento real (destino = bandeja) -> se persiste igual que un arrastre. Ver
+	 * nota equivalente en cuentas-pagar/panoramas/+page.svelte (persiste solo `items` y recarga
+	 * después, para evitar tarjetas duplicadas). */
 	async function vaciarPanorama(id: 1 | 2) {
 		const items = panoramaItems(id);
 		if (items.length === 0) return;
-		bandeja = [...bandeja, ...items];
+		bandeja = [...bandeja, ...items]; // feedback visual inmediato mientras se persiste
 		setPanoramaItems(id, []);
 		bandejaVersion++;
 		if (id === 1) panorama1Version++;
 		else panorama2Version++;
-		const result = await reorderPanoramaCobro(supabase, null, aEntradas(bandeja));
+		const result = await reorderPanoramaCobro(supabase, null, aEntradas(items));
 		if (!result.success) {
 			toast.error(result.message);
 			return;
 		}
+		await Promise.all([fetchBandeja(), fetchPanoramas()]);
 		toast.success(`${PANORAMAS[id - 1].nombre} vaciado`);
 	}
 	/** "Copiar" es a propósito solo visual/de la sesión, NO se persiste — ver nota equivalente en
