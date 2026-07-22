@@ -16,6 +16,16 @@ set "C_RESET=%ESC%[0m"
 set "PLATFORM_NAME=Android (.apk / .aab)"
 set "CHECKS_FAILED=0"
 
+rem -- modo de build: "debug" (firmado con keystore de debug, instalable directo
+rem    para pruebas en telefono) o release (default, sin firmar, para Play Store
+rem    una vez configurada la keystore de firma). Uso: build-android.bat [debug]
+set "BUILD_MODE=release"
+set "BUILD_ARGS="
+if /I "%~1"=="debug" (
+    set "BUILD_MODE=debug"
+    set "BUILD_ARGS=-- --debug"
+)
+
 pushd "%~dp0..\.."
 if errorlevel 1 (
     echo %C_RED%[X] No se pudo ubicar la carpeta del proyecto ^(app/^).%C_RESET%
@@ -60,10 +70,17 @@ if exist "src-tauri\gen\android\" (
 )
 echo.
 
-echo %C_BOLD%%C_CYAN%[4/5] Compilando ^(npm run tauri android build^)%C_RESET%
+echo %C_BOLD%%C_CYAN%[4/5] Compilando ^(modo: %BUILD_MODE%^)%C_RESET%
+if "%BUILD_MODE%"=="debug" (
+    echo %C_GRAY%    npm run tauri android build -- --debug%C_RESET%
+) else (
+    echo %C_GRAY%    npm run tauri android build%C_RESET%
+    echo %C_YELLOW%    [!]%C_RESET% APK release queda SIN FIRMAR ^(no instalable hasta configurar
+    echo %C_GRAY%        una keystore^). Para probar en un telefono usa: build-android.bat debug%C_RESET%
+)
 echo %C_GRAY%--------------------------------------------------------------%C_RESET%
 set "T_START=%time%"
-call npm run tauri android build
+call npm run tauri android build %BUILD_ARGS%
 set "BUILD_ERR=%errorlevel%"
 set "T_END=%time%"
 echo %C_GRAY%--------------------------------------------------------------%C_RESET%
@@ -73,8 +90,14 @@ echo.
 echo %C_BOLD%%C_CYAN%[5/5] Resultado%C_RESET%
 if not "!BUILD_ERR!"=="0" goto :fail
 
-echo %C_GREEN%[OK] Build de Android completado en !ELAPSED!.%C_RESET%
-echo %C_GRAY%     Artefactos: src-tauri\gen\android\app\build\outputs\%C_RESET%
+echo %C_GREEN%[OK] Build de Android ^(%BUILD_MODE%^) completado en !ELAPSED!.%C_RESET%
+if "%BUILD_MODE%"=="debug" (
+    echo %C_GRAY%     APK: src-tauri\gen\android\app\build\outputs\apk\universal\debug\app-universal-debug.apk%C_RESET%
+    echo %C_GRAY%     ^(firmado con keystore de debug, listo para instalar^)%C_RESET%
+) else (
+    echo %C_GRAY%     APK: src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release-unsigned.apk%C_RESET%
+    echo %C_GRAY%     ^(SIN FIRMAR - no instalable hasta configurar una keystore de firma^)%C_RESET%
+)
 popd
 if not defined CI_MASTER_RUN pause
 exit /b 0

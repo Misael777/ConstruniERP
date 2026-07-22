@@ -100,24 +100,14 @@
 		<h2 class="text-brand-marine font-bold">Cargando Construni ERP...</h2>
 	</div>
 {:else}
-	<div class="flex h-screen bg-brand-gray overflow-hidden">
-		<!-- Sidebar Global -->
-		<Sidebar bind:collapsed={sidebarCollapsed} bind:mobileOpen={mobileMenuOpen} />
+	<!-- Sidebar Global: hermano directo del <div overflow-hidden>, no hijo — su <aside>/backdrop
+	     internos son `position: fixed`, así que no participan del layout flex del contenedor (los
+	     elementos fixed salen del flujo normal); sacarlos de aquí evita el mismo riesgo de recorte
+	     de WebView en Android descrito abajo, ahora también para el drawer en sí, no solo el botón
+	     que lo abre. -->
+	<Sidebar bind:collapsed={sidebarCollapsed} bind:mobileOpen={mobileMenuOpen} />
 
-		<!-- Botón flotante para abrir el menú en móvil (el sidebar de escritorio está oculto con
-		     hidden md:flex ahí, no hay otra forma de navegar en pantallas angostas). Se oculta
-		     mientras el drawer ya está abierto, para no quedar encimado con el menú. -->
-		{#if !mobileMenuOpen}
-			<button
-				type="button"
-				onclick={() => (mobileMenuOpen = true)}
-				class="md:hidden fixed bottom-5 left-5 z-30 w-12 h-12 rounded-full bg-[#1a233a] text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform"
-				aria-label="Abrir menú de navegación"
-			>
-				<i class="fas fa-bars text-lg"></i>
-			</button>
-		{/if}
-		
+	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Main Content -->
 		<main class={`flex-1 overflow-y-auto transition-all duration-200 ${sidebarCollapsed ? 'md:ml-[76px]' : 'md:ml-[280px]'}`}>
 			<!-- Placeholder Topbar para Layout General -->
@@ -151,5 +141,25 @@
 			</div>
 		</main>
 	</div>
+
+	<!-- Botón flotante para abrir el menú en móvil (el sidebar de escritorio está oculto con
+	     hidden md:flex ahí, no hay otra forma de navegar en pantallas angostas). Se oculta mientras
+	     el drawer ya está abierto, para no quedar encimado con el menú.
+	     A propósito FUERA del <div overflow-hidden> de arriba, como hermano directo del `{:else}` —
+	     algunos WebView de Android no respetan `position: fixed` de forma confiable dentro de un
+	     ancestro con overflow-hidden (lo recortan como si fuera absolute dentro de ese contenedor,
+	     en vez de fijarlo contra el viewport real) aunque en un navegador de escritorio normal no se
+	     note ninguna diferencia. -->
+	{#if !mobileMenuOpen}
+		<button
+			type="button"
+			onclick={() => (mobileMenuOpen = true)}
+			class="md:hidden fixed bottom-5 left-5 z-30 w-12 h-12 rounded-full bg-[#1a233a] text-white shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+			aria-label="Abrir menú de navegación"
+		>
+			<i class="fas fa-bars text-lg"></i>
+		</button>
+	{/if}
+
 	<Toast />
 {/if}
