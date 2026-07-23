@@ -17,6 +17,7 @@
 	import { getCentroCostos, deleteCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	// Módulo 100% client-side (habla directo con Supabase vía la anon key) para funcionar en
 	// cualquier plataforma empaquetada con Tauri (Windows, Android) sin necesitar un servidor
@@ -147,6 +148,14 @@
 		editingCentro = null;
 	}
 
+	let emptyMessage = $derived(
+		loading
+			? 'Cargando...'
+			: activeTab === 'centros'
+				? 'No se encontraron centros de costo.'
+				: 'No se encontraron cuentas internas.'
+	);
+
 	async function handleDelete(item: CentroCosto) {
 		if (!confirm(deleteConfirmMessage)) return;
 
@@ -241,77 +250,102 @@
 		{/if}
 	</div>
 
-	<!-- Table -->
+	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<table class="w-full text-sm">
-				<thead class="bg-slate-50 border-b border-slate-200">
-					<tr>
-						{#each tableFields as field}
-							<th class="text-left px-4 py-3 font-semibold text-slate-600">
-								<button
-									type="button"
-									onclick={() => toggleSort(field.key, field.sortable)}
-									class={`flex items-center gap-1 ${field.sortable ? 'cursor-pointer hover:text-[#0f3b5e]' : 'cursor-default'}`}
-								>
-									{field.label}
-									{#if field.sortable && sortBy === field.key}
-										{#if sortDir === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
-									{/if}
-								</button>
-							</th>
-						{/each}
-						<th class="text-right px-4 py-3 font-semibold text-slate-600">Acciones</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each items as item (item.id_centro_costo)}
-						{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
-						<tr class="border-b border-slate-100 hover:bg-slate-50">
-							{#each tableFields as field}
-								<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
-							{/each}
-							<td class="px-4 py-3">
-								<div class="flex items-center justify-end gap-2">
-									<button
-										type="button"
-										onclick={() => openEdit(item)}
-										class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-										title="Editar"
-										aria-label="Editar"
-									>
-										<Pencil size={16} />
-									</button>
-									<button
-										type="button"
-										onclick={() => handleDelete(item)}
-										disabled={isLinked}
-										class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500 disabled:cursor-not-allowed"
-										title={isLinked ? 'Vinculado a una entidad — elimínala a ella, no este centro de costo' : deleteLabel}
-										aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
-									>
-										{#if DELETE_STRATEGY === 'soft'}
-											<Ban size={16} />
-										{:else}
-											<Trash2 size={16} />
-										{/if}
-									</button>
-								</div>
-							</td>
-						</tr>
-					{:else}
-						<tr>
-							<td colspan={tableFields.length + 1} class="px-4 py-10 text-center text-slate-400">
-								{loading
-									? 'Cargando...'
-									: activeTab === 'centros'
-										? 'No se encontraron centros de costo.'
-										: 'No se encontraron cuentas internas.'}
-							</td>
-						</tr>
+			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + 1} {emptyMessage}>
+				{#snippet header()}
+					{#each tableFields as field}
+						<th class="text-left px-4 py-3 font-semibold text-slate-600">
+							<button
+								type="button"
+								onclick={() => toggleSort(field.key, field.sortable)}
+								class={`flex items-center gap-1 ${field.sortable ? 'cursor-pointer hover:text-[#0f3b5e]' : 'cursor-default'}`}
+							>
+								{field.label}
+								{#if field.sortable && sortBy === field.key}
+									{#if sortDir === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
+								{/if}
+							</button>
+						</th>
 					{/each}
-				</tbody>
-			</table>
+					<th class="text-right px-4 py-3 font-semibold text-slate-600">Acciones</th>
+				{/snippet}
+				{#snippet row(item)}
+					{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
+					{#each tableFields as field}
+						<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
+					{/each}
+					<td class="px-4 py-3">
+						<div class="flex items-center justify-end gap-2">
+							<button
+								type="button"
+								onclick={() => openEdit(item)}
+								class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
+								title="Editar"
+								aria-label="Editar"
+							>
+								<Pencil size={16} />
+							</button>
+							<button
+								type="button"
+								onclick={() => handleDelete(item)}
+								disabled={isLinked}
+								class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500 disabled:cursor-not-allowed"
+								title={isLinked ? 'Vinculado a una entidad — elimínala a ella, no este centro de costo' : deleteLabel}
+								aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
+							>
+								{#if DELETE_STRATEGY === 'soft'}
+									<Ban size={16} />
+								{:else}
+									<Trash2 size={16} />
+								{/if}
+							</button>
+						</div>
+					</td>
+				{/snippet}
+				{#snippet card(item)}
+					{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
+					<div class="flex items-start justify-between gap-3 mb-2">
+						<div class="min-w-0">
+							<div class="font-semibold text-slate-800 truncate">{item.nombre}</div>
+							<div class="text-xs text-slate-500 mt-0.5">{item.codigo}</div>
+						</div>
+						<div class="text-right shrink-0">
+							<div class="font-bold text-slate-800">{formatCurrency(item.monto_actual)}</div>
+							<div class="text-[11px] text-slate-400">{formatDate(item.created_at)}</div>
+						</div>
+					</div>
+					<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
+						<span class="text-slate-400">Tipo</span>
+						<span class="text-right text-slate-700">{getOptionLabel(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, item.tipo)}</span>
+					</div>
+					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+						<button
+							type="button"
+							onclick={() => openEdit(item)}
+							class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100"
+							aria-label="Editar"
+						>
+							<Pencil size={14} /> Editar
+						</button>
+						<button
+							type="button"
+							onclick={() => handleDelete(item)}
+							disabled={isLinked}
+							class="flex-1 h-10 rounded-lg bg-red-50 text-red-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-red-100 disabled:opacity-30 disabled:active:bg-red-50"
+							aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
+						>
+							{#if DELETE_STRATEGY === 'soft'}
+								<Ban size={14} />
+							{:else}
+								<Trash2 size={14} />
+							{/if}
+							{deleteLabel}
+						</button>
+					</div>
+				{/snippet}
+			</ResponsiveDataView>
 		</div>
 
 		<!-- Pagination -->

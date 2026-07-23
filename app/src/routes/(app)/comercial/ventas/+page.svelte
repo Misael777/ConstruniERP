@@ -447,8 +447,9 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 						</div>
 					{:else}
 						<!-- Data Table -->
-						<div class="h-[500px]">
-						<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:viewProforma={handleViewProforma} on:viewContrato={handleViewContrato} />					</div>
+						<div class="md:h-[500px]">
+							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:viewProforma={handleViewProforma} on:viewContrato={handleViewContrato} />
+						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
 					{/if}

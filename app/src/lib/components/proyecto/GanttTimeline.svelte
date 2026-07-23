@@ -2,6 +2,7 @@
 	// Custom Gantt timeline — replaces the svelte-gantt library. See the
 	// reconstruction checklist at the top of ganttPlanning.service.ts before
 	// changing hierarchy/rollup/block-move behavior here.
+	import { onMount } from 'svelte';
 	import { buildTree, type WithChildren } from '$lib/utils/tree';
 	import {
 		computeRollup,
@@ -114,6 +115,17 @@
 	// el handle de dependencia (solo se muestran al pasar el mouse, para no
 	// saturar la grilla con controles todo el tiempo).
 	let hoveredId = $state<number | null>(null);
+
+	// Puntero "coarse" (touch) nunca dispara mouseenter/mouseleave, así que el handle de
+	// conexión (que depende de hoveredId) jamás aparecería en un teléfono — en touch se
+	// muestra siempre (más chico) en vez de depender de hover. Detectado una sola vez al
+	// montar: un tap inicial ya dispara pointerdown de "mover barra" antes de que hubiera
+	// tiempo de revelar nada, así que un flujo de "toca para revelar" competiría con ese
+	// primer gesto en vez de evitar la ambigüedad.
+	let isCoarsePointer = $state(false);
+	onMount(() => {
+		isCoarsePointer = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+	});
 
 	let tree = $derived(buildTree(actividades, 'id_cronograma_actividad', 'id_actividad_padre'));
 	let rollup = $derived(computeRollup(tree));
@@ -424,6 +436,17 @@
 		return Math.min(clientX, Math.max(8, max));
 	}
 
+	// Mismo criterio que popoverLeft pero en el eje vertical — antes solo se clampaba
+	// horizontal, así que en un viewport bajo (típico de un teléfono) un tap cerca del
+	// borde inferior podía abrir el popover parcial o totalmente fuera de pantalla.
+	// estHeight es una estimación conservadora (subestimar solo lo empuja un poco más
+	// arriba de lo necesario, que es inofensivo; sobrestimar sí podría empujarlo fuera
+	// del borde superior).
+	function popoverTop(clientY: number, estHeight = 220): number {
+		const max = (typeof window !== 'undefined' ? window.innerHeight : 800) - estHeight - 8;
+		return Math.min(clientY + 12, Math.max(8, max));
+	}
+
 	// ── DRAG-TO-CREATE: define fecha_inicio/fecha_fin for a leaf that doesn't
 	//    have dates yet by dragging across its (empty) row ─────────────────────
 	type CreateDragState = { id: number; pointerId: number; startX: number; currentX: number };
@@ -487,9 +510,9 @@
 		>Hoy</button>
 	</div>
 
-	<div class="flex overflow-y-auto" style="max-height:calc(100vh - 330px)">
+	<div class="flex overflow-y-auto max-h-[calc(100vh-220px)] md:max-h-[calc(100vh-330px)]">
 		<!-- LEFT: label column (scrolls vertically together with the timeline, see class on parent) -->
-		<div class="border-r border-slate-200 bg-white" style="width:280px;flex-shrink:0">
+		<div class="border-r border-slate-200 bg-white w-[120px] md:w-[280px] shrink-0">
 			<div class="border-b border-slate-100 bg-slate-50" style="height:{HEADER_H}px"></div>
 			{#each flatRows as row (row.node.id_cronograma_actividad)}
 				{@const tieneRestriccion = restriccionesAbiertasPorActividad.has(row.node.id_cronograma_actividad)}
@@ -540,7 +563,7 @@
 						class:bg-orange-50={selectedId === row.node.id_cronograma_actividad}
 						class:bg-slate-50={row.isGroup && selectedId !== row.node.id_cronograma_actividad}
 						class:cursor-crosshair={emptyLeaf}
-						style="top:{HEADER_H + i * ROW_H}px;height:{ROW_H}px;width:{totalWidth}px"
+						style="top:{HEADER_H + i * ROW_H}px;height:{ROW_H}px;width:{totalWidth}px{emptyLeaf ? ';touch-action:none' : ''}"
 						onpointerdown={emptyLeaf ? (e) => onRowPointerDown(e, row) : undefined}
 						onpointermove={emptyLeaf ? onRowPointerMove : undefined}
 						onpointerup={emptyLeaf ? onRowPointerUp : undefined}
@@ -645,7 +668,7 @@
 							class:ring-2={selectedId === row.node.id_cronograma_actividad}
 							class:ring-slate-800={selectedId === row.node.id_cronograma_actividad}
 							class:opacity-55={completada}
-							style="top:{HEADER_H + i * ROW_H + 4}px;left:{x}px;width:{w}px;height:{ROW_H - 8}px;background:{atrasada ? '#e11d48' : baseColor};{isDropTarget ? 'box-shadow:0 0 0 3px #10b981, 0 0 14px 3px rgba(16,185,129,0.65);' : isConnectSource ? 'box-shadow:0 0 0 2px #3b82f6;' : ''}"
+							style="top:{HEADER_H + i * ROW_H + 4}px;left:{x}px;width:{w}px;height:{ROW_H - 8}px;background:{atrasada ? '#e11d48' : baseColor};touch-action:none;{isDropTarget ? 'box-shadow:0 0 0 3px #10b981, 0 0 14px 3px rgba(16,185,129,0.65);' : isConnectSource ? 'box-shadow:0 0 0 2px #3b82f6;' : ''}"
 							title={restriccionesAbiertasPorActividad.get(row.node.id_cronograma_actividad)?.map((r: any) => r.descripcion || r.tipo_restriccion || 'Restricción').join(' · ') ?? ''}
 							onpointerdown={(e) => onBarPointerDown(e, row)}
 							onpointermove={onBarPointerMove}
@@ -659,12 +682,13 @@
 							{#if restriccionesAbiertasPorActividad.has(row.node.id_cronograma_actividad)}
 								<span class="absolute -top-2 -right-2 w-3.5 h-3.5 rounded-full bg-amber-500 text-white text-[8px] flex items-center justify-center z-10">⚠</span>
 							{/if}
-							{#if hoveredId === row.node.id_cronograma_actividad && !drag && !resize && !connectDrag}
+							{#if (isCoarsePointer || hoveredId === row.node.id_cronograma_actividad) && !drag && !resize && !connectDrag}
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<div
 									role="button"
 									tabindex="0"
-									class="absolute -right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-white border-2 border-blue-500 text-blue-600 flex items-center justify-center shadow-md cursor-crosshair z-20 hover:scale-125 hover:bg-blue-50 transition-transform"
+									class={`absolute -right-2.5 top-1/2 -translate-y-1/2 rounded-full bg-white border-2 border-blue-500 text-blue-600 flex items-center justify-center shadow-md cursor-crosshair z-20 hover:scale-125 hover:bg-blue-50 transition-transform ${isCoarsePointer ? 'w-4 h-4' : 'w-5 h-5'}`}
+									style="touch-action:none"
 									title="Clic: restricción externa en esta actividad · Arrastra hasta otra barra: crear dependencia o restricción"
 									onpointerdown={(e) => onConnectPointerDown(e, row)}
 									onpointermove={onConnectPointerMove}
@@ -673,19 +697,25 @@
 							{/if}
 							{#if !row.isGroup}
 								<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-								<div
-									class="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize"
-									onpointerdown={(e) => onResizePointerDown(e, row, 'left')}
-									onpointermove={onResizePointerMove}
-									onpointerup={onResizePointerUp}
-								></div>
+								<div class="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize">
+									<div
+										class="absolute inset-y-0 -left-3 w-8"
+										style="touch-action:none"
+										onpointerdown={(e) => onResizePointerDown(e, row, 'left')}
+										onpointermove={onResizePointerMove}
+										onpointerup={onResizePointerUp}
+									></div>
+								</div>
 								<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-								<div
-									class="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize"
-									onpointerdown={(e) => onResizePointerDown(e, row, 'right')}
-									onpointermove={onResizePointerMove}
-									onpointerup={onResizePointerUp}
-								></div>
+								<div class="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize">
+									<div
+										class="absolute inset-y-0 -right-3 w-8"
+										style="touch-action:none"
+										onpointerdown={(e) => onResizePointerDown(e, row, 'right')}
+										onpointermove={onResizePointerMove}
+										onpointerup={onResizePointerUp}
+									></div>
+								</div>
 							{/if}
 						</div>
 					{/if}
@@ -700,7 +730,7 @@
 		<div class="fixed inset-0 z-40" onclick={() => (depPopover = null)}></div>
 		<div
 			class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3 w-56"
-			style="left:{popoverLeft(depPopover.clientX)}px;top:{depPopover.clientY + 12}px"
+			style="left:{popoverLeft(depPopover.clientX)}px;top:{popoverTop(depPopover.clientY, 240)}px"
 		>
 			<p class="text-xs font-bold text-slate-700 mb-2">
 				{depPopover.mode === 'create' ? 'Nueva dependencia' : 'Editar dependencia'}
@@ -736,7 +766,7 @@
 		<div class="fixed inset-0 z-40" onclick={() => (connectChooser = null)}></div>
 		<div
 			class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3 w-56"
-			style="left:{popoverLeft(connectChooser.clientX)}px;top:{connectChooser.clientY + 12}px"
+			style="left:{popoverLeft(connectChooser.clientX)}px;top:{popoverTop(connectChooser.clientY, 170)}px"
 		>
 			<p class="text-xs font-bold text-slate-700 mb-2">¿Qué quieres crear?</p>
 			<div class="flex flex-col gap-1.5">

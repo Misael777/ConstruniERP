@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { createUser, updateUser, deleteUser } from '$lib/edgeFunctionClient';
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Area = { id: number; nombre: string };
@@ -413,99 +414,140 @@
 		</div>
 	{:else}
 		<div class="overflow-x-auto">
-			<table class="w-full text-sm text-left">
-				<thead class="text-xs text-slate-500 bg-slate-50 font-medium uppercase border-b border-slate-100">
-					<tr>
-						<th class="p-4">Personal</th>
-						<th class="p-4">Contacto</th>
-						<th class="p-4">Estado Cuenta</th>
-						<th class="p-4 w-48">Rol Asignado</th>
-						<th class="p-4 text-center">Acciones</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-100">
-					{#each empleados as emp}
-						<tr class="hover:bg-slate-50 transition-colors">
-							<td class="p-4">
-								<div class="flex items-center gap-3">
-									<div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
-										{emp.nombre.charAt(0).toUpperCase()}
-									</div>
-									<div>
-										<div class="font-bold text-slate-800">{emp.nombre}</div>
-										<div class="text-[10px] text-slate-400 capitalize">
-											<!-- @ts-ignore -->
-											{emp.roles?.nombre || 'Sin Rol'}
-										</div>
-									</div>
+			<ResponsiveDataView items={empleados} keyField="id" emptyMessage="No hay empleados registrados o no tienes permiso para verlos." columns={[
+				{ label: 'Personal' },
+				{ label: 'Contacto' },
+				{ label: 'Estado Cuenta' },
+				{ label: 'Rol Asignado' },
+				{ label: 'Acciones', align: 'center' }
+			]}>
+				{#snippet row(emp)}
+					<td class="p-4">
+						<div class="flex items-center gap-3">
+							<div class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
+								{emp.nombre.charAt(0).toUpperCase()}
+							</div>
+							<div>
+								<div class="font-bold text-slate-800">{emp.nombre}</div>
+								<div class="text-[10px] text-slate-400 capitalize">
+									<!-- @ts-ignore -->
+									{emp.roles?.nombre || 'Sin Rol'}
 								</div>
-							</td>
-							<td class="p-4">
-								<div class="flex flex-col gap-1">
-									{#if emp.telefono}
-										<div class="flex items-center gap-2 text-slate-600 text-sm">
-											<i class="fas fa-phone-alt text-slate-400 text-xs w-3"></i>
-											{emp.telefono}
-										</div>
-									{/if}
-									{#if emp.correo}
-										<div class="flex items-center gap-2 text-slate-500 text-xs">
-											<i class="fas fa-envelope text-slate-400 text-xs w-3"></i>
-											{emp.correo}
-										</div>
-									{/if}
-									{#if !emp.telefono && !emp.correo}
-										<span class="text-slate-400 italic text-xs">No registrado</span>
-									{/if}
+							</div>
+						</div>
+					</td>
+					<td class="p-4">
+						<div class="flex flex-col gap-1">
+							{#if emp.telefono}
+								<div class="flex items-center gap-2 text-slate-600 text-sm">
+									<i class="fas fa-phone-alt text-slate-400 text-xs w-3"></i>
+									{emp.telefono}
 								</div>
-							</td>
-							<td class="p-4">
-								{#if emp.auth_user_id}
-									<span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold"><i class="fas fa-link"></i> Vinculada</span>
-								{:else}
-									<span class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-semibold"><i class="fas fa-unlink"></i> Sin vincular</span>
-								{/if}
-							</td>
-							<td class="p-4 capitalize font-medium text-slate-700">
+							{/if}
+							{#if emp.correo}
+								<div class="flex items-center gap-2 text-slate-500 text-xs">
+									<i class="fas fa-envelope text-slate-400 text-xs w-3"></i>
+									{emp.correo}
+								</div>
+							{/if}
+							{#if !emp.telefono && !emp.correo}
+								<span class="text-slate-400 italic text-xs">No registrado</span>
+							{/if}
+						</div>
+					</td>
+					<td class="p-4">
+						{#if emp.auth_user_id}
+							<span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold"><i class="fas fa-link"></i> Vinculada</span>
+						{:else}
+							<span class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-semibold"><i class="fas fa-unlink"></i> Sin vincular</span>
+						{/if}
+					</td>
+					<td class="p-4 capitalize font-medium text-slate-700">
+						{#if emp.roles?.nombre}
+							<span class="px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold border border-blue-100">
+								{emp.roles.nombre}
+							</span>
+						{:else}
+							<span class="px-2.5 py-1 bg-slate-50 text-slate-400 rounded-lg text-xs font-medium border border-slate-100 italic">
+								Sin Rol
+							</span>
+						{/if}
+					</td>
+					<td class="p-4 text-center whitespace-nowrap">
+						<div class="flex items-center justify-center gap-2">
+							<button
+								onclick={() => prepararEdicion(emp)}
+								class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+								title="Editar empleado"
+							>
+								<i class="fas fa-edit text-[10px]"></i>
+								<span>Editar</span>
+							</button>
+							<button
+								onclick={() => eliminarEmpleado(emp.id, emp.nombre)}
+								class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:bg-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+								title="Eliminar empleado"
+							>
+								<i class="fas fa-trash-alt text-[10px]"></i>
+								<span>Eliminar</span>
+							</button>
+						</div>
+					</td>
+				{/snippet}
+				{#snippet card(emp)}
+					<div class="flex items-start justify-between gap-3 mb-3">
+						<div class="flex items-center gap-3 min-w-0">
+							<div class="w-10 h-10 shrink-0 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
+								{emp.nombre.charAt(0).toUpperCase()}
+							</div>
+							<div class="min-w-0">
+								<div class="font-bold text-slate-800 truncate">{emp.nombre}</div>
 								{#if emp.roles?.nombre}
-									<span class="px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold border border-blue-100">
-										{emp.roles.nombre}
-									</span>
+									<span class="inline-block mt-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-semibold border border-blue-100 capitalize">{emp.roles.nombre}</span>
 								{:else}
-									<span class="px-2.5 py-1 bg-slate-50 text-slate-400 rounded-lg text-xs font-medium border border-slate-100 italic">
-										Sin Rol
-									</span>
+									<span class="inline-block mt-1 px-2 py-0.5 bg-slate-50 text-slate-400 rounded text-[10px] font-medium border border-slate-100 italic">Sin Rol</span>
 								{/if}
-							</td>
-							<td class="p-4 text-center whitespace-nowrap">
-								<div class="flex items-center justify-center gap-2">
-									<button 
-										onclick={() => prepararEdicion(emp)} 
-										class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
-										title="Editar empleado"
-									>
-										<i class="fas fa-edit text-[10px]"></i>
-										<span>Editar</span>
-									</button>
-									<button 
-										onclick={() => eliminarEmpleado(emp.id, emp.nombre)} 
-										class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:bg-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer" 
-										title="Eliminar empleado"
-									>
-										<i class="fas fa-trash-alt text-[10px]"></i>
-										<span>Eliminar</span>
-									</button>
-								</div>
-							</td>
-						</tr>
-					{/each}
-					{#if empleados.length === 0}
-						<tr>
-							<td colspan="5" class="p-8 text-center text-slate-500">No hay empleados registrados o no tienes permiso para verlos.</td>
-						</tr>
-					{/if}
-				</tbody>
-			</table>
+							</div>
+						</div>
+						{#if emp.auth_user_id}
+							<span class="shrink-0 px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-semibold"><i class="fas fa-link"></i> Vinculada</span>
+						{:else}
+							<span class="shrink-0 px-2 py-1 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold"><i class="fas fa-unlink"></i> Sin vincular</span>
+						{/if}
+					</div>
+					<div class="flex flex-col gap-1 mb-3">
+						{#if emp.telefono}
+							<div class="flex items-center gap-2 text-slate-600 text-sm">
+								<i class="fas fa-phone-alt text-slate-400 text-xs w-3"></i>
+								{emp.telefono}
+							</div>
+						{/if}
+						{#if emp.correo}
+							<div class="flex items-center gap-2 text-slate-500 text-xs">
+								<i class="fas fa-envelope text-slate-400 text-xs w-3"></i>
+								{emp.correo}
+							</div>
+						{/if}
+						{#if !emp.telefono && !emp.correo}
+							<span class="text-slate-400 italic text-xs">No registrado</span>
+						{/if}
+					</div>
+					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+						<button
+							onclick={() => prepararEdicion(emp)}
+							class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-blue-100"
+						>
+							<i class="fas fa-edit text-[10px]"></i> Editar
+						</button>
+						<button
+							onclick={() => eliminarEmpleado(emp.id, emp.nombre)}
+							class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-rose-100"
+						>
+							<i class="fas fa-trash-alt text-[10px]"></i> Eliminar
+						</button>
+					</div>
+				{/snippet}
+			</ResponsiveDataView>
 		</div>
 	{/if}
 </div>

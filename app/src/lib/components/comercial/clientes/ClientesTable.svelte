@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+
 	let { clientes = [], onEdit = (cliente: any) => {}, onDelete = (id: number) => {} } = $props<{
 		clientes?: any[];
 		onEdit?: (cliente: any) => void;
@@ -99,9 +101,13 @@
 			return searchMatch && tipoMatch && nombreMatch && tipoColumnMatch && documentoMatch && contactoMatch;
 		})
 	);
+
+	let visibleColumnsCount = $derived(
+		Object.values(visibleColumns).filter(Boolean).length + 1 // +1 por la columna de Acciones
+	);
 </script>
 
-<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col h-full">
+<div class="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col md:h-full md:overflow-hidden">
 	
 	<!-- Filters Bar -->
 	<div class="p-4 border-b border-slate-100 flex flex-wrap items-center gap-4">
@@ -151,10 +157,10 @@
 		</button>
 	</div>
 
-	<!-- Table -->
-	<div class="overflow-x-auto flex-1">
+	<!-- Table / Cards -->
+	<div class="overflow-x-auto md:overflow-y-auto md:flex-1">
 		{#if clientes.length === 0}
-			<div class="p-12 text-center flex flex-col items-center justify-center text-slate-500 h-full">
+			<div class="p-12 text-center flex flex-col items-center justify-center text-slate-500">
 				<div class="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
 					<i class="fas fa-users text-2xl text-slate-300"></i>
 				</div>
@@ -162,169 +168,202 @@
 				<p class="text-sm text-slate-400 mt-1">Haz clic en "Nuevo Cliente" para empezar.</p>
 			</div>
 		{:else}
-			<table class="w-full text-left text-sm whitespace-nowrap">
-				<thead class="text-xs text-slate-500 bg-slate-50/50 font-semibold border-b border-slate-100">
-					<tr>
-						{#if visibleColumns.nombre}
-							<th class="px-5 py-4 relative">
-								<div class="relative flex items-center gap-2">
-									<span>Razón Social / Nombre</span>
-									<button onclick={() => toggleColumnFilter('nombre')} class="text-slate-400 hover:text-blue-600 transition-colors">
-										<i class="fas fa-filter"></i>
-									</button>
+			<ResponsiveDataView items={filteredClientes} keyField="id_cliente" colspan={visibleColumnsCount} emptyMessage="Ningún cliente coincide con esos filtros.">
+				{#snippet header()}
+					{#if visibleColumns.nombre}
+						<th class="px-5 py-4 relative">
+							<div class="relative flex items-center gap-2">
+								<span>Razón Social / Nombre</span>
+								<button onclick={() => toggleColumnFilter('nombre')} class="text-slate-400 hover:text-blue-600 transition-colors">
+									<i class="fas fa-filter"></i>
+								</button>
+							</div>
+							{#if activeFilterColumn === 'nombre'}
+								<div class="absolute mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
+									<div class="flex items-center justify-between mb-2">
+										<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por nombre</p>
+										<button onclick={() => clearColumnFilter('nombre')} class="text-[11px] text-blue-600">Limpiar</button>
+									</div>
+									<div class="max-h-48 overflow-y-auto space-y-1">
+										<button onclick={() => applyColumnFilter('nombre', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
+										{#each getColumnValues('nombre') as value}
+											<button onclick={() => applyColumnFilter('nombre', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
+										{/each}
+									</div>
 								</div>
-								{#if activeFilterColumn === 'nombre'}
-									<div class="absolute mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
-										<div class="flex items-center justify-between mb-2">
-											<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por nombre</p>
-											<button onclick={() => clearColumnFilter('nombre')} class="text-[11px] text-blue-600">Limpiar</button>
-										</div>
-										<div class="max-h-48 overflow-y-auto space-y-1">
-											<button onclick={() => applyColumnFilter('nombre', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
-											{#each getColumnValues('nombre') as value}
-												<button onclick={() => applyColumnFilter('nombre', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
-											{/each}
-										</div>
+							{/if}
+						</th>
+					{/if}
+					{#if visibleColumns.tipo}
+						<th class="px-5 py-4 relative">
+							<div class="relative flex items-center gap-2">
+								<span>Tipo</span>
+								<button onclick={() => toggleColumnFilter('tipo')} class="text-slate-400 hover:text-blue-600 transition-colors">
+									<i class="fas fa-filter"></i>
+								</button>
+							</div>
+							{#if activeFilterColumn === 'tipo'}
+								<div class="absolute mt-2 w-44 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
+									<div class="flex items-center justify-between mb-2">
+										<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por tipo</p>
+										<button onclick={() => clearColumnFilter('tipo')} class="text-[11px] text-blue-600">Limpiar</button>
+									</div>
+									<div class="space-y-1">
+										<button onclick={() => applyColumnFilter('tipo', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
+										{#each getColumnValues('tipo') as value}
+											<button onclick={() => applyColumnFilter('tipo', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						</th>
+					{/if}
+					{#if visibleColumns.documento}
+						<th class="px-5 py-4 relative">
+							<div class="relative flex items-center gap-2">
+								<span>Documento</span>
+								<button onclick={() => toggleColumnFilter('documento')} class="text-slate-400 hover:text-blue-600 transition-colors">
+									<i class="fas fa-filter"></i>
+								</button>
+							</div>
+							{#if activeFilterColumn === 'documento'}
+								<div class="absolute mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
+									<div class="flex items-center justify-between mb-2">
+										<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por documento</p>
+										<button onclick={() => clearColumnFilter('documento')} class="text-[11px] text-blue-600">Limpiar</button>
+									</div>
+									<div class="max-h-48 overflow-y-auto space-y-1">
+										<button onclick={() => applyColumnFilter('documento', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
+										{#each getColumnValues('documento') as value}
+											<button onclick={() => applyColumnFilter('documento', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						</th>
+					{/if}
+					{#if visibleColumns.contacto}
+						<th class="px-5 py-4 relative">
+							<div class="relative flex items-center gap-2">
+								<span>Contacto</span>
+								<button onclick={() => toggleColumnFilter('contacto')} class="text-slate-400 hover:text-blue-600 transition-colors">
+									<i class="fas fa-filter"></i>
+								</button>
+							</div>
+							{#if activeFilterColumn === 'contacto'}
+								<div class="absolute mt-2 w-48 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
+									<div class="flex items-center justify-between mb-2">
+										<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por contacto</p>
+										<button onclick={() => clearColumnFilter('contacto')} class="text-[11px] text-blue-600">Limpiar</button>
+									</div>
+									<div class="space-y-1">
+										<button onclick={() => applyColumnFilter('contacto', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
+										{#each getColumnValues('contacto') as value}
+											<button onclick={() => applyColumnFilter('contacto', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						</th>
+					{/if}
+					<th class="px-5 py-4 text-center">Acciones</th>
+				{/snippet}
+				{#snippet row(cliente)}
+					{#if visibleColumns.nombre}
+						<td class="px-5 py-4 font-medium text-slate-800">
+							<div class="max-w-[250px] truncate">{cliente.nombre}</div>
+						</td>
+					{/if}
+					{#if visibleColumns.tipo}
+						<td class="px-5 py-4">
+							<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoBadgeColor(cliente.tip_persona)}`}>
+								{getTipoLabel(cliente.tip_persona)}
+							</span>
+						</td>
+					{/if}
+					{#if visibleColumns.documento}
+						<td class="px-5 py-4">
+							<div class="flex flex-col">
+								<span class="font-semibold text-slate-700">{cliente.num_documento}</span>
+								<span class="text-[10px] text-slate-400 font-medium">{cliente.tipo_doc}</span>
+							</div>
+						</td>
+					{/if}
+					{#if visibleColumns.contacto}
+						<td class="px-5 py-4">
+							<div class="flex flex-col gap-1 text-slate-600">
+								{#if cliente.email}
+									<div class="flex items-center gap-2 text-xs">
+										<i class="fas fa-envelope text-slate-400 w-3 text-center"></i>
+										<span>{cliente.email}</span>
 									</div>
 								{/if}
-							</th>
-						{/if}
-						{#if visibleColumns.tipo}
-							<th class="px-5 py-4 relative">
-								<div class="relative flex items-center gap-2">
-									<span>Tipo</span>
-									<button onclick={() => toggleColumnFilter('tipo')} class="text-slate-400 hover:text-blue-600 transition-colors">
-										<i class="fas fa-filter"></i>
-									</button>
-								</div>
-								{#if activeFilterColumn === 'tipo'}
-									<div class="absolute mt-2 w-44 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
-										<div class="flex items-center justify-between mb-2">
-											<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por tipo</p>
-											<button onclick={() => clearColumnFilter('tipo')} class="text-[11px] text-blue-600">Limpiar</button>
-										</div>
-										<div class="space-y-1">
-											<button onclick={() => applyColumnFilter('tipo', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
-											{#each getColumnValues('tipo') as value}
-												<button onclick={() => applyColumnFilter('tipo', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
-											{/each}
-										</div>
+								{#if cliente.telefono}
+									<div class="flex items-center gap-2 text-xs">
+										<i class="fas fa-phone-alt text-slate-400 w-3 text-center"></i>
+										<span>{cliente.telefono}</span>
 									</div>
 								{/if}
-							</th>
-						{/if}
-						{#if visibleColumns.documento}
-							<th class="px-5 py-4 relative">
-								<div class="relative flex items-center gap-2">
-									<span>Documento</span>
-									<button onclick={() => toggleColumnFilter('documento')} class="text-slate-400 hover:text-blue-600 transition-colors">
-										<i class="fas fa-filter"></i>
-									</button>
-								</div>
-								{#if activeFilterColumn === 'documento'}
-									<div class="absolute mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
-										<div class="flex items-center justify-between mb-2">
-											<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por documento</p>
-											<button onclick={() => clearColumnFilter('documento')} class="text-[11px] text-blue-600">Limpiar</button>
-										</div>
-										<div class="max-h-48 overflow-y-auto space-y-1">
-											<button onclick={() => applyColumnFilter('documento', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
-											{#each getColumnValues('documento') as value}
-												<button onclick={() => applyColumnFilter('documento', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
-											{/each}
-										</div>
-									</div>
+								{#if !cliente.email && !cliente.telefono}
+									<span class="text-xs text-slate-400 italic">Sin contacto</span>
 								{/if}
-							</th>
+							</div>
+						</td>
+					{/if}
+					<td class="px-5 py-4 text-center">
+						<div class="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+							<button onclick={() => onEdit(cliente)} class="w-8 h-8 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Editar">
+								<i class="fas fa-pen text-xs"></i>
+							</button>
+							<button onclick={() => onDelete(cliente.id_cliente)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Eliminar">
+								<i class="fas fa-trash text-xs"></i>
+							</button>
+						</div>
+					</td>
+				{/snippet}
+				{#snippet card(cliente)}
+					<div class="flex items-start justify-between gap-3 mb-2">
+						<div class="min-w-0">
+							<div class="font-semibold text-slate-800 truncate">{cliente.nombre}</div>
+							<span class={`inline-block mt-1 text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoBadgeColor(cliente.tip_persona)}`}>
+								{getTipoLabel(cliente.tip_persona)}
+							</span>
+						</div>
+						<div class="text-right shrink-0">
+							<div class="font-semibold text-slate-700 text-sm">{cliente.num_documento}</div>
+							<div class="text-[11px] text-slate-400">{cliente.tipo_doc}</div>
+						</div>
+					</div>
+					<div class="flex flex-col gap-1 text-slate-600 mb-3">
+						{#if cliente.email}
+							<div class="flex items-center gap-2 text-xs">
+								<i class="fas fa-envelope text-slate-400 w-3 text-center"></i>
+								<span class="truncate">{cliente.email}</span>
+							</div>
 						{/if}
-						{#if visibleColumns.contacto}
-							<th class="px-5 py-4 relative">
-								<div class="relative flex items-center gap-2">
-									<span>Contacto</span>
-									<button onclick={() => toggleColumnFilter('contacto')} class="text-slate-400 hover:text-blue-600 transition-colors">
-										<i class="fas fa-filter"></i>
-									</button>
-								</div>
-								{#if activeFilterColumn === 'contacto'}
-									<div class="absolute mt-2 w-48 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-20 text-left">
-										<div class="flex items-center justify-between mb-2">
-											<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por contacto</p>
-											<button onclick={() => clearColumnFilter('contacto')} class="text-[11px] text-blue-600">Limpiar</button>
-										</div>
-										<div class="space-y-1">
-											<button onclick={() => applyColumnFilter('contacto', 'Todos')} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">Todos</button>
-											{#each getColumnValues('contacto') as value}
-												<button onclick={() => applyColumnFilter('contacto', value)} class="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50">{value}</button>
-											{/each}
-										</div>
-									</div>
-								{/if}
-							</th>
+						{#if cliente.telefono}
+							<div class="flex items-center gap-2 text-xs">
+								<i class="fas fa-phone-alt text-slate-400 w-3 text-center"></i>
+								<span>{cliente.telefono}</span>
+							</div>
 						{/if}
-						<th class="px-5 py-4 text-center">Acciones</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-100">
-					{#each filteredClientes as cliente}
-						<tr class="hover:bg-slate-50/80 transition-colors group">
-							{#if visibleColumns.nombre}
-								<td class="px-5 py-4 font-medium text-slate-800">
-									<div class="max-w-[250px] truncate">{cliente.nombre}</div>
-								</td>
-							{/if}
-							{#if visibleColumns.tipo}
-								<td class="px-5 py-4">
-									<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoBadgeColor(cliente.tip_persona)}`}>
-										{getTipoLabel(cliente.tip_persona)}
-									</span>
-								</td>
-							{/if}
-							{#if visibleColumns.documento}
-								<td class="px-5 py-4">
-									<div class="flex flex-col">
-										<span class="font-semibold text-slate-700">{cliente.num_documento}</span>
-										<span class="text-[10px] text-slate-400 font-medium">{cliente.tipo_doc}</span>
-									</div>
-								</td>
-							{/if}
-							{#if visibleColumns.contacto}
-								<td class="px-5 py-4">
-									<div class="flex flex-col gap-1 text-slate-600">
-										{#if cliente.email}
-											<div class="flex items-center gap-2 text-xs">
-												<i class="fas fa-envelope text-slate-400 w-3 text-center"></i>
-												<span>{cliente.email}</span>
-											</div>
-										{/if}
-										{#if cliente.telefono}
-											<div class="flex items-center gap-2 text-xs">
-												<i class="fas fa-phone-alt text-slate-400 w-3 text-center"></i>
-												<span>{cliente.telefono}</span>
-											</div>
-										{/if}
-										{#if !cliente.email && !cliente.telefono}
-											<span class="text-xs text-slate-400 italic">Sin contacto</span>
-										{/if}
-									</div>
-								</td>
-							{/if}
-							<td class="px-5 py-4 text-center">
-								<div class="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-									<button onclick={() => onEdit(cliente)} class="w-8 h-8 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Editar">
-										<i class="fas fa-pen text-xs"></i>
-									</button>
-									<button onclick={() => onDelete(cliente.id_cliente)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Eliminar">
-										<i class="fas fa-trash text-xs"></i>
-									</button>
-								</div>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+						{#if !cliente.email && !cliente.telefono}
+							<span class="text-xs text-slate-400 italic">Sin contacto</span>
+						{/if}
+					</div>
+					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+						<button onclick={() => onEdit(cliente)} class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100" aria-label="Editar">
+							<i class="fas fa-pen text-xs"></i> Editar
+						</button>
+						<button onclick={() => onDelete(cliente.id_cliente)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Eliminar">
+							<i class="fas fa-trash text-xs"></i> Eliminar
+						</button>
+					</div>
+				{/snippet}
+			</ResponsiveDataView>
 		{/if}
 	</div>
-	
+
 	<!-- Pagination Footer -->
 	{#if clientes.length > 0}
 		<div class="p-4 border-t border-slate-100 flex items-center justify-between mt-auto bg-slate-50/30">

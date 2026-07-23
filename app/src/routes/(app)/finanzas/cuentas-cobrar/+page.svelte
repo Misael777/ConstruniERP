@@ -23,6 +23,7 @@
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import type { CuentaCobrar, Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -392,75 +393,140 @@
 		</button>
 	</div>
 
-	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
-		<div class="min-w-[980px]">
-			<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-				<span>Proyecto</span>
-				<span>N° Documento</span>
-				<span class="text-center">Montos</span>
-				<div class="flex gap-2 pl-4">
-					<span class="flex-1">Prioridad</span>
-					<span class="flex-1">Estado</span>
+	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+		<!-- Desktop: filas tipo tabla -->
+		<div class="hidden md:block overflow-x-auto">
+			<div class="min-w-[980px]">
+				<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+					<span>Proyecto</span>
+					<span>N° Documento</span>
+					<span class="text-center">Montos</span>
+					<div class="flex gap-2 pl-4">
+						<span class="flex-1">Prioridad</span>
+						<span class="flex-1">Estado</span>
+					</div>
+					<span class="text-right">Días de Retraso</span>
+					<span class="text-right">Acciones</span>
 				</div>
-				<span class="text-right">Días de Retraso</span>
-				<span class="text-right">Acciones</span>
-			</div>
 
+				{#each items as item (item.id_cuenta_cobrar)}
+					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
+					<div
+						class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+							selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+						}`}
+						onclick={() => selectRow(item)}
+					>
+						<div class="flex items-center gap-3 min-w-0">
+							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+								<FileText size={18} />
+							</div>
+							<div class="min-w-0">
+								<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
+								<div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 flex-wrap">
+									<span class="truncate">{item.cliente?.nombre ?? 'Sin cliente'}</span>
+									<span class="text-slate-300">·</span>
+									<span class="shrink-0">{formatDate(item.fecha_vencimiento)}</span>
+								</div>
+							</div>
+						</div>
+						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
+						<div class="text-center leading-tight">
+							<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
+							{#if item.moneda === 'USD'}
+								<p class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</p>
+							{/if}
+						</div>
+						<div class="flex items-center gap-2 pl-4">
+							<div class="flex-1">
+								{#if item.prioridad}
+									<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+										{getOptionLabel(prioridadField, item.prioridad)}
+									</span>
+								{/if}
+							</div>
+							<div class="flex-1">
+								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(estadoField, item.estado)}
+								</span>
+							</div>
+						</div>
+						<div class="text-right text-sm">
+							{#if retraso !== null}
+								<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
+							{:else}
+								<span class="text-slate-300">—</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-1 justify-end">
+							<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+								<Pencil size={16} />
+							</button>
+							<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+								<Trash2 size={16} />
+							</button>
+						</div>
+					</div>
+				{:else}
+					<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por cobrar.'}</p>
+				{/each}
+			</div>
+		</div>
+
+		<!-- Mobile: tarjetas apiladas -->
+		<div class="md:hidden">
 			{#each items as item (item.id_cuenta_cobrar)}
 				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
 				<div
-					class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
-						selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
-					}`}
+					role="button"
+					tabindex="0"
 					onclick={() => selectRow(item)}
+					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectRow(item)}
+					class={`w-full text-left p-4 border-b border-slate-100 last:border-b-0 active:bg-slate-50 transition-colors cursor-pointer ${
+						selectedId === item.id_cuenta_cobrar ? 'bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+					}`}
 				>
-					<div class="flex items-center gap-3 min-w-0">
-						<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-							<FileText size={18} />
-						</div>
-						<div class="min-w-0">
-							<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
-							<div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-								<span class="truncate">{item.cliente?.nombre ?? 'Sin cliente'}</span>
-								<span class="text-slate-300">·</span>
-								<span class="shrink-0">{formatDate(item.fecha_vencimiento)}</span>
+					<div class="flex items-start justify-between gap-3 mb-2">
+						<div class="flex items-center gap-3 min-w-0">
+							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+								<FileText size={18} />
+							</div>
+							<div class="min-w-0">
+								<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
+								<p class="text-[11px] text-slate-500 truncate mt-0.5">{item.cliente?.nombre ?? 'Sin cliente'} · {item.num_documento || '—'}</p>
 							</div>
 						</div>
+						<div class="text-right shrink-0">
+							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</div>
+							{#if item.moneda === 'USD'}
+								<div class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</div>
+							{/if}
+						</div>
 					</div>
-					<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
-					<div class="text-center leading-tight">
-						<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
-						{#if item.moneda === 'USD'}
-							<p class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</p>
-						{/if}
-					</div>
-					<div class="flex items-center gap-2 pl-4">
-						<div class="flex-1">
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-1.5 flex-wrap">
 							{#if item.prioridad}
 								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
 							{/if}
-						</div>
-						<div class="flex-1">
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						</div>
 					</div>
-					<div class="text-right text-sm">
+					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
+						<span>Vencimiento: {formatDate(item.fecha_vencimiento)}</span>
 						{#if retraso !== null}
-							<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
-						{:else}
-							<span class="text-slate-300">—</span>
+							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>
 						{/if}
 					</div>
-					<div class="flex items-center gap-1 justify-end">
-						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-							<Pencil size={16} />
+					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
+							<Pencil size={14} /> Editar
 						</button>
-						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-							<Trash2 size={16} />
+						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar">
+							<Trash2 size={14} /> Eliminar
 						</button>
 					</div>
 				</div>
@@ -496,61 +562,93 @@
 			{#if selectedCobros.length === 0}
 				<p class="text-sm text-slate-400 text-center py-6">Sin cobros registrados todavía.</p>
 			{:else}
-				<table class="w-full text-sm">
-					<thead class="bg-slate-50 border-b border-slate-200">
-						<tr>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Fecha</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Monto</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">N° Operación</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Estado</th>
-							<th class="text-right px-3 py-2 font-semibold text-slate-600">Acciones</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each selectedCobros as cobro (cobro.id_cobro)}
+				<div class="overflow-x-auto">
+					<ResponsiveDataView items={selectedCobros} keyField="id_cobro" columns={[
+						{ label: 'Fecha' },
+						{ label: 'Monto' },
+						{ label: 'N° Operación' },
+						{ label: 'Estado' },
+						{ label: 'Acciones', align: 'right' }
+					]}>
+						{#snippet row(cobro)}
 							{@const bloqueado = !!cobro.transaccion?.aprobado && !isAdmin()}
-							<tr
-								class={`border-b border-slate-100 ${cobro.estado_cobro === 'programado' && !bloqueado ? 'cursor-pointer hover:bg-slate-50' : ''}`}
-								ondblclick={() => cobro.estado_cobro === 'programado' && !bloqueado && openEditCobro(cobro)}
-								title={cobro.estado_cobro === 'programado' && !bloqueado ? 'Doble clic para editar/cancelar esta cuota' : undefined}
-							>
-								<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
-								<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
-								<td class="px-3 py-2">{cobro.num_operacion ?? '—'}</td>
-								<td class="px-3 py-2">
-									<div class="flex items-center gap-1.5">
-										{#if cobro.estado_cobro === 'programado'}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
-										{:else if cobro.estado_cobro === 'cancelado'}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-										{:else}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
-										{/if}
-										{#if cobro.transaccion?.aprobado}
-											<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${cobro.transaccion.aprobado_por ?? 'un administrador'}`} />
-										{/if}
-									</div>
-								</td>
-								<td class="px-3 py-2 text-right">
-									{#if bloqueado}
-										<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
-											<Lock size={16} />
-										</span>
+							<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
+							<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
+							<td class="px-3 py-2">{cobro.num_operacion ?? '—'}</td>
+							<td class="px-3 py-2">
+								<div class="flex items-center gap-1.5">
+									{#if cobro.estado_cobro === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if cobro.estado_cobro === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
-										{#if cobro.estado_cobro === 'programado'}
-											<button type="button" onclick={() => openEditCobro(cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
-												<Pencil size={16} />
-											</button>
-										{/if}
-										<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar cobro" aria-label="Eliminar cobro">
-											<Trash2 size={16} />
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
+									{/if}
+									{#if cobro.transaccion?.aprobado}
+										<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${cobro.transaccion.aprobado_por ?? 'un administrador'}`} />
+									{/if}
+								</div>
+							</td>
+							<td class="px-3 py-2 text-right">
+								{#if bloqueado}
+									<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
+										<Lock size={16} />
+									</span>
+								{:else}
+									{#if cobro.estado_cobro === 'programado'}
+										<button type="button" onclick={() => openEditCobro(cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+											<Pencil size={16} />
 										</button>
 									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+									<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar cobro" aria-label="Eliminar cobro">
+										<Trash2 size={16} />
+									</button>
+								{/if}
+							</td>
+						{/snippet}
+						{#snippet card(cobro)}
+							{@const bloqueado = !!cobro.transaccion?.aprobado && !isAdmin()}
+							<div class="flex items-start justify-between gap-3 mb-2">
+								<div class="min-w-0">
+									<div class="font-semibold text-slate-800">{formatCurrency(cobro.monto)}</div>
+									<div class="text-xs text-slate-400 mt-0.5">{formatDate(cobro.fecha_cobro)}</div>
+								</div>
+								<div class="flex items-center gap-1.5 shrink-0">
+									{#if cobro.estado_cobro === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if cobro.estado_cobro === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+									{:else}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Cobrado</span>
+									{/if}
+									{#if cobro.transaccion?.aprobado}
+										<ShieldCheck size={13} class="text-emerald-600" />
+									{/if}
+								</div>
+							</div>
+							<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
+								<span class="text-slate-400">N° Operación</span>
+								<span class="text-right text-slate-700">{cobro.num_operacion ?? '—'}</span>
+							</div>
+							{#if bloqueado}
+								<div class="flex items-center justify-center gap-2 text-slate-400 text-xs pt-2 border-t border-slate-100">
+									<Lock size={14} /> Bloqueado: transacción aprobada
+								</div>
+							{:else}
+								<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+									{#if cobro.estado_cobro === 'programado'}
+										<button type="button" onclick={() => openEditCobro(cobro)} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar cuota">
+											<Pencil size={14} /> Editar
+										</button>
+									{/if}
+									<button type="button" onclick={() => handleDeleteCobro(cobro.id_cobro)} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar cobro">
+										<Trash2 size={14} /> Eliminar
+									</button>
+								</div>
+							{/if}
+						{/snippet}
+					</ResponsiveDataView>
+				</div>
 			{/if}
 		</div>
 	{/if}

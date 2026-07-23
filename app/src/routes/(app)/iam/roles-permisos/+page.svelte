@@ -80,6 +80,13 @@
 	let nuevoRolDescripcion = $state('');
 	let modalError = $state('');
 
+	// Vista maestro-detalle, solo para móvil (ver bloque `md:hidden` del template): la matriz
+	// roles×permisos completa no cabe en una pantalla angosta, así que ahí se elige un rol primero
+	// y se muestra un checklist vertical de sus permisos — reutiliza structuredModules/hasPermiso/
+	// togglePermiso tal cual, sin lógica duplicada. El desktop (matriz completa) no cambia.
+	let selectedRoleId = $state<number | null>(null);
+	let selectedRole = $derived(roles.find((r) => r.id === selectedRoleId) ?? null);
+
 	onMount(async () => {
 		try {
 			const { data: rData } = await supabase.from('roles').select('*').order('id');
@@ -229,7 +236,7 @@
 			<i class="fas fa-spinner fa-spin"></i>
 		</div>
 	{:else}
-		<div class="overflow-x-auto pb-4">
+		<div class="hidden md:block overflow-x-auto pb-4">
 			<table class="w-full text-sm text-left border-collapse min-w-[600px]">
 				<thead class="text-xs text-slate-500 bg-slate-50 font-medium uppercase border-b border-slate-200">
 					<tr>
@@ -302,7 +309,93 @@
 				</tbody>
 			</table>
 		</div>
-		<div class="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl flex items-start gap-3 text-sm text-blue-800">
+
+		<!-- Mobile: maestro-detalle (elegir un rol, luego checklist vertical de sus permisos) -->
+		<div class="md:hidden">
+			{#if !selectedRole}
+				<div class="space-y-2">
+					{#each roles as rol}
+						<div class="flex items-center gap-2">
+							<button
+								type="button"
+								onclick={() => (selectedRoleId = rol.id)}
+								class="flex-1 flex items-center justify-between p-4 rounded-xl border border-slate-200 bg-white active:bg-slate-50 text-left"
+							>
+								<div class="min-w-0">
+									<div class="font-bold text-slate-800 capitalize truncate">{rol.nombre}</div>
+									<div class="text-xs text-slate-400 mt-0.5 truncate">{rol.descripcion || 'Sin descripción'}</div>
+								</div>
+								<div class="flex items-center gap-2 shrink-0 ml-3">
+									<span class="text-xs text-slate-400">{rolesPermisos.filter((rp) => rp.rol_id === rol.id).length} permisos</span>
+									<i class="fas fa-chevron-right text-slate-300"></i>
+								</div>
+							</button>
+							<button
+								type="button"
+								onclick={() => abrirModalEditarRol(rol)}
+								class="w-11 h-11 shrink-0 rounded-xl border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100"
+								aria-label="Editar rol"
+							>
+								<i class="fas fa-edit"></i>
+							</button>
+							{#if rol.nombre !== 'administrador'}
+								<button
+									type="button"
+									onclick={() => eliminarRol(rol.id, rol.nombre)}
+									class="w-11 h-11 shrink-0 rounded-xl border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50"
+									aria-label="Eliminar rol"
+								>
+									<i class="fas fa-trash-alt"></i>
+								</button>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<div class="mb-4 flex items-center gap-3">
+					<button
+						type="button"
+						onclick={() => (selectedRoleId = null)}
+						class="w-9 h-9 shrink-0 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 active:bg-slate-200"
+						aria-label="Volver a la lista de roles"
+					>
+						<i class="fas fa-arrow-left"></i>
+					</button>
+					<div class="min-w-0">
+						<div class="font-bold text-slate-800 capitalize truncate">{selectedRole.nombre}</div>
+						<div class="text-xs text-slate-400 truncate">{selectedRole.descripcion || 'Sin descripción'}</div>
+					</div>
+				</div>
+
+				{#each structuredModules as mod}
+					<div class="mb-4">
+						<div class={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border ${mod.colorClass} font-semibold text-sm mb-2`}>
+							<i class={mod.icon}></i> {mod.name}
+						</div>
+						<div class="space-y-1">
+							{#each mod.submodules as sub}
+								{@const isChecked = hasPermiso(selectedRole.id, sub.dbId!)}
+								<label class="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-100 active:bg-slate-50">
+									<div class="min-w-0">
+										<div class="text-sm font-medium text-slate-700">{sub.label}</div>
+										{#if sub.descripcion}<div class="text-xs text-slate-400 truncate">{sub.descripcion}</div>{/if}
+									</div>
+									<input
+										type="checkbox"
+										checked={isChecked}
+										onchange={() => togglePermiso(selectedRole.id, sub.dbId!, isChecked)}
+										disabled={selectedRole.nombre === 'administrador'}
+										class="w-6 h-6 shrink-0 rounded cursor-pointer accent-blue-600 disabled:opacity-70 disabled:cursor-not-allowed"
+									/>
+								</label>
+							{/each}
+						</div>
+					</div>
+				{/each}
+			{/if}
+		</div>
+
+		<div class="hidden md:flex mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl items-start gap-3 text-sm text-blue-800">
 			<i class="fas fa-info-circle mt-0.5"></i>
 			<p>Pasa el ratón sobre el encabezado de un rol para ver las opciones de editar o eliminar. Al crear un nuevo rol, este aparecerá automáticamente tanto en esta matriz como en el selector de la pantalla de Empleados.</p>
 		</div>

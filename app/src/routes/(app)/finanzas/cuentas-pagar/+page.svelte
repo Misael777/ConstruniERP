@@ -22,6 +22,7 @@
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -379,54 +380,107 @@
 		</button>
 	</div>
 
-	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
-		<div class="min-w-[880px]">
-			<div class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-				<span>Proveedor</span>
-				<span>N° Documento</span>
-				<span class="text-right">Monto</span>
-				<span>Estado</span>
-				<span class="text-right">Días de Retraso</span>
-				<span class="text-right">Acciones</span>
-			</div>
+	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+		<!-- Desktop: filas tipo tabla -->
+		<div class="hidden md:block overflow-x-auto">
+			<div class="min-w-[880px]">
+				<div class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+					<span>Proveedor</span>
+					<span>N° Documento</span>
+					<span class="text-right">Monto</span>
+					<span>Estado</span>
+					<span class="text-right">Días de Retraso</span>
+					<span class="text-right">Acciones</span>
+				</div>
 
+				{#each items as item (item.id_cuenta_pagar)}
+					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
+					<div
+						class={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+							selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+						}`}
+						onclick={() => selectRow(item)}
+					>
+						<div class="flex items-center gap-3 min-w-0">
+							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+								<FileText size={18} />
+							</div>
+							<div class="min-w-0">
+								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
+							</div>
+						</div>
+						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
+						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+						<div>
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
+							</span>
+						</div>
+						<div class="text-right text-sm">
+							{#if retraso !== null}
+								<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
+							{:else}
+								<span class="text-slate-300">—</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-1 justify-end">
+							<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+								<Pencil size={16} />
+							</button>
+							<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
+								<Trash2 size={16} />
+							</button>
+						</div>
+					</div>
+				{:else}
+					<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas por pagar.'}</p>
+				{/each}
+			</div>
+		</div>
+
+		<!-- Mobile: tarjetas apiladas -->
+		<div class="md:hidden">
 			{#each items as item (item.id_cuenta_pagar)}
 				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 				<div
-					class={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
-						selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
-					}`}
+					role="button"
+					tabindex="0"
 					onclick={() => selectRow(item)}
+					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectRow(item)}
+					class={`w-full text-left p-4 border-b border-slate-100 last:border-b-0 active:bg-slate-50 transition-colors cursor-pointer ${
+						selectedId === item.id_cuenta_pagar ? 'bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+					}`}
 				>
-					<div class="flex items-center gap-3 min-w-0">
-						<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-							<FileText size={18} />
+					<div class="flex items-start justify-between gap-3 mb-2">
+						<div class="flex items-center gap-3 min-w-0">
+							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
+								<FileText size={18} />
+							</div>
+							<div class="min-w-0">
+								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5">{item.num_documento || '—'}</p>
+							</div>
 						</div>
-						<div class="min-w-0">
-							<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-							<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
+						<div class="text-right shrink-0">
+							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+							<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
+							</span>
 						</div>
 					</div>
-					<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
-					<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
-					<div>
-						<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-							{getOptionLabel(estadoField, item.estado)}
-						</span>
-					</div>
-					<div class="text-right text-sm">
+					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
+						<span>Vencimiento: {formatDate(item.fecha_vencimiento)}</span>
 						{#if retraso !== null}
-							<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
-						{:else}
-							<span class="text-slate-300">—</span>
+							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>
 						{/if}
 					</div>
-					<div class="flex items-center gap-1 justify-end">
-						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-							<Pencil size={16} />
+					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
+							<Pencil size={14} /> Editar
 						</button>
-						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-							<Trash2 size={16} />
+						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar">
+							<Trash2 size={14} /> Eliminar
 						</button>
 					</div>
 				</div>
@@ -462,63 +516,97 @@
 			{#if selectedPagos.length === 0}
 				<p class="text-sm text-slate-400 text-center py-6">Sin pagos registrados todavía.</p>
 			{:else}
-				<table class="w-full text-sm">
-					<thead class="bg-slate-50 border-b border-slate-200">
-						<tr>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Fecha</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Monto</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Medio</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">N° Operación</th>
-							<th class="text-left px-3 py-2 font-semibold text-slate-600">Estado</th>
-							<th class="text-right px-3 py-2 font-semibold text-slate-600">Acciones</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each selectedPagos as pago (pago.id_pago)}
+				<div class="overflow-x-auto">
+					<ResponsiveDataView items={selectedPagos} keyField="id_pago" columns={[
+						{ label: 'Fecha' },
+						{ label: 'Monto' },
+						{ label: 'Medio' },
+						{ label: 'N° Operación' },
+						{ label: 'Estado' },
+						{ label: 'Acciones', align: 'right' }
+					]}>
+						{#snippet row(pago)}
 							{@const bloqueado = !!pago.transaccion?.aprobado && !isAdmin()}
-							<tr
-								class={`border-b border-slate-100 ${pago.estado_pago === 'programado' && !bloqueado ? 'cursor-pointer hover:bg-slate-50' : ''}`}
-								ondblclick={() => pago.estado_pago === 'programado' && !bloqueado && openEditPago(pago)}
-								title={pago.estado_pago === 'programado' && !bloqueado ? 'Doble clic para editar/cancelar esta cuota' : undefined}
-							>
-								<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
-								<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
-								<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
-								<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
-								<td class="px-3 py-2">
-									<div class="flex items-center gap-1.5">
-										{#if pago.estado_pago === 'programado'}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
-										{:else if pago.estado_pago === 'cancelado'}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-										{:else}
-											<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
-										{/if}
-										{#if pago.transaccion?.aprobado}
-											<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${pago.transaccion.aprobado_por ?? 'un administrador'}`} />
-										{/if}
-									</div>
-								</td>
-								<td class="px-3 py-2 text-right">
-									{#if bloqueado}
-										<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
-											<Lock size={16} />
-										</span>
+							<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
+							<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
+							<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
+							<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
+							<td class="px-3 py-2">
+								<div class="flex items-center gap-1.5">
+									{#if pago.estado_pago === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if pago.estado_pago === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
-										{#if pago.estado_pago === 'programado'}
-											<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
-												<Pencil size={16} />
-											</button>
-										{/if}
-										<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
-											<Trash2 size={16} />
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
+									{/if}
+									{#if pago.transaccion?.aprobado}
+										<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${pago.transaccion.aprobado_por ?? 'un administrador'}`} />
+									{/if}
+								</div>
+							</td>
+							<td class="px-3 py-2 text-right">
+								{#if bloqueado}
+									<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
+										<Lock size={16} />
+									</span>
+								{:else}
+									{#if pago.estado_pago === 'programado'}
+										<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
+											<Pencil size={16} />
 										</button>
 									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
+										<Trash2 size={16} />
+									</button>
+								{/if}
+							</td>
+						{/snippet}
+						{#snippet card(pago)}
+							{@const bloqueado = !!pago.transaccion?.aprobado && !isAdmin()}
+							<div class="flex items-start justify-between gap-3 mb-2">
+								<div class="min-w-0">
+									<div class="font-semibold text-slate-800">{formatCurrency(pago.monto)}</div>
+									<div class="text-xs text-slate-400 mt-0.5">{formatDate(pago.fecha_pago)}</div>
+								</div>
+								<div class="flex items-center gap-1.5 shrink-0">
+									{#if pago.estado_pago === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{:else if pago.estado_pago === 'cancelado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
+									{:else}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
+									{/if}
+									{#if pago.transaccion?.aprobado}
+										<ShieldCheck size={13} class="text-emerald-600" />
+									{/if}
+								</div>
+							</div>
+							<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
+								<span class="text-slate-400">Medio</span>
+								<span class="text-right text-slate-700">{pago.medio_pago ?? '—'}</span>
+								<span class="text-slate-400">N° Operación</span>
+								<span class="text-right text-slate-700">{pago.num_operacion ?? '—'}</span>
+							</div>
+							{#if bloqueado}
+								<div class="flex items-center justify-center gap-2 text-slate-400 text-xs pt-2 border-t border-slate-100">
+									<Lock size={14} /> Bloqueado: transacción aprobada
+								</div>
+							{:else}
+								<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
+									{#if pago.estado_pago === 'programado'}
+										<button type="button" onclick={() => openEditPago(pago)} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar cuota">
+											<Pencil size={14} /> Editar
+										</button>
+									{/if}
+									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar pago">
+										<Trash2 size={14} /> Eliminar
+									</button>
+								</div>
+							{/if}
+						{/snippet}
+					</ResponsiveDataView>
+				</div>
 			{/if}
 		</div>
 	{/if}

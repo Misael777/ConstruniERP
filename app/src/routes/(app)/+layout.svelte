@@ -6,11 +6,15 @@
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
-	import { getRequiredPermiso } from '$lib/config/modules';
-	
+	import { getRequiredPermiso, getFirstAccessiblePath } from '$lib/config/modules';
+
 	let { children } = $props();
-	
+
 	let isLoading = $state(true);
+	/** true = el usuario está autenticado pero no tiene permiso para NINGÚN módulo del ERP — no hay
+	 * a dónde redirigirlo, así que se muestra una pantalla explicándolo en vez de dejarlo con el
+	 * spinner de carga pegado para siempre (ver bug en el bloque de protección de rutas abajo). */
+	let noAccess = $state(false);
 	let userRole = $state<string | null>(null);
 	let sidebarCollapsed = $state(false);
 	// El sidebar de escritorio (franja fija, hidden md:flex) no se ve en pantallas angostas — en
@@ -76,17 +80,30 @@
 				const allowed = hasPermiso(requiredPermiso);
 				console.log(`[Layout] Permission Check -> Path: "${page.url.pathname}", Requires: "${requiredPermiso}", Allowed: ${allowed}`);
 				if (!allowed) {
-					console.warn(`[Layout] Access Denied: Missing permission "${requiredPermiso}" for path "${page.url.pathname}". Redirecting to /dashboard.`);
-					goto('/dashboard');
-					return;
+					// Antes esto siempre mandaba a /dashboard sin importar si el usuario tenía acceso a
+					// esa ruta — si NO lo tenía (caso típico: rol sin ver_dashboard, que es exactamente
+					// donde el login te deja después de iniciar sesión), goto('/dashboard') es una
+					// navegación al MISMO path en el que ya estás, SvelteKit no la trata como una
+					// navegación real y este onMount no se vuelve a ejecutar (los layouts compartidos
+					// no se remontan en cada nav) — el spinner de carga se quedaba pegado para siempre.
+					// Ahora se calcula el primer módulo al que el usuario SÍ tiene acceso; si no tiene
+					// acceso a ninguno, se muestra una pantalla explicándolo en vez de redirigir en
+					// círculos.
+					const fallback = getFirstAccessiblePath(hasPermiso);
+					console.warn(`[Layout] Access Denied: Missing permission "${requiredPermiso}" for path "${page.url.pathname}". Fallback:`, fallback);
+					if (fallback && fallback !== page.url.pathname) {
+						goto(fallback, { replaceState: true });
+					} else {
+						noAccess = true;
+					}
 				}
 			} else {
 				console.log('[Layout] Path has no restricted permissions mapped. Allowing access.');
 			}
-			
+
 			console.log('[Layout] Layout loaded successfully. Disabling loading spinner.');
 			isLoading = false;
-			
+
 		} catch (e) {
 			console.error("[Layout] Fatal error in session verification / loading:", e);
 			goto('/login');
@@ -98,6 +115,23 @@
 	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50">
 		<i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
 		<h2 class="text-brand-marine font-bold">Cargando Construni ERP...</h2>
+	</div>
+{:else if noAccess}
+	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 px-6 text-center">
+		<div class="w-16 h-16 rounded-full bg-amber-100 text-amber-500 flex items-center justify-center mb-4">
+			<i class="fas fa-lock text-2xl"></i>
+		</div>
+		<h2 class="text-brand-marine font-bold text-lg mb-2">No tienes acceso a ningún módulo</h2>
+		<p class="text-slate-500 text-sm max-w-sm mb-6">
+			Tu cuenta no tiene permisos asignados para ver ninguna sección del ERP todavía. Contacta a un administrador para que te asigne un rol con acceso.
+		</p>
+		<button
+			type="button"
+			class="px-5 py-2 bg-[#1a233a] text-white rounded-xl hover:bg-[#0f1729] font-medium text-sm transition-colors"
+			onclick={async () => { await supabase.auth.signOut(); goto('/login'); }}
+		>
+			Cerrar sesión
+		</button>
 	</div>
 {:else}
 	<!-- Sidebar Global: hermano directo del <div overflow-hidden>, no hijo — su <aside>/backdrop

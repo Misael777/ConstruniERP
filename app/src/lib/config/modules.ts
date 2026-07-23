@@ -79,5 +79,29 @@ export function getRequiredPermiso(pathname: string): string | null {
   return null;
 }
 
+/**
+ * Finds the first path the user actually has permission to see, walking MODULE_REGISTRY in
+ * order. Used to redirect somewhere useful after login (or after a denied-route redirect)
+ * instead of hardcoding '/dashboard' — a user without ver_dashboard would otherwise get bounced
+ * back to the very page that just denied them, stuck on the loading spinner forever (that page's
+ * own onMount never re-fires, since goto() to the SAME path is a no-op in SvelteKit).
+ * Takes `hasPermisoFn` as a parameter (not imported directly) to avoid a circular import with
+ * $lib/stores/permisos.svelte, which itself imports ADMIN_ROLE from this file.
+ * Returns null if the user has no access to anything — caller must show a "no access" screen,
+ * NOT redirect again (that would just recreate the same stuck-loop bug from another angle).
+ */
+export function getFirstAccessiblePath(hasPermisoFn: (key: string) => boolean): string | null {
+  for (const mod of MODULE_REGISTRY) {
+    if (mod.subItems) {
+      for (const sub of mod.subItems) {
+        if (hasPermisoFn(sub.permiso ?? mod.permiso)) return sub.path;
+      }
+    } else if (hasPermisoFn(mod.permiso)) {
+      return mod.path;
+    }
+  }
+  return null;
+}
+
 /** The bypass role name — sees everything regardless of permissions */
 export const ADMIN_ROLE = 'administrador';

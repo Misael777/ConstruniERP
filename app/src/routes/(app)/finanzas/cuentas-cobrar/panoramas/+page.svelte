@@ -14,6 +14,7 @@
 		getResumenCobros,
 		getProyectoOptions,
 		actualizarFechasVencimientoCobro,
+		getTodasLasCuentasPorCobrarPendientes,
 		reorderPanoramaCobro,
 		moverFraccionAPanoramaCobro,
 		type IngresoPendienteItem,
@@ -96,6 +97,9 @@
 	let bandeja = $state<IngresoPendienteItem[]>([]);
 	let panorama1 = $state<IngresoPendienteItem[]>([]);
 	let panorama2 = $state<IngresoPendienteItem[]>([]);
+	/** Panorama 0 ("Panorama Actual") — TODAS las cuentas de la cartera, sin filtrar por
+	 * panorama_id, espejo del estado real de fecha_vencimiento (ver PanoramaCalendarView). */
+	let panorama0Items = $state<IngresoPendienteItem[]>([]);
 
 	let proyectoOptions = $state<FieldOption[]>([]);
 	let clienteOptions = $state<FieldOption[]>([]);
@@ -184,6 +188,7 @@
 	let bandejaVersion = $state(0);
 	let panorama1Version = $state(0);
 	let panorama2Version = $state(0);
+	let panorama0Version = $state(0);
 
 	function panoramaItems(id: 1 | 2) {
 		return id === 1 ? panorama1 : panorama2;
@@ -245,14 +250,16 @@
 		fetchBandeja();
 	}
 
-	/** Trae Panorama 1 y 2 desde la BD (ya persisten, ver nota de arriba). */
+	/** Trae Panorama 1, 2 y "Panorama Actual" (todas las cuentas, sin filtrar) desde la BD. */
 	async function fetchPanoramas() {
 		try {
-			const [p1, p2] = await Promise.all([getPanoramaItemsCobro(supabase, 1), getPanoramaItemsCobro(supabase, 2)]);
+			const [p1, p2, p0] = await Promise.all([getPanoramaItemsCobro(supabase, 1), getPanoramaItemsCobro(supabase, 2), getTodasLasCuentasPorCobrarPendientes(supabase)]);
 			panorama1 = p1;
 			panorama2 = p2;
+			panorama0Items = p0;
 			panorama1Version++;
 			panorama2Version++;
+			panorama0Version++;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar los panoramas');
 		}
@@ -467,17 +474,24 @@
 		await Promise.all([fetchBandeja(), fetchResumenYCaja()]);
 	}
 
-	/** Persiste las fechas reprogramadas por drag-and-drop en la vista Calendario y actualiza los
-	 * arreglos locales para que el tablero Kanban y el propio calendario queden en sincro sin recargar. */
-	async function handleGuardarFechasCalendario(cambios: { id: number; fechaNueva: string }[]) {
+	/** Persiste fecha_vencimiento reprogramada por drag-and-drop en la vista Calendario y actualiza
+	 * los 4 arreglos locales (bandeja/panorama1/panorama2/panorama0Items) para que el tablero Kanban
+	 * y el propio calendario — incluido Panorama Actual, venga el cambio de él mismo o de un
+	 * "Establecer como panorama actual" en P1/P2 — queden en sincro sin recargar. */
+	async function handleGuardarFechasCalendario(panoramaId: 0 | 1 | 2, cambios: { id: number; fechaNueva: string }[]) {
 		const result = await actualizarFechasVencimientoCobro(supabase, cambios.map((c) => ({ id: c.id, fecha: c.fechaNueva })));
 		if (!result.success) throw new Error(result.message);
 		const mapa = new Map(cambios.map((c) => [c.id, c.fechaNueva]));
-		panorama1 = panorama1.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
-		panorama2 = panorama2.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
+		const parchear = (items: IngresoPendienteItem[]) => items.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
+		bandeja = parchear(bandeja);
+		panorama1 = parchear(panorama1);
+		panorama2 = parchear(panorama2);
+		panorama0Items = parchear(panorama0Items);
+		bandejaVersion++;
 		panorama1Version++;
 		panorama2Version++;
-		toast.success('Fechas actualizadas');
+		panorama0Version++;
+		toast.success(panoramaId === 0 ? 'Fechas actualizadas' : 'Panorama establecido como actual');
 	}
 </script>
 
@@ -538,9 +552,12 @@
 				{/if}
 			</div>
 		{/if}
-		{#key panorama1Version + panorama2Version}
+		{#key panorama0Version + panorama1Version + panorama2Version}
 			<PanoramaCalendarView
-				panoramas={PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, items: panoramaItems(p.id) }))}
+				panoramas={[
+					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: panorama0Items },
+					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: panoramaItems(p.id) }))
+				]}
 				tipo="ingreso"
 				subtituloDe={(i: IngresoPendienteItem) => `Cliente: ${i.clienteNombre}`}
 				detalleDe={(i: IngresoPendienteItem) => (i.proyectoNombre ? `Proyecto: ${i.proyectoNombre}` : null)}

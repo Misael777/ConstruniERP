@@ -26,6 +26,7 @@
 		type TipoMovimiento
 	} from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
+	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	// Reporte 100% client-side (Supabase anon key) y de solo lectura sobre `transaccion` — no
 	// crea/edita nada, "jala" los datos que ya generan Cuentas por Pagar/Cobrar y Transacciones.
@@ -402,11 +403,16 @@
 		{/each}
 	</div>
 
-	<!-- Tabla -->
-	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
-		<table class="w-full text-sm">
-			<thead class="bg-slate-50 border-b border-slate-200">
-				<tr>
+	<!-- Tabla / Tarjetas -->
+	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+		<div class="overflow-x-auto">
+			<ResponsiveDataView
+				items={filasPagina}
+				keyField="codigo"
+				colspan={12}
+				emptyMessage={loading ? 'Cargando...' : 'Sin movimientos en este período.'}
+			>
+				{#snippet header()}
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Tipo</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Código</th>
@@ -419,47 +425,78 @@
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Financiamientos (S/)</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Saldo Acumulado (S/)</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Acciones</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each filasPagina as fila (fila.codigo)}
-					<tr class={`border-b border-slate-100 ${fila.esSaldoInicial ? 'bg-slate-50' : ''}`}>
-						<td class="px-3 py-2 whitespace-nowrap">{formatDate(fila.fecha)}</td>
-						<td class="px-3 py-2 whitespace-nowrap">
+				{/snippet}
+				{#snippet row(fila)}
+					<td class="px-3 py-2 whitespace-nowrap">{formatDate(fila.fecha)}</td>
+					<td class="px-3 py-2 whitespace-nowrap">
+						<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${TIPO_BADGE_CLASS[fila.tipo] ?? 'bg-slate-100 text-slate-600'}`}>
+							{TIPO_LABEL[fila.tipo] ?? fila.tipo}
+						</span>
+					</td>
+					<td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-slate-500">{fila.codigo}</td>
+					<td class="px-3 py-2 max-w-[220px] truncate">{fila.concepto}</td>
+					<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoOrigenLabel}</td>
+					<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoDestinoLabel}</td>
+					<td class="px-3 py-2 whitespace-nowrap">{fila.categoria ?? '—'}</td>
+					<td class="px-3 py-2 text-right whitespace-nowrap text-emerald-700">{fila.ingreso ? formatCurrency(fila.ingreso) : '—'}</td>
+					<td class="px-3 py-2 text-right whitespace-nowrap text-red-700">{fila.egreso ? formatCurrency(fila.egreso) : '—'}</td>
+					<td class="px-3 py-2 text-right whitespace-nowrap text-violet-700">{fila.financiamiento ? formatCurrency(fila.financiamiento) : '—'}</td>
+					<td class="px-3 py-2 text-right whitespace-nowrap font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</td>
+					<td class="px-3 py-2 text-right whitespace-nowrap">
+						{#if !fila.esSaldoInicial && fila.raw}
+							<button
+								type="button"
+								onclick={() => openView(fila.raw as Transaccion)}
+								class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
+								title="Ver / editar transacción"
+								aria-label="Ver / editar transacción"
+							>
+								<Eye size={16} />
+							</button>
+						{/if}
+					</td>
+				{/snippet}
+				{#snippet card(fila)}
+					<div class="flex items-start justify-between gap-3 mb-2">
+						<div class="min-w-0">
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${TIPO_BADGE_CLASS[fila.tipo] ?? 'bg-slate-100 text-slate-600'}`}>
 								{TIPO_LABEL[fila.tipo] ?? fila.tipo}
 							</span>
-						</td>
-						<td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-slate-500">{fila.codigo}</td>
-						<td class="px-3 py-2 max-w-[220px] truncate">{fila.concepto}</td>
-						<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoOrigenLabel}</td>
-						<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoDestinoLabel}</td>
-						<td class="px-3 py-2 whitespace-nowrap">{fila.categoria ?? '—'}</td>
-						<td class="px-3 py-2 text-right whitespace-nowrap text-emerald-700">{fila.ingreso ? formatCurrency(fila.ingreso) : '—'}</td>
-						<td class="px-3 py-2 text-right whitespace-nowrap text-red-700">{fila.egreso ? formatCurrency(fila.egreso) : '—'}</td>
-						<td class="px-3 py-2 text-right whitespace-nowrap text-violet-700">{fila.financiamiento ? formatCurrency(fila.financiamiento) : '—'}</td>
-						<td class="px-3 py-2 text-right whitespace-nowrap font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</td>
-						<td class="px-3 py-2 text-right whitespace-nowrap">
-							{#if !fila.esSaldoInicial && fila.raw}
-								<button
-									type="button"
-									onclick={() => openView(fila.raw as Transaccion)}
-									class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-									title="Ver / editar transacción"
-									aria-label="Ver / editar transacción"
-								>
-									<Eye size={16} />
-								</button>
-							{/if}
-						</td>
-					</tr>
-				{:else}
-					<tr>
-						<td colspan="12" class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'Sin movimientos en este período.'}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+							<div class="font-semibold text-slate-800 truncate mt-1">{fila.concepto}</div>
+						</div>
+						<div class="text-right shrink-0">
+							{#if fila.ingreso}<div class="font-bold text-emerald-700">+{formatCurrency(fila.ingreso)}</div>{/if}
+							{#if fila.egreso}<div class="font-bold text-red-700">-{formatCurrency(fila.egreso)}</div>{/if}
+							{#if fila.financiamiento}<div class="font-bold text-violet-700">{formatCurrency(fila.financiamiento)}</div>{/if}
+							<div class="text-[11px] text-slate-400">{formatDate(fila.fecha)}</div>
+						</div>
+					</div>
+					<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs mb-3">
+						<span class="text-slate-400">Código</span>
+						<span class="text-right font-mono text-slate-600">{fila.codigo}</span>
+						<span class="text-slate-400">Categoría</span>
+						<span class="text-right text-slate-700">{fila.categoria ?? '—'}</span>
+						<span class="text-slate-400">Cuenta Origen</span>
+						<span class="text-right text-slate-700 truncate">{fila.centroCostoOrigenLabel}</span>
+						<span class="text-slate-400">Cuenta Destino</span>
+						<span class="text-right text-slate-700 truncate">{fila.centroCostoDestinoLabel}</span>
+						<span class="text-slate-400">Saldo Acumulado</span>
+						<span class="text-right font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</span>
+					</div>
+					{#if !fila.esSaldoInicial && fila.raw}
+						<div class="pt-2 border-t border-slate-100">
+							<button
+								type="button"
+								onclick={() => openView(fila.raw as Transaccion)}
+								class="w-full h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
+							>
+								<Eye size={14} /> Ver / editar transacción
+							</button>
+						</div>
+					{/if}
+				{/snippet}
+			</ResponsiveDataView>
+		</div>
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
 			<span>

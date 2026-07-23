@@ -288,6 +288,15 @@
 		return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' });
 	}
 
+	// Clamp vertical del popover de restricción rápida (quickR) — mismo criterio que
+	// popoverTop en GanttTimeline.svelte (duplicado a propósito, función trivial y no hay
+	// un util compartido entre ambos componentes hoy): sin esto, un tap cerca del borde
+	// inferior de un viewport bajo (típico en un teléfono) abre el popover fuera de pantalla.
+	function popoverTop(clientY: number, estHeight = 260): number {
+		const max = (typeof window !== 'undefined' ? window.innerHeight : 800) - estHeight - 8;
+		return Math.min(clientY + 12, Math.max(8, max));
+	}
+
 	// ── LOAD ───────────────────────────────────────────────────────────────────
 	async function load() {
 		isLoading = true;
@@ -719,7 +728,7 @@
 						<span class="text-slate-400">Inicio:</span>
 						<input
 							type="date"
-							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-xs"
 							value={selInicio ?? ''}
 							onchange={(e) => {
 								const v = (e.target as HTMLInputElement).value;
@@ -729,7 +738,7 @@
 						<span class="text-slate-400">Fin:</span>
 						<input
 							type="date"
-							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							class="border border-slate-200 rounded px-1 py-0.5 bg-white text-xs"
 							value={selFin ?? ''}
 							onchange={(e) => {
 								const v = (e.target as HTMLInputElement).value;
@@ -740,7 +749,7 @@
 						<input
 							type="number"
 							min="1"
-							class="w-14 border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+							class="w-16 border border-slate-200 rounded px-1 py-0.5 bg-white text-xs"
 							value={duracionDias(selInicio, selFin)}
 							onchange={(e) => {
 								const dias = Number((e.target as HTMLInputElement).value);
@@ -753,7 +762,7 @@
 					<span class="text-slate-300">|</span>
 
 					<select
-						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-[10px]"
+						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-xs"
 						onchange={(e) => {
 							const v = Number((e.target as HTMLSelectElement).value);
 							if (v && selectedId) createDep(v, selectedId);
@@ -1094,7 +1103,7 @@
 	<div class="fixed inset-0 z-40" onclick={() => quickR = null}></div>
 	<div
 		class="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-200 p-3.5 w-64"
-		style="left:{Math.min(quickR.clientX, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 272)}px;top:{quickR.clientY + 12}px"
+		style="left:{Math.min(quickR.clientX, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 272)}px;top:{popoverTop(quickR.clientY)}px"
 	>
 		<p class="text-xs font-bold text-slate-700 mb-0.5"><i class="fas fa-flag mr-1 text-orange-500"></i>Restricción rápida</p>
 		<p class="text-[10px] text-slate-400 {quickR.nombreOrigen ? 'mb-1' : 'mb-2.5'} truncate">{quickR.nombre}</p>

@@ -1,20 +1,30 @@
 <script module lang="ts">
 	export interface CalendarPanorama<T> {
-		id: 1 | 2;
+		id: 0 | 1 | 2;
 		nombre: string;
 		subtitulo: string;
 		items: T[];
+		/** 'actual' (Panorama 0): arrastrar reprograma DE INMEDIATO al confirmar, igual que antes.
+		 * 'escenario' (P1/P2): arrastrar solo propone un cambio local (de sesión, no se guarda solo) —
+		 * recién se escribe en la BD cuando el usuario pulsa "Establecer como panorama actual". */
+		modo: 'actual' | 'escenario';
 	}
 </script>
 
 <script lang="ts" generics="T extends { id: number; titulo: string; monto: number; fechaVencimiento: string | null }">
 	// Vista "Calendario" (tab alterno al tablero Kanban) para los tableros de Panoramas de
-	// Pago/Cobro. Muestra Panorama 1 y Panorama 2 como calendarios semanales de "todo el día"
-	// (sin franja horaria: este ERP no registra hora de vencimiento, solo fecha) y permite
-	// arrastrar una cuota a otro día DENTRO del mismo panorama para reprogramarla. El cambio de
-	// fecha queda en un estado local (staged) hasta que el usuario pulsa "Confirmar cambios" —
-	// recién ahí se persiste en la BD (ver onGuardarFechas), igual que el tablero Kanban no
-	// persiste el orden hasta una acción explícita.
+	// Pago/Cobro. Muestra Panorama Actual (0), Panorama 1 y Panorama 2 como calendarios semanales
+	// de "todo el día" (sin franja horaria: este ERP no registra hora de vencimiento, solo fecha) y
+	// permite arrastrar una cuota a otro día DENTRO del mismo panorama para reprogramarla.
+	//
+	// Panorama Actual (modo 'actual') es el espejo del estado real: arrastrar + "Confirmar cambios"
+	// escribe de inmediato en la BD (ver onGuardarFechas), igual que el comportamiento original de
+	// este componente. Panorama 1/2 (modo 'escenario') son propuestas de sesión — arrastrar solo
+	// mueve la tarjeta LOCALMENTE, nunca se guarda solo; recién al pulsar "Establecer como panorama
+	// actual" (su versión de "confirmar", ver confirmarCambios) esas fechas propuestas se escriben
+	// en la BD, y por lo tanto pasan a reflejarse en Panorama Actual. Los cambios pendientes se
+	// llevan POR PANORAMA (cambiosPorPanorama, indexado como `grid` por pIdx) — nunca en un solo
+	// Map compartido, para que confirmar/descartar en un panorama no toque a los otros dos.
 	import { dndzone } from 'svelte-dnd-action';
 	import { ChevronLeft, ChevronRight, GripVertical, Loader2 } from '@lucide/svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
@@ -34,7 +44,7 @@
 		detalleDe?: (item: T) => string | null;
 		onAbrirCuotas: (item: T) => void;
 		cuotasCargandoId?: number | null;
-		onGuardarFechas: (cambios: { id: number; fechaNueva: string }[]) => Promise<void>;
+		onGuardarFechas: (panoramaId: 0 | 1 | 2, cambios: { id: number; fechaNueva: string }[]) => Promise<void>;
 	} = $props();
 
 	const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -143,10 +153,14 @@
 
 	let grid = $state<T[][][]>(computeGrid());
 	let gridVersion = $state(0);
-	/** id -> {item, fechaAnterior, fechaNueva}: cambios de fecha arrastrados pero aún sin confirmar. */
-	let cambios = $state(new Map<number, { item: T; fechaAnterior: string | null; fechaNueva: string }>());
-	let guardando = $state(false);
-	let errorGuardado = $state('');
+	/** Un Map de cambios pendientes POR PANORAMA (índice = pIdx, igual que `grid`): id -> {item,
+	 * fechaAnterior, fechaNueva}. Separado por panorama para que confirmar/descartar en uno no
+	 * afecte a los otros dos — ver nota de arriba del archivo. */
+	let cambiosPorPanorama = $state<Map<number, { item: T; fechaAnterior: string | null; fechaNueva: string }>[]>(
+		panoramas.map(() => new Map())
+	);
+	let guardando = $state<boolean[]>(panoramas.map(() => false));
+	let errorGuardado = $state<string[]>(panoramas.map(() => ''));
 
 	function prev() {
 		cursor = vista === 'semana' ? addDays(cursor, -7) : new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
@@ -171,6 +185,7 @@
 	function handleFinalize(pIdx: number, dIdx: number, e: CustomEvent<{ items: T[] }>) {
 		const dayISO = visibleDays[dIdx];
 		const items = e.detail.items;
+		const cambios = cambiosPorPanorama[pIdx];
 		for (const it of items) {
 			if (it.fechaVencimiento !== dayISO) {
 				const previo = cambios.get(it.id);
@@ -183,22 +198,24 @@
 		grid[pIdx][dIdx] = [...items].sort((a, b) => horaPseudo(a.id) - horaPseudo(b.id));
 	}
 
-	async function confirmarCambios() {
-		guardando = true;
-		errorGuardado = '';
+	async function confirmarCambios(pIdx: number) {
+		guardando[pIdx] = true;
+		errorGuardado[pIdx] = '';
 		try {
-			await onGuardarFechas(Array.from(cambios.values()).map((c) => ({ id: c.item.id, fechaNueva: c.fechaNueva })));
+			const panorama = panoramas[pIdx];
+			const cambios = cambiosPorPanorama[pIdx];
+			await onGuardarFechas(panorama.id, Array.from(cambios.values()).map((c) => ({ id: c.item.id, fechaNueva: c.fechaNueva })));
 			cambios.clear();
 		} catch (err: any) {
-			errorGuardado = err?.message ?? 'No se pudieron guardar los cambios de fecha';
+			errorGuardado[pIdx] = err?.message ?? 'No se pudieron guardar los cambios de fecha';
 		} finally {
-			guardando = false;
+			guardando[pIdx] = false;
 		}
 	}
-	function descartarCambios() {
-		cambios.clear();
-		errorGuardado = '';
-		grid = computeGrid();
+	function descartarCambios(pIdx: number) {
+		cambiosPorPanorama[pIdx].clear();
+		errorGuardado[pIdx] = '';
+		grid[pIdx] = computeGrid()[pIdx];
 		gridVersion++;
 	}
 
@@ -211,7 +228,7 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<div class="flex flex-wrap items-center justify-between gap-3 bg-white rounded-xl border border-slate-200 p-3">
+	<div class="flex flex-wrap items-center gap-3 bg-white rounded-xl border border-slate-200 p-3">
 		<div class="flex items-center gap-2 text-sm">
 			<button type="button" onclick={prev} class="w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label={vista === 'semana' ? 'Semana anterior' : 'Mes anterior'}>
 				<ChevronLeft size={16} />
@@ -230,26 +247,35 @@
 				</button>
 			</div>
 		</div>
-
-		{#if cambios.size > 0}
-			<div class="flex items-center gap-2 text-sm">
-				<span class="text-amber-600 font-medium">{cambios.size} fecha{cambios.size === 1 ? '' : 's'} sin guardar</span>
-				{#if errorGuardado}<span class="text-red-600 text-xs">{errorGuardado}</span>{/if}
-				<button type="button" onclick={descartarCambios} disabled={guardando} class="px-3 h-8 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 disabled:opacity-50">
-					Descartar
-				</button>
-				<button type="button" onclick={confirmarCambios} disabled={guardando} class="flex items-center gap-1.5 px-3 h-8 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60">
-					{#if guardando}<Loader2 size={14} class="animate-spin" />{/if} Confirmar cambios
-				</button>
-			</div>
-		{/if}
 	</div>
 
 	{#each panoramas as panorama, pIdx (panorama.id)}
+		{@const cambios = cambiosPorPanorama[pIdx]}
 		<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-			<div class="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
+			<div class="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-slate-100">
 				<h3 class="font-bold text-slate-800 text-sm">{panorama.nombre} – {panorama.subtitulo}</h3>
-				<span class="ml-auto text-xs text-slate-400">{formatCurrency(totalPanorama(panorama))} · {panorama.items.length} cuota{panorama.items.length === 1 ? '' : 's'}</span>
+				<span class="text-xs text-slate-400">{formatCurrency(totalPanorama(panorama))} · {panorama.items.length} cuota{panorama.items.length === 1 ? '' : 's'}</span>
+
+				{#if cambios?.size > 0}
+					<div class="ml-auto flex items-center gap-2 text-sm">
+						<span class="text-amber-600 font-medium">
+							{cambios.size} {panorama.modo === 'actual' ? 'fecha' : 'cambio propuesto'}{cambios.size === 1 ? '' : 's'}{panorama.modo === 'actual' ? ' sin guardar' : ''}
+						</span>
+						{#if errorGuardado[pIdx]}<span class="text-red-600 text-xs">{errorGuardado[pIdx]}</span>{/if}
+						<button type="button" onclick={() => descartarCambios(pIdx)} disabled={guardando[pIdx]} class="px-3 h-8 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50 disabled:opacity-50">
+							{panorama.modo === 'actual' ? 'Descartar' : 'Descartar propuesta'}
+						</button>
+						<button
+							type="button"
+							onclick={() => confirmarCambios(pIdx)}
+							disabled={guardando[pIdx]}
+							class={`flex items-center gap-1.5 px-3 h-8 rounded-lg text-white font-medium disabled:opacity-60 ${panorama.modo === 'actual' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-amber-500 hover:bg-amber-600'}`}
+						>
+							{#if guardando[pIdx]}<Loader2 size={14} class="animate-spin" />{/if}
+							{panorama.modo === 'actual' ? 'Confirmar cambios' : 'Establecer como panorama actual'}
+						</button>
+					</div>
+				{/if}
 			</div>
 
 			{#if vista === 'mes'}
@@ -318,6 +344,7 @@
 	{/each}
 
 	<p class="text-[11px] text-slate-400 px-1">
-		Mostrando cuotas con vencimiento entre {rangoLabel}. Arrastra una cuota a otro día dentro de su mismo panorama para reprogramarla y confirma para guardar.
+		Mostrando cuotas programadas entre {rangoLabel}. <strong>Panorama Actual</strong> es el estado real de la cartera — arrastra y confirma para reprogramar de inmediato.
+		En <strong>Panorama 1</strong> y <strong>Panorama 2</strong>, arrastrar solo propone un cambio (no se guarda solo) — usa "Establecer como panorama actual" para volverlo real.
 	</p>
 </div>

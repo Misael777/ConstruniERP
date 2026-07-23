@@ -66,7 +66,7 @@
 	<title>Clientes | Comercial - Construni ERP</title>
 </svelte:head>
 
-<div class="flex flex-col h-[calc(100vh-80px)] overflow-hidden bg-slate-50/50">
+<div class="flex flex-col md:h-[calc(100vh-80px)] md:overflow-hidden bg-slate-50/50">
 	
 	<!-- Header area -->
 	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
@@ -89,8 +89,8 @@
 	</div>
 
 	<!-- Scrollable content -->
-	<div class="flex-1 overflow-hidden p-6">
-		<div class="h-full max-w-[1200px] mx-auto flex flex-col">
+	<div class="flex-1 overflow-y-auto md:overflow-hidden p-6">
+		<div class="md:h-full max-w-[1200px] mx-auto flex flex-col">
 			{#if isLoading}
 				<div class="flex-1 flex items-center justify-center">
 					<div class="flex flex-col items-center gap-3 text-slate-400">

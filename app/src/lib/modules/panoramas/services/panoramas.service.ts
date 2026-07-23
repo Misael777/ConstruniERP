@@ -62,6 +62,9 @@ export interface PagoPendienteItem {
 	proveedorNombre: string;
 	monto: number;
 	fechaVencimiento: string | null;
+	/** fecha_pago_programada — fecha interna de planificación de pago, distinta de fechaVencimiento
+	 * (la fecha contractual). Es lo que posiciona/reprograma el calendario de Panoramas de Pago. */
+	fechaProgramada: string | null;
 	idProyecto: number | null;
 	panoramaId: number | null;
 	panoramaOrden: number | null;
@@ -189,6 +192,7 @@ function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 		// cuenta completa, para el popup de cuotas.
 		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.monto_comprometido),
 		fechaVencimiento: row.fecha_vencimiento,
+		fechaProgramada: row.fecha_pago_programada,
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
 		panoramaId: row.panorama_id,
 		panoramaOrden: row.panorama_orden,
@@ -305,6 +309,16 @@ export async function getPanoramaItems(client: SupabaseClient, panoramaId: Panor
 	return items;
 }
 
+/** TODAS las cuentas pendientes/vencidas de la cartera, sin filtrar por panorama_id — a diferencia
+ * de getPagosPendientes (solo bandeja) y getPanoramaItems (solo un panorama), esta es la fuente del
+ * calendario "Panorama Actual" (id 0): el espejo del estado real de fecha_pago_programada para toda
+ * la cartera, sin importar en qué panorama/bandeja esté cada cuenta hoy. Cada cuenta se devuelve
+ * completa (todas sus cuotas), no partida por columna, ya que aquí no hay noción de columna. */
+export async function getTodasLasCuentasPendientes(client: SupabaseClient): Promise<PagoPendienteItem[]> {
+	const { cuentas, fracciones } = await cuentasPagarConFracciones(client);
+	return cuentas.map((row) => mapRow(row, fracciones.get(row.id_cuenta_pagar) ?? []));
+}
+
 /** Asigna una cuenta SIMPLE (no fraccionada) a un panorama (o la regresa a la bandeja si
  * panoramaId es null), en la posición dada. */
 export async function assignToPanorama(
@@ -394,13 +408,14 @@ export async function getProyeccionIngresos(client: SupabaseClient, desde?: stri
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_pendiente), 0);
 }
 
-/** Reprograma fecha_vencimiento de una o más cuentas por pagar (drag-and-drop en la vista Calendario
- * de Panoramas de Pago) — 1 update por fila, igual patrón que reorderPanorama. */
-export async function actualizarFechasVencimientoPago(
+/** Reprograma fecha_pago_programada de una o más cuentas por pagar (drag-and-drop en la vista
+ * Calendario de Panoramas de Pago — Panorama Actual escribe directo, P1/P2 escriben acá recién al
+ * "Establecer como panorama actual") — 1 update por fila, igual patrón que reorderPanorama. */
+export async function actualizarFechasProgramadasPago(
 	client: SupabaseClient,
 	cambios: { id: number; fecha: string }[]
 ): Promise<{ success: boolean; message: string }> {
-	const results = await Promise.all(cambios.map((c) => client.from('cuentas_pagar').update({ fecha_vencimiento: c.fecha }).eq('id_cuenta_pagar', c.id)));
+	const results = await Promise.all(cambios.map((c) => client.from('cuentas_pagar').update({ fecha_pago_programada: c.fecha }).eq('id_cuenta_pagar', c.id)));
 	const failed = results.find((r) => r.error);
 	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas: ${failed.error.message}` };
 	return { success: true, message: 'Fechas actualizadas' };
@@ -585,6 +600,13 @@ export async function getPanoramaItemsCobro(client: SupabaseClient, panoramaId: 
 	}
 	items.sort((a, b) => (a.panoramaOrden ?? Infinity) - (b.panoramaOrden ?? Infinity));
 	return items;
+}
+
+/** TODAS las cuentas por cobrar pendientes/vencidas, sin filtrar por panorama_id — contraparte de
+ * getTodasLasCuentasPendientes, fuente del calendario "Panorama Actual" (id 0) del lado Cobro. */
+export async function getTodasLasCuentasPorCobrarPendientes(client: SupabaseClient): Promise<IngresoPendienteItem[]> {
+	const { cuentas, fracciones } = await cuentasCobrarConFracciones(client);
+	return cuentas.map((row) => mapCobroRow(row, fracciones.get(row.id_cuenta_cobrar) ?? []));
 }
 
 /** Asigna una cuenta por cobrar SIMPLE (no fraccionada) a un panorama — contraparte de assignToPanorama. */
