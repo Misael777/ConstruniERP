@@ -240,8 +240,12 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'responsable',
 		label: 'Responsable',
-		tipo: 'text',
-		maxLength: 20,
+		tipo: 'select',
+		optionsSource: 'empleado', // opciones cargadas en runtime desde la tabla empleados, ver +page.svelte
+		// La columna sigue siendo VARCHAR de texto libre (no una FK) — el valor guardado es el nombre
+		// del empleado elegido. Ensanchada de VARCHAR(20) a VARCHAR(100) vía migración (ver
+		// responsable_varchar_migration.sql) porque 20 no alcanza para un nombre completo real, y con
+		// el dropdown ya no hay forma de escribir una versión abreviada a mano.
 		showInTable: false,
 		showInForm: true,
 		sortable: false

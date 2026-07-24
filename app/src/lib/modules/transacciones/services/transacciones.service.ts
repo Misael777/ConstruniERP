@@ -353,6 +353,15 @@ export async function getPartidaOptions(client: SupabaseClient): Promise<FieldOp
 	return (data ?? []).map((p: any) => ({ value: String(p.id_partida), label: `${p.codigo} - ${p.descripcion}` }));
 }
 
+/** Opciones para el campo "Responsable" (texto libre, no FK) de Cuentas por Pagar/Cobrar — el
+ * valor guardado es el NOMBRE del empleado elegido (value === label), no su id, para no cambiar
+ * el formato de la columna existente (VARCHAR de texto libre). */
+export async function getEmpleadoOptions(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client.from('empleados').select('nombre').order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((e: any) => ({ value: e.nombre, label: e.nombre }));
+}
+
 const MEDIO_PAGO_OPTIONS = FIELDS_CONFIG.find((f) => f.key === 'medio_pago')!.options!;
 
 /** Busca el `value` (código) de una opción a partir de su `label` exacto. Usado para traducir el

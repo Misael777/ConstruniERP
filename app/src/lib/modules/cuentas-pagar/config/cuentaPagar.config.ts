@@ -298,8 +298,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'responsable',
 		label: 'Responsable',
-		tipo: 'text',
-		maxLength: 100,
+		tipo: 'select',
+		optionsSource: 'empleado', // opciones cargadas en runtime desde la tabla empleados, ver +page.svelte
+		// La columna sigue siendo VARCHAR(100) de texto libre (no una FK) — el valor guardado es el
+		// nombre del empleado elegido, mismo formato que ya tenían los registros escritos a mano.
 		showInTable: false,
 		showInForm: true,
 		sortable: false

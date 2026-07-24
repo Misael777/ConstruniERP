@@ -16,7 +16,7 @@
 		confirmarPagoPagado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
@@ -68,7 +68,7 @@
 	let montoFiltrado = $state(0);
 	let columnFilters = $state<ColumnFilters>(emptyColumnFilters(FIELDS_CONFIG));
 
-	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [] });
+	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [], responsable: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
 	let selectedId = $state<number | null>(null);
@@ -149,7 +149,8 @@
 			const centroCostoOptions = await getCentroCostoOptions(supabase);
 			dynamicOptions = {
 				id_proveedor: await getProveedorOptions(supabase),
-				id_centro_costo: centroCostoOptions
+				id_centro_costo: centroCostoOptions,
+				responsable: await getEmpleadoOptions(supabase)
 			};
 			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
 		} catch (err: any) {

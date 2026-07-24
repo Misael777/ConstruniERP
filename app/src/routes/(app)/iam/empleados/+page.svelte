@@ -13,7 +13,10 @@
 		correo?: string; 
 		rol_id: number; 
 		area_id?: number | null;
-		auth_user_id: string; 
+		auth_user_id: string;
+		/** true = ya completó el flujo de "Configura tu acceso" (código OTP + su propia contraseña),
+		 * distinto de solo tener auth_user_id — ver nota junto al badge de Estado Cuenta más abajo. */
+		passwordConfigurado: boolean;
 		fecha_ingreso?: string;
 		salario?: number;
 		horas?: number;
@@ -63,6 +66,7 @@
 			rol_id: emp.rol_id,
 			area_id: emp.area_id || null,
 			auth_user_id: emp.auth_user_id,
+			passwordConfigurado: Boolean(emp.password_configurado),
 			fecha_ingreso: emp.fecha_ingreso,
 			salario: emp.salario ? Number(emp.salario) : 0,
 			horas: emp.horas ? Number(emp.horas) : 0,
@@ -98,7 +102,7 @@
 			const { data: empData, error: empError } = await supabase
 				.from('empleados')
 				.select(`
-					id, nombre, telefono, correo, rol_id, auth_user_id,
+					id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 					fecha_ingreso, salario, horas, periodo, nivel, area_id,
 					roles ( nombre )
 				`)
@@ -203,7 +207,7 @@
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
@@ -316,7 +320,7 @@
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
@@ -456,8 +460,10 @@
 						</div>
 					</td>
 					<td class="p-4">
-						{#if emp.auth_user_id}
+						{#if emp.auth_user_id && emp.passwordConfigurado}
 							<span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold"><i class="fas fa-link"></i> Vinculada</span>
+						{:else if emp.auth_user_id}
+							<span class="px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs font-semibold" title="Ya se creó su acceso pero todavía no completó 'Configura tu acceso' (código OTP + su contraseña)"><i class="fas fa-clock"></i> Pendiente de activación</span>
 						{:else}
 							<span class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-semibold"><i class="fas fa-unlink"></i> Sin vincular</span>
 						{/if}
@@ -509,8 +515,10 @@
 								{/if}
 							</div>
 						</div>
-						{#if emp.auth_user_id}
+						{#if emp.auth_user_id && emp.passwordConfigurado}
 							<span class="shrink-0 px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-semibold"><i class="fas fa-link"></i> Vinculada</span>
+						{:else if emp.auth_user_id}
+							<span class="shrink-0 px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-semibold" title="Ya se creó su acceso pero todavía no completó 'Configura tu acceso'"><i class="fas fa-clock"></i> Pendiente</span>
 						{:else}
 							<span class="shrink-0 px-2 py-1 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold"><i class="fas fa-unlink"></i> Sin vincular</span>
 						{/if}

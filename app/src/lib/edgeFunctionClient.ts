@@ -141,3 +141,19 @@ export async function resetPassword(authUserId: string, newPassword: string) {
 	});
 	return handleResponse(response);
 }
+
+/**
+ * Marca a un empleado como realmente activado (password_configurado = true) — llamado por el
+ * propio empleado justo después de completar "Configura tu acceso" (código OTP + su contraseña)
+ * en login/+page.svelte. Pasa por la Edge Function (service_role) porque un update directo a
+ * `empleados` desde esa sesión de bajo privilegio falla en silencio por RLS.
+ */
+export async function confirmActivation(authUserId: string) {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'confirm-activation');
+	const response = await fetchWithApiKey(url.toString(), {
+		method: 'POST',
+		body: JSON.stringify({ auth_user_id: authUserId })
+	});
+	return handleResponse(response);
+}

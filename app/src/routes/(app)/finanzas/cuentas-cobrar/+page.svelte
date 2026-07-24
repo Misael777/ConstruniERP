@@ -17,7 +17,7 @@
 		confirmarCobroCobrado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -80,7 +80,7 @@
 	let montoFiltrado = $state(0);
 	let columnFilters = $state<ColumnFilters>(emptyColumnFilters(FIELDS_CONFIG));
 
-	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [] });
+	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [], responsable: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
 	let selectedId = $state<number | null>(null);
@@ -158,12 +158,13 @@
 			return;
 		}
 		try {
-			const [clienteOptions, proyectoOptions, centroCostoOptions] = await Promise.all([
+			const [clienteOptions, proyectoOptions, centroCostoOptions, empleadoOptions] = await Promise.all([
 				getClienteOptions(supabase),
 				getProyectoOptions(supabase),
-				getCentroCostoOptions(supabase)
+				getCentroCostoOptions(supabase),
+				getEmpleadoOptions(supabase)
 			]);
-			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptions };
+			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptions, responsable: empleadoOptions };
 			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');

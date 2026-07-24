@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { fetchApi, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri } from '$lib/driveUploadClient';
+	import { confirmActivation } from '$lib/edgeFunctionClient';
 	
 	let mode = $state<'login' | 'setup_password' | 'forgot_password' | 'first_admin'>('login');
 	let email = $state('');
@@ -29,25 +30,35 @@
 	let firstAdminError = $state('');
 	let firstAdminSuccess = $state('');
 	let checkingFirstAdmin = $state(true);
-	function formatError(err: any) {
-		try {
-			if (!err) return 'Error desconocido';
-			let parts: string[] = [];
-			parts.push(new Date().toISOString());
-			if (err.message) parts.push('Message: ' + String(err.message));
-			if (err.code) parts.push('Code: ' + String(err.code));
-			if (err.details) parts.push('Details: ' + JSON.stringify(err.details));
-			if (err.hint) parts.push('Hint: ' + String(err.hint));
-			if (err.stack) parts.push('Stack:\n' + String(err.stack));
-			// include any other enumerable props
-			const extra = Object.assign({}, err);
-			delete extra.message; delete extra.code; delete extra.details; delete extra.hint; delete extra.stack;
-			const extraKeys = Object.keys(extra);
-			if (extraKeys.length) parts.push('Extra: ' + JSON.stringify(extra, null, 2));
-			return parts.join('\n');
-		} catch (e) {
-			return String(err);
+	/** Traduce un error técnico de Supabase Auth a un mensaje corto en español, apto para mostrar al
+	 * usuario — antes se mostraba el error crudo (message/code/details/hint/stack completos) directo
+	 * en pantalla, lo cual no es apto para un usuario final. El detalle técnico completo se sigue
+	 * mandando a consola vía console.error en cada catch (sin cambios), solo deja de llegar a la UI. */
+	function friendlyAuthError(err: any): string {
+		if (!err) return 'Ocurrió un error inesperado. Intenta de nuevo.';
+
+		// Errores propios de esta pantalla (throw new Error('mensaje ya en español') más arriba) no
+		// son un AuthError de Supabase — esos SIEMPRE traen `.status` (código HTTP). Un Error plano
+		// sin `.status` ya es un mensaje amigable escrito a mano: se muestra tal cual, sin remapear.
+		if (err instanceof Error && (err as any).status === undefined && (err as any).code === undefined) {
+			return err.message;
 		}
+
+		const msg = String(err?.message ?? '').toLowerCase();
+
+		if (msg.includes('invalid login credentials')) return 'Correo o contraseña incorrectos.';
+		if (msg.includes('email not confirmed')) return 'Tu correo todavía no ha sido confirmado.';
+		if (msg.includes('token has expired') || msg.includes('otp_expired') || msg.includes('invalid otp') || msg.includes('token is invalid'))
+			return 'El código ingresado no es válido o ya expiró. Solicita uno nuevo.';
+		if (msg.includes('user already registered') || msg.includes('already been registered')) return 'Ya existe una cuenta registrada con ese correo.';
+		if (msg.includes('password should be at least') || msg.includes('should be different from the old password'))
+			return 'La contraseña no cumple los requisitos mínimos (u es igual a la anterior).';
+		if (msg.includes('rate limit') || msg.includes('for security purposes')) return 'Demasiados intentos seguidos. Espera unos minutos y vuelve a intentarlo.';
+		if (msg.includes('user not found')) return 'No se encontró ninguna cuenta con ese correo.';
+		if (msg.includes('failed to fetch') || msg.includes('network')) return 'No se pudo conectar. Revisa tu conexión a internet e intenta de nuevo.';
+
+		console.error('[Login] Error de auth no mapeado a un mensaje amigable:', err);
+		return 'Ocurrió un error al procesar tu solicitud. Intenta de nuevo.';
 	}
 	
 	let passwordInputRef = $state<HTMLInputElement>();
@@ -180,7 +191,7 @@
 			if (empleadoError) {
 				console.error('[Login] Error fetching employee record:', empleadoError);
 				await supabase.auth.signOut();
-				throw new Error('Error de verificación: ' + empleadoError.message);
+				throw new Error('No se pudo verificar tu cuenta. Intenta de nuevo o contacta a un administrador.');
 			}
 
 			if (!empleado) {
@@ -206,7 +217,7 @@
 			
 		} catch (err: any) {
 			console.error('[Login] Login process exception:', err);
-			errorMessage = formatError(err);
+			errorMessage = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
 		}
@@ -237,7 +248,7 @@
 			console.log('[SetupPassword] OTP enviado con éxito:', data);
 		} catch (err: any) {
 			console.error('[SetupPassword] Exception caught while requesting OTP:', err);
-			errorMessage = formatError(err);
+			errorMessage = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
 		}
@@ -286,10 +297,26 @@ async function verifyOtpAndSetPassword(e: Event) {
 			}
 
 			console.log('[SetupPassword] Contraseña actualizada con éxito:', updateData);
+
+			// Marca la cuenta como realmente activada (distinto de "vinculada", ver nota en
+			// iam/empleados/+page.svelte) — recién ahora el empleado completó el código OTP y puso su
+			// propia contraseña. Pasa por la Edge Function (service_role) porque un update directo a
+			// `empleados` desde esta sesión de bajo privilegio fallaba en silencio por RLS — quedaba
+			// en "Pendiente de activación" para siempre aunque la contraseña sí se hubiera guardado.
+			// No se bloquea el login si esto falla (lo importante, la contraseña, ya quedó guardada);
+			// solo se deja constancia en consola.
+			if (updateData?.user?.id) {
+				try {
+					await confirmActivation(updateData.user.id);
+				} catch (flagError) {
+					console.error('[SetupPassword] No se pudo marcar password_configurado:', flagError);
+				}
+			}
+
 			goto('/dashboard');
 		} catch (err: any) {
 			console.error('[SetupPassword] Exception caught while verifying OTP:', err);
-			errorMessage = formatError(err);
+			errorMessage = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
 		}
@@ -378,7 +405,7 @@ async function handleSetupPassword(e: Event) {
 			email = firstAdminEmail;
 		} catch (err: any) {
 			console.error('[Login] Error creating first admin:', err);
-			firstAdminError = formatError(err);
+			firstAdminError = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
 		}
@@ -415,9 +442,9 @@ async function handleSetupPassword(e: Event) {
 				</div>
 				
 				{#if errorMessage}
-					<pre class="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl font-medium text-left overflow-auto max-h-40 whitespace-pre-wrap">
+					<div class="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl font-medium text-center">
 						{errorMessage}
-					</pre>
+					</div>
 				{/if}
 
 				{#if infoMessage}
@@ -516,9 +543,9 @@ async function handleSetupPassword(e: Event) {
 				</div>
 
 				{#if firstAdminError}
-					<pre class="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl font-medium text-left overflow-auto whitespace-pre-wrap">
+					<div class="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl font-medium text-center">
 						{firstAdminError}
-					</pre>
+					</div>
 				{/if}
 				{#if firstAdminSuccess}
 					<div class="p-3 bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm rounded-xl font-medium text-center">

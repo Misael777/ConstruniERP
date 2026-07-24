@@ -229,6 +229,25 @@ async function deleteUser(userId: string | null) {
   return buildJsonResponse({ success: true, auth_user_id: authUserId });
 }
 
+// Marca la cuenta como realmente activada (distinto de solo "vinculada") — llamada por el propio
+// empleado, recién autenticado con una sesión de bajo privilegio, justo después de completar el
+// flujo de "Configura tu acceso" (código OTP + su propia contraseña) en login/+page.svelte. Pasa
+// por acá (service_role, sin RLS) en vez de un update directo desde el cliente porque `empleados`
+// no permite escritura anónima/de bajo privilegio — un update directo ahí falla en silencio
+// (Postgrest no reporta error cuando RLS bloquea, solo actualiza 0 filas), que es exactamente el
+// bug reportado: la cuenta se quedaba en "Pendiente de activación" para siempre.
+async function confirmActivation(body: any) {
+  const authUserId = String(body.auth_user_id ?? '').trim();
+  if (!authUserId || !isUuid(authUserId)) {
+    return buildJsonResponse({ success: false, error: 'auth_user_id válido es requerido.' }, 400);
+  }
+
+  const { error } = await supabase.from('empleados').update({ password_configurado: true }).eq('auth_user_id', authUserId);
+  if (error) return buildJsonResponse({ success: false, error: error.message }, 500);
+
+  return buildJsonResponse({ success: true });
+}
+
 async function resetPassword(body: any) {
   const authUserId = String(body.auth_user_id ?? '').trim();
   const password = String(body.password ?? '').trim();
@@ -267,6 +286,7 @@ Deno.serve(async (req) => {
 
     if (req.method === 'POST') {
       if (action === 'reset-password') return await resetPassword(body);
+      if (action === 'confirm-activation') return await confirmActivation(body);
       return await createUser(body);
     }
 

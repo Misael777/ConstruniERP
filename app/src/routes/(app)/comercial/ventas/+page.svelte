@@ -2,6 +2,7 @@
 import { onMount } from 'svelte';
 import { goto } from '$app/navigation';
 import { supabase } from '$lib/supabaseClient';
+import { isAdmin } from '$lib/stores/permisos.svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
 import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
@@ -74,9 +75,23 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 		errorMessage = null;
 
 		try {
-			const { data, error } = await supabase
+			// Un asesor/vendedor (cualquier rol que no sea administrador) solo debe ver SUS PROPIAS
+			// ventas cerradas, no las de toda la cartera — pedido explícito del usuario. Se filtra por
+			// asesor_comercial_id (el UUID de auth de quien la cerró, ver NuevaVentaModal.svelte donde
+			// se guarda como session.user.id al crear la venta) en vez de `responsable` (nombre de
+			// texto libre, no confiable para filtrar: puede tener errores de tipeo o coincidir entre
+			// dos personas distintas).
+			let query = supabase
 				.from('proyecto')
-				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,descripcion,contrato')
+				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato');
+
+			if (!isAdmin()) {
+				const { data: userData } = await supabase.auth.getUser();
+				const currentUserId = userData?.user?.id;
+				query = currentUserId ? query.eq('asesor_comercial_id', currentUserId) : query.eq('asesor_comercial_id', '00000000-0000-0000-0000-000000000000');
+			}
+
+			const { data, error } = await query
 				.order('fecha_inicio_plan', { ascending: false })
 				.limit(100);
 
@@ -104,7 +119,10 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 
 				tipoCounts[tipo] = (tipoCounts[tipo] || 0) + 1;
 
-				const asesor = String((project.asesor_comercial_id ?? project.responsable) || 'Sin asignar');
+				// `responsable` es el nombre para MOSTRAR (texto libre) — asesor_comercial_id ahora
+				// también viene en el select (se usa arriba para filtrar), pero es el UUID de auth, no
+				// un nombre, así que no debe usarse aquí para no mostrar un UUID en pantalla.
+				const asesor = String(project.responsable || 'Sin asignar');
 				const asesorData = asesorMap.get(asesor) || { ventas: 0, count: 0 };
 				asesorData.ventas += valor;
 				asesorData.count += 1;
@@ -411,10 +429,9 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
 		<div class="flex flex-col">
 			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
-				<a href="/comercial" aria-label="Regresar a Comercial" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
-				<span class="font-bold text-slate-800 text-2xl ml-2">Venta cerrada</span>
+				<span class="font-bold text-slate-800 text-2xl">Venta cerrada</span>
 			</div>
-			<p class="text-sm text-slate-500 ml-7">Consulta y administra todas tus ventas cerradas.</p>
+			<p class="text-sm text-slate-500">Consulta y administra todas tus ventas cerradas.</p>
 		</div>
 		
 		<div class="flex items-center gap-3">
