@@ -9,6 +9,7 @@ import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
 import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
+import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -305,45 +306,17 @@ import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDel
 		}
 	}
 
-	// PDF preview state and helpers
+	// Preview de documentos (contrato/proforma) — el modal en sí (conversión de URL de Drive,
+	// descarga, iframe) vive en el componente compartido DocumentPreviewModal.svelte, reusado
+	// también en Transacciones para el comprobante.
 	let isPdfPreviewOpen = $state(false);
 	let pdfPreviewUrl = $state('');
 	let pdfPreviewTitle = $state('');
 
-	function ensurePreviewUrl(url: string) {
-		console.log('[ensurePreviewUrl] URL original:', url);
-		if (!url) {
-			console.log('[ensurePreviewUrl] URL vacía');
-			return '';
-		}
-		try {
-			const u = new URL(url);
-			console.log('[ensurePreviewUrl] URL parseada correctamente');
-			console.log('[ensurePreviewUrl] Hostname:', u.hostname);
-			if (u.hostname.includes('drive.google.com')) {
-				console.log('[ensurePreviewUrl] Detectado Google Drive');
-				const id = u.searchParams.get('id');
-				if (id) {
-					const previewUrl = `https://drive.google.com/file/d/${id}/preview`;
-					console.log('[ensurePreviewUrl] ID encontrado en searchParams:', id);
-					console.log('[ensurePreviewUrl] URL de preview:', previewUrl);
-					return previewUrl;
-				}
-				const m = u.pathname.match(/\/file\/d\/([^\/]+)/);
-				if (m) {
-					const previewUrl = `https://drive.google.com/file/d/${m[1]}/preview`;
-					console.log('[ensurePreviewUrl] ID encontrado en pathname:', m[1]);
-					console.log('[ensurePreviewUrl] URL de preview:', previewUrl);
-					return previewUrl;
-				}
-			}
-			console.log('[ensurePreviewUrl] Devolviendo URL sin cambios');
-			return url;
-		} catch (err) {
-			console.error('[ensurePreviewUrl] Error parseando URL:', err);
-			console.log('[ensurePreviewUrl] URL problemática:', url);
-			return url;
-		}
+	function closePreview() {
+		isPdfPreviewOpen = false;
+		pdfPreviewUrl = '';
+		pdfPreviewTitle = '';
 	}
 
 	function extractProformaUrl(description: string) {
@@ -361,94 +334,27 @@ import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDel
 		return null;
 	}
 
-	function closePdfPreview() {
-		isPdfPreviewOpen = false;
-		pdfPreviewUrl = '';
-		pdfPreviewTitle = '';
-	}
-
-	function sanitizeFilename(name: string) {
-		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
-	}
-
-	async function downloadPdf() {
-		if (!pdfPreviewUrl) {
-			alert('URL no disponible para descargar');
-			return;
-		}
-
-		const filename = sanitizeFilename(pdfPreviewTitle) + '.pdf';
-		try {
-			const res = await fetch(pdfPreviewUrl, { mode: 'cors' });
-			if (!res.ok) throw new Error('Fetch failed');
-			const blob = await res.blob();
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = filename;
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			URL.revokeObjectURL(url);
-			return;
-		} catch (err) {
-			console.warn('[downloadPdf] descarga por fetch falló, abriendo en nueva pestaña', err);
-			// Fallback: open in new tab (user can download from there)
-			window.open(pdfPreviewUrl, '_blank', 'noopener');
-		}
-	}
-
 	function handleViewContrato(e: CustomEvent) {
-		console.log('[handleViewContrato] Evento recibido');
 		const row = e.detail.row;
-		console.log('[handleViewContrato] Row:', row);
-		console.log('[handleViewContrato] Contrato URL:', row?.contrato);
-		
 		if (!row?.contrato) {
-			console.error('[handleViewContrato] No hay contrato para este proyecto');
 			alert('No se encontró el contrato para este proyecto.');
 			return;
 		}
-		
-		console.log('[handleViewContrato] Procesando URL del contrato');
-		const urlProcessada = ensurePreviewUrl(String(row.contrato));
-		console.log('[handleViewContrato] URL procesada:', urlProcessada);
-		
-		pdfPreviewUrl = urlProcessada;
+		pdfPreviewUrl = String(row.contrato);
 		pdfPreviewTitle = `Contrato - ${row.proyecto}`;
 		isPdfPreviewOpen = true;
-		
-		console.log('[handleViewContrato] Preview abierto');
-		console.log('[handleViewContrato] pdfPreviewUrl:', pdfPreviewUrl);
-		console.log('[handleViewContrato] pdfPreviewTitle:', pdfPreviewTitle);
 	}
 
 	function handleViewProforma(e: CustomEvent) {
-		console.log('[handleViewProforma] Evento recibido');
 		const row = e.detail.row;
-		console.log('[handleViewProforma] Row:', row);
-		console.log('[handleViewProforma] Descripción:', row?.descripcion);
-		
 		const url = extractProformaUrl(String(row?.descripcion || ''));
-		console.log('[handleViewProforma] URL extraída:', url);
-		
 		if (!url) {
-			console.error('[handleViewProforma] No se encontró URL en la descripción');
 			alert('No se encontró la proforma para este proyecto.');
 			return;
 		}
-		
-		console.log('[handleViewProforma] Procesando URL');
-		const urlProcessada = ensurePreviewUrl(url);
-		console.log('[handleViewProforma] URL procesada:', urlProcessada);
-		
-		pdfPreviewUrl = urlProcessada;
+		pdfPreviewUrl = url;
 		pdfPreviewTitle = `Proforma - ${row.proyecto}`;
 		isPdfPreviewOpen = true;
-		
-		console.log('[handleViewProforma] Preview abierto');
-		console.log('[handleViewProforma] pdfPreviewUrl:', pdfPreviewUrl);
-		console.log('[handleViewProforma] pdfPreviewTitle:', pdfPreviewTitle);
 	}
 
 </script>
@@ -526,50 +432,5 @@ import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDel
 	onConfirmed={handleDeleteConfirmed}
 />
 
-<!-- PDF Preview Modal -->
-{#if isPdfPreviewOpen}
-	<div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[90vh] flex flex-col overflow-hidden">
-			<!-- Modal Header -->
-			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
-				<h2 class="text-lg font-semibold text-slate-800">{pdfPreviewTitle}</h2>
-				<div class="flex items-center gap-2">
-					<button
-						onclick={downloadPdf}
-						class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
-						aria-label="Descargar PDF"
-						title="Descargar"
-					>
-						<i class="fas fa-download text-lg"></i>
-					</button>
-					<button 
-						onclick={closePdfPreview}
-						class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
-						aria-label="Cerrar"
-					>
-						<i class="fas fa-times text-lg"></i>
-					</button>
-				</div>
-			</div>
-
-			<div class="flex-1 overflow-hidden bg-slate-100">
-				{#if pdfPreviewUrl}
-					<iframe 
-						src={pdfPreviewUrl}
-						title={pdfPreviewTitle}
-						class="w-full h-full border-none"
-						allowfullscreen
-					></iframe>
-				{:else}
-					<div class="w-full h-full flex items-center justify-center">
-						<div class="text-center text-slate-500">
-							<i class="fas fa-exclamation-circle text-4xl mb-3"></i>
-							<p class="font-medium">No se pudo cargar la vista previa</p>
-							<p class="text-sm mt-1">URL no disponible</p>
-						</div>
-					</div>
-				{/if}
-			</div>
-		</div>
-	</div>
-{/if}
+<!-- Preview de contrato/proforma -->
+<DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
