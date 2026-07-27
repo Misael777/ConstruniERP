@@ -157,3 +157,20 @@ export async function confirmActivation(authUserId: string) {
 	});
 	return handleResponse(response);
 }
+
+/**
+ * Verifica correo+contraseña de un administrador — segundo factor antes de una acción destructiva
+ * crítica (ver eliminarVenta en comercial/ventas/+page.svelte). Corre en la Edge Function para no
+ * tocar la sesión real del navegador (ver nota en user-admin/index.ts). Devuelve `{success:false}`
+ * tanto si la contraseña es incorrecta como si el usuario no es administrador — a propósito no se
+ * distingue cuál de las dos cosas falló en la respuesta que llega al cliente.
+ */
+export async function verifyAdminPassword(email: string, password: string) {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'verify-admin-password');
+	const response = await fetchWithApiKey(url.toString(), {
+		method: 'POST',
+		body: JSON.stringify({ email, password })
+	});
+	return handleResponse(response);
+}

@@ -3,7 +3,8 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
-	import { isRunningInTauri, uploadToDriveClient, safeSegment } from '$lib/driveUploadClient';
+	import { isRunningInTauri, uploadToDriveClient } from '$lib/driveUploadClient';
+	import { generateUniqueFileName } from '$lib/shared/fileNaming';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
@@ -113,9 +114,8 @@ let codigoGenerado = $derived(
 		// In Tauri (adapter-static build) there is no Node server, so +server.ts routes don't
 		// exist. Upload directly to Google Drive using the client-side helper.
 		if (isRunningInTauri()) {
-			const ext      = file.name.includes('.') ? `.${file.name.split('.').pop()}` : '';
-			const baseName = `${type}-${Date.now()}-${safeSegment(file.name.replace(/\.[^.]+$/, ''))}`;
-			const { url } = await uploadToDriveClient(file, `${baseName}${ext}`, type);
+			const fileName = generateUniqueFileName(type, file.name);
+			const { url } = await uploadToDriveClient(file, fileName, type);
 			console.log(`[NuevaVentaModal] ✓ Tauri upload OK. URL: ${url}`);
 			return url;
 		}

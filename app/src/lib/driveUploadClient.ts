@@ -154,13 +154,3 @@ export async function deleteDriveFileClient(fileId: string): Promise<void> {
 		throw new Error(`Google Drive delete failed: ${await res.text()}`);
 	}
 }
-
-/** Safe filename segment: remove special chars, collapse underscores */
-export function safeSegment(value: string): string {
-	return value
-		.trim()
-		.replace(/\s+/g, '_')
-		.replace(/[^a-zA-Z0-9._-]/g, '')
-		.replace(/_+/g, '_')
-		.replace(/^_+|_+$/g, '');
-}

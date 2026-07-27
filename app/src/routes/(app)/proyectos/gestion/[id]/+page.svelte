@@ -6,6 +6,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
+	import { generateUniqueFileName } from '$lib/shared/fileNaming';
 	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
 	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
@@ -206,7 +207,7 @@
 		contratoUploading = true;
 		try {
 			const oldFileId = extractDriveFileId(proyecto.contrato);
-			const fileName = `contrato-${proyecto.id_proyecto}-${Date.now()}-${file.name}`;
+			const fileName = generateUniqueFileName(`contrato_proy${proyecto.id_proyecto}`, file.name);
 			let url: string;
 
 			if (isRunningInTauri()) {

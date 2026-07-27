@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { supabase } from '$lib/server/supabase';
 import { safeEndpoint } from '$lib/server/safeEndpoint';
 import { uploadToDrive, renameDriveFile, deleteDriveFile } from '$lib/server/config';
+import { sanitizeFileSegment, generateUniqueFileName } from '$lib/shared/fileNaming';
 
 const handler: RequestHandler = async ({ request }) => {
 	const formData = await request.formData();
@@ -42,22 +43,18 @@ const handler: RequestHandler = async ({ request }) => {
 		}
 	}
 
-	const safeName = (value: string) =>
-		value
-			.trim()
-			.replace(/\s+/g, '_')
-			.replace(/[^a-zA-Z0-9._-]/g, '')
-			.replace(/_+/g, '_')
-			.replace(/^_+|_+$/g, '');
-
 	const originalName = file instanceof File ? file.name : 'document.pdf';
-	const extension = originalName.includes('.') ? `.${originalName.split('.').pop()}` : '';
-	const fileBaseName = type === 'documento'
-		? `${safeName(documentType)}_${safeName(documentName || originalName.replace(/\.[^.]+$/, ''))}_${safeName(projectName || 'Proyecto')}`
-		: type === 'comprobante' && customFileName
-			? safeName(customFileName)
-			: `${type}-${Date.now()}-${safeName(originalName.replace(/\.[^.]+$/, ''))}`;
-	const fileName = `${fileBaseName}${extension}`;
+
+	// Todo archivo subido debe tener un nombre único y trazable (pedido explícito del usuario) —
+	// generateUniqueFileName agrega fecha+id corto garantizando eso. Única excepción a propósito:
+	// un comprobante con `customFileName` ya trae un nombre basado en el código real de la
+	// transacción (id_transaccion, único en la BD por sí solo — ver TransaccionModal.svelte), que es
+	// MÁS trazable que un id aleatorio; ahí se respeta tal cual en vez de complicarlo.
+	const fileName = type === 'comprobante' && customFileName
+		? `${sanitizeFileSegment(customFileName)}${originalName.includes('.') ? `.${originalName.split('.').pop()}` : ''}`
+		: type === 'documento'
+			? generateUniqueFileName(`documento_${documentType}_${documentName || 'doc'}_${projectName || 'Proyecto'}`, originalName)
+			: generateUniqueFileName(type, originalName);
 
 	const { url, fileId } = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma' | 'documento' | 'comprobante');
 

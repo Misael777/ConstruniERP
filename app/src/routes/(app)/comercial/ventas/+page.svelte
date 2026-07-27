@@ -8,6 +8,7 @@ import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
+import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -195,6 +196,10 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 
 	let confirmRow: any = $state(null);
 	let isDeleting = $state(false);
+	/** true = el modal de advertencia + contraseña de admin ya se muestra para `confirmRow`. La
+	 * eliminación real (performDelete) solo se dispara desde el callback onConfirmed de ese modal,
+	 * nunca directo desde el click en el botón — ver handleDeleteEvent. */
+	let showDeleteConfirm = $state(false);
 
 	function closeModal() {
 		isModalOpen = false;
@@ -226,46 +231,75 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 	function handleDeleteEvent(e: CustomEvent) {
 		confirmRow = e.detail.row;
 		if (!confirmRow) return;
+		showDeleteConfirm = true;
+	}
 
-		const message = `¿Estás seguro de eliminar el proyecto "${confirmRow.proyecto}"?`;
-		if (!confirm(message)) {
-			return;
-		}
+	function cancelDelete() {
+		showDeleteConfirm = false;
+		confirmRow = null;
+	}
 
+	function handleDeleteConfirmed() {
+		showDeleteConfirm = false;
 		performDelete();
+	}
+
+	/** Vuelca un error de Supabase/Postgrest a un string legible — message/code/details/hint, lo que
+	 * venga presente. Se usa en el alert de abajo porque en el .exe empaquetado no hay consola
+	 * accesible para el usuario: el alert ES la única forma de ver qué falló realmente. */
+	function describeError(err: any): string {
+		if (!err) return 'Error desconocido';
+		const parts: string[] = [];
+		if (err.message) parts.push(String(err.message));
+		if (err.code) parts.push(`code=${err.code}`);
+		if (err.details) parts.push(`details=${err.details}`);
+		if (err.hint) parts.push(`hint=${err.hint}`);
+		return parts.length ? parts.join(' | ') : String(err);
 	}
 
 	async function performDelete() {
 		if (!confirmRow) return;
 		isDeleting = true;
+		let step = 'inicio';
 
 		try {
 			const id = confirmRow.id;
+			console.log('[Ventas] performDelete: iniciando borrado de proyecto id=', id);
 
 			// Delete tables that reference proyecto WITHOUT ON DELETE CASCADE
 			// presupuesto_detalle cascades from presupuesto, so deleting presupuesto covers it
+			step = 'borrar presupuesto';
 			const { error: e1 } = await supabase.from('presupuesto').delete().eq('id_proyecto', id);
+			console.log(`[Ventas] performDelete: ${step} ->`, e1 ?? 'OK');
 			if (e1) throw e1;
 
+			step = 'borrar adelanto';
 			const { error: e2 } = await supabase.from('adelanto').delete().eq('id_proyecto', id);
+			console.log(`[Ventas] performDelete: ${step} ->`, e2 ?? 'OK');
 			if (e2) throw e2;
 
+			step = 'borrar contrato_proyecto';
 			const { error: e3 } = await supabase.from('contrato_proyecto').delete().eq('id_proyecto', id);
+			console.log(`[Ventas] performDelete: ${step} ->`, e3 ?? 'OK');
 			if (e3) throw e3;
 
 			// cuentas_cobrar has a nullable FK — nullify to preserve payment records
+			step = 'desvincular cuentas_cobrar';
 			const { error: e4 } = await supabase.from('cuentas_cobrar').update({ id_proyecto: null }).eq('id_proyecto', id);
+			console.log(`[Ventas] performDelete: ${step} ->`, e4 ?? 'OK');
 			if (e4) throw e4;
 
 			// All other FK references have ON DELETE CASCADE and will auto-delete
+			step = 'borrar proyecto';
 			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', id);
+			console.log(`[Ventas] performDelete: ${step} ->`, error ?? 'OK');
 			if (error) throw error;
 
 			confirmRow = null;
 			fetchVentas();
 		} catch (err) {
-			console.error('[Ventas] Error deleting project:', err);
-			alert('No se pudo eliminar el proyecto. Revisa la consola.');
+			console.error(`[Ventas] Error deleting project en paso "${step}":`, err);
+			alert(`No se pudo eliminar el proyecto.\nPaso: ${step}\n${describeError(err)}`);
 		} finally {
 			isDeleting = false;
 		}
@@ -483,6 +517,14 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 
 <!-- Modal Overlay -->
 <NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} onSaved={fetchVentas} />
+
+<!-- Confirmación de eliminación (advertencia + contraseña de admin) -->
+<ConfirmDeleteVentaModal
+	open={showDeleteConfirm}
+	ventaNombre={confirmRow?.proyecto ?? ''}
+	onCancel={cancelDelete}
+	onConfirmed={handleDeleteConfirmed}
+/>
 
 <!-- PDF Preview Modal -->
 {#if isPdfPreviewOpen}

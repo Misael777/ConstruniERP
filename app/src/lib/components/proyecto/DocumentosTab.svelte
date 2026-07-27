@@ -3,6 +3,7 @@
     import { supabase } from '$lib/supabaseClient';
     import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
     import { isRunningInTauri, uploadToDriveClient } from '$lib/driveUploadClient';
+    import { generateUniqueFileName } from '$lib/shared/fileNaming';
 
     const { projectId, projectName = 'Proyecto' } = $props<{
         projectId: number | string;
@@ -64,29 +65,12 @@
 const PROJECT_DOCUMENTS_BUCKET = 'project-documents';
 const useGoogleDriveDocuments = true; // GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS is configured server-side
 
-function safeFileSegment(value: string) {
-    return value
-        .trim()
-        .replace(/\s+/g, '_')
-        .replace(/[^a-zA-Z0-9._-]/g, '')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '');
-}
-
-function buildDocumentFileName(tipo: string, nombre: string, proyecto: string, originalName: string) {
-    const extension = originalName.includes('.') ? `.${originalName.split('.').pop()}` : '';
-    const safeTipo = safeFileSegment(tipo || 'Documento');
-    const safeNombre = safeFileSegment(nombre || originalName.replace(/\.[^.]+$/, ''));
-    const safeProyecto = safeFileSegment(proyecto || 'Proyecto');
-    return `${safeTipo}_${safeNombre}_${safeProyecto}${extension}`;
-}
-
 async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
     console.log(`[DocumentosTab] uploadDocumentToDrive() - tipo: ${tipo}, inTauri: ${isRunningInTauri()}`);
 
     if (isRunningInTauri()) {
         // adapter-static: no server endpoint available — upload directly from the WebView
-        const fileName = buildDocumentFileName(tipo, nombre, projectName, file.name);
+        const fileName = generateUniqueFileName(`documento_${tipo}_${nombre}_${projectName}`, file.name);
         const { url } = await uploadToDriveClient(file, fileName, 'documento');
         console.log(`[DocumentosTab] ✓ Tauri upload OK. URL: ${url}`);
         return { url, fileName };
@@ -144,7 +128,6 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
 
         if (uploadFile) {
             const originalName = uploadFile.name;
-            const documentFileName = buildDocumentFileName(uploadTipo, uploadNombre, projectName, originalName);
             fileSize = uploadFile.size;
             fileType = uploadFile.type;
 
@@ -159,8 +142,8 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                     return;
                 }
             } else {
-                const safeName = documentFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                storagePath = `${projectId}/${safeName}`;
+                const documentFileName = generateUniqueFileName(`documento_${uploadTipo}_${uploadNombre}_${projectName}`, originalName);
+                storagePath = `${projectId}/${documentFileName}`;
 
                 const { error: se } = await supabase.storage
                     .from(PROJECT_DOCUMENTS_BUCKET)

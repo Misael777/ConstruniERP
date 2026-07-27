@@ -10,6 +10,7 @@ const corsHeaders = {
 // 2. Variables de entorno nativas de las Edge Functions (Supabase las inyecta solas)
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in function environment');
@@ -19,6 +20,8 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false }
 });
+
+const ADMIN_ROLE = 'administrador';
 
 // Helper para construir respuestas JSON con soporte CORS
 function buildJsonResponse(body: unknown, status = 200) {
@@ -229,6 +232,48 @@ async function deleteUser(userId: string | null) {
   return buildJsonResponse({ success: true, auth_user_id: authUserId });
 }
 
+// Verifica que un correo+contraseña pertenezcan a un ADMINISTRADOR real — usado como segundo
+// factor antes de acciones destructivas críticas (ej. eliminar una venta y su proyecto en
+// cascada, ver comercial/ventas/+page.svelte). No hay una API de Supabase para "verificar una
+// contraseña sin iniciar sesión", así que se usa un cliente EFECTIVO Y DESECHABLE (con la anon
+// key, no el de arriba con service_role) para intentar un login real vía signInWithPassword —
+// esto corre en el contexto aislado de ESTA función/request, nunca toca ni reemplaza la sesión
+// real del navegador que hizo la llamada. Si el login es válido, se revisa con el cliente
+// service_role si ese usuario tiene rol admin; ninguna de las dos cosas por separado autoriza.
+async function verifyAdminPassword(body: any) {
+  const email = String(body.email ?? '').trim().toLowerCase();
+  const password = String(body.password ?? '').trim();
+
+  if (!email || !password) {
+    return buildJsonResponse({ success: false, error: 'Correo y contraseña son requeridos.' }, 400);
+  }
+  if (!SUPABASE_ANON_KEY) {
+    return buildJsonResponse({ success: false, error: 'Falta configurar SUPABASE_ANON_KEY en la función.' }, 500);
+  }
+
+  const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+  const { data: signInData, error: signInError } = await authClient.auth.signInWithPassword({ email, password });
+
+  if (signInError || !signInData?.user) {
+    return buildJsonResponse({ success: false, error: 'Correo o contraseña incorrectos.' }, 401);
+  }
+
+  const { data: empleado, error: empleadoError } = await supabase
+    .from('empleados')
+    .select('roles ( nombre )')
+    .eq('auth_user_id', signInData.user.id)
+    .maybeSingle();
+
+  const rolesObj: any = Array.isArray(empleado?.roles) ? empleado?.roles[0] : empleado?.roles;
+  const rolNombre = rolesObj?.nombre ?? null;
+
+  if (empleadoError || rolNombre !== ADMIN_ROLE) {
+    return buildJsonResponse({ success: false, error: 'Ese usuario no tiene permisos de administrador.' }, 403);
+  }
+
+  return buildJsonResponse({ success: true });
+}
+
 // Marca la cuenta como realmente activada (distinto de solo "vinculada") — llamada por el propio
 // empleado, recién autenticado con una sesión de bajo privilegio, justo después de completar el
 // flujo de "Configura tu acceso" (código OTP + su propia contraseña) en login/+page.svelte. Pasa
@@ -287,6 +332,7 @@ Deno.serve(async (req) => {
     if (req.method === 'POST') {
       if (action === 'reset-password') return await resetPassword(body);
       if (action === 'confirm-activation') return await confirmActivation(body);
+      if (action === 'verify-admin-password') return await verifyAdminPassword(body);
       return await createUser(body);
     }
 

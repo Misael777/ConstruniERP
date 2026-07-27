@@ -38,6 +38,15 @@ CREATE INDEX IF NOT EXISTS idx_centro_costo_id_proveedor ON centro_costo(id_prov
 -- existente sobre la columna `tipo` sin depender de su nombre exacto — DER2.sql y la BD real ya
 -- han mostrado desviarse entre sí en esta tabla (ver notas en centroCostos.config.ts), así que no
 -- se asume un nombre de constraint fijo.
+-- OJO: la lista de valores de abajo incluye TAMBIÉN 'empleado' y 'bolsa general' — agregados por
+-- centro_costo_empleado_migration.sql y centro_costo_tipo_bolsa_general_migration.sql
+-- respectivamente. Esta migración es la MÁS VIEJA de las tres; si se corre DESPUÉS de esas dos
+-- (ej. al re-ejecutar todo el set de migraciones, o simplemente fuera de orden) y su lista se
+-- quedara solo con los valores originales, el ALTER TABLE... ADD CONSTRAINT de acá fallaría con
+-- "check constraint is violated by some row" contra los centros de costo de tipo empleado/bolsa
+-- general que ya existen — exactamente el mismo bug que tenía la migración de bolsa_general antes
+-- de corregirla. Se mantiene aquí la lista COMPLETA para que las tres migraciones sigan siendo
+-- seguras de correr en cualquier orden/repetidamente, tal como promete el header de este archivo.
 DO $$
 DECLARE
     r RECORD;
@@ -54,7 +63,7 @@ END $$;
 
 ALTER TABLE centro_costo
     ADD CONSTRAINT centro_costo_tipo_check
-    CHECK (tipo IN ('obra', 'consultoria', 'area', 'otro', 'proyecto', 'cliente', 'proveedor'));
+    CHECK (tipo IN ('obra', 'consultoria', 'area', 'otro', 'proyecto', 'cliente', 'proveedor', 'empleado', 'bolsa general'));
 
 -- Fuerza a PostgREST a recargar el schema cache de inmediato.
 NOTIFY pgrst, 'reload schema';
