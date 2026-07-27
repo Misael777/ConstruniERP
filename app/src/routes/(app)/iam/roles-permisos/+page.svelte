@@ -31,7 +31,7 @@
 				{ key: 'ver_proyectos', label: 'General Proyectos' },
 				{ key: 'ver_proyectos_dashboard', label: 'Dashboard Proyectos' },
 				{ key: 'ver_proyectos_gestion', label: 'Gestión de Proyectos' },
-				{ key: 'ver_proyectos', label: 'Partidas y Plantillas' }
+				{ key: 'ver_proyectos_partidas', label: 'Partidas y Plantillas' }
 			]
 		},
 		{
@@ -40,7 +40,8 @@
 				{ key: 'ver_finanzas', label: 'General Finanzas' },
 				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
 				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
-				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' }
+				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' },
+				{ key: 'ver_finanzas_cuentas_bancarias', label: 'Cuentas Bancarias' }
 			]
 		},
 		{

@@ -16,8 +16,12 @@
 		getTransDetalles,
 		deleteTransDetalle,
 		getCentroCostoOptions,
+		getCentroCostoOptionsProyectos,
+		getCentroCostoOptionsExternos,
+		getCentroCostoOptionsExternosOrigen,
 		getPartidaOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import TransDetalleModal from '$lib/modules/transacciones/components/TransDetalleModal.svelte';
 	import TransaccionCalendarView from '$lib/modules/transacciones/components/TransaccionCalendarView.svelte';
@@ -52,11 +56,14 @@
 	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
+	// dynamicOptions (Origen/Destino de Transacción en el formulario) solo trae centros de costo
+	// vinculados a un PROYECTO (ver getCentroCostoOptionsProyectos) — pero la tabla de abajo puede
+	// mostrar transacciones antiguas contra un centro de costo de proveedor/empleado, así que el
+	// lookup para pintar esa columna usa la lista COMPLETA por separado, no dynamicOptions.
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
+	let centroCostoOptionsCompleto = $state<FieldOption[]>([]);
 	let detalleDynamicOptions = $state<Record<string, FieldOption[]>>({ id_partida: [] });
-	const centroCostoLookup = $derived(
-		new Map((dynamicOptions.id_centro_costo_origen ?? []).map((o) => [o.value, o.label]))
-	);
+	const centroCostoLookup = $derived(new Map(centroCostoOptionsCompleto.map((o) => [o.value, o.label])));
 
 	let selectedId = $state<number | null>(null);
 	let selectedDetalles = $state<TransDetalle[]>([]);
@@ -156,8 +163,21 @@
 			return;
 		}
 		try {
-			const centroCostoOptions = await getCentroCostoOptions(supabase);
-			dynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
+			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, cuentaBancoOptions] = await Promise.all([
+				getCentroCostoOptions(supabase),
+				getCentroCostoOptionsProyectos(supabase),
+				getCentroCostoOptionsExternos(supabase),
+				getCentroCostoOptionsExternosOrigen(supabase),
+				getCuentaBancoOptions(supabase)
+			]);
+			centroCostoOptionsCompleto = centroCostoCompleto;
+			dynamicOptions = {
+				id_centro_costo_origen: centroCostoProyectos,
+				id_centro_costo_destino: centroCostoProyectos,
+				id_centro_costo_origen_externo: centroCostoExternosOrigen,
+				id_centro_costo_destino_externo: centroCostoExternosDestino,
+				cuenta_banco: cuentaBancoOptions
+			};
 			detalleDynamicOptions = { id_partida: await getPartidaOptions(supabase) };
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar los catálogos');

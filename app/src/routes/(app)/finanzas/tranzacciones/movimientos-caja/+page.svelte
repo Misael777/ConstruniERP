@@ -18,7 +18,13 @@
 	} from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import {
+		getCentroCostoOptions,
+		getCentroCostoOptionsProyectos,
+		getCentroCostoOptionsExternos,
+		getCentroCostoOptionsExternosOrigen
+	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import {
 		getMovimientosCaja,
@@ -74,6 +80,12 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	let centroCostoOptions = $state<FieldOption[]>([]);
+	/** Solo para Origen/Destino de Transacción en el modal (ver getCentroCostoOptionsProyectos/
+	 * getCentroCostoOptionsExternos) — el filtro de esta página sigue usando centroCostoOptions completo. */
+	let centroCostoProyectosOptions = $state<FieldOption[]>([]);
+	let centroCostoExternosDestinoOptions = $state<FieldOption[]>([]);
+	let centroCostoExternosOrigenOptions = $state<FieldOption[]>([]);
+	let cuentaBancoOptions = $state<FieldOption[]>([]);
 	let resultado = $state<MovimientosCajaResult | null>(null);
 	let loading = $state(true);
 	let loadError = $state('');
@@ -102,7 +114,13 @@
 
 	let modalOpen = $state(false);
 	let editingTransaccion = $state<Transaccion | null>(null);
-	const transaccionDynamicOptions = $derived({ id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions });
+	const transaccionDynamicOptions = $derived({
+		id_centro_costo_origen: centroCostoProyectosOptions,
+		id_centro_costo_destino: centroCostoProyectosOptions,
+		id_centro_costo_origen_externo: centroCostoExternosOrigenOptions,
+		id_centro_costo_destino_externo: centroCostoExternosDestinoOptions,
+		cuenta_banco: cuentaBancoOptions
+	});
 
 	// Previsualización rápida del comprobante desde la fila, sin abrir el formulario completo.
 	let previewOpen = $state(false);
@@ -140,7 +158,18 @@
 			return;
 		}
 		try {
-			centroCostoOptions = await getCentroCostoOptions(supabase);
+			const [completo, proyectos, externosDestino, externosOrigen, bancos] = await Promise.all([
+				getCentroCostoOptions(supabase),
+				getCentroCostoOptionsProyectos(supabase),
+				getCentroCostoOptionsExternos(supabase),
+				getCentroCostoOptionsExternosOrigen(supabase),
+				getCuentaBancoOptions(supabase)
+			]);
+			centroCostoOptions = completo;
+			centroCostoProyectosOptions = proyectos;
+			centroCostoExternosDestinoOptions = externosDestino;
+			centroCostoExternosOrigenOptions = externosOrigen;
+			cuentaBancoOptions = bancos;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo');
 		}

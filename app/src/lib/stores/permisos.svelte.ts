@@ -125,29 +125,16 @@ export async function loadPermisos(userId: string): Promise<void> {
 // --------------- Helpers ---------------
 
 // Map frontend-only sidebar check permissions to DB database permissions
-const PERMISO_MAPPING: Record<string, string> = {
-  'ver_dashboard': 'dashboard:read',
-  'ver_proyectos': 'proyectos:read',
-  'ver_compras': 'compras:read',
-  'ver_almacen': 'almacen:read',
-  'ver_ventas': 'ventas:read',
-  'ver_finanzas': 'finanzas:read',
-  'ver_rrhh': 'recursos_humanos:read',
-  'ver_iam': 'iam:read',
-  'ver_configuracion': 'configuracion:read'
-};
-
 /** Check if the current user has a specific permission (or is admin) */
 export function hasPermiso(key: string): boolean {
   if (permisosState.permisos.includes('*')) {
     console.log(`[Permisos Check] Checking for "${key}". Admin wildcard bypass. Result: true`);
     return true; // admin bypass
   }
-  
-  const dbKey = PERMISO_MAPPING[key] || key;
-  const result = permisosState.permisos.includes(dbKey) || permisosState.permisos.includes(key);
-  
-  console.log(`[Permisos Check] Checking for permission "${key}" (mapped to: "${dbKey}"). User permissions:`, JSON.stringify(permisosState.permisos), `Result: ${result}`);
+
+  const result = permisosState.permisos.includes(key);
+
+  console.log(`[Permisos Check] Checking for permission "${key}". User permissions:`, JSON.stringify(permisosState.permisos), `Result: ${result}`);
   return result;
 }
 

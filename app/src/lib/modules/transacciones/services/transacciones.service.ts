@@ -59,6 +59,10 @@ export interface Transaccion {
 	aprobado: boolean;
 	aprobado_por: string | null;
 	aprobado_en: string | null;
+	/** 'interna' = movimiento entre dos centros de costo propios (Tipo se fuerza a 'transferencia' y
+	 * queda bloqueado); 'externa' = con un tercero, el formulario funciona igual que siempre. Ver
+	 * TransaccionModal.svelte y transaccion_tipo_alcance_migration.sql. */
+	tipo_alcance: 'interna' | 'externa' | null;
 }
 
 export interface TransDetalle {
@@ -345,6 +349,63 @@ export async function getCentroCostoOptions(client: SupabaseClient): Promise<Fie
 	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre').order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
+/** Como getCentroCostoOptions, pero solo centros de costo vinculados a un PROYECTO (excluye los
+ * vinculados a proveedor/cliente/empleado, ver centro_costo_vinculacion_migration.sql) — a pedido
+ * del usuario, "Origen de Transacción"/"Destino de Transacción" en TransaccionModal.svelte solo
+ * deben ofrecer proyectos, no proveedores ni empleados. */
+export async function getCentroCostoOptionsProyectos(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre')
+		.not('id_proyecto', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
+/** Para "Destino de Transacción" en "Transacción Externa" (TransaccionModal.svelte): TODOS los
+ * centros de costo, agrupados en este orden — proveedores, clientes, empleados, proyectos — a
+ * pedido del usuario. */
+export async function getCentroCostoOptionsExternos(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto')
+		.order('nombre');
+	if (error) throw error;
+
+	const rows = (data ?? []) as any[];
+	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` });
+	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
+	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
+	const empleados = rows.filter((r) => r.id_empleado !== null).map(toOption);
+	const proyectos = rows.filter((r) => r.id_proyecto !== null).map(toOption);
+	// Centros de costo creados a mano, sin vincular a ninguna entidad — van al final, para no
+	// dejarlos fuera de "todos los centros de costo".
+	const sinVincular = rows.filter((r) => r.id_proveedor === null && r.id_cliente === null && r.id_empleado === null && r.id_proyecto === null).map(toOption);
+	return [...proveedores, ...clientes, ...empleados, ...proyectos, ...sinVincular];
+}
+
+/** Variante de getCentroCostoOptionsExternos SOLO para "Origen de Transacción" en Externa — a
+ * diferencia de Destino, Origen también incluye centros de costo de proyecto (el origen de una
+ * transacción externa puede ser un cliente que paga, o un proyecto propio), y clientes/proyectos
+ * van primero: clientes, proyectos, proveedores, empleados. */
+export async function getCentroCostoOptionsExternosOrigen(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto')
+		.or('id_proveedor.not.is.null,id_cliente.not.is.null,id_empleado.not.is.null,id_proyecto.not.is.null')
+		.order('nombre');
+	if (error) throw error;
+
+	const rows = (data ?? []) as any[];
+	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` });
+	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
+	const proyectos = rows.filter((r) => r.id_proyecto !== null).map(toOption);
+	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
+	const empleados = rows.filter((r) => r.id_empleado !== null).map(toOption);
+	return [...clientes, ...proyectos, ...proveedores, ...empleados];
 }
 
 export async function getPartidaOptions(client: SupabaseClient): Promise<FieldOption[]> {

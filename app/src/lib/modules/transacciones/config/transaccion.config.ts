@@ -29,7 +29,9 @@
  *     comprobante_url             TEXT,  -- agregada por migración, ver transaccion_comprobante_migration.sql
  *     aprobado                    BOOLEAN NOT NULL DEFAULT FALSE, -- agregada por migración, ver transaccion_aprobacion_migration.sql
  *     aprobado_por                VARCHAR(100),
- *     aprobado_en                 TIMESTAMPTZ
+ *     aprobado_en                 TIMESTAMPTZ,
+ *     tipo_alcance                VARCHAR(10) NOT NULL DEFAULT 'externa' CHECK (tipo_alcance IN ('interna','externa')),
+ *       -- agregada por migración, ver transaccion_tipo_alcance_migration.sql
  *   );
  *
  * Notas importantes:
@@ -66,8 +68,25 @@ export const DEFAULT_SORT_DIR: 'asc' | 'desc' = 'desc';
 
 export const FIELDS_CONFIG: FieldConfig[] = [
 	{
+		// Toggle "Transacción Interna" / "Transacción Externa" — se renderiza aparte (widget propio,
+		// no el <select> genérico) al inicio del formulario, ver TransaccionModal.svelte. Interna
+		// fuerza y bloquea el campo `tipo` en 'transferencia' (ver más abajo); Externa deja el
+		// formulario exactamente como funcionaba antes de agregar esto.
+		key: 'tipo_alcance',
+		label: 'Alcance de la Transacción',
+		tipo: 'select',
+		required: true,
+		options: [
+			{ value: 'interna', label: 'Transacción Interna' },
+			{ value: 'externa', label: 'Transacción Externa' }
+		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
 		key: 'id_centro_costo_origen',
-		label: 'Cuenta Interna Origen',
+		label: 'Origen de Transacción',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
@@ -77,7 +96,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'id_centro_costo_destino',
-		label: 'Cuenta Interna Destino',
+		label: 'Destino de Transacción',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo',
@@ -102,7 +121,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		options: [
 			{ value: 'ingreso', label: 'Ingreso' },
 			{ value: 'egreso', label: 'Egreso' },
-			{ value: 'financiamiento', label: 'Financiamiento' }
+			{ value: 'financiamiento', label: 'Financiamiento' },
+			// Se autoselecciona y se bloquea cuando "Alcance de la Transacción" = Interna — ver
+			// TransaccionModal.svelte. También queda disponible para elegir a mano en una Externa.
+			{ value: 'transferencia', label: 'Transferencia' }
 		],
 		showInTable: true,
 		showInForm: true,
@@ -124,7 +146,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'G. Administrativos', label: 'G. Administrativos' },
 			{ value: 'Servicios', label: 'Servicios' },
 			{ value: 'Materiales', label: 'Materiales' },
-			{ value: 'Préstamos', label: 'Préstamos' }
+			{ value: 'Préstamos', label: 'Préstamos' },
+			// Categorías propias de tipo='transferencia' (transacción Interna) — ver optionsWhen abajo.
+			{ value: 'Préstamo', label: 'Préstamo' },
+			{ value: 'Inyección', label: 'Inyección' }
 		],
 		optionsWhen: (payload) => {
 			const tipo = String(payload.tipo ?? '');
@@ -144,6 +169,12 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			}
 			if (tipo === 'financiamiento') {
 				return [{ value: 'Préstamos', label: 'Préstamos' }];
+			}
+			if (tipo === 'transferencia') {
+				return [
+					{ value: 'Préstamo', label: 'Préstamo' },
+					{ value: 'Inyección', label: 'Inyección' }
+				];
 			}
 			return [];
 		},
@@ -178,8 +209,30 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: '3', label: 'Recibo por Honorarios' },
 			{ value: '4', label: 'Ticket' },
 			{ value: '5', label: 'Autodetracción' },
-			{ value: '6', label: 'Otros' }
+			{ value: '6', label: 'Otros' },
+			// Solo se ofrecen cuando "Alcance de la Transacción" = Interna, ver optionsWhen abajo.
+			{ value: '7', label: 'Talonario' },
+			{ value: '8', label: 'Boucher' }
 		],
+		// En Interna, un comprobante externo (factura/boleta/etc.) no aplica — solo talonario/boucher
+		// internos. En Externa se mantiene el catálogo original de 6 — ver TransaccionModal.svelte,
+		// que además limpia este campo cuando cambia el Alcance para no dejar un valor inválido.
+		optionsWhen: (payload) => {
+			if (String(payload.tipo_alcance ?? '') === 'interna') {
+				return [
+					{ value: '7', label: 'Talonario' },
+					{ value: '8', label: 'Boucher' }
+				];
+			}
+			return [
+				{ value: '1', label: 'Factura' },
+				{ value: '2', label: 'Boleta de venta' },
+				{ value: '3', label: 'Recibo por Honorarios' },
+				{ value: '4', label: 'Ticket' },
+				{ value: '5', label: 'Autodetracción' },
+				{ value: '6', label: 'Otros' }
+			];
+		},
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -307,7 +360,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		tipo: 'select',
 		options: [
 			{ value: 'activo', label: 'Activo' },
-			{ value: 'anulado', label: 'Anulado' }
+			{ value: 'anulado', label: 'Anulado' },
+			// Se autoselecciona y se bloquea cuando "Alcance de la Transacción" = Interna — ver
+			// TransaccionModal.svelte. También queda disponible para elegir a mano en una Externa.
+			{ value: 'consulta', label: 'Consulta' }
 		],
 		showInTable: true,
 		showInForm: true,
