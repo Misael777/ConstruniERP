@@ -3,7 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet, LayoutGrid, CalendarDays } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet, LayoutGrid, CalendarDays, Eye } from '@lucide/svelte';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
@@ -72,6 +73,17 @@
 	let editingTransaccion = $state<Transaccion | null>(null);
 	let detalleModalOpen = $state(false);
 	let editingDetalle = $state<TransDetalle | null>(null);
+
+	// Previsualización rápida del comprobante desde la lista, sin tener que abrir el formulario de
+	// edición completo — mismo componente compartido que usa Ventas para contrato/proforma.
+	let previewOpen = $state(false);
+	let previewUrl = $state('');
+	let previewTitle = $state('');
+	function openComprobantePreview(item: Transaccion) {
+		previewUrl = item.comprobante_url ?? '';
+		previewTitle = `Comprobante - ${item.num_documento || 'Transacción'}`;
+		previewOpen = true;
+	}
 
 	// Tab "Calendario" — muestra las transacciones reales (no las cuotas pendientes de
 	// Panoramas de Cobro/Pago) distribuidas por fecha, ver TransaccionCalendarView.svelte.
@@ -427,6 +439,11 @@
 					</div>
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
+					{#if item.comprobante_url}
+						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver comprobante" aria-label="Ver comprobante">
+							<Eye size={16} />
+						</button>
+					{/if}
 					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 						<Pencil size={16} />
 					</button>
@@ -514,3 +531,4 @@
 
 <TransaccionModal open={modalOpen} mode={modalMode} transaccion={editingTransaccion} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
 <TransDetalleModal open={detalleModalOpen} idTransaccion={selectedId} detalle={editingDetalle} dynamicOptions={detalleDynamicOptions} onClose={closeDetalleModal} onSaved={handleDetalleSaved} />
+<DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />

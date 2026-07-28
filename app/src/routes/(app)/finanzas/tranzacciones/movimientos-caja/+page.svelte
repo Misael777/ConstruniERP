@@ -13,6 +13,7 @@
 		Search,
 		Download,
 		Eye,
+		Paperclip,
 		X
 	} from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
@@ -33,6 +34,7 @@
 	} from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	// Reporte 100% client-side (Supabase anon key) y de solo lectura sobre `transaccion` — no
 	// crea/edita nada, "jala" los datos que ya generan Cuentas por Pagar/Cobrar y Transacciones.
@@ -119,6 +121,16 @@
 		id_centro_costo_destino_externo: centroCostoExternosDestinoOptions,
 		cuenta_banco: cuentaBancoOptions
 	});
+
+	// Previsualización rápida del comprobante desde la fila, sin abrir el formulario completo.
+	let previewOpen = $state(false);
+	let previewUrl = $state('');
+	let previewTitle = $state('');
+	function openComprobantePreview(transaccion: Transaccion) {
+		previewUrl = transaccion.comprobante_url ?? '';
+		previewTitle = `Comprobante - ${transaccion.num_documento || 'Transacción'}`;
+		previewOpen = true;
+	}
 
 	async function fetchData() {
 		loading = true;
@@ -473,6 +485,17 @@
 					<td class="px-3 py-2 text-right whitespace-nowrap font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap">
 						{#if !fila.esSaldoInicial && fila.raw}
+							{#if (fila.raw as Transaccion).comprobante_url}
+								<button
+									type="button"
+									onclick={() => openComprobantePreview(fila.raw as Transaccion)}
+									class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
+									title="Ver comprobante"
+									aria-label="Ver comprobante"
+								>
+									<Paperclip size={16} />
+								</button>
+							{/if}
 							<button
 								type="button"
 								onclick={() => openView(fila.raw as Transaccion)}
@@ -513,13 +536,22 @@
 						<span class="text-right font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</span>
 					</div>
 					{#if !fila.esSaldoInicial && fila.raw}
-						<div class="pt-2 border-t border-slate-100">
+						<div class="pt-2 border-t border-slate-100 flex gap-2">
+							{#if (fila.raw as Transaccion).comprobante_url}
+								<button
+									type="button"
+									onclick={() => openComprobantePreview(fila.raw as Transaccion)}
+									class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
+								>
+									<Paperclip size={14} /> Comprobante
+								</button>
+							{/if}
 							<button
 								type="button"
 								onclick={() => openView(fila.raw as Transaccion)}
-								class="w-full h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
+								class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
 							>
-								<Eye size={14} /> Ver / editar transacción
+								<Eye size={14} /> Ver / editar
 							</button>
 						</div>
 					{/if}
@@ -654,3 +686,4 @@
 	onClose={closeModal}
 	onSaved={handleTransaccionSaved}
 />
+<DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />

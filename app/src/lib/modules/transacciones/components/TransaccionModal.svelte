@@ -9,6 +9,7 @@
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	let {
 		open = false,
@@ -80,6 +81,9 @@
 	let comprobanteError = $state('');
 	let uploadingComprobante = $state(false);
 	let localPreviewUrl = $state<string | null>(null);
+	// Popup de previsualización del comprobante ya subido — mismo componente compartido que usa
+	// Ventas para contrato/proforma, en vez del <a target="_blank"> que abría el archivo crudo.
+	let showComprobantePreview = $state(false);
 
 	$effect(() => {
 		if (open) {
@@ -568,7 +572,13 @@
 									class="w-24 h-24 object-cover rounded-lg border border-slate-200"
 									onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
 								/>
-								<a href={comprobanteUrl} target="_blank" rel="noopener noreferrer" class="text-xs text-blue-600 hover:underline">Ver comprobante actual</a>
+								<button
+									type="button"
+									onclick={() => (showComprobantePreview = true)}
+									class="text-xs text-blue-600 hover:underline"
+								>
+									Ver comprobante actual
+								</button>
 							</div>
 						{/if}
 
@@ -595,3 +605,10 @@
 		</div>
 	</div>
 {/if}
+
+<DocumentPreviewModal
+	open={showComprobantePreview}
+	url={comprobanteUrl}
+	title="Comprobante"
+	onClose={() => (showComprobantePreview = false)}
+/>
