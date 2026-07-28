@@ -46,6 +46,10 @@ export interface CentroCosto {
 	id_cliente: number | null;
 	id_proveedor: number | null;
 	id_empleado: number | null;
+	/** Solo para filas vinculadas a un proveedor (pestaña "Cuentas Internas"): el "Producto y Servicio"
+	 * de ese proveedor (columna real `proveedor.vendedor`, ver ProveedorModal.svelte) — se trae con un
+	 * embed, no es una columna propia de centro_costo. null para filas sin proveedor vinculado. */
+	producto: string | null;
 }
 
 export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor' | 'empleado';
@@ -103,7 +107,10 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
 
-	const sortField = params.sortBy && SORTABLE_KEYS.has(params.sortBy) ? params.sortBy : DEFAULT_SORT_FIELD;
+	// 'producto' no es un campo de FIELDS_CONFIG (ver nota en CentroCosto.producto) — se acepta aparte
+	// y se ordena vía el embed a proveedor, no como columna propia de centro_costo.
+	const sortByProducto = params.sortBy === 'producto';
+	const sortField = sortByProducto ? 'producto' : params.sortBy && SORTABLE_KEYS.has(params.sortBy) ? params.sortBy : DEFAULT_SORT_FIELD;
 	const sortDir: 'asc' | 'desc' = params.sortDir === 'asc' || params.sortDir === 'desc' ? params.sortDir : DEFAULT_SORT_DIR;
 
 	const from = (page - 1) * pageSize;
@@ -111,9 +118,12 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 
 	let query = client
 		.from(TABLE_NAME)
-		.select('*', { count: 'exact' })
-		.order(sortField, { ascending: sortDir === 'asc' })
+		.select('*, proveedor(vendedor)', { count: 'exact' })
 		.range(from, to);
+
+	query = sortByProducto
+		? query.order('vendedor', { foreignTable: 'proveedor', ascending: sortDir === 'asc' })
+		: query.order(sortField, { ascending: sortDir === 'asc' });
 
 	if (params.vinculado === true) {
 		// "Cuentas Internas" — proyecto queda fuera a propósito, ver doc de ListParams.vinculado.
@@ -126,16 +136,18 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	const search = params.search?.trim();
 	if (search) {
 		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
-		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
+		const orFilter = [...SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`), `proveedor.vendedor.ilike.%${escaped}%`].join(',');
 		query = query.or(orFilter);
 	}
 
 	const { data, error, count } = await query;
 	if (error) throw error;
 
+	const items = ((data ?? []) as any[]).map((row) => ({ ...row, producto: row.proveedor?.vendedor ?? null }));
+
 	const total = count ?? 0;
 	return {
-		items: (data ?? []) as CentroCosto[],
+		items: items as CentroCosto[],
 		total,
 		page,
 		pageSize,

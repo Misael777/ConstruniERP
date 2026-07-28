@@ -185,7 +185,7 @@
 				<div class={`p-6 grid ${gridColsClass} gap-4`}>
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`ccf-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`ccf-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>

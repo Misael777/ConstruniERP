@@ -351,6 +351,30 @@ export async function getCentroCostoOptions(client: SupabaseClient): Promise<Fie
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
 }
 
+/** Para "Centro de Costo" en Nueva/Editar Cuenta por Pagar — a pedido del usuario, solo ofrece
+ * centros de costo de tipo proyecto, consultoría o bolsa general (excluye obra/área/otro y los
+ * vinculados a cliente/proveedor/empleado, ver tipo en centroCostos.config.ts). */
+export async function getCentroCostoOptionsPagos(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre')
+		.in('tipo', ['proyecto', 'consultoria', 'bolsa general'])
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
+/** id_centro_costo (como texto) -> tipo — para CuentaPagarModal.svelte: cuando el centro de costo
+ * elegido es 'bolsa general', el campo "ID Partida" se bloquea (un gasto de bolsa general no se
+ * carga a una partida puntual de obra). */
+export async function getCentroCostoTipoMap(client: SupabaseClient): Promise<Record<string, string>> {
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, tipo');
+	if (error) throw error;
+	const mapa: Record<string, string> = {};
+	for (const row of (data ?? []) as any[]) mapa[String(row.id_centro_costo)] = row.tipo;
+	return mapa;
+}
+
 /** Como getCentroCostoOptions, pero solo centros de costo vinculados a un PROYECTO (excluye los
  * vinculados a proveedor/cliente/empleado, ver centro_costo_vinculacion_migration.sql) — a pedido
  * del usuario, "Origen de Transacción"/"Destino de Transacción" en TransaccionModal.svelte solo

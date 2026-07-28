@@ -128,11 +128,13 @@ export async function deleteCuentaBanco(client: SupabaseClient, id: number): Pro
  * Ingreso): el valor guardado sigue siendo el número de cuenta en texto libre (mismo formato que
  * siempre tuvo `transaccion.cuente_destino`), no el id — solo se ofrece como lista en vez de
  * digitarlo a mano, para asegurar que el dinero entrante vaya a una cuenta bancaria ya registrada.
- * Se muestra como "Titular - N° de cuenta", ordenado alfabéticamente por titular. */
+ * Se muestra como "Titular - N° de cuenta", ordenado alfabéticamente por titular. Solo cuentas en
+ * estado 'activa' — una inactiva/no autorizada no debe poder recibir ni originar movimientos. */
 export async function getCuentaBancoOptions(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from(TABLE_NAME)
 		.select('numero_cuenta, titular_cuenta, nombre_banco')
+		.eq('estado', 'activa')
 		.order('titular_cuenta');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}` }));

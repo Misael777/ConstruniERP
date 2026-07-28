@@ -90,7 +90,7 @@
         <!-- Proyecto selector -->
         {#if showProyectoSelector}
             <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded text-[12px]">
-                <label class="block font-medium text-[#1e293b] mb-1">Selecciona el proyecto destino</label>
+                <label class="block font-medium text-[#0f3b5e] mb-1">Selecciona el proyecto destino</label>
                 {#if $proyectosList.length === 0}
                     <p class="text-slate-500 italic">No hay proyectos activos disponibles.</p>
                 {:else}

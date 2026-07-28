@@ -3,18 +3,16 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Ban, Search, ChevronUp, ChevronDown, X, Building2 } from '@lucide/svelte';
-	import { toast } from '$lib/stores/toast';
+	import { Plus, Search, ChevronUp, ChevronDown, X, Building2 } from '@lucide/svelte';
 	import {
 		FIELDS_CONFIG,
 		DEFAULT_SORT_FIELD,
 		DEFAULT_SORT_DIR,
 		DEFAULT_PAGE_SIZE,
-		DELETE_STRATEGY,
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { getCentroCostos, deleteCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { getCentroCostos } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
@@ -24,13 +22,15 @@
 	// SvelteKit embebido. AJUSTAR: hoy la seguridad depende únicamente del guard de UI de abajo
 	// (isAdmin()) — la BD no tiene políticas RLS reales todavía, así que cualquiera con la anon
 	// key puede leer/escribir esta tabla sin pasar por esta pantalla. Agregar RLS es tarea aparte.
+	//
+	// Editar y eliminar están deshabilitados a propósito (a pedido del usuario): muchos otros módulos
+	// referencian un centro_costo por id sin FK real en la BD (ver nota en centroCostos.service.ts),
+	// así que editar/eliminar uno desde acá podía descuadrar esos otros módulos en silencio. Solo
+	// queda la creación (Nuevo Centro de Costo). ResponsiveDataView ya cubre tabla (desktop) y
+	// tarjetas (móvil/Tauri) con los mismos snippets, así que este cambio aplica igual en todas las
+	// plataformas sin necesitar código aparte.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
-	const deleteLabel = DELETE_STRATEGY === 'soft' ? 'Anular' : 'Eliminar';
-	const deleteConfirmMessage =
-		DELETE_STRATEGY === 'soft'
-			? '¿Anular este centro de costo? Podrás revertirlo desde la base de datos si fue un error.'
-			: '¿Eliminar este centro de costo de forma permanente? Esta acción no se puede deshacer.';
 
 	// El submódulo tiene dos vistas sobre la MISMA tabla centro_costo, separadas por si la fila
 	// está vinculada a una entidad (proyecto/cliente/proveedor/empleado, ver centroCostos.service.ts):
@@ -52,8 +52,6 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	let modalOpen = $state(false);
-	let modalMode = $state<'create' | 'edit'>('create');
-	let editingCentro = $state<CentroCosto | null>(null);
 
 	async function fetchList() {
 		loading = true;
@@ -81,6 +79,12 @@
 		if (activeTab === tab) return;
 		activeTab = tab;
 		pageNum = 1;
+		// 'producto' solo tiene sentido en Cuentas Internas — al salir de esa pestaña se vuelve al
+		// orden por defecto para no dejar un ordenamiento que ya no aplica.
+		if (sortBy === 'producto') {
+			sortBy = DEFAULT_SORT_FIELD;
+			sortDir = DEFAULT_SORT_DIR;
+		}
 		fetchList();
 	}
 
@@ -110,6 +114,22 @@
 		fetchList();
 	}
 
+	/** Botones dedicados "Razón Social (A-Z)" / "Producto (A-Z)" en la pestaña Cuentas Internas —
+	 * 'producto' no es un campo de tableFields (ver nota en CentroCosto.producto), así que no puede
+	 * activarse haciendo clic en un encabezado de columna como el resto; siempre ordena ascendente,
+	 * un segundo clic vuelve al orden por defecto. */
+	function sortAlfabetico(fieldKey: 'nombre' | 'producto') {
+		if (sortBy === fieldKey && sortDir === 'asc') {
+			sortBy = DEFAULT_SORT_FIELD;
+			sortDir = DEFAULT_SORT_DIR;
+		} else {
+			sortBy = fieldKey;
+			sortDir = 'asc';
+		}
+		pageNum = 1;
+		fetchList();
+	}
+
 	function goToPage(p: number) {
 		if (p < 1 || p > totalPages) return;
 		pageNum = p;
@@ -132,20 +152,11 @@
 	}
 
 	function openCreate() {
-		modalMode = 'create';
-		editingCentro = null;
-		modalOpen = true;
-	}
-
-	function openEdit(item: CentroCosto) {
-		modalMode = 'edit';
-		editingCentro = item;
 		modalOpen = true;
 	}
 
 	function closeModal() {
 		modalOpen = false;
-		editingCentro = null;
 	}
 
 	let emptyMessage = $derived(
@@ -155,20 +166,6 @@
 				? 'No se encontraron centros de costo.'
 				: 'No se encontraron cuentas internas.'
 	);
-
-	async function handleDelete(item: CentroCosto) {
-		if (!confirm(deleteConfirmMessage)) return;
-
-		try {
-			const result = await deleteCentroCosto(supabase, item.id_centro_costo);
-			if (result.success) toast.success(result.message);
-			else toast.error(result.message);
-		} catch (err: any) {
-			toast.error(err?.message ?? 'Ocurrió un error inesperado');
-		} finally {
-			await fetchList();
-		}
-	}
 </script>
 
 <div class="max-w-6xl mx-auto">
@@ -229,31 +226,51 @@
 	{/if}
 
 	<!-- Search -->
-	<div class="mb-4 relative max-w-sm">
-		<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-		<input
-			type="text"
-			value={searchInput}
-			oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
-			placeholder="Buscar por código o nombre..."
-			class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-		/>
-		{#if searchInput}
-			<button
-				type="button"
-				onclick={() => onSearchInput('')}
-				class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-				aria-label="Limpiar búsqueda"
-			>
-				<X size={14} />
-			</button>
+	<div class="mb-4 flex flex-wrap items-center gap-3">
+		<div class="relative max-w-sm flex-1 min-w-[220px]">
+			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+			<input
+				type="text"
+				value={searchInput}
+				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
+				placeholder={activeTab === 'cuentas' ? 'Buscar por código, nombre o producto...' : 'Buscar por código o nombre...'}
+				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+			/>
+			{#if searchInput}
+				<button
+					type="button"
+					onclick={() => onSearchInput('')}
+					class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+					aria-label="Limpiar búsqueda"
+				>
+					<X size={14} />
+				</button>
+			{/if}
+		</div>
+		{#if activeTab === 'cuentas'}
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					onclick={() => sortAlfabetico('nombre')}
+					class={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${sortBy === 'nombre' && sortDir === 'asc' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+				>
+					Razón Social (A-Z)
+				</button>
+				<button
+					type="button"
+					onclick={() => sortAlfabetico('producto')}
+					class={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${sortBy === 'producto' && sortDir === 'asc' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+				>
+					Producto (A-Z)
+				</button>
+			</div>
 		{/if}
 	</div>
 
 	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + 1} {emptyMessage}>
+			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + (activeTab === 'cuentas' ? 1 : 0)} {emptyMessage}>
 				{#snippet header()}
 					{#each tableFields as field}
 						<th class="text-left px-4 py-3 font-semibold text-slate-600">
@@ -269,43 +286,36 @@
 							</button>
 						</th>
 					{/each}
-					<th class="text-right px-4 py-3 font-semibold text-slate-600">Acciones</th>
+					{#if activeTab === 'cuentas'}
+						<th class="text-left px-4 py-3 font-semibold text-slate-600">
+							<button
+								type="button"
+								onclick={() => sortAlfabetico('producto')}
+								class="flex items-center gap-1 cursor-pointer hover:text-[#0f3b5e]"
+							>
+								Producto
+								{#if sortBy === 'producto'}
+									{#if sortDir === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
+								{/if}
+							</button>
+						</th>
+					{/if}
 				{/snippet}
 				{#snippet row(item)}
-					{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
 					{#each tableFields as field}
 						<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
 					{/each}
-					<td class="px-4 py-3">
-						<div class="flex items-center justify-end gap-2">
-							<button
-								type="button"
-								onclick={() => openEdit(item)}
-								class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-								title="Editar"
-								aria-label="Editar"
-							>
-								<Pencil size={16} />
-							</button>
-							<button
-								type="button"
-								onclick={() => handleDelete(item)}
-								disabled={isLinked}
-								class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500 disabled:cursor-not-allowed"
-								title={isLinked ? 'Vinculado a una entidad — elimínala a ella, no este centro de costo' : deleteLabel}
-								aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
-							>
-								{#if DELETE_STRATEGY === 'soft'}
-									<Ban size={16} />
-								{:else}
-									<Trash2 size={16} />
-								{/if}
-							</button>
-						</div>
-					</td>
+					{#if activeTab === 'cuentas'}
+						<td class="px-4 py-3 text-slate-700">
+							{#if item.producto}
+								<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{item.producto}</span>
+							{:else}
+								<span class="text-xs text-slate-400 italic">—</span>
+							{/if}
+						</td>
+					{/if}
 				{/snippet}
 				{#snippet card(item)}
-					{@const isLinked = !!(item.id_proyecto || item.id_cliente || item.id_proveedor || item.id_empleado)}
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="min-w-0">
 							<div class="font-semibold text-slate-800 truncate">{item.nombre}</div>
@@ -316,33 +326,13 @@
 							<div class="text-[11px] text-slate-400">{formatDate(item.created_at)}</div>
 						</div>
 					</div>
-					<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
+					<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500">
 						<span class="text-slate-400">Tipo</span>
 						<span class="text-right text-slate-700">{getOptionLabel(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, item.tipo)}</span>
-					</div>
-					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-						<button
-							type="button"
-							onclick={() => openEdit(item)}
-							class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100"
-							aria-label="Editar"
-						>
-							<Pencil size={14} /> Editar
-						</button>
-						<button
-							type="button"
-							onclick={() => handleDelete(item)}
-							disabled={isLinked}
-							class="flex-1 h-10 rounded-lg bg-red-50 text-red-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-red-100 disabled:opacity-30 disabled:active:bg-red-50"
-							aria-label={isLinked ? 'No se puede eliminar: vinculado a una entidad' : deleteLabel}
-						>
-							{#if DELETE_STRATEGY === 'soft'}
-								<Ban size={14} />
-							{:else}
-								<Trash2 size={14} />
-							{/if}
-							{deleteLabel}
-						</button>
+						{#if activeTab === 'cuentas' && item.producto}
+							<span class="text-slate-400">Producto</span>
+							<span class="text-right text-slate-700">{item.producto}</span>
+						{/if}
 					</div>
 				{/snippet}
 			</ResponsiveDataView>
@@ -375,4 +365,4 @@
 	</div>
 </div>
 
-<CentroCostoModal open={modalOpen} mode={modalMode} centro={editingCentro} onClose={closeModal} onSaved={fetchList} />
+<CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={fetchList} />

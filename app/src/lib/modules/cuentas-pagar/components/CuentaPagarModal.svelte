@@ -14,6 +14,7 @@
 		mode = 'create',
 		cuenta = null,
 		dynamicOptions = {},
+		centroCostoTipoMap = {},
 		onClose,
 		onSaved
 	}: {
@@ -21,6 +22,9 @@
 		mode: 'create' | 'edit';
 		cuenta: CuentaPagar | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
+		/** id_centro_costo (texto) -> tipo — para bloquear "ID Partida" cuando el centro de costo
+		 * elegido es 'bolsa general', ver getCentroCostoTipoMap en transacciones.service.ts. */
+		centroCostoTipoMap?: Record<string, string>;
 		onClose: () => void;
 		onSaved: () => void;
 	} = $props();
@@ -45,6 +49,27 @@
 	let fracciones = $state<Fraccion[]>([]);
 	let fraccionamientoOpen = $state(false);
 
+	/** Fecha de la primera fracción configurada (la más temprana) — usada para autocompletar Fecha
+	 * Pago Programada cuando Forma de Pago es Crédito. Se calcula sobre `fracciones` a propósito (NO
+	 * sobre los pagos ya guardados en BD): así funciona igual creando una cuenta nueva (donde todavía
+	 * no existe ninguna fila en `pagos`, solo lo que el usuario acaba de configurar en "Fraccionar
+	 * este pago") que editando una existente (donde `fracciones` se precarga desde sus pagos
+	 * 'programado' reales, ver el $effect de abajo). '' si no hay ninguna fracción configurada.
+	 */
+	function primeraFechaFraccion(lista: Fraccion[]): string {
+		if (lista.length === 0) return '';
+		return lista.reduce((min, f) => (f.fecha < min.fecha ? f : min)).fecha;
+	}
+
+	/** Contado ('1') -> Fecha Pago Programada en blanco, se pide a mano. Crédito (cualquier otro
+	 * valor) -> se autocompleta con la fecha de la primera fracción configurada. */
+	function actualizarFechaPagoProgramada(formaPago: string) {
+		formValues = {
+			...formValues,
+			fecha_pago_programada: formaPago === '1' ? '' : primeraFechaFraccion(fracciones)
+		};
+	}
+
 	$effect(() => {
 		if (!open) return;
 		formValues = buildInitialValues();
@@ -57,6 +82,7 @@
 					.filter((p) => p.estado_pago === 'programado')
 					.map((p) => ({ fecha: p.fecha_pago, monto: Number(p.monto) }))
 					.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+				actualizarFechaPagoProgramada(String(formValues.fotma_pago ?? ''));
 			})();
 		}
 	});
@@ -64,6 +90,10 @@
 	// fotma_pago '1' = Contado (una sola cuota, sin fraccionar). Cualquier otro valor elegido (ej.
 	// Crédito) habilita la ventana "Fraccionar este pago".
 	const esFraccionable = $derived(String(formValues.fotma_pago ?? '') !== '' && String(formValues.fotma_pago ?? '') !== '1');
+
+	// "ID Partida" se bloquea cuando el Centro de Costo elegido es de tipo 'bolsa general' — un gasto
+	// de bolsa general no se carga a una partida puntual de obra.
+	const idPartidaBloqueado = $derived(centroCostoTipoMap[String(formValues.id_centro_costo ?? '')] === 'bolsa general');
 
 	// 'condicion_pago' ya no se edita a mano: se mantiene igual a la cantidad de fracciones
 	// configuradas (o vacío si Forma de Pago es Contado / todavía no se configuró nada).
@@ -80,16 +110,19 @@
 	// Al confirmar las cuotas (siempre con Forma de Pago distinta de Contado, único caso en que esta
 	// ventana es alcanzable), la fecha de la última cuota pasa a ser la Fecha Vencimiento de la
 	// cuenta — evita que quede desalineada con el calendario que el usuario acaba de definir a mano.
+	// La PRIMERA cuota, a su vez, autocompleta Fecha Pago Programada (ver primeraFechaFraccion).
 	function onFraccionesConfirmadas(nuevas: Fraccion[]) {
 		fracciones = nuevas;
 		if (esFraccionable && nuevas.length > 0) {
 			const ultimaFecha = nuevas.reduce((max, f) => (f.fecha > max ? f.fecha : max), nuevas[0].fecha);
 			formValues = { ...formValues, fecha_vencimiento: ultimaFecha };
 		}
+		actualizarFechaPagoProgramada(String(formValues.fotma_pago ?? ''));
 	}
 
 	function onFraccionamientoEliminado() {
 		fracciones = [];
+		actualizarFechaPagoProgramada(String(formValues.fotma_pago ?? ''));
 	}
 
 	// Recalcula en vivo los campos con computeValue (monto_imponible, monto_igv, monto_retencion)
@@ -107,9 +140,14 @@
 				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
 			}
 		}
+		// "ID Partida" no usa disabledWhen/disabledValue (depende de un lookup externo, ver
+		// idPartidaBloqueado) — se limpia aparte al bloquearse, para no guardar un valor que ya no
+		// aplica (bolsa general no se carga a una partida puntual).
+		if (idPartidaBloqueado && formValues.id_partida !== '') formValues.id_partida = '';
 	});
 
 	function isDisabled(field: (typeof formFields)[number]): boolean {
+		if (field.key === 'id_partida' && idPartidaBloqueado) return true;
 		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
 	}
 
@@ -117,6 +155,8 @@
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
+		// Ver actualizarFechaPagoProgramada: Contado -> en blanco, Crédito -> cuota más cercana a hoy.
+		if (key === 'fotma_pago') actualizarFechaPagoProgramada(masked);
 		revalidate();
 	}
 
@@ -184,7 +224,7 @@
 				<div class={`p-6 grid ${gridColsClass} gap-4`}>
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`ccp-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`ccp-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
@@ -233,6 +273,8 @@
 
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
+							{:else if field.key === 'id_partida' && idPartidaBloqueado}
+								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Centro de Costo es "Bolsa General".</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}

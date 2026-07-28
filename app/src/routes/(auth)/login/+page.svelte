@@ -455,7 +455,7 @@ async function handleSetupPassword(e: Event) {
 
 				<!-- Correo -->
 				<div>
-					<label for="login-email" class="block text-sm font-semibold text-slate-700 mb-1">Correo Electrónico</label>
+					<label for="login-email" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Correo Electrónico</label>
 					<div class="relative">
 						<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 							<i class="fas fa-envelope"></i>
@@ -473,7 +473,7 @@ async function handleSetupPassword(e: Event) {
 				
 				<!-- Contraseña -->
 				<div>
-					<label for="login-password" class="block text-sm font-semibold text-slate-700 mb-1">Contraseña</label>
+					<label for="login-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Contraseña</label>
 					<div class="relative">
 						<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 							<i class="fas fa-lock"></i>
@@ -554,7 +554,7 @@ async function handleSetupPassword(e: Event) {
 				{/if}
 
 				<div>
-					<label for="first-admin-name" class="block text-sm font-semibold text-slate-700 mb-1">Nombre completo</label>
+					<label for="first-admin-name" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Nombre completo</label>
 					<input
 						type="text"
 						id="first-admin-name"
@@ -566,7 +566,7 @@ async function handleSetupPassword(e: Event) {
 				</div>
 
 				<div>
-					<label for="first-admin-email" class="block text-sm font-semibold text-slate-700 mb-1">Correo electrónico</label>
+					<label for="first-admin-email" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Correo electrónico</label>
 					<input
 						type="email"
 						id="first-admin-email"
@@ -578,7 +578,7 @@ async function handleSetupPassword(e: Event) {
 				</div>
 
 				<div>
-					<label for="first-admin-password" class="block text-sm font-semibold text-slate-700 mb-1">Contraseña</label>
+					<label for="first-admin-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Contraseña</label>
 					<input
 						type="password"
 						id="first-admin-password"
@@ -590,7 +590,7 @@ async function handleSetupPassword(e: Event) {
 				</div>
 
 				<div>
-					<label for="first-admin-confirm-password" class="block text-sm font-semibold text-slate-700 mb-1">Confirmar contraseña</label>
+					<label for="first-admin-confirm-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Confirmar contraseña</label>
 					<input
 						type="password"
 						id="first-admin-confirm-password"
@@ -640,7 +640,7 @@ async function handleSetupPassword(e: Event) {
 
 				<!-- Correo -->
 				<div>
-					<label for="setup-email" class="block text-sm font-semibold text-slate-700 mb-1">Correo Electrónico</label>
+					<label for="setup-email" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Correo Electrónico</label>
 					<div class="relative">
 						<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 							<i class="fas fa-envelope"></i>
@@ -658,7 +658,7 @@ async function handleSetupPassword(e: Event) {
 
 				{#if otpSent}
 					<div>
-						<label for="otp-token" class="block text-sm font-semibold text-slate-700 mb-1">Código OTP</label>
+						<label for="otp-token" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Código OTP</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-key"></i>
@@ -674,7 +674,7 @@ async function handleSetupPassword(e: Event) {
 					</div>
 
 					<div>
-						<label for="setup-password" class="block text-sm font-semibold text-slate-700 mb-1">Nueva Contraseña</label>
+						<label for="setup-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Nueva Contraseña</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-lock"></i>
@@ -698,7 +698,7 @@ async function handleSetupPassword(e: Event) {
 					</div>
 
 					<div>
-						<label for="setup-confirm-password" class="block text-sm font-semibold text-slate-700 mb-1">Confirmar Contraseña</label>
+						<label for="setup-confirm-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Confirmar Contraseña</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-lock"></i>
@@ -761,7 +761,7 @@ async function handleSetupPassword(e: Event) {
 
 				<!-- Correo -->
 				<div>
-					<label for="setup-email" class="block text-sm font-semibold text-slate-700 mb-1">Correo Electrónico</label>
+					<label for="setup-email" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Correo Electrónico</label>
 					<div class="relative">
 						<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 							<i class="fas fa-envelope"></i>
@@ -779,7 +779,7 @@ async function handleSetupPassword(e: Event) {
 
 				{#if otpSent}
 					<div>
-						<label for="otp-token" class="block text-sm font-semibold text-slate-700 mb-1">Código OTP</label>
+						<label for="otp-token" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Código OTP</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-key"></i>
@@ -795,7 +795,7 @@ async function handleSetupPassword(e: Event) {
 					</div>
 
 					<div>
-						<label for="setup-password" class="block text-sm font-semibold text-slate-700 mb-1">Nueva Contraseña</label>
+						<label for="setup-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Nueva Contraseña</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-lock"></i>
@@ -819,7 +819,7 @@ async function handleSetupPassword(e: Event) {
 					</div>
 
 					<div>
-						<label for="setup-confirm-password" class="block text-sm font-semibold text-slate-700 mb-1">Confirmar Contraseña</label>
+						<label for="setup-confirm-password" class="block text-sm font-semibold text-[#0f3b5e] mb-1">Confirmar Contraseña</label>
 						<div class="relative">
 							<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
 								<i class="fas fa-lock"></i>

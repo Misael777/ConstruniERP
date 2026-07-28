@@ -84,7 +84,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'id_centro_costo',
 		label: 'Centro de Costo',
 		tipo: 'select',
-		required: true,
+		// Ya no es obligatorio (a pedido del usuario) — solo ofrece centros de costo de tipo
+		// proyecto/consultoría/bolsa general, ver getCentroCostoOptionsPagos en transacciones.service.ts.
 		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
 		helpText: 'Centro de costo al que se carga este gasto. Se usa como origen al generar automáticamente la transacción del pago.',
 		showInTable: false,

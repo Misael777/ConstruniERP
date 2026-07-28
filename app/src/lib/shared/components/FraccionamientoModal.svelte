@@ -224,7 +224,7 @@
 
 			<div class="p-6 space-y-4">
 				<div class="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
-					<span class="text-sm font-bold text-slate-700">{titulo}</span>
+					<span class="text-sm font-bold text-[#0f3b5e]">{titulo}</span>
 					<button
 						type="button"
 						role="switch"
@@ -239,7 +239,7 @@
 
 				{#if activo}
 					<div class="flex items-center justify-between">
-						<span class="text-sm font-bold text-slate-700">Número de fracciones</span>
+						<span class="text-sm font-bold text-[#0f3b5e]">Número de fracciones</span>
 						<div class="flex items-center gap-2">
 							<button type="button" onclick={decrementarNumero} class="p-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-40" disabled={filas.length <= 1}>
 								<Minus size={14} />
@@ -252,7 +252,7 @@
 					</div>
 
 					<div>
-						<span class="block text-sm font-bold text-slate-700 mb-1">Método de fraccionamiento</span>
+						<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Método de fraccionamiento</span>
 						<select
 							value={metodo}
 							onchange={(e) => (metodo = (e.target as HTMLSelectElement).value as 'montos_iguales' | 'montos_desiguales')}

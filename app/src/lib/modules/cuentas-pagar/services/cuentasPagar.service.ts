@@ -686,8 +686,14 @@ export async function recalcularCuentaPagar(client: SupabaseClient, idCuentaPaga
 		.eq(PK_COLUMN, idCuentaPagar);
 }
 
+/** El dropdown "Proveedor" en Nueva/Editar Cuenta por Pagar muestra la razón social + su producto
+ * y servicio (columna real `vendedor`, ver ProveedorModal.svelte) — a pedido del usuario, para poder
+ * distinguir proveedores por lo que venden sin abrir el Directorio de Proveedores aparte. */
 export async function getProveedorOptions(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data, error } = await client.from('proveedor').select('id_proveedor, razon_social').order('razon_social');
+	const { data, error } = await client.from('proveedor').select('id_proveedor, razon_social, vendedor').order('razon_social');
 	if (error) throw error;
-	return (data ?? []).map((p: any) => ({ value: String(p.id_proveedor), label: p.razon_social }));
+	return (data ?? []).map((p: any) => ({
+		value: String(p.id_proveedor),
+		label: p.vendedor ? `${p.razon_social} - ${p.vendedor}` : p.razon_social
+	}));
 }

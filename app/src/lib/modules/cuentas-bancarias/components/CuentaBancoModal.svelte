@@ -102,7 +102,7 @@
 				<div class="p-6 grid grid-cols-2 gap-4">
 					{#each formFields as field (field.key)}
 						<div class={field.key === 'observacion' ? 'col-span-full' : ''}>
-							<label for={`cb-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-slate-700 mb-1">
+							<label for={`cb-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>

@@ -12,6 +12,7 @@
 		open = false,
 		idCuentaPagar,
 		pago = null,
+		initialValues = {},
 		onClose,
 		onSaved,
 		onTransaccionSugerida
@@ -20,6 +21,10 @@
 		idCuentaPagar: number | null;
 		/** Si viene un pago, el modal edita esa cuota en vez de crear una nueva. */
 		pago?: Pago | null;
+		/** Solo se usa en modo "crear" (sin `pago`) — para prellenar Monto/Fecha de Pago cuando se abre
+		 * desde la cuota "más próxima" de una cuenta al Contado (que no tiene fila real en `pagos`
+		 * todavía, ver +page.svelte). Se ignora por completo en modo "editar". */
+		initialValues?: Record<string, string>;
 		onClose: () => void;
 		onSaved: () => void;
 		/** Se llama cuando una cuota recién pasa a 'pagado' y hay un payload de transacción sugerido
@@ -41,7 +46,7 @@
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
-			const raw = pago ? (pago as any)[field.key] : '';
+			const raw = pago ? (pago as any)[field.key] : (initialValues[field.key] ?? '');
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		return values;
@@ -120,7 +125,7 @@
 				<div class="p-6 grid grid-cols-1 gap-4">
 					{#if mode === 'edit'}
 						<div>
-							<label for="pg-estado_pago" class="block text-sm font-medium text-slate-700 mb-1">Estado</label>
+							<label for="pg-estado_pago" class="block text-sm font-medium text-[#0f3b5e] mb-1">Estado</label>
 							<select
 								id="pg-estado_pago"
 								value={estadoPago}
@@ -146,7 +151,7 @@
 
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`pg-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`pg-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>

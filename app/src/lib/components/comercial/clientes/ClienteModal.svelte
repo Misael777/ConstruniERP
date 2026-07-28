@@ -133,7 +133,7 @@
 					
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Tipo de Persona *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Persona *</label>
 							<select bind:value={tipPersona} disabled={isSaving} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 								<option value="J">Jurídica (Empresa)</option>
 								<option value="N">Natural (Persona)</option>
@@ -141,7 +141,7 @@
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Tipo de Documento *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Documento *</label>
 							<select bind:value={tipoDoc} disabled={isSaving} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 								<option value="RUC">RUC</option>
 								<option value="DNI">DNI</option>
@@ -150,27 +150,27 @@
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-slate-600">{tipPersona === 'J' ? 'Razón Social' : 'Nombre Completo'} *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">{tipPersona === 'J' ? 'Razón Social' : 'Nombre Completo'} *</label>
 							<input type="text" bind:value={nombre} disabled={isSaving} placeholder={tipPersona === 'J' ? "Ej. Constructora ABC S.A.C." : "Ej. Juan Pérez"} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-slate-600">Nº de Documento ({tipoDoc}) *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Nº de Documento ({tipoDoc}) *</label>
 							<input type="text" bind:value={numDocumento} disabled={isSaving} placeholder="Ej. 20123456789" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-slate-600">Dirección</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Dirección</label>
 							<input type="text" bind:value={direccion} disabled={isSaving} placeholder="Ej. Av. Javier Prado 123, San Isidro" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Teléfono</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Teléfono</label>
 							<input type="text" bind:value={telefono} disabled={isSaving} placeholder="Ej. 987654321" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Correo Electrónico</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Correo Electrónico</label>
 							<input type="email" bind:value={email} disabled={isSaving} placeholder="Ej. contacto@empresa.com" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 

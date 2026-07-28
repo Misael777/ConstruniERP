@@ -429,12 +429,12 @@
 				{/if}
 
 				<div>
-					<label class="block text-xs font-semibold text-slate-600 mb-1">Nombre del Rol *</label>
+					<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Nombre del Rol *</label>
 					<input type="text" bind:value={nuevoRolNombre} placeholder="ej. supervisor" disabled={editingRoleId && nuevoRolNombre === 'administrador'} required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm disabled:opacity-50" />
 					<p class="text-[10px] text-slate-400 mt-1">Se guardará en minúsculas. Evita espacios.</p>
 				</div>
 				<div>
-					<label class="block text-xs font-semibold text-slate-600 mb-1">Descripción</label>
+					<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Descripción</label>
 					<textarea bind:value={nuevoRolDescripcion} placeholder="Breve descripción de las responsabilidades..." rows="3" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm resize-none"></textarea>
 				</div>
 				

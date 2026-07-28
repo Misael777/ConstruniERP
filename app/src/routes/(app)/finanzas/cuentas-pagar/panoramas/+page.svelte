@@ -71,6 +71,15 @@
 	const estadoVencBadgeClass = { vencido: 'bg-red-100 text-red-700', por_vencer: 'bg-amber-100 text-amber-700' };
 	const estadoVencLabel = { vencido: 'Vencido', por_vencer: 'Por vencer' };
 
+	/** Fecha de vencimiento a mostrar en la tarjeta de la Bandeja: si la cuenta está fraccionada
+	 * (2+ cuotas visibles en esta tarjeta), la de la cuota MÁS CERCANA entre esas — no
+	 * `fechaVencimiento` (esa es la fecha contractual de la cuenta completa/última cuota). Si no está
+	 * fraccionada, no hay cuotas que comparar y se usa la propia fecha de vencimiento de la cuenta. */
+	function fechaVencimientoMasCercana(item: PagoPendienteItem): string | null {
+		if (item.fracciones.length === 0) return item.fechaVencimiento;
+		return item.fracciones.reduce((min, f) => (f.fecha < min ? f.fecha : min), item.fracciones[0].fecha);
+	}
+
 	function primerYUltimoDiaMes(base: Date): { desde: string; hasta: string } {
 		const desde = new Date(base.getFullYear(), base.getMonth(), 1);
 		const hasta = new Date(base.getFullYear(), base.getMonth() + 1, 0);
@@ -723,7 +732,8 @@
 							<div class="flex-1 min-w-0">
 								<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
 								<p class="text-xs text-slate-500 truncate">Proveedor: {item.proveedorNombre}</p>
-								<p class="text-[11px] text-slate-400">Vencimiento: {item.fechaVencimiento ?? '—'}</p>
+								<p class="text-xs text-slate-500 truncate">Producto: {item.producto ?? '—'}</p>
+								<p class="text-[11px] text-slate-400">Vencimiento: {fechaVencimientoMasCercana(item) ?? '—'}</p>
 
 								{#if item.fracciones.length > 0}
 									<div class="mt-1.5 flex items-center gap-1 text-[10px] text-blue-600 font-semibold">

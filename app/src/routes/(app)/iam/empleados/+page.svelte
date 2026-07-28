@@ -596,16 +596,16 @@
 					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Informacion Personal</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Nombre Completo *</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Nombre Completo *</label>
 							<input type="text" bind:value={nuevoNombre} oninput={onInputChange} placeholder="Nombre y Apellidos" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Teléfono</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Teléfono</label>
 							<input type="text" bind:value={nuevoTelefono} oninput={onInputChange} placeholder="987654321" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 					</div>
 					<div class="mt-4">
-						<label class="block text-xs font-semibold text-slate-600 mb-1">
+						<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">
 							Correo Electronico * 
 							{#if editingEmpleadoId}
 								<span class="font-normal text-slate-400">(se actualizará el acceso del empleado)</span>
@@ -625,7 +625,7 @@
 					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Asignacion de Roles</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Rol de Acceso</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Rol de Acceso</label>
 							<select bind:value={nuevoRolId} onchange={onInputChange} class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm">
 								<option value={null}>Sin Rol / Acceso Restringido</option>
 								{#each roles as rol}
@@ -634,7 +634,7 @@
 							</select>
 						</div>
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Área / Departamento</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Área / Departamento</label>
 							<select bind:value={nuevoAreaId} onchange={onInputChange} class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm">
 								<option value={null}>Sin Área Asignada</option>
 								{#each areas as area}
@@ -650,11 +650,11 @@
 					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Detalles Laborales</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Fecha de Ingreso *</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Fecha de Ingreso *</label>
 							<input type="date" bind:value={nuevaFechaIngreso} onchange={onInputChange} required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1">Nivel Laboral</label>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Nivel Laboral</label>
 							<input type="text" bind:value={nuevoNivel} oninput={onInputChange} placeholder="Junior, Senior, Practicante..." class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 					</div>

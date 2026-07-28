@@ -60,6 +60,9 @@ export interface PagoPendienteItem {
 	id_cuenta_pagar: number;
 	titulo: string;
 	proveedorNombre: string;
+	/** vendedor (columna "Producto y Servicio" del proveedor, ver ProveedorModal.svelte) — null si el
+	 * proveedor no tiene uno cargado. */
+	producto: string | null;
 	monto: number;
 	fechaVencimiento: string | null;
 	/** fecha_pago_programada — fecha interna de planificación de pago, distinta de fechaVencimiento
@@ -177,14 +180,17 @@ export function computeEstadoVencimiento(fechaVencimiento: string | null): Estad
 	return dias !== null && dias < 0 ? 'vencido' : 'por_vencer';
 }
 
-const SELECT_CON_JOINS = '*, proveedor(razon_social), presupuesto(id_proyecto, proyecto(nombre_proyecto))';
+const SELECT_CON_JOINS = '*, proveedor(razon_social, vendedor), presupuesto(id_proyecto, proyecto(nombre_proyecto))';
 
 function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 	return {
 		id: row.id_cuenta_pagar,
 		id_cuenta_pagar: row.id_cuenta_pagar,
-		titulo: row.observacion || row.num_documento || row.responsable || 'Pago sin descripción',
+		// A pedido del usuario: si no hay observación/N° documento, el encabezado de la tarjeta muestra
+		// el proveedor en vez del responsable (nombre de contacto) — antes caía en `row.responsable`.
+		titulo: row.observacion || row.num_documento || row.proveedor?.razon_social || 'Pago sin descripción',
 		proveedorNombre: row.proveedor?.razon_social ?? 'Sin proveedor',
+		producto: row.proveedor?.vendedor ?? null,
 		// Si está fraccionada, `monto` es la suma de SOLO las cuotas visibles en ESTA tarjeta (no el
 		// total de la cuenta) — se usa para sumar totales por columna (proyeccionPagos, CSV, etc.);
 		// usar el total completo sobre-contaría cuando las cuotas de una cuenta terminan repartidas

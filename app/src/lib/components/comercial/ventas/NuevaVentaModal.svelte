@@ -450,25 +450,25 @@ let codigoGenerado = $derived(
 						</h3>
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Proyecto *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Proyecto *</label>
 								<input type="text" bind:value={proyectoNombre} placeholder="Nombre del proyecto" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Código de proyecto</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Código de proyecto</label>
 								<input type="text" readonly value={codigoGenerado} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								<span class="text-[10px] text-slate-400 mt-0.5">Se generará automáticamente</span>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Fecha de venta *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Fecha de venta *</label>
 								<input type="date" bind:value={fechaVenta} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Asesor *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Asesor *</label>
 								<input type="text" readonly value={asesor || 'Cargando asesor...'} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none text-slate-700">
 								<span class="text-[10px] text-slate-400 mt-0.5">Se asigna automáticamente con el usuario activo</span>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Cliente *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Cliente *</label>
 								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
 									<option value="">-- Selecciona cliente --</option>
 									{#each clientes as c}
@@ -481,22 +481,22 @@ let codigoGenerado = $derived(
 								{/if}
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-slate-600">Valor venta (S/) *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
 								<input type="text" bind:value={valorVenta} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
 								<div class="flex flex-col gap-1">
-									<label class="text-xs font-semibold text-slate-600">Comisión (%) *</label>
+									<label class="text-xs font-semibold text-[#0f3b5e]">Comisión (%) *</label>
 									<input type="number" bind:value={comisionPorcentaje} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 								</div>
 								<div class="flex flex-col gap-1">
-									<label class="text-xs font-semibold text-slate-600">Comisión (S/)</label>
+									<label class="text-xs font-semibold text-[#0f3b5e]">Comisión (S/)</label>
 									<input type="text" readonly value={comisionMonto} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								</div>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
 								<div class="flex flex-col gap-1">
-									<label class="text-xs font-semibold text-slate-600">Proforma</label>
+									<label class="text-xs font-semibold text-[#0f3b5e]">Proforma</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
 										<input type="file" accept="application/pdf" onchange={(event) => proformaFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
@@ -508,7 +508,7 @@ let codigoGenerado = $derived(
 									</label>
 								</div>
 								<div class="flex flex-col gap-1">
-									<label class="text-xs font-semibold text-slate-600">Contrato</label>
+									<label class="text-xs font-semibold text-[#0f3b5e]">Contrato</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
 										<input type="file" accept="application/pdf" onchange={(event) => contratoFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
@@ -531,21 +531,21 @@ let codigoGenerado = $derived(
 						</h3>
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Tipo de proyecto *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
 								<select bind:value={tipoProyecto} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="O">Proyecto de Obra (O)</option>
 									<option value="M">Mantenimiento (M)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Estado del predio *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
 								<select bind:value={estadoPredio} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="A">Ampliación (A)</option>
 									<option value="N">Nuevo (N)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Tipo de edificación *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
 								<select bind:value={tipoEdificacion} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="M">Viv. Multifamiliar (M)</option>
 									<option value="U">Viv. Unifamiliar (U)</option>
@@ -553,12 +553,12 @@ let codigoGenerado = $derived(
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Número de pisos *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
 								<input type="number" bind:value={numeroPisos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 							</div>
 
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-slate-600">Distrito *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
 								<select bind:value={distrito} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="ATE Salamanca">Ate</option>
 									<option value="Miraflores">Miraflores</option>

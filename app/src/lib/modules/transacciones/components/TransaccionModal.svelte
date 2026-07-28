@@ -138,7 +138,10 @@
 		const response = await fetch(resolveApiUrl('/api/upload-document'), { method: 'POST', body: formData });
 		const result = await parseJsonResponse(response);
 		if (!response.ok || !result.success) {
-			throw new Error(result.error || 'Error al subir el comprobante.');
+			// safeEndpoint (servidor) devuelve `error` genérico ("Internal server error") + `details` con
+			// la causa real (ej. falta configurar GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES) — se prioriza
+			// `details` para que el mensaje sea accionable en vez de mostrar siempre el mismo texto vacío.
+			throw new Error(result.details || result.error || 'Error al subir el comprobante.');
 		}
 		return { url: result.url as string, fileId: result.fileId as string };
 	}
@@ -271,6 +274,17 @@
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
 	const CAMPOS_BLOQUEADOS_POR_INTERNA = new Set(['tipo', 'estado', 'tipo_transaccion', 'forma_pago']);
+	// Transacción de respaldo de un pago confirmado (ver lockedFields, siempre llega con Tipo='egreso'
+	// ya fijado por la cuenta por pagar): un egreso siempre sale hacia una cuenta externa, así que el
+	// Alcance se fuerza a Externa y se bloquea junto con el resto de campos prellenados — ver el
+	// $effect más abajo que aplica el valor forzado.
+	const alcanceForzadoExterna = $derived(lockedFields.includes('tipo') && formValues.tipo === 'egreso');
+
+	$effect(() => {
+		if (alcanceForzadoExterna && formValues.tipo_alcance !== 'externa') {
+			formValues = { ...formValues, tipo_alcance: 'externa' };
+		}
+	});
 
 	const modalWidthClass = $derived(otherFields.length <= 4 ? 'max-w-md' : otherFields.length <= 8 ? 'max-w-2xl' : 'max-w-4xl');
 	const gridColsClass = $derived(otherFields.length <= 4 ? 'grid-cols-1' : otherFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
@@ -279,8 +293,14 @@
 		// Origen/Destino de Transacción muestran una lista distinta según el Alcance: en Interna, solo
 		// proyectos (dynamicOptions[key]); en Externa, proveedores/clientes/empleados (dynamicOptions[key
 		// + '_externo']) — ver getCentroCostoOptionsProyectos/getCentroCostoOptionsExternos y cómo las
-		// pasa cada página (+page.svelte de Transacciones y de Movimientos de Caja).
+		// pasa cada página (+page.svelte de Transacciones y de Movimientos de Caja). Excepción: si el
+		// campo llega bloqueado (ver lockedFields — caso "confirmar pago/cobro"), el valor ya lo decide
+		// la cuenta y no se elige de una lista con curaduría por Alcance, así que se usa la lista PLANA
+		// (todos los centros de costo, sin filtrar por tipo/vínculo) — la variante "_externo" excluye
+		// centros sin vincular a una entidad (ej. Bolsa General, Consultoría) y dejaba ese caso sin
+		// ninguna opción que calzara con el id ya guardado.
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
+			if (lockedFields.includes(field.key)) return dynamicOptions[field.key] || [];
 			const key = formValues.tipo_alcance === 'externa' ? `${field.key}_externo` : field.key;
 			return dynamicOptions[key] || [];
 		}
@@ -412,41 +432,44 @@
 					{/if}
 
 					<div class="col-span-full">
-						<span class="flex items-center gap-1 text-sm font-bold text-slate-700 mb-1">
+						<span class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 							Alcance de la Transacción <span class="text-red-500">*</span>
 						</span>
 						<div class="grid grid-cols-2 gap-2">
 							<label
-								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'interna' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'interna' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
 							>
 								<input
 									type="radio"
 									name="tipo_alcance"
 									value="interna"
 									checked={formValues.tipo_alcance === 'interna'}
-									disabled={bloqueadaPorAprobacion}
+									disabled={bloqueadaPorAprobacion || alcanceForzadoExterna}
 									onchange={() => handleInput('tipo_alcance', 'interna')}
 									class="accent-blue-600"
 								/>
 								Transacción Interna
 							</label>
 							<label
-								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'externa' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'externa' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
 							>
 								<input
 									type="radio"
 									name="tipo_alcance"
 									value="externa"
 									checked={formValues.tipo_alcance === 'externa'}
-									disabled={bloqueadaPorAprobacion}
+									disabled={bloqueadaPorAprobacion || alcanceForzadoExterna}
 									onchange={() => handleInput('tipo_alcance', 'externa')}
 									class="accent-blue-600"
 								/>
 								Transacción Externa
+								{#if alcanceForzadoExterna}<Lock size={12} class="text-slate-400" />{/if}
 							</label>
 						</div>
 						{#if formValues.tipo_alcance === 'interna'}
 							<p class="mt-1 text-xs text-slate-400">Movimiento entre centros de costo propios — el Tipo se fija en "Transferencia".</p>
+						{:else if alcanceForzadoExterna}
+							<p class="mt-1 text-xs text-slate-400">Se fija en "Externa" porque esta transacción es de un Egreso — no se puede cambiar aquí.</p>
 						{/if}
 						{#if fieldErrors.tipo_alcance}<p class="mt-1 text-xs text-red-600">{fieldErrors.tipo_alcance}</p>{/if}
 					</div>
@@ -456,7 +479,7 @@
 						{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
 						{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna}
 						<div>
-							<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-slate-700 mb-1">
+							<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 								{#if isLocked || isBloqueadoInterna}<Lock size={12} class="text-slate-400" />{/if}
@@ -515,7 +538,7 @@
 					{/each}
 
 					<div class="col-span-full">
-						<label for="tr-comprobante" class="block text-sm font-bold text-slate-700 mb-1">
+						<label for="tr-comprobante" class="block text-sm font-bold text-[#0f3b5e] mb-1">
 							Comprobante <span class="text-red-500">*</span>
 						</label>
 						<label

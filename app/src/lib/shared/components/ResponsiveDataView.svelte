@@ -11,7 +11,8 @@
 		colspan,
 		row,
 		card,
-		emptyMessage = 'No hay datos para mostrar.'
+		emptyMessage = 'No hay datos para mostrar.',
+		onRowDblClick
 	}: {
 		items: any[];
 		keyField: string;
@@ -21,6 +22,8 @@
 		row: Snippet<[item: any]>;
 		card: Snippet<[item: any]>;
 		emptyMessage?: string;
+		/** Opcional — doble clic en una fila (tabla) o tarjeta (móvil). Nada si no se pasa. */
+		onRowDblClick?: (item: any) => void;
 	} = $props();
 
 	function alignClass(align?: Column['align']) {
@@ -52,7 +55,7 @@
 			</tr>
 		{:else}
 			{#each items as item (item[keyField])}
-				<tr class="hover:bg-slate-50/80 transition-colors group">
+				<tr class="hover:bg-slate-50/80 transition-colors group" ondblclick={() => onRowDblClick?.(item)}>
 					{@render row(item)}
 				</tr>
 			{/each}
@@ -66,9 +69,21 @@
 		<div class="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">{emptyMessage}</div>
 	{:else}
 		{#each items as item (item[keyField])}
-			<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-				{@render card(item)}
-			</div>
+			{#if onRowDblClick}
+				<div
+					class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+					ondblclick={() => onRowDblClick(item)}
+					role="button"
+					tabindex="0"
+					onkeydown={(e) => { if (e.key === 'Enter') onRowDblClick(item); }}
+				>
+					{@render card(item)}
+				</div>
+			{:else}
+				<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+					{@render card(item)}
+				</div>
+			{/if}
 		{/each}
 	{/if}
 </div>

@@ -8,26 +8,35 @@
 	}>();
 
 	let searchTerm = $state('');
+	/** null = sin ordenar (orden de llegada); si no, alfabético A-Z por razón social o por producto. */
+	let sortBy = $state<'razon_social' | 'vendedor' | null>(null);
 
-	const filteredProveedores = $derived(
-		searchTerm.trim() === ''
-			? proveedores
-			: proveedores.filter((p: any) => {
-				const term = searchTerm.trim().toLowerCase();
-				return (
+	const filteredProveedores = $derived.by(() => {
+		const term = searchTerm.trim().toLowerCase();
+		let result = term
+			? proveedores.filter((p: any) =>
 					String(p.razon_social ?? '').toLowerCase().includes(term) ||
 					String(p.ruc ?? '').toLowerCase().includes(term) ||
 					String(p.contacto ?? '').toLowerCase().includes(term) ||
-					String(p.email ?? '').toLowerCase().includes(term)
-				);
-			})
-	);
+					String(p.email ?? '').toLowerCase().includes(term) ||
+					String(p.vendedor ?? '').toLowerCase().includes(term)
+				)
+			: proveedores;
+
+		const activeSortBy = sortBy;
+		if (activeSortBy) {
+			result = [...result].sort((a: any, b: any) =>
+				String(a[activeSortBy] ?? '').localeCompare(String(b[activeSortBy] ?? ''), 'es', { sensitivity: 'base' })
+			);
+		}
+		return result;
+	});
 
 	const columns = [
 		{ label: 'Razón Social' },
-		{ label: 'RUC' },
+		{ label: 'RUC / DNI' },
 		{ label: 'Contacto Principal' },
-		{ label: 'Vendedor Asignado' },
+		{ label: 'Producto y Servicio' },
 		{ label: 'Acciones', align: 'center' as const }
 	];
 </script>
@@ -38,9 +47,25 @@
 	<div class="p-4 border-b border-slate-100 flex flex-wrap items-center gap-4">
 		<div class="flex flex-col gap-1 flex-1 min-w-[200px]">
 			<div class="relative">
-				<input bind:value={searchTerm} type="text" placeholder="Buscar por Razón Social, RUC o Contacto..." class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-9">
+				<input bind:value={searchTerm} type="text" placeholder="Buscar por Razón Social, RUC, Contacto o Producto..." class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full pl-9">
 				<i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
 			</div>
+		</div>
+		<div class="flex items-center gap-2">
+			<button
+				type="button"
+				onclick={() => (sortBy = sortBy === 'razon_social' ? null : 'razon_social')}
+				class={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${sortBy === 'razon_social' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+			>
+				<i class="fas fa-arrow-down-a-z"></i> Razón Social (A-Z)
+			</button>
+			<button
+				type="button"
+				onclick={() => (sortBy = sortBy === 'vendedor' ? null : 'vendedor')}
+				class={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${sortBy === 'vendedor' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+			>
+				<i class="fas fa-arrow-down-a-z"></i> Producto (A-Z)
+			</button>
 		</div>
 	</div>
 
@@ -89,7 +114,7 @@
 						{#if proveedor.vendedor}
 							<span class="px-2.5 py-1 bg-slate-100 rounded text-xs font-medium border border-slate-200">{proveedor.vendedor}</span>
 						{:else}
-							<span class="text-xs text-slate-400 italic">No asignado</span>
+							<span class="text-xs text-slate-400 italic">Sin producto</span>
 						{/if}
 					</td>
 					<td class="px-5 py-4 text-center">
@@ -112,7 +137,7 @@
 						{#if proveedor.vendedor}
 							<span class="shrink-0 px-2.5 py-1 bg-slate-100 rounded text-[11px] font-medium border border-slate-200">{proveedor.vendedor}</span>
 						{:else}
-							<span class="shrink-0 text-[11px] text-slate-400 italic">No asignado</span>
+							<span class="shrink-0 text-[11px] text-slate-400 italic">Sin producto</span>
 						{/if}
 					</div>
 					<div class="flex flex-col gap-1 text-slate-600 mb-3">

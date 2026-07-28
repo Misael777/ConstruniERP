@@ -153,7 +153,7 @@
                 {/if}
                 
                 <div>
-                    <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                    <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Código <span class="text-red-500">*</span>
                     </label>
                     <input 
@@ -165,7 +165,7 @@
                 </div>
                 
                 <div>
-                    <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                    <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Descripción <span class="text-red-500">*</span>
                     </label>
                     <textarea 
@@ -178,7 +178,7 @@
                 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                        <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                             Nivel
                         </label>
                         <input 
@@ -190,7 +190,7 @@
                     </div>
                     
                     <div>
-                        <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                        <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                             Unidad
                         </label>
                         <input 
@@ -203,7 +203,7 @@
                 </div>
                 
                 <div>
-                    <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                    <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Precio Unitario
                     </label>
                     <input 
@@ -216,7 +216,7 @@
                 </div>
                 
                 <div>
-                    <label class="block text-sm font-medium text-[#1e293b] mb-1">
+                    <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Partida Padre (Opcional)
                     </label>
                     <select 

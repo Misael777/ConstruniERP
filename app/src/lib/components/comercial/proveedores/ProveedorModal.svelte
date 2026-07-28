@@ -46,7 +46,7 @@
 
 	async function handleGuardar() {
 		if (!razonSocial || !ruc) {
-			errorMsg = 'La Razón Social y el RUC son obligatorios.';
+			errorMsg = 'La Razón Social y el RUC / DNI son obligatorios.';
 			return;
 		}
 
@@ -129,18 +129,18 @@
 					
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-slate-600">Razón Social *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Razón Social *</label>
 							<input type="text" bind:value={razonSocial} disabled={isSaving} placeholder="Ej. Corporación ABC S.A.C." class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">RUC *</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">RUC / DNI *</label>
 							<input type="text" bind:value={ruc} disabled={isSaving} placeholder="Ej. 20123456789" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
-						
+
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Vendedor Asignado (Nosotros)</label>
-							<input type="text" bind:value={vendedor} disabled={isSaving} placeholder="Ej. Juan Pérez" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+							<label class="text-xs font-semibold text-[#0f3b5e]">Producto y Servicio</label>
+							<input type="text" bind:value={vendedor} disabled={isSaving} placeholder="Ej. Cemento" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="col-span-2 pt-4 border-t border-slate-100 mt-2">
@@ -151,17 +151,17 @@
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-slate-600">Nombre del Contacto</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Nombre del Contacto</label>
 							<input type="text" bind:value={contacto} disabled={isSaving} placeholder="Ej. Ana García" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Teléfono</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Teléfono</label>
 							<input type="text" bind:value={telefono} disabled={isSaving} placeholder="Ej. 987654321" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
-							<label class="text-xs font-semibold text-slate-600">Correo Electrónico</label>
+							<label class="text-xs font-semibold text-[#0f3b5e]">Correo Electrónico</label>
 							<input type="email" bind:value={email} disabled={isSaving} placeholder="Ej. ventas@empresa.com" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 

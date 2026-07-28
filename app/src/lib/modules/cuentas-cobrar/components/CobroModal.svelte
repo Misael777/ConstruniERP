@@ -120,7 +120,7 @@
 				<div class="p-6 grid grid-cols-1 gap-4">
 					{#if mode === 'edit'}
 						<div>
-							<label for="cb-estado_cobro" class="block text-sm font-medium text-slate-700 mb-1">Estado</label>
+							<label for="cb-estado_cobro" class="block text-sm font-medium text-[#0f3b5e] mb-1">Estado</label>
 							<select
 								id="cb-estado_cobro"
 								value={estadoCobro}
@@ -146,7 +146,7 @@
 
 					{#each formFields as field (field.key)}
 						<div>
-							<label for={`cb-${field.key}`} class="block text-sm font-medium text-slate-700 mb-1">
+							<label for={`cb-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>

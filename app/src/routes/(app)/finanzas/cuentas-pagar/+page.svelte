@@ -16,7 +16,15 @@
 		confirmarPagoPagado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import { getCentroCostoOptions, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import {
+		getCentroCostoOptions,
+		getCentroCostoOptionsPagos,
+		getCentroCostoOptionsExternos,
+		getCentroCostoOptionsExternosOrigen,
+		getCentroCostoTipoMap,
+		getEmpleadoOptions
+	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
@@ -70,6 +78,9 @@
 
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_proveedor: [], id_centro_costo: [], responsable: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
+	/** id_centro_costo (texto) -> tipo — para bloquear "ID Partida" en el modal cuando el centro de
+	 * costo elegido es 'bolsa general', ver CuentaPagarModal.svelte. */
+	let centroCostoTipoMap = $state<Record<string, string>>({});
 
 	let selectedId = $state<number | null>(null);
 	let selectedPagos = $state<Pago[]>([]);
@@ -79,6 +90,9 @@
 	let editingCuenta = $state<CuentaPagar | null>(null);
 	let pagoModalOpen = $state(false);
 	let editingPago = $state<Pago | null>(null);
+	/** Prellenar Monto/Fecha de Pago al abrir "Registrar Pago" desde la cuota sintética de una cuenta
+	 * al Contado (ver cuotasAMostrar) — ver PagoModal.svelte. */
+	let pagoInitialValues = $state<Record<string, string>>({});
 	let transaccionModalOpen = $state(false);
 	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
 	/** Pago que se está confirmando como 'pagado' vía el TransaccionModal — ver
@@ -146,13 +160,31 @@
 			return;
 		}
 		try {
-			const centroCostoOptions = await getCentroCostoOptions(supabase);
+			const [centroCostoOptions, centroCostoOptionsPagos, centroCostoOptionsExternos, centroCostoOptionsExternosOrigen, cuentaBancoOptions, tipoMap] = await Promise.all([
+				getCentroCostoOptions(supabase),
+				getCentroCostoOptionsPagos(supabase),
+				getCentroCostoOptionsExternos(supabase),
+				getCentroCostoOptionsExternosOrigen(supabase),
+				getCuentaBancoOptions(supabase),
+				getCentroCostoTipoMap(supabase)
+			]);
 			dynamicOptions = {
 				id_proveedor: await getProveedorOptions(supabase),
-				id_centro_costo: centroCostoOptions,
+				id_centro_costo: centroCostoOptionsPagos,
 				responsable: await getEmpleadoOptions(supabase)
 			};
-			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
+			// El pago de una cuenta por pagar siempre confirma como Transacción Externa (ver
+			// alcanceForzadoExterna en TransaccionModal.svelte) — hacen falta también las variantes
+			// "_externo" (mismas que usa la página de Transacciones) y las cuentas bancarias, o el
+			// selector de Origen/Destino de Transacción y de Cuenta Origen queda sin opciones.
+			transaccionDynamicOptions = {
+				id_centro_costo_origen: centroCostoOptions,
+				id_centro_costo_destino: centroCostoOptions,
+				id_centro_costo_origen_externo: centroCostoOptionsExternosOrigen,
+				id_centro_costo_destino_externo: centroCostoOptionsExternos,
+				cuenta_banco: cuentaBancoOptions
+			};
+			centroCostoTipoMap = tipoMap;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
@@ -212,6 +244,67 @@
 
 	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_pagar === selectedId) ?? null);
 
+	// fotma_pago=1 (Contado) es "una sola cuota" por definición — no genera filas reales en `pagos`
+	// (a diferencia de Crédito, que las autogenera vía "Fraccionar este pago"). Mientras no se haya
+	// registrado ningún pago real todavía, se muestra una cuota SINTÉTICA (id_pago=-1, nunca existe en
+	// BD) usando Fecha Pago Programada y el saldo pendiente — así el usuario ve "su cuota" igual que
+	// vería cualquier cuota de una cuenta a Crédito, y puede hacer doble clic para registrarla.
+	const esContadoSinPagos = $derived(selectedCuenta?.fotma_pago === 1 && selectedPagos.length === 0);
+	const cuotasAMostrar = $derived.by((): Pago[] => {
+		if (esContadoSinPagos && selectedCuenta?.fecha_pago_programada) {
+			return [
+				{
+					id_pago: -1,
+					id_cuenta_pagar: selectedCuenta.id_cuenta_pagar,
+					monto: selectedCuenta.saldo_pendiente,
+					fecha_pago: selectedCuenta.fecha_pago_programada,
+					medio_pago: null,
+					num_operacion: null,
+					usuario_registro: null,
+					referencia: null,
+					created_at: '',
+					estado_pago: 'programado',
+					id_transaccion: null,
+					transaccion: null
+				}
+			];
+		}
+		return selectedPagos;
+	});
+
+	/** La cuota 'programado' de fecha_pago más temprana entre las que se están mostrando — la que se
+	 * abre al hacer doble clic sobre cualquier fila (no solo esa fila puntual, para que sea fácil de
+	 * encontrar sin tener que apuntarle exacto). */
+	const cuotaMasProxima = $derived.by(() => {
+		const programadas = cuotasAMostrar.filter((c) => c.estado_pago === 'programado');
+		if (programadas.length === 0) return null;
+		return programadas.reduce((min, c) => (c.fecha_pago < min.fecha_pago ? c : min));
+	});
+
+	/** Una cuota (real o sintética) sin pagar cuya fecha programada ya pasó se muestra como "Vencido"
+	 * en vez de "Programado"/"Por registrar" — comparación por día calendario, no por hora. */
+	function esCuotaVencida(pago: Pago): boolean {
+		if (pago.estado_pago !== 'programado' || !pago.fecha_pago) return false;
+		const hoy = new Date();
+		hoy.setHours(0, 0, 0, 0);
+		return new Date(pago.fecha_pago + 'T00:00:00') < hoy;
+	}
+
+	/** Doble clic en cualquier cuota -> siempre abre/registra la "más próxima" (no la que se clickeó),
+	 * a pedido del usuario. Si es la sintética (Contado sin pagos aún) abre "Registrar Pago" prellenado
+	 * con su monto/fecha; si es una cuota real, abre la edición normal (ahí se puede pasar a Pagado).
+	 */
+	function handleDobleClicCuota() {
+		if (!cuotaMasProxima) return;
+		if (cuotaMasProxima.id_pago === -1) {
+			editingPago = null;
+			pagoInitialValues = { monto: String(cuotaMasProxima.monto), fecha_pago: cuotaMasProxima.fecha_pago };
+			pagoModalOpen = true;
+		} else {
+			openEditPago(cuotaMasProxima);
+		}
+	}
+
 	async function handleDelete(item: CuentaPagar) {
 		if (!confirm('¿Eliminar esta cuenta por pagar y todos sus pagos registrados? Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer.')) return;
 		try {
@@ -244,6 +337,7 @@
 
 	function openCreatePago() {
 		editingPago = null;
+		pagoInitialValues = {};
 		pagoModalOpen = true;
 	}
 	function openEditPago(pago: Pago) {
@@ -253,6 +347,7 @@
 	function closePagoModal() {
 		pagoModalOpen = false;
 		editingPago = null;
+		pagoInitialValues = {};
 	}
 
 	async function handleSaved() {
@@ -273,6 +368,17 @@
 		transaccionPrefill = null;
 		confirmandoPagoId = null;
 	}
+
+	// Campos que llegan ya resueltos con datos reales del pago (ver construirPayloadTransaccionPorPago
+	// en transacciones.service.ts) — esos quedan bloqueados en el TransaccionModal de confirmar pago;
+	// solo lo que no vino en el payload (cuentas bancarias, alcance, etc.) queda disponible para llenar.
+	const lockedFieldsConfirmarPago = $derived.by(() => {
+		if (!confirmandoPagoId || !transaccionPrefill) return [];
+		return Object.keys(transaccionPrefill).filter((key) => {
+			const value = transaccionPrefill![key];
+			return value !== null && value !== undefined && value !== '';
+		});
+	});
 
 	// Se pasa como onConfirm al TransaccionModal cuando está confirmando un pago (ver
 	// confirmandoPagoId) — crea la transacción Y confirma el pago como 'pagado' en un solo paso
@@ -398,7 +504,7 @@
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 					<div
 						class={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
-							selectedId === item.id_cuenta_pagar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+							selectedId === item.id_cuenta_pagar ? 'bg-blue-100 hover:bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
 					>
@@ -412,7 +518,7 @@
 							</div>
 						</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
-						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
 						<div>
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(estadoField, item.estado)}
@@ -450,7 +556,7 @@
 					onclick={() => selectRow(item)}
 					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && selectRow(item)}
 					class={`w-full text-left p-4 border-b border-slate-100 last:border-b-0 active:bg-slate-50 transition-colors cursor-pointer ${
-						selectedId === item.id_cuenta_pagar ? 'bg-blue-50' : (estadoCardClass[item.estado] ?? '')
+						selectedId === item.id_cuenta_pagar ? 'bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 					}`}
 				>
 					<div class="flex items-start justify-between gap-3 mb-2">
@@ -464,7 +570,7 @@
 							</div>
 						</div>
 						<div class="text-right shrink-0">
-							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
 							<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
@@ -514,11 +620,16 @@
 				</button>
 			</div>
 
-			{#if selectedPagos.length === 0}
+			{#if cuotasAMostrar.length === 0}
 				<p class="text-sm text-slate-400 text-center py-6">Sin pagos registrados todavía.</p>
 			{:else}
+				{#if esContadoSinPagos}
+					<p class="text-xs text-slate-400 mb-2">Cuenta al Contado: se trata como una sola cuota. Doble clic para registrar el pago.</p>
+				{:else}
+					<p class="text-xs text-slate-400 mb-2">Doble clic en cualquier fila para registrar/editar la cuota más próxima.</p>
+				{/if}
 				<div class="overflow-x-auto">
-					<ResponsiveDataView items={selectedPagos} keyField="id_pago" columns={[
+					<ResponsiveDataView items={cuotasAMostrar} keyField="id_pago" onRowDblClick={handleDobleClicCuota} columns={[
 						{ label: 'Fecha' },
 						{ label: 'Monto' },
 						{ label: 'Medio' },
@@ -527,15 +638,18 @@
 						{ label: 'Acciones', align: 'right' }
 					]}>
 						{#snippet row(pago)}
-							{@const bloqueado = !!pago.transaccion?.aprobado && !isAdmin()}
+							{@const sintetica = pago.id_pago === -1}
+							{@const bloqueado = !sintetica && !!pago.transaccion?.aprobado && !isAdmin()}
 							<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
 							<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
 							<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
 							<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
 							<td class="px-3 py-2">
 								<div class="flex items-center gap-1.5">
-									{#if pago.estado_pago === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{#if pago.estado_pago === 'programado' && esCuotaVencida(pago)}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
+									{:else if pago.estado_pago === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
 									{:else if pago.estado_pago === 'cancelado'}
 										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
@@ -547,7 +661,9 @@
 								</div>
 							</td>
 							<td class="px-3 py-2 text-right">
-								{#if bloqueado}
+								{#if sintetica}
+									<span class="text-[11px] text-slate-400">Doble clic para registrar</span>
+								{:else if bloqueado}
 									<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
 										<Lock size={16} />
 									</span>
@@ -564,15 +680,18 @@
 							</td>
 						{/snippet}
 						{#snippet card(pago)}
-							{@const bloqueado = !!pago.transaccion?.aprobado && !isAdmin()}
+							{@const sintetica = pago.id_pago === -1}
+							{@const bloqueado = !sintetica && !!pago.transaccion?.aprobado && !isAdmin()}
 							<div class="flex items-start justify-between gap-3 mb-2">
 								<div class="min-w-0">
 									<div class="font-semibold text-slate-800">{formatCurrency(pago.monto)}</div>
 									<div class="text-xs text-slate-400 mt-0.5">{formatDate(pago.fecha_pago)}</div>
 								</div>
 								<div class="flex items-center gap-1.5 shrink-0">
-									{#if pago.estado_pago === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{#if pago.estado_pago === 'programado' && esCuotaVencida(pago)}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
+									{:else if pago.estado_pago === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
 									{:else if pago.estado_pago === 'cancelado'}
 										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
@@ -589,7 +708,9 @@
 								<span class="text-slate-400">N° Operación</span>
 								<span class="text-right text-slate-700">{pago.num_operacion ?? '—'}</span>
 							</div>
-							{#if bloqueado}
+							{#if sintetica}
+								<p class="text-center text-[11px] text-slate-400 pt-2 border-t border-slate-100">Doble clic para registrar el pago</p>
+							{:else if bloqueado}
 								<div class="flex items-center justify-center gap-2 text-slate-400 text-xs pt-2 border-t border-slate-100">
 									<Lock size={14} /> Bloqueado: transacción aprobada
 								</div>
@@ -613,11 +734,12 @@
 	{/if}
 </div>
 
-<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
+<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} {centroCostoTipoMap} onClose={closeModal} onSaved={handleSaved} />
 <PagoModal
 	open={pagoModalOpen}
 	idCuentaPagar={selectedId}
 	pago={editingPago}
+	initialValues={pagoInitialValues}
 	onClose={closePagoModal}
 	onSaved={handlePagoSaved}
 	onTransaccionSugerida={handleTransaccionSugerida}
@@ -632,5 +754,5 @@
 	onConfirm={confirmandoPagoId ? confirmarTransaccionPago : null}
 	confirmTitle={confirmandoPagoId ? 'Confirmar Pago — Transacción de Respaldo' : null}
 	confirmButtonLabel={confirmandoPagoId ? 'Confirmar Pago' : null}
-	lockedFields={confirmandoPagoId ? ['id_centro_costo_origen', 'id_centro_costo_destino'] : []}
+	lockedFields={lockedFieldsConfirmarPago}
 />

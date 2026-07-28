@@ -75,7 +75,7 @@
                 {/if}
 
                 <div>
-                    <label for="pm-nombre" class="block text-sm font-medium text-[#1e293b] mb-1">
+                    <label for="pm-nombre" class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Nombre <span class="text-red-500">*</span>
                     </label>
                     <input
@@ -89,7 +89,7 @@
                 </div>
 
                 <div>
-                    <label for="pm-tipo" class="block text-sm font-medium text-[#1e293b] mb-1">Tipo</label>
+                    <label for="pm-tipo" class="block text-sm font-medium text-[#0f3b5e] mb-1">Tipo</label>
                     <select
                         id="pm-tipo"
                         bind:value={tipo}
@@ -104,7 +104,7 @@
                 </div>
 
                 <div>
-                    <label for="pm-descripcion" class="block text-sm font-medium text-[#1e293b] mb-1">Descripción</label>
+                    <label for="pm-descripcion" class="block text-sm font-medium text-[#0f3b5e] mb-1">Descripción</label>
                     <textarea
                         id="pm-descripcion"
                         bind:value={descripcion}
