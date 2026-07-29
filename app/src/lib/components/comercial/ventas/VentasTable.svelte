@@ -6,6 +6,7 @@
 
 	const columns = [
 		{ label: 'Proyecto' },
+		{ label: 'Estado' },
 		{ label: 'Valor venta' },
 		{ label: 'Tipo proyecto' },
 		{ label: 'Fecha' },
@@ -15,6 +16,15 @@
 		{ label: 'Contrato', align: 'center' as const },
 		{ label: 'Acciones', align: 'center' as const }
 	];
+
+	function getEstadoBadge(estado: string) {
+		if (estado === 'venta_cerrada') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
+		return 'bg-amber-50 text-amber-600 border-amber-200';
+	}
+
+	function getEstadoLabel(estado: string) {
+		return estado === 'venta_cerrada' ? 'Venta Cerrada' : 'En negociación';
+	}
 
 	let { data = [
 		{ id: 1, proyecto: 'Edificio Residencial Los Olivos', valor: 350000, tipo: 'Residencial', fecha: '05/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 35000, comisionPct: 10 },
@@ -151,6 +161,11 @@
 				<td class="px-5 py-4 font-medium text-slate-800">
 					<div class="max-w-[200px] truncate">{row.proyecto}</div>
 				</td>
+				<td class="px-5 py-4">
+					<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border whitespace-nowrap ${getEstadoBadge(row.estado_proyecto)}`}>
+						{getEstadoLabel(row.estado_proyecto)}
+					</span>
+				</td>
 				<td class="px-5 py-4 font-semibold text-slate-700">{formatMoney(row.valor)}</td>
 				<td class="px-5 py-4">
 					<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
@@ -173,12 +188,7 @@
 					</div>
 				</td>
 				<td class="px-5 py-4 text-center">
-					<button onclick={() => {
-						console.log('[VentasTable] Click en Proforma');
-						console.log('[VentasTable] Row data:', row);
-						console.log('[VentasTable] Descripción:', row?.descripcion);
-						dispatch('viewProforma', { row });
-					}} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Ver Proforma" aria-label="Ver Proforma">
+					<button onclick={() => dispatch('gestionarProformas', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors" title="Proformas" aria-label="Proformas">
 						<i class="far fa-file-pdf"></i>
 					</button>
 				</td>
@@ -207,9 +217,14 @@
 				<div class="flex items-start justify-between gap-3 mb-2">
 					<div class="min-w-0">
 						<div class="font-semibold text-slate-800 truncate">{row.proyecto}</div>
-						<span class={`inline-block mt-1 text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
-							{row.tipo}
-						</span>
+						<div class="flex items-center gap-1.5 mt-1 flex-wrap">
+							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
+								{row.tipo}
+							</span>
+							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border whitespace-nowrap ${getEstadoBadge(row.estado_proyecto)}`}>
+								{getEstadoLabel(row.estado_proyecto)}
+							</span>
+						</div>
 					</div>
 					<div class="text-right shrink-0">
 						<div class="font-bold text-slate-800">{formatMoney(row.valor)}</div>
@@ -227,7 +242,7 @@
 					<span class="font-medium text-slate-700">{formatMoney(row.comision)} <span class="text-slate-400">({row.comisionPct}%)</span></span>
 				</div>
 				<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-					<button onclick={() => dispatch('viewProforma', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Proforma">
+					<button onclick={() => dispatch('gestionarProformas', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Proformas">
 						<i class="far fa-file-pdf"></i> Proforma
 					</button>
 					<button onclick={() => dispatch('viewContrato', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">

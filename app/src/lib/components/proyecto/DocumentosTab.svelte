@@ -1,8 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { supabase } from '$lib/supabaseClient';
-    import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
-    import { isRunningInTauri, uploadToDriveClient } from '$lib/driveUploadClient';
+    import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
     import { generateUniqueFileName } from '$lib/shared/fileNaming';
 
     const { projectId, projectName = 'Proyecto' } = $props<{
@@ -66,37 +65,13 @@ const PROJECT_DOCUMENTS_BUCKET = 'project-documents';
 const useGoogleDriveDocuments = true; // GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS is configured server-side
 
 async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
-    console.log(`[DocumentosTab] uploadDocumentToDrive() - tipo: ${tipo}, inTauri: ${isRunningInTauri()}`);
-
-    if (isRunningInTauri()) {
-        // adapter-static: no server endpoint available — upload directly from the WebView
-        const fileName = generateUniqueFileName(`documento_${tipo}_${nombre}_${projectName}`, file.name);
-        const { url } = await uploadToDriveClient(file, fileName, 'documento');
-        console.log(`[DocumentosTab] ✓ Tauri upload OK. URL: ${url}`);
-        return { url, fileName };
-    }
-
-    // Web: delegate to the SvelteKit server endpoint
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('type', 'documento');
-    formData.append('projectId', String(projectId));
-    formData.append('documentType', tipo);
-    formData.append('documentName', nombre);
-    formData.append('projectName', projectName);
-
-    const response = await fetch(resolveApiUrl('/api/upload-document'), {
-        method: 'POST',
-        body: formData
+    return uploadProjectDocument(file, {
+        type: 'documento',
+        projectId,
+        documentType: tipo,
+        documentName: nombre,
+        projectName
     });
-
-    const result = await parseJsonResponse(response);
-    if (!response.ok || !result.success) {
-        throw new Error(result.details || result.error || 'Error al subir documento a Google Drive.');
-    }
-
-    console.log(`[DocumentosTab] ✓ Server upload OK. URL: ${result.url}`);
-    return { url: result.url as string, fileName: result.fileName as string };
 }
 
     const filteredDocs = $derived(documentos.filter(d => {
