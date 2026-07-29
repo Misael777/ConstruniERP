@@ -9,6 +9,7 @@
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
+	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	let {
@@ -114,13 +115,6 @@
 		return name.includes('.') ? `.${name.split('.').pop()}` : '';
 	}
 
-	/** Extrae el fileId de Drive de una URL `https://drive.google.com/uc?export=download&id=FILEID`
-	 * (formato que usan uploadToDrive/uploadToDriveClient) — para poder renombrar/borrar ese archivo. */
-	function extractDriveFileId(url: string | null): string | null {
-		if (!url) return null;
-		const match = url.match(/[?&]id=([^&]+)/);
-		return match ? match[1] : null;
-	}
 
 	/**
 	 * Sube el comprobante a Google Drive con el nombre `baseName` (código de la transacción cuando ya

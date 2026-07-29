@@ -7,6 +7,7 @@
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { generateUniqueFileName } from '$lib/shared/fileNaming';
+	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
 	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
@@ -165,11 +166,6 @@
 	let contratoUploading = $state(false);
 	let showContratoPreview = $state(false);
 
-	function extractDriveFileId(url: string | null): string | null {
-		if (!url) return null;
-		const match = url.match(/[?&]id=([^&]+)/);
-		return match ? match[1] : null;
-	}
 
 	// Mismo mecanismo que usa el submódulo de Ventas para previsualizar el
 	// contrato/proforma: el visor propio de Google Drive embebido en un

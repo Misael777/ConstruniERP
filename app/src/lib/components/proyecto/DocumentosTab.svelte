@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { supabase } from '$lib/supabaseClient';
-    import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
+    import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
     import { generateUniqueFileName } from '$lib/shared/fileNaming';
 
     const { projectId, projectName = 'Proyecto' } = $props<{
@@ -162,6 +162,8 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
     async function handleDelete(doc: DocumentoProyecto) {
         if (doc.storage_path && !useGoogleDriveDocuments) {
             await supabase.storage.from(PROJECT_DOCUMENTS_BUCKET).remove([doc.storage_path]);
+        } else if (useGoogleDriveDocuments && doc.storage_url) {
+            await deleteProjectDocumentFile(doc.storage_url);
         }
         await supabase.from('documento_proyecto').delete().eq('id_documento', doc.id_documento);
         if (selectedDoc?.id_documento === doc.id_documento) selectedDoc = null;
