@@ -71,13 +71,15 @@
 	const estadoVencBadgeClass = { vencido: 'bg-red-100 text-red-700', por_vencer: 'bg-amber-100 text-amber-700' };
 	const estadoVencLabel = { vencido: 'Vencido', por_vencer: 'Por vencer' };
 
-	/** Fecha de vencimiento a mostrar en la tarjeta de la Bandeja: si la cuenta está fraccionada
-	 * (2+ cuotas visibles en esta tarjeta), la de la cuota MÁS CERCANA entre esas — no
-	 * `fechaVencimiento` (esa es la fecha contractual de la cuenta completa/última cuota). Si no está
-	 * fraccionada, no hay cuotas que comparar y se usa la propia fecha de vencimiento de la cuenta. */
-	function fechaVencimientoMasCercana(item: PagoPendienteItem): string | null {
-		if (item.fracciones.length === 0) return item.fechaVencimiento;
-		return item.fracciones.reduce((min, f) => (f.fecha < min ? f.fecha : min), item.fracciones[0].fecha);
+	/** Fecha + monto a mostrar en la tarjeta de la Bandeja: si la cuenta está fraccionada (2+ cuotas
+	 * visibles en esta tarjeta), los de la cuota con fecha programada MÁS CERCANA a hoy entre esas —
+	 * no `fechaVencimiento`/`monto` de la cuenta completa (esa es la fecha contractual y el total, no
+	 * la cuota puntual). Si no está fraccionada, no hay cuotas que comparar: la cuenta ES la única
+	 * "cuota", se usan sus propios fechaVencimiento/monto. */
+	function cuotaMasCercana(item: PagoPendienteItem): { fecha: string | null; monto: number } {
+		if (item.fracciones.length === 0) return { fecha: item.fechaVencimiento, monto: item.monto };
+		const cercana = item.fracciones.reduce((min, f) => (f.fecha < min.fecha ? f : min), item.fracciones[0]);
+		return { fecha: cercana.fecha, monto: cercana.monto };
 	}
 
 	function primerYUltimoDiaMes(base: Date): { desde: string; hasta: string } {
@@ -274,8 +276,10 @@
 		fetchBandeja();
 	}
 
+	// A pedido del usuario: la proyección de pagos de un panorama es la suma del monto de la cuota MÁS
+	// CERCANA a hoy de cada cuenta ahí (no la suma de todas sus cuotas visibles) — ver cuotaMasCercana.
 	function proyeccionPagos(id: 1 | 2) {
-		return panoramaItems(id).reduce((sum, i) => sum + i.monto, 0);
+		return panoramaItems(id).reduce((sum, i) => sum + cuotaMasCercana(i).monto, 0);
 	}
 	function flujoProyectado(id: 1 | 2) {
 		return proyeccionIngresos - proyeccionPagos(id);
@@ -638,10 +642,6 @@
 			</div>
 			<p class="text-xs text-slate-400 mb-3">Arrastra los pagos para asignarlos a un panorama.</p>
 
-			<button type="button" onclick={() => (pagoModalOpen = true)} class="w-full mb-3 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-200 text-blue-600 text-sm font-medium hover:bg-blue-50">
-				+ Nuevo pago pendiente
-			</button>
-
 			<div class="relative mb-2">
 				<Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
 				<input
@@ -712,6 +712,7 @@
 					class="flex flex-col gap-2 min-h-[100px]"
 				>
 					{#each bandeja as item (item.id)}
+						{@const cuota = cuotaMasCercana(item)}
 						<div class="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-white cursor-grab active:cursor-grabbing">
 							<button
 								type="button"
@@ -730,10 +731,13 @@
 								<Package size={16} />
 							</div>
 							<div class="flex-1 min-w-0">
-								<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
-								<p class="text-xs text-slate-500 truncate">Proveedor: {item.proveedorNombre}</p>
+								<p class="text-sm font-bold text-slate-800 truncate">{item.proveedorNombre}</p>
 								<p class="text-xs text-slate-500 truncate">Producto: {item.producto ?? '—'}</p>
-								<p class="text-[11px] text-slate-400">Vencimiento: {fechaVencimientoMasCercana(item) ?? '—'}</p>
+								<p class="text-[11px] text-slate-400">Vencimiento: {cuota.fecha ?? '—'}</p>
+								<div class="flex items-center justify-between mt-1 text-xs">
+									<span class="text-slate-500">Cuota: <span class="font-semibold text-slate-700">{formatCurrency(cuota.monto)}</span></span>
+									<span class="text-slate-500">Saldo: <span class="font-semibold text-slate-700">{formatCurrency(item.saldoPendiente)}</span></span>
+								</div>
 
 								{#if item.fracciones.length > 0}
 									<div class="mt-1.5 flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
@@ -750,15 +754,6 @@
 												</div>
 											</div>
 										{/each}
-									</div>
-									<div class="flex items-center justify-between mt-1.5 pt-1.5 border-t border-slate-100">
-										<span class="text-[10px] text-slate-400">Total de estas cuotas</span>
-										<span class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</span>
-									</div>
-								{:else}
-									<div class="flex items-center justify-between mt-1">
-										<span class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</span>
-										<span class={`px-2 py-0.5 rounded-full text-[10px] font-medium ${prioridadBadgeClass[item.prioridad]}`}>{prioridadLabel[item.prioridad]}</span>
 									</div>
 								{/if}
 							</div>
@@ -843,8 +838,8 @@
 										<MoreVertical size={14} />
 									</button>
 									<div class="flex-1 min-w-0">
-										<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
-										<p class="text-xs text-slate-500 truncate">Proveedor: {item.proveedorNombre}</p>
+										<p class="text-sm font-bold text-slate-800 truncate">{item.proveedorNombre}</p>
+										<p class="text-xs text-slate-500 truncate">Producto: {item.producto ?? '—'}</p>
 										<p class="text-[11px] text-slate-400">Vencimiento: {item.fechaVencimiento ?? '—'}</p>
 									</div>
 									<div class="text-right shrink-0">

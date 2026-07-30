@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency, applyColumnFilters, isColumnFilterActive } from '$lib/shared/fieldConfig';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -132,9 +132,12 @@ async function pagoTieneTransaccionAprobada(client: SupabaseClient, idPago: numb
 }
 
 /**
- * Regla de negocio de `estado`: pagado si el saldo ya llegó a 0; vencido si hoy pasó la fecha de
- * vencimiento o la fecha de pago programada (lo que ocurra primero); si no, pendiente. Ya no es una
- * marca manual — se recalcula en cada create/update de la cuenta y en cada alta/baja de un pago.
+ * Regla de negocio de `estado`: pagado si el saldo ya llegó a 0; si no, vencido/pendiente según la
+ * fecha de la cuota MÁS CERCANA (fecha_pago_programada, reprogramada a la cuota 'programado' más
+ * próxima en cada recalcularCuentaPagar — ver ahí) — solo si la cuenta todavía no tiene ninguna
+ * cuota programada (recién creada, sin fraccionar) se usa la fecha de vencimiento contractual como
+ * respaldo. Ya no es una marca manual — se recalcula en cada create/update de la cuenta y en cada
+ * alta/baja de un pago.
  */
 function computeEstadoCuentaPagar(saldoPendiente: number, fechaVencimiento: string | null, fechaPagoProgramada: string | null): string {
 	if (saldoPendiente <= 0) return 'pagado';
@@ -147,8 +150,8 @@ function computeEstadoCuentaPagar(saldoPendiente: number, fechaVencimiento: stri
 		return !Number.isNaN(d.getTime()) && d.getTime() < hoy.getTime();
 	};
 
-	if (yaVencio(fechaVencimiento) || yaVencio(fechaPagoProgramada)) return 'vencido';
-	return 'pendiente';
+	const fechaAEvaluar = fechaPagoProgramada ?? fechaVencimiento;
+	return yaVencio(fechaAEvaluar) ? 'vencido' : 'pendiente';
 }
 
 export async function getCuentasPagar(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<CuentaPagar>> {
@@ -171,6 +174,12 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
 		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
 		query = query.or(orFilter);
+	}
+	// Una cuenta ya pagada (saldo=0) no es algo pendiente de gestionar — se oculta de la lista por
+	// defecto, a pedido del usuario. Solo se muestra si el usuario filtra explícitamente por
+	// Estado: Pagado en la barra de filtros (ColumnFilterBar) — ahí sí se respeta su elección.
+	if (!isColumnFilterActive(params.columnFilters?.estado)) {
+		query = query.neq('estado', 'pagado');
 	}
 	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
 
@@ -220,31 +229,49 @@ export async function getMontoFiltrado(client: SupabaseClient, search: string, c
  * "Vencido" depende de la fecha de hoy, no de ningún evento (crear/editar/pagar) — sin un cron en
  * el servidor (esta app es client-side puro), el único momento en que se puede detectar que una
  * cuenta acaba de vencer es cuando se vuelve a listar. Corrige en BD las filas de ESTA página cuyo
- * estado calculado ya no coincide con el guardado, y devuelve la lista ya corregida.
+ * estado y/o fecha_pago_programada ya no coinciden con lo guardado, y devuelve la lista ya corregida.
+ * Recalcula fecha_pago_programada contra las cuotas 'programado' reales (no solo confía en la
+ * guardada) — necesario para sanar cuentas cuyo último pago se registró ANTES de que
+ * recalcularCuentaPagar empezara a reprogramarla (ver ahí): sin esto, una cuenta con su cuota más
+ * próxima ya pagada podía quedar marcada "Vencido" para siempre, con fecha_pago_programada pegada a
+ * la de esa cuota vieja en vez de avanzar a la cuota real siguiente.
  * AJUSTAR: solo sana lo que se está viendo en pantalla, no la tabla completa — si se necesita un
  * barrido global real, hace falta un cron/trigger en Supabase (Edge Function programada, por ejemplo).
  */
 async function autoCorregirVencidos(client: SupabaseClient, items: CuentaPagar[]): Promise<CuentaPagar[]> {
-	const desincronizados = items.filter((item) => {
-		if (item.estado === 'pagado') return false; // pagado no se re-evalúa por fecha
-		const esperado = computeEstadoCuentaPagar(item.saldo_pendiente, item.fecha_vencimiento, item.fecha_pago_programada);
-		return esperado !== item.estado;
+	const candidatos = items.filter((item) => item.estado !== 'pagado'); // pagado no se re-evalúa por fecha
+	if (candidatos.length === 0) return items;
+
+	const idsCandidatos = candidatos.map((item) => item.id_cuenta_pagar);
+	const { data: pagos } = await client.from(PAGO_TABLE).select(`${PARENT_FK_COLUMN}, estado_pago, fecha_pago`).in(PARENT_FK_COLUMN, idsCandidatos);
+	const programadosPorCuenta = new Map<number, string[]>();
+	for (const p of (pagos ?? []) as any[]) {
+		if (p.estado_pago !== 'programado') continue;
+		const lista = programadosPorCuenta.get(p[PARENT_FK_COLUMN]) ?? [];
+		lista.push(p.fecha_pago);
+		programadosPorCuenta.set(p[PARENT_FK_COLUMN], lista);
+	}
+
+	const actualizaciones: { id: number; estado: string; fechaPagoProgramada: string | null }[] = [];
+	const resultado = items.map((item) => {
+		if (item.estado === 'pagado') return item;
+		const fechas = programadosPorCuenta.get(item.id_cuenta_pagar) ?? [];
+		const fechaPagoProgramada = fechas.length > 0 ? fechas.reduce((min, f) => (f < min ? f : min)) : null;
+		const esperado = computeEstadoCuentaPagar(item.saldo_pendiente, item.fecha_vencimiento, fechaPagoProgramada);
+		if (esperado === item.estado && fechaPagoProgramada === item.fecha_pago_programada) return item;
+		actualizaciones.push({ id: item.id_cuenta_pagar, estado: esperado, fechaPagoProgramada });
+		return { ...item, estado: esperado, fecha_pago_programada: fechaPagoProgramada };
 	});
-	if (desincronizados.length === 0) return items;
 
-	await Promise.all(
-		desincronizados.map((item) => {
-			const esperado = computeEstadoCuentaPagar(item.saldo_pendiente, item.fecha_vencimiento, item.fecha_pago_programada);
-			return client.from(TABLE_NAME).update({ estado: esperado }).eq(PK_COLUMN, item.id_cuenta_pagar);
-		})
-	);
+	if (actualizaciones.length > 0) {
+		await Promise.all(
+			actualizaciones.map((u) =>
+				client.from(TABLE_NAME).update({ estado: u.estado, fecha_pago_programada: u.fechaPagoProgramada }).eq(PK_COLUMN, u.id)
+			)
+		);
+	}
 
-	const corregidos = new Set(desincronizados.map((i) => i.id_cuenta_pagar));
-	return items.map((item) =>
-		corregidos.has(item.id_cuenta_pagar)
-			? { ...item, estado: computeEstadoCuentaPagar(item.saldo_pendiente, item.fecha_vencimiento, item.fecha_pago_programada) }
-			: item
-	);
+	return resultado;
 }
 
 export async function createCuentaPagar(
@@ -427,6 +454,14 @@ export async function createPago(
 
 	const { data, error } = await client.from(PAGO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
+
+	// A diferencia de Crédito (donde fecha_pago_programada ya queda fijada al fraccionar, ANTES de que
+	// exista ningún pago real — ver CuentaPagarModal), en Contado esa fecha se deja en blanco hasta
+	// que se registra el pago real aquí — sin este recálculo, el Estado/Días de Retraso de la lista
+	// principal seguían basados en la fecha de vencimiento contractual en vez de la fecha real recién
+	// ingresada, hasta que se confirmaba la transacción de respaldo (ver updatePago, que sí siempre
+	// recalcula, incluso sin pasar a 'pagado').
+	await recalcularCuentaPagar(client, idCuentaPagar);
 
 	const transaccionSugerida = await construirPayloadTransaccionPorPago(client, { ...cuenta, proveedorNombre: (cuenta as any).proveedor?.razon_social }, {
 		id_pago: data.id_pago,
@@ -664,25 +699,38 @@ export async function deletePago(client: SupabaseClient, idPago: number, esAdmin
  * cuotas 'programado' generadas por generarCuotasProgramadas NO cuentan hasta que se registren
  * como pagos reales), y ajusta estado con computeEstadoCuentaPagar. No es una transacción atómica
  * de BD — ver misma nota en cuentasCobrar.service.ts.
+ *
+ * También reprograma fecha_pago_programada a la cuota 'programado' más próxima (mismo criterio que
+ * primeraFechaFraccion en CuentaPagarModal) cada vez que se llama — a pedido del usuario: cuando ya
+ * se pagó la cuota más próxima, el Estado (vencido/pendiente) debe evaluarse contra la cuota
+ * SIGUIENTE, no quedarse pegado a la fecha de la que ya se pagó. Sin esto, una cuenta con la
+ * primera cuota vencida-pero-ya-pagada seguía marcándose "Vencido" para siempre aunque la próxima
+ * cuota real todavía no venciera. Si ya no queda ninguna cuota 'programado' (todas pagadas/
+ * canceladas), queda en null — no hay una "próxima" que mostrar.
  */
 export async function recalcularCuentaPagar(client: SupabaseClient, idCuentaPagar: number): Promise<void> {
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('monto_comprometido, fecha_vencimiento, fecha_pago_programada')
+		.select('monto_comprometido, fecha_vencimiento')
 		.eq(PK_COLUMN, idCuentaPagar)
 		.single();
 	if (!cuenta) return;
 
-	const { data: pagos } = await client.from(PAGO_TABLE).select('monto, estado_pago').eq(PARENT_FK_COLUMN, idCuentaPagar);
+	const { data: pagos } = await client.from(PAGO_TABLE).select('monto, estado_pago, fecha_pago').eq(PARENT_FK_COLUMN, idCuentaPagar);
 	const totalPagado = (pagos ?? [])
 		.filter((p: any) => p.estado_pago === 'pagado')
 		.reduce((sum: number, p: any) => sum + Number(p.monto), 0);
 	const saldoPendiente = Math.max(Number(cuenta.monto_comprometido) - totalPagado, 0);
-	const nuevoEstado = computeEstadoCuentaPagar(saldoPendiente, cuenta.fecha_vencimiento, cuenta.fecha_pago_programada);
+
+	const programados = (pagos ?? []).filter((p: any) => p.estado_pago === 'programado');
+	const fechaPagoProgramada =
+		programados.length > 0 ? programados.reduce((min: string, p: any) => (p.fecha_pago < min ? p.fecha_pago : min), programados[0].fecha_pago) : null;
+
+	const nuevoEstado = computeEstadoCuentaPagar(saldoPendiente, cuenta.fecha_vencimiento, fechaPagoProgramada);
 
 	await client
 		.from(TABLE_NAME)
-		.update({ monto_pagado: totalPagado, saldo_pendiente: saldoPendiente, estado: nuevoEstado })
+		.update({ monto_pagado: totalPagado, saldo_pendiente: saldoPendiente, estado: nuevoEstado, fecha_pago_programada: fechaPagoProgramada })
 		.eq(PK_COLUMN, idCuentaPagar);
 }
 

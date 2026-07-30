@@ -47,8 +47,34 @@
 	let isSaving = $state(false);
 	let saveError = $state('');
 
-	// Reset whenever the modal is opened
-	$effect(() => { if (isOpen) { saveError = ''; } });
+	// Reset whenever the modal is opened — antes solo se limpiaba saveError, y el resto de los
+	// campos quedaba con lo que se había escrito (o con datos de ejemplo hardcodeados: fecha vieja,
+	// S/15000.00, 4 pisos, etc.) la última vez que se abrió el modal, en vez de partir en blanco
+	// listo para ingresar una venta nueva.
+	$effect(() => {
+		if (isOpen) {
+			saveError = '';
+			proyectoNombre = '';
+			fechaVenta = new Date().toISOString().slice(0, 10);
+			selectedClienteId = '';
+			nuevoClienteNombre = '';
+			valorVenta = '';
+			comisionPorcentaje = '';
+			numeroPisos = '';
+			contratoFile = null;
+			proformaFile = null;
+			observaciones = '';
+		}
+	});
+
+	// A pedido del usuario: el campo Proyecto se autocompleta con el nombre del Cliente elegido en su
+	// dropdown (o el que se está escribiendo para "+ Nuevo cliente") — el usuario puede seguir
+	// editándolo a mano después si quiere personalizarlo, este efecto solo lo vuelve a llenar cuando
+	// CAMBIA el cliente elegido.
+	$effect(() => {
+		const nombreCliente = getClienteNombreActual();
+		if (nombreCliente) proyectoNombre = nombreCliente;
+	});
 
 	// Auto-calculated code
 	function getClienteNombreActual() {
