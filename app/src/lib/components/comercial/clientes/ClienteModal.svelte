@@ -47,6 +47,13 @@
 		}
 	});
 
+	// A pedido del usuario: Tipo de Documento se autocompleta según Tipo de Persona — Natural -> DNI,
+	// Jurídica -> RUC (el usuario todavía puede cambiarlo a mano después, ej. a CE para un extranjero).
+	$effect(() => {
+		if (tipPersona === 'N') tipoDoc = 'DNI';
+		else if (tipPersona === 'J') tipoDoc = 'RUC';
+	});
+
 	async function handleGuardar() {
 		if (!nombre || !numDocumento) {
 			errorMsg = 'El nombre y documento son obligatorios.';

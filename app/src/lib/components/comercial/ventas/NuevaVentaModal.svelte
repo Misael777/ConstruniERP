@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
 
@@ -11,21 +12,26 @@
 	let proyectoNombre = $state('');
 	let fechaVenta = $state('2026-05-20');
 	let asesor = $state('');
+	let empleados = $state<{ nombre: string; auth_user_id: string | null }[]>([]);
 	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
 	let nuevoClienteNombre = $state('');
 	let valorVenta = $state('15000.00');
 	let comisionPorcentaje = $state('10');
+	let direccionPredio = $state('');
 
 	let contratoFile = $state<File | null>(null);
 	let proformaFiles = $state<File[]>([]);
 
 	// Generation fields
-	let tipoProyecto = $state('O'); // Proyecto de Obra (O)
-	let estadoPredio = $state('A'); // Ampliación (A)
-	let tipoEdificacion = $state('M'); // Viv. Multifamiliar (M)
-	let numeroPisos = $state('4');
-	let distrito = $state('ATE Salamanca');
+	let tipoProyecto = $state('');
+	let estadoPredio = $state('');
+	let tipoEdificacion = $state('');
+	let tipoEdificacion2 = $state('');
+	let numeroPisos = $state('');
+	let departamento = $state('Lima');
+	let provincia = $state('Lima');
+	let distrito = $state('');
 	let clienteNombreGen = $state('');
 
 	function getMesFromFecha() {
@@ -44,6 +50,7 @@
 	let observaciones = $state('');
 	let isSaving = $state(false);
 	let saveError = $state('');
+	let caracteristicasTab = $state<'consultoria' | 'obra'>('consultoria');
 
 	// Reset whenever the modal is opened — antes solo se limpiaba saveError, y el resto de los
 	// campos quedaba con lo que se había escrito (o con datos de ejemplo hardcodeados: fecha vieja,
@@ -54,14 +61,24 @@
 			saveError = '';
 			proyectoNombre = '';
 			fechaVenta = new Date().toISOString().slice(0, 10);
+			asesor = '';
 			selectedClienteId = '';
 			nuevoClienteNombre = '';
 			valorVenta = '';
 			comisionPorcentaje = '';
+			direccionPredio = '';
+			tipoProyecto = '';
+			estadoPredio = '';
+			tipoEdificacion = '';
+			tipoEdificacion2 = '';
 			numeroPisos = '';
+			departamento = 'Lima';
+			provincia = 'Lima';
+			distrito = '';
 			contratoFile = null;
-			proformaFile = null;
+			proformaFiles = [];
 			observaciones = '';
+			caracteristicasTab = 'consultoria';
 		}
 	});
 
@@ -126,12 +143,6 @@ let codigoGenerado = $derived(
 		}
 	}
 
-	async function loadCurrentAsesor() {
-		const resolvedAsesor = await resolveCurrentAsesorName();
-		asesor = resolvedAsesor;
-		console.log('[NuevaVentaModal] Asesor inicial cargado:', asesor);
-	}
-
 	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number, projectName: string) {
 		const { url } = await uploadProjectDocument(file, { type, projectId, projectName });
 		return url;
@@ -194,10 +205,24 @@ let codigoGenerado = $derived(
 		}
 	}
 
+	/** Para el dropdown de Asesor — trae también auth_user_id (no solo el nombre) para poder guardar
+	 * asesor_comercial_id del empleado realmente elegido, no siempre el del usuario que tiene la
+	 * sesión abierta (puede estar registrando la venta en nombre de otro asesor). */
+	async function loadEmpleados() {
+		try {
+			const { data, error } = await supabase.from('empleados').select('nombre,auth_user_id').order('nombre', { ascending: true });
+			if (error) throw error;
+			empleados = data || [];
+		} catch (err) {
+			console.error('[NuevaVentaModal] ❌ Error cargando empleados:', err);
+			empleados = [];
+		}
+	}
+
 	onMount(() => {
-		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes y asesor...');
+		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes y empleados...');
 		loadClientes();
-		loadCurrentAsesor();
+		loadEmpleados();
 	});
 
 	async function handleGuardar() {
@@ -286,7 +311,11 @@ let codigoGenerado = $derived(
 		const asesorFinal = (asesor || '').trim() || await resolveCurrentAsesorName();
 		const clienteNombreFinal = getClienteNombreActual().trim();
 		const { data: { session } } = await supabase.auth.getSession();
-		const asesorUserId = session?.user?.id ?? null;
+		// asesor_comercial_id debe ser del EMPLEADO elegido en el dropdown (puede no ser quien tiene la
+		// sesión abierta, ej. un admin registrando la venta a nombre de otro asesor) — si ese empleado
+		// no tiene auth_user_id vinculado, cae al usuario de la sesión actual como respaldo.
+		const empleadoAsesor = empleados.find((e) => e.nombre === asesorFinal);
+		const asesorUserId = empleadoAsesor?.auth_user_id ?? session?.user?.id ?? null;
 		asesor = asesorFinal;
 
 		console.log('[NuevaVentaModal] Datos calculados:', {
@@ -312,11 +341,15 @@ let codigoGenerado = $derived(
 			tip_proyecto: tipoProyecto,
 			estado_predio: estadoPredio,
 			tipo_edifica: tipoEdificacion,
+			tipo_edificacion2: tipoEdificacion2 || null,
 			nro_pisos: numeroPisosValue,
 			distrito: distrito ? distrito.substring(0, 4).trim() : null,
+			provincia: provincia ? provincia.substring(0, 4).trim() : null,
+			departamento: departamento ? departamento.substring(0, 4).trim() : null,
 			costo_estima: precioVenta,
 			estado_proyecto: 'activo',
 			ubicacion: distrito,
+			direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 			usuario_registro: asesorUserId,
 			descripcion: observaciones?.trim() ? observaciones.trim() : null
 		};
@@ -453,8 +486,58 @@ let codigoGenerado = $derived(
 						</h3>
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Proyecto *</label>
-								<input type="text" bind:value={proyectoNombre} placeholder="Nombre del proyecto" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Clientes *</label>
+								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
+									<option value="">-- Selecciona cliente --</option>
+									{#each clientes as c}
+										<option value={c.id_cliente}>{c.nombre}</option>
+									{/each}
+									<option value="__new__">+ Nuevo cliente</option>
+								</select>
+								{#if selectedClienteId === '__new__'}
+									<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+								{/if}
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Departamento *</label>
+								<select
+									value={departamento}
+									onchange={(e) => {
+										departamento = (e.currentTarget as HTMLSelectElement).value;
+										provincia = (PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [])[0] ?? '';
+										distrito = '';
+									}}
+									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+								>
+									{#each DEPARTAMENTOS as d}
+										<option value={d}>{d}</option>
+									{/each}
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Provincia *</label>
+								<select
+									value={provincia}
+									onchange={(e) => { provincia = (e.currentTarget as HTMLSelectElement).value; distrito = ''; }}
+									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+								>
+									{#each PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [] as p}
+										<option value={p}>{p}</option>
+									{/each}
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
+								<select bind:value={distrito} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									{#if (DISTRITOS_POR_PROVINCIA[provincia] ?? []).length === 0}
+										<option value="" disabled>-- Sin distritos cargados para {provincia} --</option>
+									{:else}
+										<option value="">-- Selecciona --</option>
+										{#each DISTRITOS_POR_PROVINCIA[provincia] as d}
+											<option value={d}>{d}</option>
+										{/each}
+									{/if}
+								</select>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Código de proyecto</label>
@@ -467,25 +550,20 @@ let codigoGenerado = $derived(
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Asesor *</label>
-								<input type="text" readonly value={asesor || 'Cargando asesor...'} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none text-slate-700">
-								<span class="text-[10px] text-slate-400 mt-0.5">Se asigna automáticamente con el usuario activo</span>
-							</div>
-							<div class="flex flex-col gap-1 md:col-span-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Cliente *</label>
-								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
-									<option value="">-- Selecciona cliente --</option>
-									{#each clientes as c}
-										<option value={c.id_cliente}>{c.nombre}</option>
+								<select bind:value={asesor} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
+									<option value="">-- Selecciona empleado --</option>
+									{#each empleados as e}
+										<option value={e.nombre}>{e.nombre}</option>
 									{/each}
-									<option value="__new__">+ Nuevo cliente</option>
 								</select>
-								{#if selectedClienteId === '__new__'}
-									<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
-								{/if}
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
 								<input type="text" bind:value={valorVenta} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+							</div>
+							<div class="flex flex-col gap-1 md:col-span-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Dirección del predio</label>
+								<input type="text" bind:value={direccionPredio} placeholder="Ej. Jr. Los Álamos 123" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
 								<div class="flex flex-col gap-1">
@@ -545,10 +623,30 @@ let codigoGenerado = $derived(
 							<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
 							Características del proyecto nuevo
 						</h3>
+
+						<div class="flex gap-1 mb-4 border-b border-slate-200">
+							<button
+								type="button"
+								onclick={() => (caracteristicasTab = 'consultoria')}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${caracteristicasTab === 'consultoria' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+							>
+								Consultoría
+							</button>
+							<button
+								type="button"
+								onclick={() => (caracteristicasTab = 'obra')}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+							>
+								Obra
+							</button>
+						</div>
+
+						{#if caracteristicasTab === 'consultoria'}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
 								<select bind:value={tipoProyecto} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
 									<option value="O">Proyecto de Obra (O)</option>
 									<option value="M">Mantenimiento (M)</option>
 								</select>
@@ -556,6 +654,7 @@ let codigoGenerado = $derived(
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
 								<select bind:value={estadoPredio} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
 									<option value="A">Ampliación (A)</option>
 									<option value="N">Nuevo (N)</option>
 								</select>
@@ -563,8 +662,16 @@ let codigoGenerado = $derived(
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
 								<select bind:value={tipoEdificacion} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
 									<option value="M">Viv. Multifamiliar (M)</option>
 									<option value="U">Viv. Unifamiliar (U)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación (2) *</label>
+								<select bind:value={tipoEdificacion2} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="F">Familiar (F)</option>
 									<option value="C">Comercial (C)</option>
 								</select>
 							</div>
@@ -573,14 +680,6 @@ let codigoGenerado = $derived(
 								<input type="number" bind:value={numeroPisos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 							</div>
 
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
-								<select bind:value={distrito} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-									<option value="ATE Salamanca">Ate</option>
-									<option value="Miraflores">Miraflores</option>
-									<option value="San Isidro">San Isidro</option>
-								</select>
-							</div>
 						</div>
 
 						<!-- Generador de Código visual -->
@@ -649,6 +748,9 @@ let codigoGenerado = $derived(
 								</div>
 							</div>
 						</div>
+						{:else}
+						<p class="text-sm text-slate-400 text-center py-10">Todavía no hay campos configurados para Obra.</p>
+						{/if}
 					</section>
 
 					<!-- Observaciones -->
