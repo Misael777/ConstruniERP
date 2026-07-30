@@ -58,43 +58,19 @@ const handler: RequestHandler = async ({ request }) => {
 
 	const { url, fileId } = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma' | 'documento' | 'comprobante');
 
-	if (projectId && type !== 'documento' && type !== 'comprobante') {
-		if (type === 'contrato') {
-			const { error: updateError } = await supabase
-				.from('proyecto')
-				.update({ contrato: url })
-				.eq('id_proyecto', projectId);
+	// El contrato sigue siendo un archivo único por proyecto — se escribe directo en la columna.
+	// Las proformas ya NO se guardan aquí: ahora son filas en `documento_proyecto`
+	// (tipo_documento='Proforma', ver ProformasVentaModal.svelte/NuevaVentaModal.svelte), que el
+	// cliente inserta explícitamente después de subir el archivo — permite múltiples proformas por
+	// proyecto en vez de una sola incrustada en `descripcion`.
+	if (projectId && type === 'contrato') {
+		const { error: updateError } = await supabase
+			.from('proyecto')
+			.update({ contrato: url })
+			.eq('id_proyecto', projectId);
 
-			if (updateError) {
-				return json({ success: false, error: 'No se pudo actualizar el contrato en el proyecto.' }, { status: 500 });
-			}
-		} else {
-			const { data: project, error: selectError } = await supabase
-				.from('proyecto')
-				.select('descripcion')
-				.eq('id_proyecto', projectId)
-				.single();
-
-			if (selectError) {
-				return json({ success: false, error: 'No se pudo leer el proyecto para guardar la proforma.' }, { status: 500 });
-			}
-
-			const baseDescription = String(project?.descripcion || '');
-			let descripcion = baseDescription ? `${baseDescription} ` : '';
-			descripcion += `Proforma: ${url}`;
-
-			if (descripcion.length > 200) {
-				descripcion = descripcion.slice(0, 200);
-			}
-
-			const { error: updateError } = await supabase
-				.from('proyecto')
-				.update({ descripcion })
-				.eq('id_proyecto', projectId);
-
-			if (updateError) {
-				return json({ success: false, error: 'No se pudo actualizar la proforma en el proyecto.' }, { status: 500 });
-			}
+		if (updateError) {
+			return json({ success: false, error: 'No se pudo actualizar el contrato en el proyecto.' }, { status: 500 });
 		}
 	}
 

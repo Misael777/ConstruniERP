@@ -9,7 +9,9 @@ import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
 import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
+import ProformasVentaModal from '$lib/components/comercial/ventas/ProformasVentaModal.svelte';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+import { describeError } from '$lib/shared/describeError';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -85,7 +87,7 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 			// dos personas distintas).
 			let query = supabase
 				.from('proyecto')
-				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato');
+				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato,estado_proyecto');
 
 			if (!isAdmin()) {
 				const { data: userData } = await supabase.auth.getUser();
@@ -141,13 +143,19 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 					comisionPct,
 					comision: Math.round(valor * (comisionPct / 100)),
 					descripcion: project.descripcion || '',
-					contrato: project.contrato || ''
+					contrato: project.contrato || '',
+					estado_proyecto: project.estado_proyecto || 'activo'
 				};
 			});
 
-			const ventasCerradas = ventas.length;
-			const valorTotal = ventas.reduce((sum, row) => sum + row.valor, 0);
-			const comisionTotal = ventas.reduce((sum, row) => sum + row.comision, 0);
+			// Los KPIs de arriba ("Ventas cerradas", "Valor total", etc.) reflejan solo las ventas ya
+			// CERRADAS (estado_proyecto='venta_cerrada' — ver ProformasVentaModal.svelte). La tabla y
+			// los gráficos de más abajo siguen mostrando TODAS las ventas del asesor (abiertas y
+			// cerradas), pedido explícito del usuario para no ocultar las que siguen en negociación.
+			const cerradas = ventas.filter((row) => row.estado_proyecto === 'venta_cerrada');
+			const ventasCerradas = cerradas.length;
+			const valorTotal = cerradas.reduce((sum, row) => sum + row.valor, 0);
+			const comisionTotal = cerradas.reduce((sum, row) => sum + row.comision, 0);
 			const ticketPromedio = ventasCerradas ? Math.round(valorTotal / ventasCerradas) : 0;
 
 			kpis = {
@@ -245,19 +253,6 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 		performDelete();
 	}
 
-	/** Vuelca un error de Supabase/Postgrest a un string legible — message/code/details/hint, lo que
-	 * venga presente. Se usa en el alert de abajo porque en el .exe empaquetado no hay consola
-	 * accesible para el usuario: el alert ES la única forma de ver qué falló realmente. */
-	function describeError(err: any): string {
-		if (!err) return 'Error desconocido';
-		const parts: string[] = [];
-		if (err.message) parts.push(String(err.message));
-		if (err.code) parts.push(`code=${err.code}`);
-		if (err.details) parts.push(`details=${err.details}`);
-		if (err.hint) parts.push(`hint=${err.hint}`);
-		return parts.length ? parts.join(' | ') : String(err);
-	}
-
 	async function performDelete() {
 		if (!confirmRow) return;
 		isDeleting = true;
@@ -319,21 +314,6 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 		pdfPreviewTitle = '';
 	}
 
-	function extractProformaUrl(description: string) {
-		console.log('[extractProformaUrl] Description recibida:', description);
-		if (!description) {
-			console.log('[extractProformaUrl] Description vacía');
-			return null;
-		}
-		const match = description.match(/https?:\/\/[\w\-._%~:\/\?#[\]@!$&'()*+,;=%]+/);
-		if (match) {
-			console.log('[extractProformaUrl] URL encontrada:', match[0]);
-			return match[0];
-		}
-		console.log('[extractProformaUrl] No se encontró URL en la descripción');
-		return null;
-	}
-
 	function handleViewContrato(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.contrato) {
@@ -345,18 +325,27 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 		isPdfPreviewOpen = true;
 	}
 
-	function handleViewProforma(e: CustomEvent) {
+	// Gestión de proformas (múltiples por venta) + cierre formal de la venta — ver
+	// ProformasVentaModal.svelte. Reemplaza al viejo handleViewProforma de un solo archivo.
+	let proformasModalOpen = $state(false);
+	let proformasModalProyecto: { id_proyecto: number; nombre_proyecto: string; contrato: string; estado_proyecto: string } | null = $state(null);
+
+	function handleGestionarProformas(e: CustomEvent) {
 		const row = e.detail.row;
-		const url = extractProformaUrl(String(row?.descripcion || ''));
-		if (!url) {
-			alert('No se encontró la proforma para este proyecto.');
-			return;
-		}
-		pdfPreviewUrl = url;
-		pdfPreviewTitle = `Proforma - ${row.proyecto}`;
-		isPdfPreviewOpen = true;
+		if (!row?.id) return;
+		proformasModalProyecto = {
+			id_proyecto: row.id,
+			nombre_proyecto: row.proyecto,
+			contrato: row.contrato || '',
+			estado_proyecto: row.estado_proyecto || 'activo'
+		};
+		proformasModalOpen = true;
 	}
 
+	function closeProformasModal() {
+		proformasModalOpen = false;
+		proformasModalProyecto = null;
+	}
 </script>
 
 <svelte:head>
@@ -405,7 +394,7 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:viewProforma={handleViewProforma} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleGestionarProformas} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -434,3 +423,11 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
+
+<!-- Gestión de proformas (múltiples) + cierre formal de venta -->
+<ProformasVentaModal
+	open={proformasModalOpen}
+	proyecto={proformasModalProyecto}
+	onClose={closeProformasModal}
+	onUpdated={fetchVentas}
+/>

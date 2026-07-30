@@ -2,9 +2,7 @@
 	import { fade, scale } from 'svelte/transition';
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
-	import { isRunningInTauri, uploadToDriveClient } from '$lib/driveUploadClient';
-	import { generateUniqueFileName } from '$lib/shared/fileNaming';
+	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
@@ -20,7 +18,7 @@
 	let comisionPorcentaje = $state('10');
 
 	let contratoFile = $state<File | null>(null);
-	let proformaFile = $state<File | null>(null);
+	let proformaFiles = $state<File[]>([]);
 
 	// Generation fields
 	let tipoProyecto = $state('O'); // Proyecto de Obra (O)
@@ -134,36 +132,9 @@ let codigoGenerado = $derived(
 		console.log('[NuevaVentaModal] Asesor inicial cargado:', asesor);
 	}
 
-	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number) {
-		console.log(`[NuevaVentaModal] uploadDocument() - type: ${type}, file: ${file.name} (${file.size}b), inTauri: ${isRunningInTauri()}`);
-
-		// In Tauri (adapter-static build) there is no Node server, so +server.ts routes don't
-		// exist. Upload directly to Google Drive using the client-side helper.
-		if (isRunningInTauri()) {
-			const fileName = generateUniqueFileName(type, file.name);
-			const { url } = await uploadToDriveClient(file, fileName, type);
-			console.log(`[NuevaVentaModal] ✓ Tauri upload OK. URL: ${url}`);
-			return url;
-		}
-
-		// Web: delegate to the SvelteKit server endpoint
-		const formData = new FormData();
-		formData.append('file', file);
-		formData.append('type', type);
-		formData.append('projectId', String(projectId));
-
-		const response = await fetch(resolveApiUrl('/api/upload-document'), {
-			method: 'POST',
-			body: formData
-		});
-
-		const result = await parseJsonResponse(response);
-		if (!response.ok || !result.success) {
-			throw new Error(result.error || 'Error al subir documento.');
-		}
-
-		console.log(`[NuevaVentaModal] ✓ Server upload OK. URL: ${result.url}`);
-		return result.url as string;
+	async function uploadDocument(type: 'contrato' | 'proforma', file: File, projectId: number, projectName: string) {
+		const { url } = await uploadProjectDocument(file, { type, projectId, projectName });
+		return url;
 	}
 
 	async function ensureCliente(nombre: string) {
@@ -241,7 +212,7 @@ let codigoGenerado = $derived(
 			valorVenta,
 			comisionPorcentaje,
 			contratoFile: contratoFile?.name || null,
-			proformaFile: proformaFile?.name || null
+			proformaFiles: proformaFiles.map((f) => f.name)
 		});
 
 		saveError = '';
@@ -389,30 +360,36 @@ let codigoGenerado = $derived(
 			try {
 				console.log('[NuevaVentaModal] Verificando documentos para subir...');
 				console.log('[NuevaVentaModal]   contratoFile:', contratoFile ? `${contratoFile.name} (${contratoFile.size} bytes)` : 'null');
-				console.log('[NuevaVentaModal]   proformaFile:', proformaFile ? `${proformaFile.name} (${proformaFile.size} bytes)` : 'null');
-
-				let contratoUrl: string | null = null;
-				let proformaUrl: string | null = null;
+				console.log('[NuevaVentaModal]   proformaFiles:', proformaFiles.map((f) => `${f.name} (${f.size} bytes)`));
 
 				if (contratoFile) {
 					console.log('[NuevaVentaModal] Subiendo contrato...');
-					contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId);
+					const contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId, proyectoNombre);
 					console.log('[NuevaVentaModal] ✓ Contrato subido exitosamente. URL:', contratoUrl);
+					await supabase.from('proyecto').update({ contrato: contratoUrl }).eq('id_proyecto', nuevoProyectoId);
 				}
 
-				if (proformaFile) {
-					console.log('[NuevaVentaModal] Subiendo proforma...');
-					proformaUrl = await uploadDocument('proforma', proformaFile, nuevoProyectoId);
+				// Cada proforma se registra como una fila propia en documento_proyecto — la venta
+				// puede tener varias mientras sigue en negociación (ver ProformasVentaModal.svelte,
+				// donde luego se elige cuál es la final para cerrar la venta).
+				for (const file of proformaFiles) {
+					console.log('[NuevaVentaModal] Subiendo proforma:', file.name);
+					const proformaUrl = await uploadDocument('proforma', file, nuevoProyectoId, proyectoNombre);
 					console.log('[NuevaVentaModal] ✓ Proforma subida exitosamente. URL:', proformaUrl);
-				}
 
-				const updatePayload: Record<string, unknown> = {};
-				if (contratoUrl) updatePayload.contrato = contratoUrl;
-				if (proformaUrl) {
-					updatePayload.descripcion = [observaciones?.trim(), `Proforma: ${proformaUrl}`].filter(Boolean).join('\n');
-				}
-				if (Object.keys(updatePayload).length > 0) {
-					await supabase.from('proyecto').update(updatePayload).eq('id_proyecto', nuevoProyectoId);
+					const { error: docError } = await supabase.from('documento_proyecto').insert({
+						id_proyecto: nuevoProyectoId,
+						nombre: file.name.replace(/\.[^.]+$/, ''),
+						tipo_documento: 'Proforma',
+						estado: 'borrador',
+						es_proforma_final: false,
+						storage_url: proformaUrl,
+						file_size: file.size,
+						file_type: file.type,
+						creado_por: asesorFinal,
+						responsable: asesorFinal
+					});
+					if (docError) throw docError;
 				}
 
 				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
@@ -522,16 +499,29 @@ let codigoGenerado = $derived(
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
 								<div class="flex flex-col gap-1">
-									<label class="text-xs font-semibold text-[#0f3b5e]">Proforma</label>
+									<label class="text-xs font-semibold text-[#0f3b5e]">Proformas</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
-										<input type="file" accept="application/pdf" onchange={(event) => proformaFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
-										{#if proformaFile}
-											<span class="text-xs text-slate-500 truncate max-w-[120px]">{proformaFile.name}</span>
-										{:else}
-											<span>Adjuntar PDF</span>
-										{/if}
+										<input type="file" accept="application/pdf" onchange={(event) => {
+											const input = event.currentTarget as HTMLInputElement;
+											const file = input.files?.[0];
+											if (file) proformaFiles = [...proformaFiles, file];
+											input.value = '';
+										}} class="hidden" />
+										<span>Agregar PDF</span>
 									</label>
+									{#if proformaFiles.length > 0}
+										<div class="flex flex-col gap-1 mt-1">
+											{#each proformaFiles as file, i}
+												<div class="flex items-center justify-between gap-2 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
+													<span class="truncate">{file.name}</span>
+													<button type="button" onclick={() => proformaFiles = proformaFiles.filter((_, idx) => idx !== i)} class="text-slate-400 hover:text-rose-600 shrink-0" aria-label="Quitar proforma">
+														<i class="fas fa-times"></i>
+													</button>
+												</div>
+											{/each}
+										</div>
+									{/if}
 								</div>
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Contrato</label>
