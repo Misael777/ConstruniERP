@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
-	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
+	import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
 	import { describeError } from '$lib/shared/describeError';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
@@ -133,6 +133,7 @@
 	async function handleEliminarProforma(doc: ProformaDoc) {
 		if (!confirm(`¿Eliminar la proforma "${doc.nombre}"? Esta acción no se puede deshacer.`)) return;
 		try {
+			await deleteProjectDocumentFile(doc.storage_url);
 			const { error } = await supabase.from('documento_proyecto').delete().eq('id_documento', doc.id_documento);
 			if (error) throw error;
 			if (selectedFinalId === doc.id_documento) selectedFinalId = null;
