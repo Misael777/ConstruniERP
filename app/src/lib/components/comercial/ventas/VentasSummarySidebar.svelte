@@ -24,7 +24,11 @@
 		valorTotal = 2850000,
 		comisionTotal = 285000,
 		ventasCount = 48,
-		asesorCount = 5
+		asesorCount = 5,
+		desde = '',
+		hasta = '',
+		onDesdeChange = (_value: string) => {},
+		onHastaChange = (_value: string) => {}
 	} = $props<{
 		labels?: string[];
 		tipoData?: number[];
@@ -33,6 +37,13 @@
 		comisionTotal?: number;
 		ventasCount?: number;
 		asesorCount?: number;
+		/** Filtro de fecha del cuadro de resumen (Desde/Hasta) — el cálculo de valorTotal/comisionTotal/
+		 * ventasCount/asesorCount ya viene filtrado por este rango desde el padre (ver +page.svelte,
+		 * fetchResumenVentas), este componente solo muestra los controles y avisa cuando cambian. */
+		desde?: string;
+		hasta?: string;
+		onDesdeChange?: (value: string) => void;
+		onHastaChange?: (value: string) => void;
 	}>();
 
 	function formatMoney(amount: number) {
@@ -75,9 +86,28 @@
 			</div>
 		</div>
 		
-		<select class="w-full text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 mb-6">
-			<option>Este año</option>
-		</select>
+		<div class="grid grid-cols-2 gap-2 mb-6">
+			<div class="flex flex-col gap-1">
+				<label class="text-[10px] font-semibold text-slate-500" for="resumen-desde">Desde</label>
+				<input
+					id="resumen-desde"
+					type="date"
+					value={desde}
+					onchange={(e) => onDesdeChange((e.currentTarget as HTMLInputElement).value)}
+					class="w-full text-sm px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700"
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label class="text-[10px] font-semibold text-slate-500" for="resumen-hasta">Hasta</label>
+				<input
+					id="resumen-hasta"
+					type="date"
+					value={hasta}
+					onchange={(e) => onHastaChange((e.currentTarget as HTMLInputElement).value)}
+					class="w-full text-sm px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700"
+				/>
+			</div>
+		</div>
 
 		<div class="space-y-4">
 			<div class="flex items-center justify-between">
@@ -85,28 +115,28 @@
 					<i class="fas fa-sack-dollar text-emerald-500 w-4 text-center"></i>
 					<span class="text-sm font-medium">Valor total de ventas</span>
 				</div>
-				<span class="text-sm font-bold text-slate-800">S/ 2,850,000.00</span>
+				<span class="text-sm font-bold text-slate-800">{formatMoney(valorTotal)}</span>
 			</div>
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-3 text-slate-600">
 					<i class="fas fa-hand-holding-usd text-orange-500 w-4 text-center"></i>
 					<span class="text-sm font-medium">Comisión total</span>
 				</div>
-				<span class="text-sm font-bold text-slate-800">S/ 285,000.00</span>
+				<span class="text-sm font-bold text-slate-800">{formatMoney(comisionTotal)}</span>
 			</div>
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-3 text-slate-600">
 					<i class="far fa-building text-blue-500 w-4 text-center"></i>
-					<span class="text-sm font-medium">Proyectos vendidos</span>
+					<span class="text-sm font-medium">Ventas cerradas</span>
 				</div>
-				<span class="text-sm font-bold text-slate-800">48</span>
+				<span class="text-sm font-bold text-slate-800">{ventasCount}</span>
 			</div>
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-3 text-slate-600">
 					<i class="fas fa-user-friends text-purple-500 w-4 text-center"></i>
 					<span class="text-sm font-medium">Asesores con ventas</span>
 				</div>
-				<span class="text-sm font-bold text-slate-800">5</span>
+				<span class="text-sm font-bold text-slate-800">{asesorCount}</span>
 			</div>
 		</div>
 	</section>

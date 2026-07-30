@@ -74,6 +74,75 @@ import { describeError } from '$lib/shared/describeError';
 
 	let isModalOpen = $state(false);
 
+	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
+	// de abajo, a pedido del usuario. Por defecto: el año en curso. Se recalcula con una consulta
+	// PROPIA (no reutiliza `ventas`, que viene limitada a 100 filas) para que el resumen sea exacto
+	// sin importar cuántas ventas cerradas haya en el rango elegido.
+	function primerDiaDelAnio() {
+		const hoy = new Date();
+		return `${hoy.getFullYear()}-01-01`;
+	}
+	function hoyISO() {
+		return new Date().toISOString().slice(0, 10);
+	}
+
+	let resumenDesde = $state(primerDiaDelAnio());
+	let resumenHasta = $state(hoyISO());
+	let resumenLoading = $state(false);
+	let resumenKpis = $state({ valorTotal: 0, comisionTotal: 0, ventasCount: 0, asesorCount: 0 });
+
+	/** Solo ventas CERRADAS (estado_proyecto='venta_cerrada') cuya fecha caiga en [resumenDesde,
+	 * resumenHasta] — mismo filtro de permisos que fetchVentas: un asesor no-admin solo ve las suyas
+	 * (asesor_comercial_id = su propio id), un admin ve todas. */
+	async function fetchResumenVentas() {
+		resumenLoading = true;
+		try {
+			let query = supabase
+				.from('proyecto')
+				.select('precio_venta,comision_asesor,responsable,asesor_comercial_id,fecha_inicio_plan,estado_proyecto')
+				.eq('estado_proyecto', 'venta_cerrada');
+
+			if (resumenDesde) query = query.gte('fecha_inicio_plan', resumenDesde);
+			if (resumenHasta) query = query.lte('fecha_inicio_plan', resumenHasta);
+
+			if (!isAdmin()) {
+				const { data: userData } = await supabase.auth.getUser();
+				const currentUserId = userData?.user?.id;
+				query = currentUserId ? query.eq('asesor_comercial_id', currentUserId) : query.eq('asesor_comercial_id', '00000000-0000-0000-0000-000000000000');
+			}
+
+			const { data, error } = await query;
+			if (error) throw error;
+
+			const filas = data || [];
+			const asesores = new Set<string>();
+			let valorTotal = 0;
+			let comisionTotal = 0;
+			for (const row of filas as any[]) {
+				const valor = Number(row.precio_venta) || 0;
+				const comisionPct = Number(row.comision_asesor) || 10;
+				valorTotal += valor;
+				comisionTotal += valor * (comisionPct / 100);
+				asesores.add(String(row.asesor_comercial_id || row.responsable || 'Sin asignar'));
+			}
+
+			resumenKpis = { valorTotal, comisionTotal: Math.round(comisionTotal), ventasCount: filas.length, asesorCount: asesores.size };
+		} catch (err) {
+			console.error('[Ventas] Error cargando el resumen de ventas:', err);
+		} finally {
+			resumenLoading = false;
+		}
+	}
+
+	function handleResumenDesdeChange(value: string) {
+		resumenDesde = value;
+		fetchResumenVentas();
+	}
+	function handleResumenHastaChange(value: string) {
+		resumenHasta = value;
+		fetchResumenVentas();
+	}
+
 	async function fetchVentas() {
 		isLoading = true;
 		errorMessage = null;
@@ -197,6 +266,7 @@ import { describeError } from '$lib/shared/describeError';
 
 	onMount(() => {
 		fetchVentas();
+		fetchResumenVentas();
 	});
 
 	function openModal() {
@@ -403,7 +473,19 @@ import { describeError } from '$lib/shared/describeError';
 
 				<!-- Right Area (Summary Sidebar) -->
 				<div class="xl:col-span-1">
-					<VentasSummarySidebar labels={summary.tipoLabels} tipoData={summary.tipoData} topAsesores={summary.topAsesores} valorTotal={kpis.valorTotal} comisionTotal={kpis.comisionTotal} ventasCount={kpis.ventasCerradas} asesorCount={summary.asesorCount} />
+					<VentasSummarySidebar
+					labels={summary.tipoLabels}
+					tipoData={summary.tipoData}
+					topAsesores={summary.topAsesores}
+					valorTotal={resumenKpis.valorTotal}
+					comisionTotal={resumenKpis.comisionTotal}
+					ventasCount={resumenKpis.ventasCount}
+					asesorCount={resumenKpis.asesorCount}
+					desde={resumenDesde}
+					hasta={resumenHasta}
+					onDesdeChange={handleResumenDesdeChange}
+					onHastaChange={handleResumenHastaChange}
+				/>
 				</div>
 			</div>
 		</div>

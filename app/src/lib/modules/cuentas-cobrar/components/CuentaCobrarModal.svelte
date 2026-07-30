@@ -14,6 +14,7 @@
 		mode = 'create',
 		cuenta = null,
 		dynamicOptions = {},
+		centroCostoMontoMap = {},
 		onClose,
 		onSaved
 	}: {
@@ -21,6 +22,9 @@
 		mode: 'create' | 'edit';
 		cuenta: CuentaCobrar | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
+		/** id_centro_costo (texto) -> precio_venta de la venta cerrada vinculada — para autocompletar
+		 * "Monto" al elegir el Centro de Costo (ver handleInput), a pedido del usuario. */
+		centroCostoMontoMap?: Record<string, number>;
 		onClose: () => void;
 		onSaved: () => void;
 	} = $props();
@@ -36,6 +40,9 @@
 			const raw = cuenta ? (cuenta as any)[field.key] : '';
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
+		// Moneda arranca en Soles por defecto para una cuenta nueva (a pedido del usuario) — en
+		// edición se respeta lo que ya tenía guardado esa cuenta.
+		if (!cuenta && !values.moneda) values.moneda = 'PEN';
 		return values;
 	}
 
@@ -105,6 +112,10 @@
 	});
 
 	function isDisabled(field: (typeof formFields)[number]): boolean {
+		// "Monto" lo determina el Centro de Costo elegido (precio de esa venta cerrada) — a pedido del
+		// usuario, se muestra pero ya no se puede editar a mano una vez que hay un monto conocido para
+		// ese centro de costo (ver handleInput/centroCostoMontoMap).
+		if (field.key === 'monto' && centroCostoMontoMap[formValues.id_centro_costo] !== undefined) return true;
 		return field.disabledWhen?.(formValues) ?? false;
 	}
 
@@ -112,6 +123,12 @@
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
+		// Autocompleta "Monto" con el precio de venta de la venta cerrada vinculada a ese Centro de
+		// Costo — el usuario puede seguir editándolo a mano después si quiere ajustarlo.
+		if (key === 'id_centro_costo') {
+			const monto = centroCostoMontoMap[masked];
+			if (monto !== undefined) formValues = { ...formValues, monto: monto.toFixed(2) };
+		}
 		revalidate();
 	}
 

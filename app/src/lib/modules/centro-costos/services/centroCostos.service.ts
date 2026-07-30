@@ -129,8 +129,17 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		// "Cuentas Internas" — proyecto queda fuera a propósito, ver doc de ListParams.vinculado.
 		query = query.or('id_cliente.not.is.null,id_proveedor.not.is.null,id_empleado.not.is.null');
 	} else if (params.vinculado === false) {
-		// "Centros de Costos" — manuales + los vinculados a proyecto.
-		query = query.is('id_cliente', null).is('id_proveedor', null).is('id_empleado', null);
+		// "Centros de Costos" — a pedido del usuario, solo se muestran los de tipo 'bolsa general' y
+		// los vinculados a un proyecto que YA es una venta cerrada (estado_proyecto='venta_cerrada') —
+		// un proyecto todavía en negociación, u otros tipos manuales (ej. consultoría), quedan fuera.
+		// PostgREST no permite mezclar en un solo .or() una condición de columna propia (tipo) con una
+		// del embed (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se traen los
+		// ids de proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo='bolsa general'.
+		const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+		if (errorCerrados) throw errorCerrados;
+		const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+		const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
+		query = query.or(`tipo.eq.bolsa general,${idProyectoFilter}`);
 	}
 
 	const search = params.search?.trim();

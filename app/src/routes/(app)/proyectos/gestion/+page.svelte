@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 
 	type Proyecto = {
 		id_proyecto: number;
@@ -19,10 +20,18 @@
 
 	onMount(async () => {
 		try {
-			const { data, error } = await supabase
-				.from('proyecto')
-				.select('*')
-				.order('created_at', { ascending: false });
+			// Un usuario no-administrador solo debe ver (y poder entrar a) SUS PROPIOS proyectos, no
+			// los de toda la cartera — mismo criterio ya usado en Ventas (ver comercial/ventas/
+			// +page.svelte, fetchVentas). Se filtra por asesor_comercial_id (UUID de auth de quien
+			// creó el proyecto/venta), no por `responsable` (texto libre, no confiable).
+			let query = supabase.from('proyecto').select('*');
+			if (!isAdmin()) {
+				const { data: userData } = await supabase.auth.getUser();
+				const currentUserId = userData?.user?.id;
+				query = currentUserId ? query.eq('asesor_comercial_id', currentUserId) : query.eq('asesor_comercial_id', '00000000-0000-0000-0000-000000000000');
+			}
+
+			const { data, error } = await query.order('created_at', { ascending: false });
 
 			if (error) throw error;
 			proyectos = data || [];

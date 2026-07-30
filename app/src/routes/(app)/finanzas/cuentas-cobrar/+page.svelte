@@ -17,7 +17,7 @@
 		confirmarCobroCobrado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -82,6 +82,7 @@
 
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [], responsable: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
+	let centroCostoMontoMap = $state<Record<string, number>>({});
 
 	let selectedId = $state<number | null>(null);
 	let selectedCobros = $state<Cobro[]>([]);
@@ -158,14 +159,20 @@
 			return;
 		}
 		try {
-			const [clienteOptions, proyectoOptions, centroCostoOptions, empleadoOptions] = await Promise.all([
+			const [clienteOptions, proyectoOptions, centroCostoOptions, centroCostoOptionsVentasCerradas, montoMap, empleadoOptions] = await Promise.all([
 				getClienteOptions(supabase),
 				getProyectoOptions(supabase),
 				getCentroCostoOptions(supabase),
+				getCentroCostoOptionsVentasCerradas(supabase),
+				getCentroCostoMontoVentaCerrada(supabase),
 				getEmpleadoOptions(supabase)
 			]);
-			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptions, responsable: empleadoOptions };
+			// "Centro de Costo" en Nueva/Editar Cuenta por Cobrar solo ofrece las ventas cerradas (a
+			// pedido del usuario) — el de la transacción de respaldo (confirmar cobro) sigue usando la
+			// lista completa sin filtrar, igual que en Cuentas por Pagar.
+			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptionsVentasCerradas, responsable: empleadoOptions };
 			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
+			centroCostoMontoMap = montoMap;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
@@ -655,7 +662,7 @@
 	{/if}
 </div>
 
-<CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
+<CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} centroCostoMontoMap={centroCostoMontoMap} onClose={closeModal} onSaved={handleSaved} />
 <CobroModal
 	open={cobroModalOpen}
 	idCuentaCobrar={selectedId}

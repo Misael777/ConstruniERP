@@ -364,6 +364,47 @@ export async function getCentroCostoOptionsPagos(client: SupabaseClient): Promis
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
 }
 
+/** Para "Centro de Costo" en Nueva/Editar Cuenta por Cobrar — a pedido del usuario, solo ofrece los
+ * centros de costo vinculados a un proyecto que YA es una venta cerrada (estado_proyecto=
+ * 'venta_cerrada'); excluye bolsa general/consultoría y proyectos aún en negociación. Etiqueta
+ * "código - nombre del proyecto" (mismo formato que getCentroCostoOptions). */
+export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	if (errorCerrados) throw errorCerrados;
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	if (idsCerrados.length === 0) return [];
+
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre')
+		.in('id_proyecto', idsCerrados)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
+/** id_centro_costo (como texto) -> precio_venta de la venta cerrada vinculada — para
+ * CuentaCobrarModal.svelte: autocompletar "Monto" al elegir el Centro de Costo (ver
+ * getCentroCostoOptionsVentasCerradas, misma fuente de centros de costo). */
+export async function getCentroCostoMontoVentaCerrada(client: SupabaseClient): Promise<Record<string, number>> {
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	if (errorCerrados) throw errorCerrados;
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	if (idsCerrados.length === 0) return {};
+
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, proyecto:id_proyecto(precio_venta)')
+		.in('id_proyecto', idsCerrados);
+	if (error) throw error;
+
+	const mapa: Record<string, number> = {};
+	for (const row of (data ?? []) as any[]) {
+		mapa[String(row.id_centro_costo)] = Number(row.proyecto?.precio_venta) || 0;
+	}
+	return mapa;
+}
+
 /** id_centro_costo (como texto) -> tipo — para CuentaPagarModal.svelte: cuando el centro de costo
  * elegido es 'bolsa general', el campo "ID Partida" se bloquea (un gasto de bolsa general no se
  * carga a una partida puntual de obra). */

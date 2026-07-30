@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 	import { toast } from '$lib/stores/toast';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { generateUniqueFileName } from '$lib/shared/fileNaming';
@@ -72,9 +73,21 @@
 		descripcion: string;
 	};
 
+	/** Mismo criterio de armado que el "Código generado" de Nueva Venta (ver codigoGenerado en
+	 * NuevaVentaModal.svelte) — ahí es solo una vista previa que nunca se guarda, así que se
+	 * recalcula aquí a partir de los campos ya guardados del proyecto para mostrarlo en "Nombre del
+	 * Proyecto" al abrir uno existente para actualizarlo (incluye ventas ya cerradas). */
+	function generarCodigoProyecto(p: Proyecto): string {
+		const fecha = p.fecha_inicio_plan ? new Date(p.fecha_inicio_plan) : null;
+		const mes = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getMonth() + 1).padStart(2, '0') : '';
+		const anio = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getFullYear()).slice(2) : '';
+		const clienteNombre = p.cliente?.nombre?.trim() || 'Cliente';
+		return `${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${p.nro_pisos ?? ''} - ${mes}${anio} - ${p.distrito ?? ''} - ${clienteNombre}`;
+	}
+
 	function seedForm(p: Proyecto): FormFields {
 		return {
-			nombre_proyecto: p.nombre_proyecto ?? '',
+			nombre_proyecto: generarCodigoProyecto(p),
 			responsable: p.responsable ?? '',
 			tip_proyecto: p.tip_proyecto ?? '',
 			ubicacion: p.ubicacion ?? '',
@@ -111,6 +124,20 @@
 				.eq('id_proyecto', id)
 				.single();
 			if (error) throw error;
+
+			// Bloqueo por URL directa: la lista (gestion/+page.svelte) ya oculta los proyectos ajenos,
+			// pero un usuario no-administrador podría igual escribir la URL de un proyecto de otro y
+			// entrar sin este chequeo — mismo criterio de propiedad (asesor_comercial_id) que la lista.
+			if (!isAdmin()) {
+				const { data: userData } = await supabase.auth.getUser();
+				const currentUserId = userData?.user?.id;
+				if (data.asesor_comercial_id !== currentUserId) {
+					toast.error('No tienes permiso para ver este proyecto.');
+					goto('/proyectos/gestion');
+					return;
+				}
+			}
+
 			proyecto = data;
 			form = seedForm(data);
 			lastLoadedProjectId = id;

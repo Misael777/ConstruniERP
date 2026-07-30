@@ -12,7 +12,6 @@
 	let proyectoNombre = $state('');
 	let fechaVenta = $state('2026-05-20');
 	let asesor = $state('');
-	let empleados = $state<{ nombre: string; auth_user_id: string | null }[]>([]);
 	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
 	let nuevoClienteNombre = $state('');
@@ -61,7 +60,7 @@
 			saveError = '';
 			proyectoNombre = '';
 			fechaVenta = new Date().toISOString().slice(0, 10);
-			asesor = '';
+			loadCurrentAsesor();
 			selectedClienteId = '';
 			nuevoClienteNombre = '';
 			valorVenta = '';
@@ -205,24 +204,16 @@ let codigoGenerado = $derived(
 		}
 	}
 
-	/** Para el dropdown de Asesor — trae también auth_user_id (no solo el nombre) para poder guardar
-	 * asesor_comercial_id del empleado realmente elegido, no siempre el del usuario que tiene la
-	 * sesión abierta (puede estar registrando la venta en nombre de otro asesor). */
-	async function loadEmpleados() {
-		try {
-			const { data, error } = await supabase.from('empleados').select('nombre,auth_user_id').order('nombre', { ascending: true });
-			if (error) throw error;
-			empleados = data || [];
-		} catch (err) {
-			console.error('[NuevaVentaModal] ❌ Error cargando empleados:', err);
-			empleados = [];
-		}
+	async function loadCurrentAsesor() {
+		const resolvedAsesor = await resolveCurrentAsesorName();
+		asesor = resolvedAsesor;
+		console.log('[NuevaVentaModal] Asesor inicial cargado:', asesor);
 	}
 
 	onMount(() => {
-		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes y empleados...');
+		console.log('[NuevaVentaModal] onMount() ejecutado, cargando clientes y asesor...');
 		loadClientes();
-		loadEmpleados();
+		loadCurrentAsesor();
 	});
 
 	async function handleGuardar() {
@@ -311,11 +302,7 @@ let codigoGenerado = $derived(
 		const asesorFinal = (asesor || '').trim() || await resolveCurrentAsesorName();
 		const clienteNombreFinal = getClienteNombreActual().trim();
 		const { data: { session } } = await supabase.auth.getSession();
-		// asesor_comercial_id debe ser del EMPLEADO elegido en el dropdown (puede no ser quien tiene la
-		// sesión abierta, ej. un admin registrando la venta a nombre de otro asesor) — si ese empleado
-		// no tiene auth_user_id vinculado, cae al usuario de la sesión actual como respaldo.
-		const empleadoAsesor = empleados.find((e) => e.nombre === asesorFinal);
-		const asesorUserId = empleadoAsesor?.auth_user_id ?? session?.user?.id ?? null;
+		const asesorUserId = session?.user?.id ?? null;
 		asesor = asesorFinal;
 
 		console.log('[NuevaVentaModal] Datos calculados:', {
@@ -550,12 +537,8 @@ let codigoGenerado = $derived(
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Asesor *</label>
-								<select bind:value={asesor} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
-									<option value="">-- Selecciona empleado --</option>
-									{#each empleados as e}
-										<option value={e.nombre}>{e.nombre}</option>
-									{/each}
-								</select>
+								<input type="text" readonly value={asesor || 'Cargando asesor...'} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none text-slate-700">
+								<span class="text-[10px] text-slate-400 mt-0.5">Se asigna automáticamente con el usuario activo</span>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
