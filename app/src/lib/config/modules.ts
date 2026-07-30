@@ -29,8 +29,8 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     icon: 'fas fa-store', 
     permiso: 'ver_comercial',
     subItems: [
-      { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' },
       { path: '/comercial/clientes', label: 'Clientes', permiso: 'ver_comercial_clientes' },
+      { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' },
       { path: '/comercial/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }
     ]
   },

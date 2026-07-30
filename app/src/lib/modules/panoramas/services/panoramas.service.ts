@@ -64,6 +64,9 @@ export interface PagoPendienteItem {
 	 * proveedor no tiene uno cargado. */
 	producto: string | null;
 	monto: number;
+	/** saldo_pendiente de TODA la cuenta (no solo lo visible en esta tarjeta/cluster) — para la
+	 * Bandeja de Pagos Pendientes, ver +page.svelte. */
+	saldoPendiente: number;
 	fechaVencimiento: string | null;
 	/** fecha_pago_programada — fecha interna de planificación de pago, distinta de fechaVencimiento
 	 * (la fecha contractual). Es lo que posiciona/reprograma el calendario de Panoramas de Pago. */
@@ -191,12 +194,16 @@ function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 		titulo: row.observacion || row.num_documento || row.proveedor?.razon_social || 'Pago sin descripción',
 		proveedorNombre: row.proveedor?.razon_social ?? 'Sin proveedor',
 		producto: row.proveedor?.vendedor ?? null,
-		// Si está fraccionada, `monto` es la suma de SOLO las cuotas visibles en ESTA tarjeta (no el
-		// total de la cuenta) — se usa para sumar totales por columna (proyeccionPagos, CSV, etc.);
-		// usar el total completo sobre-contaría cuando las cuotas de una cuenta terminan repartidas
-		// entre Bandeja/Panorama 1/Panorama 2. `montoTotal` (abajo) sigue siendo el total real de la
-		// cuenta completa, para el popup de cuotas.
-		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.monto_comprometido),
+		// Si está fraccionada, `monto` es la suma de SOLO las cuotas 'programado' (no pagadas) visibles
+		// en ESTA tarjeta (no el total de la cuenta) — se usa para sumar totales por columna
+		// (proyeccionPagos, CSV, etc.); usar el total completo sobre-contaría cuando las cuotas de una
+		// cuenta terminan repartidas entre Bandeja/Panorama 1/Panorama 2. Si NO está fraccionada, se usa
+		// saldo_pendiente (lo que falta pagar), no monto_comprometido (el total original) — una cuenta
+		// simple con pagos parciales ya registrados no debe proyectarse por su monto completo, mismo
+		// criterio que las fracciones (que ya excluyen lo pagado). `montoTotal` (abajo) sigue siendo el
+		// comprometido original de la cuenta completa, para el popup de cuotas.
+		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.saldo_pendiente),
+		saldoPendiente: Number(row.saldo_pendiente),
 		fechaVencimiento: row.fecha_vencimiento,
 		fechaProgramada: row.fecha_pago_programada,
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
@@ -738,18 +745,64 @@ export interface ResumenPagos {
 
 /** Agregados para "Resumen general" del tablero de Panoramas de Pago — sobre TODAS las cuentas por
  * pagar pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas. Inverso de
- * getResumenCobros. */
+ * getResumenCobros.
+ *
+ * `vencidoTotal` NO es el saldo completo de las cuentas marcadas 'vencido' (esa cuenta puede tener
+ * cuotas futuras que todavía no vencen) — a pedido del usuario, es la suma de los MONTOS de las
+ * cuotas ('pagos' con estado_pago='programado') cuya fecha programada ya pasó. Cuentas sin ninguna
+ * cuota registrada todavía (fraccionadas o no) usan su propio saldo_pendiente contra
+ * fecha_pago_programada/fecha_vencimiento, mismo criterio que computeEstadoCuentaPagar. `vencidoCount`
+ * sigue siendo cuentas (documentos) distintas con al menos una cuota vencida, no el conteo de cuotas. */
 export async function getResumenPagos(client: SupabaseClient): Promise<ResumenPagos> {
-	const { data, error } = await client.from('cuentas_pagar').select('saldo_pendiente, estado, id_proveedor').in('estado', ['pendiente', 'vencido']);
+	const { data, error } = await client
+		.from('cuentas_pagar')
+		.select('id_cuenta_pagar, saldo_pendiente, estado, fecha_vencimiento, fecha_pago_programada, id_proveedor')
+		.in('estado', ['pendiente', 'vencido']);
 	if (error) throw error;
 
 	const rows = (data ?? []) as any[];
 	const totalPendiente = rows.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
-	const vencidos = rows.filter((r) => r.estado === 'vencido');
-	const vencidoTotal = vencidos.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
 	const proveedoresConCompras = new Set(rows.map((r) => r.id_proveedor)).size;
 
-	return { totalPendiente, vencidoTotal, vencidoCount: vencidos.length, proveedoresConCompras };
+	const hoy = new Date();
+	hoy.setHours(0, 0, 0, 0);
+	const yaVencio = (fecha: string | null) => {
+		if (!fecha) return false;
+		const d = new Date(fecha);
+		return !Number.isNaN(d.getTime()) && d.getTime() < hoy.getTime();
+	};
+
+	const ids = rows.map((r) => r.id_cuenta_pagar);
+	const { data: pagos } =
+		ids.length > 0
+			? await client.from('pagos').select('id_cuenta_pagar, monto, fecha_pago').in('id_cuenta_pagar', ids).eq('estado_pago', 'programado')
+			: { data: [] as any[] };
+
+	const pagosPorCuenta = new Map<number, any[]>();
+	for (const p of (pagos ?? []) as any[]) {
+		const lista = pagosPorCuenta.get(p.id_cuenta_pagar) ?? [];
+		lista.push(p);
+		pagosPorCuenta.set(p.id_cuenta_pagar, lista);
+	}
+
+	let vencidoTotal = 0;
+	const cuentasVencidas = new Set<number>();
+	for (const r of rows) {
+		const propios = pagosPorCuenta.get(r.id_cuenta_pagar) ?? [];
+		if (propios.length > 0) {
+			for (const p of propios) {
+				if (yaVencio(p.fecha_pago)) {
+					vencidoTotal += Number(p.monto);
+					cuentasVencidas.add(r.id_cuenta_pagar);
+				}
+			}
+		} else if (yaVencio(r.fecha_pago_programada ?? r.fecha_vencimiento)) {
+			vencidoTotal += Number(r.saldo_pendiente);
+			cuentasVencidas.add(r.id_cuenta_pagar);
+		}
+	}
+
+	return { totalPendiente, vencidoTotal, vencidoCount: cuentasVencidas.size, proveedoresConCompras };
 }
 
 /** Reprograma fecha_vencimiento de una o más cuentas por cobrar (drag-and-drop en la vista Calendario

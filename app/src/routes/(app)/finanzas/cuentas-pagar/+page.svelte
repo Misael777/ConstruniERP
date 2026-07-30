@@ -247,17 +247,21 @@
 	// fotma_pago=1 (Contado) es "una sola cuota" por definición — no genera filas reales en `pagos`
 	// (a diferencia de Crédito, que las autogenera vía "Fraccionar este pago"). Mientras no se haya
 	// registrado ningún pago real todavía, se muestra una cuota SINTÉTICA (id_pago=-1, nunca existe en
-	// BD) usando Fecha Pago Programada y el saldo pendiente — así el usuario ve "su cuota" igual que
-	// vería cualquier cuota de una cuenta a Crédito, y puede hacer doble clic para registrarla.
+	// BD) usando el saldo pendiente y una fecha — así el usuario ve "su cuota" igual que vería
+	// cualquier cuota de una cuenta a Crédito, y puede hacer doble clic para registrarla. La fecha
+	// prioriza Fecha Pago Programada (opcional, se llena a mano en Contado) y si no hay, cae a Fecha
+	// Vencimiento — mismo criterio que ya se usa en la lista principal (ver más abajo) — para no dejar
+	// la cuota sin mostrarse solo porque esa fecha opcional quedó vacía.
 	const esContadoSinPagos = $derived(selectedCuenta?.fotma_pago === 1 && selectedPagos.length === 0);
 	const cuotasAMostrar = $derived.by((): Pago[] => {
-		if (esContadoSinPagos && selectedCuenta?.fecha_pago_programada) {
+		const fechaSintetica = selectedCuenta?.fecha_pago_programada || selectedCuenta?.fecha_vencimiento;
+		if (esContadoSinPagos && fechaSintetica) {
 			return [
 				{
 					id_pago: -1,
-					id_cuenta_pagar: selectedCuenta.id_cuenta_pagar,
-					monto: selectedCuenta.saldo_pendiente,
-					fecha_pago: selectedCuenta.fecha_pago_programada,
+					id_cuenta_pagar: selectedCuenta!.id_cuenta_pagar,
+					monto: selectedCuenta!.saldo_pendiente,
+					fecha_pago: fechaSintetica,
 					medio_pago: null,
 					num_operacion: null,
 					usuario_registro: null,
@@ -514,7 +518,7 @@
 							</div>
 							<div class="min-w-0">
 								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-								<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_vencimiento)}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</p>
 							</div>
 						</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
@@ -577,7 +581,7 @@
 						</div>
 					</div>
 					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
-						<span>Vencimiento: {formatDate(item.fecha_vencimiento)}</span>
+						<span>Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</span>
 						{#if retraso !== null}
 							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>
 						{/if}
