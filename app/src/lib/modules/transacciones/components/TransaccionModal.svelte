@@ -239,6 +239,12 @@
 			formValues.cuente_destino = '';
 			formValues.cuente_origen = '';
 		}
+		// Efectivo/Yape o Plin no tienen una cuenta bancaria de por medio — se bloquean y limpian Cuenta
+		// Origen/Destino (a pedido del usuario), igual que se limpian arriba al cambiar Tipo/Alcance.
+		if (key === 'medio_pago' && (masked === '1' || masked === '4')) {
+			formValues.cuente_destino = '';
+			formValues.cuente_origen = '';
+		}
 		if (key === 'tipo_alcance') {
 			// Tipo de Documento también depende del Alcance (Talonario/Boucher en Interna vs el
 			// catálogo completo en Externa, ver optionsWhen) — se limpia en cualquier dirección del
@@ -271,6 +277,9 @@
 	// getCuentaBancoOptions.
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
 	const cuentaOrigenEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso'));
+	// Efectivo ('1') o Yape o Plin ('4') no pasan por ninguna cuenta bancaria — a pedido del usuario,
+	// Cuenta Origen y Cuenta Destino se bloquean (y se limpian, ver handleInput) en ambos casos.
+	const cuentasBloqueadasPorMedioPago = $derived(['1', '4'].includes(String(formValues.medio_pago ?? '')));
 	// Campos que se bloquean cuando el Alcance es Interna — 'tipo' y 'estado' además se fuerzan a un
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
@@ -302,11 +311,18 @@
 		// ninguna opción que calzara con el id ya guardado.
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
 			if (lockedFields.includes(field.key)) return dynamicOptions[field.key] || [];
-			// Excepción a pedido del usuario: en Externa + Ingreso, "Origen de Transacción" NO usa la
-			// lista mezclada de clientes/proyectos/proveedores/empleados (getCentroCostoOptionsExternosOrigen)
-			// — se queda con la lista plana de solo proyectos (dynamicOptions.id_centro_costo_origen), la
-			// misma que ya usa Interna.
+			// Excepciones a pedido del usuario, ambas en Externa:
+			// - Ingreso: "Origen de Transacción" NO usa la lista mezclada de clientes/proyectos/
+			//   proveedores/empleados (getCentroCostoOptionsExternosOrigen) — se queda con la lista plana
+			//   de solo proyectos (dynamicOptions.id_centro_costo_origen), la misma que ya usa Interna.
+			// - Egreso: "Destino de Transacción" usa "Centro de Costos" en su sentido estricto (ver
+			//   getCentroCostoOptionsSoloCentros — misma definición que el tab "Centro de Costos" del
+			//   submódulo Centro de Costos y Cuentas Internas: obra/consultoría/bolsa general + proyectos
+			//   con venta cerrada), en vez de la lista mezclada con "Cuentas Internas"
+			//   (cliente/proveedor/empleado, getCentroCostoOptionsExternos).
 			const esOrigenIngresoExterna = field.key === 'id_centro_costo_origen' && formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso';
+			const esDestinoEgresoExterna = field.key === 'id_centro_costo_destino' && formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso';
+			if (esDestinoEgresoExterna) return dynamicOptions.id_centro_costo_destino_solo_centros || [];
 			const key = formValues.tipo_alcance === 'externa' && !esOrigenIngresoExterna ? `${field.key}_externo` : field.key;
 			return dynamicOptions[key] || [];
 		}
@@ -483,12 +499,13 @@
 					{#each otherFields as field (field.key)}
 						{@const isLocked = lockedFields.includes(field.key)}
 						{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
-						{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna}
+						{@const isBloqueadoPorMedioPago = cuentasBloqueadasPorMedioPago && (field.key === 'cuente_origen' || field.key === 'cuente_destino')}
+						{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
 						<div>
 							<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
-								{#if isLocked || isBloqueadoInterna}<Lock size={12} class="text-slate-400" />{/if}
+								{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
 							</label>
 
 							{#if field.tipo === 'select' || field.options || (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
@@ -535,6 +552,8 @@
 								<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
 							{:else if isBloqueadoInterna}
 								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
+							{:else if isBloqueadoPorMedioPago}
+								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 							{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
 								<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
 							{:else if field.helpText}

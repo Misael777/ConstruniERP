@@ -368,6 +368,26 @@ export async function getCentroCostoProductoLookup(client: SupabaseClient): Prom
 	return lookup;
 }
 
+/** Para "Destino de Transacción" en Externa + Egreso (a pedido del usuario) — misma definición
+ * EXACTA de "Centro de Costos" (a diferencia de "Cuentas Internas") que ya usa el submódulo
+ * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los 3 tipos creados a
+ * mano (obra/consultoría/bolsa general) MÁS los vinculados a un proyecto que YA es una venta
+ * cerrada. Excluye "Cuentas Internas" (cliente/proveedor/empleado) y proyectos aún en negociación. */
+export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	if (errorCerrados) throw errorCerrados;
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
+
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre')
+		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
 /** Para "Centro de Costo" en Nueva/Editar Cuenta por Pagar — a pedido del usuario, solo ofrece
  * centros de costo de tipo proyecto, consultoría o bolsa general (excluye obra/área/otro y los
  * vinculados a cliente/proveedor/empleado, ver tipo en centroCostos.config.ts). */

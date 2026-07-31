@@ -21,6 +21,7 @@
 		getCentroCostoOptionsProyectos,
 		getCentroCostoOptionsExternos,
 		getCentroCostoOptionsExternosOrigen,
+		getCentroCostoOptionsSoloCentros,
 		getCentroCostoProductoLookup,
 		getPartidaOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
@@ -202,11 +203,12 @@
 			return;
 		}
 		try {
-			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, cuentaBancoOptions, productoLookup] = await Promise.all([
+			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, centroCostoSoloCentros, cuentaBancoOptions, productoLookup] = await Promise.all([
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsProyectos(supabase),
 				getCentroCostoOptionsExternos(supabase),
 				getCentroCostoOptionsExternosOrigen(supabase),
+				getCentroCostoOptionsSoloCentros(supabase),
 				getCuentaBancoOptions(supabase),
 				getCentroCostoProductoLookup(supabase)
 			]);
@@ -217,6 +219,7 @@
 				id_centro_costo_destino: centroCostoProyectos,
 				id_centro_costo_origen_externo: centroCostoExternosOrigen,
 				id_centro_costo_destino_externo: centroCostoExternosDestino,
+				id_centro_costo_destino_solo_centros: centroCostoSoloCentros,
 				cuenta_banco: cuentaBancoOptions
 			};
 			detalleDynamicOptions = { id_partida: await getPartidaOptions(supabase) };

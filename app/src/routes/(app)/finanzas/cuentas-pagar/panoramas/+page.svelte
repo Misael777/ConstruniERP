@@ -202,6 +202,14 @@
 			panorama1 = p1;
 			panorama2 = p2;
 			panorama0Items = p0;
+			// Este refetch se llama justo después de soltar un arrastre (ver handlePanoramaFinalize/
+			// handleBandejaFinalize) — bumpear la versión de inmediato fuerza el remount del {#key} (ver
+			// template) MIENTRAS svelte-dnd-action todavía está a mitad de su propia animación de FLIP_MS
+			// tras el drop, lo que le deja un elemento "fantasma" (shadow del drag) huérfano superpuesto
+			// sobre la tarjeta — la falla visual reportada por el usuario ("Panorama 1" se veía
+			// aplastado/con texto superpuesto justo después de soltar un arrastre). Esperar a que esa
+			// animación termine antes de remontar evita la colisión.
+			await new Promise((resolve) => setTimeout(resolve, FLIP_MS));
 			panorama1Version++;
 			panorama2Version++;
 			panorama0Version++;
@@ -276,10 +284,15 @@
 		fetchBandeja();
 	}
 
-	// A pedido del usuario: la proyección de pagos de un panorama es la suma del monto de la cuota MÁS
-	// CERCANA a hoy de cada cuenta ahí (no la suma de todas sus cuotas visibles) — ver cuotaMasCercana.
+	// A pedido del usuario: la proyección de pagos de un panorama es la suma de TODO lo visible en esa
+	// columna — si una cuenta está fraccionada y tiene 2+ cuotas visibles ahí, cuentan TODAS, no solo
+	// la más cercana a hoy (`item.monto` ya viene como esa suma, ver mapRow en panoramas.service.ts;
+	// para una cuenta sin fraccionar es su saldo_pendiente). Antes solo sumaba la cuota más cercana de
+	// cada cuenta (ver cuotaMasCercana, que se sigue usando para el resumen "Cuota: X" de cada tarjeta
+	// en la Bandeja, un propósito distinto), lo que hacía que este total no coincidiera con lo que se
+	// veía sumando las tarjetas a simple vista.
 	function proyeccionPagos(id: 1 | 2) {
-		return panoramaItems(id).reduce((sum, i) => sum + cuotaMasCercana(i).monto, 0);
+		return panoramaItems(id).reduce((sum, i) => sum + i.monto, 0);
 	}
 	function flujoProyectado(id: 1 | 2) {
 		return proyeccionIngresos - proyeccionPagos(id);
@@ -374,6 +387,11 @@
 			return;
 		}
 		await Promise.all([fetchBandeja(), fetchPanoramas()]);
+		// Reafirma que el panorama vaciado queda en 0 — reorderPanorama ya confirmó que TODAS sus cuotas
+		// quedaron con panorama_id=null, así que no debería hacer falta, pero si el refetch de arriba
+		// trae de vuelta datos no del todo frescos (lag de lectura justo después de escribir), esto evita
+		// que "Total proyección de pagos" rebote de nuevo al monto viejo en vez de quedar en S/0.00.
+		setPanoramaItems(id, []);
 		toast.success(`${PANORAMAS[id - 1].nombre} vaciado`);
 	}
 	/** "Copiar" (a diferencia de "vaciar") es a propósito solo visual/de la sesión actual, NO se

@@ -22,7 +22,8 @@
 		getCentroCostoOptions,
 		getCentroCostoOptionsProyectos,
 		getCentroCostoOptionsExternos,
-		getCentroCostoOptionsExternosOrigen
+		getCentroCostoOptionsExternosOrigen,
+		getCentroCostoOptionsSoloCentros
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
@@ -85,6 +86,7 @@
 	let centroCostoProyectosOptions = $state<FieldOption[]>([]);
 	let centroCostoExternosDestinoOptions = $state<FieldOption[]>([]);
 	let centroCostoExternosOrigenOptions = $state<FieldOption[]>([]);
+	let centroCostoSoloCentrosOptions = $state<FieldOption[]>([]);
 	let cuentaBancoOptions = $state<FieldOption[]>([]);
 	let resultado = $state<MovimientosCajaResult | null>(null);
 	let loading = $state(true);
@@ -119,6 +121,7 @@
 		id_centro_costo_destino: centroCostoProyectosOptions,
 		id_centro_costo_origen_externo: centroCostoExternosOrigenOptions,
 		id_centro_costo_destino_externo: centroCostoExternosDestinoOptions,
+		id_centro_costo_destino_solo_centros: centroCostoSoloCentrosOptions,
 		cuenta_banco: cuentaBancoOptions
 	});
 
@@ -158,17 +161,19 @@
 			return;
 		}
 		try {
-			const [completo, proyectos, externosDestino, externosOrigen, bancos] = await Promise.all([
+			const [completo, proyectos, externosDestino, externosOrigen, soloCentros, bancos] = await Promise.all([
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsProyectos(supabase),
 				getCentroCostoOptionsExternos(supabase),
 				getCentroCostoOptionsExternosOrigen(supabase),
+				getCentroCostoOptionsSoloCentros(supabase),
 				getCuentaBancoOptions(supabase)
 			]);
 			centroCostoOptions = completo;
 			centroCostoProyectosOptions = proyectos;
 			centroCostoExternosDestinoOptions = externosDestino;
 			centroCostoExternosOrigenOptions = externosOrigen;
+			centroCostoSoloCentrosOptions = soloCentros;
 			cuentaBancoOptions = bancos;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo');
