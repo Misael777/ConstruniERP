@@ -298,6 +298,7 @@ export async function getTransDetalles(client: SupabaseClient, idTransaccion: nu
 	return (data ?? []) as TransDetalle[];
 }
 
+
 export async function createTransDetalle(
 	client: SupabaseClient,
 	idTransaccion: number,
@@ -349,6 +350,22 @@ export async function getCentroCostoOptions(client: SupabaseClient): Promise<Fie
 	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre').order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+}
+
+/** Mapa id_centro_costo (como string) -> "Producto y Servicio" del proveedor vinculado a ese centro
+ * de costo (columna real `proveedor.vendedor`, ver ProveedorModal.svelte y getProveedorOptions en
+ * cuentasPagar.service.ts) — solo incluye los centros de costo que SÍ están vinculados a un
+ * proveedor. Usado en /finanzas/tranzacciones para mostrar, en cada fila, el producto del proveedor
+ * elegido como origen/destino de esa transacción (a pedido del usuario, no el nombre de la Partida). */
+export async function getCentroCostoProductoLookup(client: SupabaseClient): Promise<Record<string, string>> {
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, proveedor(vendedor)').not('id_proveedor', 'is', null);
+	if (error) throw error;
+	const lookup: Record<string, string> = {};
+	for (const row of (data ?? []) as any[]) {
+		const producto = Array.isArray(row.proveedor) ? row.proveedor[0]?.vendedor : row.proveedor?.vendedor;
+		if (producto) lookup[String(row.id_centro_costo)] = producto;
+	}
+	return lookup;
 }
 
 /** Para "Centro de Costo" en Nueva/Editar Cuenta por Pagar — a pedido del usuario, solo ofrece

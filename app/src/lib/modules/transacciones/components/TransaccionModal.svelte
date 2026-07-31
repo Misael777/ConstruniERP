@@ -61,6 +61,9 @@
 		// Transacción nueva sin alcance elegido todavía -> por defecto Externa (mismo comportamiento
 		// que el formulario tenía antes de agregar este toggle).
 		if (!transaccion && !values.tipo_alcance) values.tipo_alcance = 'externa';
+		// Transacción nueva sin Tipo elegido todavía -> por defecto Egreso, a pedido del usuario (el
+		// selector manual ahora solo ofrece Egreso/Ingreso, ver optionsWhen en transaccion.config.ts).
+		if (!transaccion && !values.tipo) values.tipo = 'egreso';
 		return values;
 	}
 
@@ -299,7 +302,12 @@
 		// ninguna opción que calzara con el id ya guardado.
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
 			if (lockedFields.includes(field.key)) return dynamicOptions[field.key] || [];
-			const key = formValues.tipo_alcance === 'externa' ? `${field.key}_externo` : field.key;
+			// Excepción a pedido del usuario: en Externa + Ingreso, "Origen de Transacción" NO usa la
+			// lista mezclada de clientes/proyectos/proveedores/empleados (getCentroCostoOptionsExternosOrigen)
+			// — se queda con la lista plana de solo proyectos (dynamicOptions.id_centro_costo_origen), la
+			// misma que ya usa Interna.
+			const esOrigenIngresoExterna = field.key === 'id_centro_costo_origen' && formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso';
+			const key = formValues.tipo_alcance === 'externa' && !esOrigenIngresoExterna ? `${field.key}_externo` : field.key;
 			return dynamicOptions[key] || [];
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) return dynamicOptions.cuenta_banco || [];

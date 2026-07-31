@@ -12,6 +12,7 @@
 		open = false,
 		idCuentaCobrar,
 		cobro = null,
+		initialValues = {},
 		onClose,
 		onSaved,
 		onTransaccionSugerida
@@ -20,6 +21,10 @@
 		idCuentaCobrar: number | null;
 		/** Si viene un cobro, el modal edita esa cuota en vez de crear una nueva. */
 		cobro?: Cobro | null;
+		/** Solo se usa en modo "crear" (sin `cobro`) — para prellenar Monto/Fecha de Cobro cuando se
+		 * abre desde la cuota "más próxima" de una cuenta al Contado (que no tiene fila real en `cobros`
+		 * todavía, ver +page.svelte). Se ignora por completo en modo "editar". */
+		initialValues?: Record<string, string>;
 		onClose: () => void;
 		onSaved: () => void;
 		/** Se llama cuando una cuota recién pasa a 'cobrado' y hay un payload de transacción sugerido
@@ -41,7 +46,7 @@
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
-			const raw = cobro ? (cobro as any)[field.key] : '';
+			const raw = cobro ? (cobro as any)[field.key] : (initialValues[field.key] ?? '');
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		return values;

@@ -3,8 +3,10 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Lock, Wallet, LayoutGrid, CalendarDays, Eye } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye } from '@lucide/svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
+	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
@@ -19,6 +21,7 @@
 		getCentroCostoOptionsProyectos,
 		getCentroCostoOptionsExternos,
 		getCentroCostoOptionsExternosOrigen,
+		getCentroCostoProductoLookup,
 		getPartidaOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
@@ -65,8 +68,44 @@
 	let detalleDynamicOptions = $state<Record<string, FieldOption[]>>({ id_partida: [] });
 	const centroCostoLookup = $derived(new Map(centroCostoOptionsCompleto.map((o) => [o.value, o.label])));
 
+	// Producto y Servicio del proveedor vinculado al centro de costo origen/destino de cada
+	// transacción (columna real proveedor.vendedor, ver getCentroCostoProductoLookup) — no toda
+	// transacción tiene un proveedor de por medio (ej. cobros de cliente), por eso puede no haber dato.
+	let centroCostoProductoLookup = $state<Record<string, string>>({});
+	function productoProveedorLabel(item: Transaccion): string {
+		return (
+			centroCostoProductoLookup[String(item.id_centro_costo_destino)] ??
+			centroCostoProductoLookup[String(item.id_centro_costo_origen)] ??
+			'—'
+		);
+	}
+
 	let selectedId = $state<number | null>(null);
 	let selectedDetalles = $state<TransDetalle[]>([]);
+
+	// Selección múltiple para borrado masivo — reemplaza el tachito de basura por fila (ver
+	// handleBulkDelete/AdminConfirmModal más abajo, a pedido del usuario).
+	let checkedIds = $state<Set<number>>(new Set());
+	const allOnPageChecked = $derived(items.length > 0 && items.every((i) => checkedIds.has(i.id_transaccion)));
+	let bulkDeleteModalOpen = $state(false);
+	let bulkDeleting = $state(false);
+
+	function toggleChecked(id: number) {
+		const next = new Set(checkedIds);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		checkedIds = next;
+	}
+
+	function toggleCheckAllOnPage() {
+		const next = new Set(checkedIds);
+		if (allOnPageChecked) {
+			for (const i of items) next.delete(i.id_transaccion);
+		} else {
+			for (const i of items) next.add(i.id_transaccion);
+		}
+		checkedIds = next;
+	}
 
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
@@ -163,14 +202,16 @@
 			return;
 		}
 		try {
-			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, cuentaBancoOptions] = await Promise.all([
+			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, cuentaBancoOptions, productoLookup] = await Promise.all([
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsProyectos(supabase),
 				getCentroCostoOptionsExternos(supabase),
 				getCentroCostoOptionsExternosOrigen(supabase),
-				getCuentaBancoOptions(supabase)
+				getCuentaBancoOptions(supabase),
+				getCentroCostoProductoLookup(supabase)
 			]);
 			centroCostoOptionsCompleto = centroCostoCompleto;
+			centroCostoProductoLookup = productoLookup;
 			dynamicOptions = {
 				id_centro_costo_origen: centroCostoProyectos,
 				id_centro_costo_destino: centroCostoProyectos,
@@ -242,26 +283,48 @@
 
 	const selectedTransaccion = $derived(items.find((i) => i.id_transaccion === selectedId) ?? null);
 
-	async function handleDelete(item: Transaccion) {
-		if (item.aprobado && !isAdmin()) {
-			toast.error('No se puede eliminar: el comprobante ya fue aprobado por un administrador.');
-			return;
-		}
-		const advertencia = item.aprobado
-			? '¿Eliminar esta transacción APROBADA y todo su detalle? Si está vinculada a un cobro/pago, ese cobro/pago volverá a quedar pendiente. Esta acción no se puede deshacer.'
-			: '¿Eliminar esta transacción y todo su detalle? Si está vinculada a un cobro/pago, ese cobro/pago volverá a quedar pendiente. Esta acción no se puede deshacer.';
-		if (!confirm(advertencia)) return;
+	function openBulkDeleteModal() {
+		if (checkedIds.size === 0) return;
+		bulkDeleteModalOpen = true;
+	}
+	function closeBulkDeleteModal() {
+		if (bulkDeleting) return;
+		bulkDeleteModalOpen = false;
+	}
+
+	/** Verifica credenciales de administrador (ver verifyAdminCredentials) y recién ahí elimina las
+	 * transacciones marcadas — deleteTransaccion ya se encarga de devolver a 'programado' cualquier
+	 * cobro/pago vinculado y de recalcular su cuenta (vuelve a 'pendiente'/'no pagada' si corresponde). */
+	async function handleBulkDeleteConfirm(email: string, password: string) {
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		bulkDeleting = true;
+		const ids = Array.from(checkedIds);
+		let okCount = 0;
+		const errores: string[] = [];
 		try {
-			const result = await deleteTransaccion(supabase, item.id_transaccion, isAdmin());
-			if (result.success) {
-				toast.success(result.message);
-				if (selectedId === item.id_transaccion) selectedId = null;
-			} else {
-				toast.error(result.message);
+			for (const id of ids) {
+				try {
+					const result = await deleteTransaccion(supabase, id, true);
+					if (result.success) {
+						okCount++;
+						if (selectedId === id) selectedId = null;
+					} else {
+						errores.push(result.message);
+					}
+				} catch (err: any) {
+					errores.push(err?.message ?? 'Error inesperado');
+				}
 			}
-		} catch (err: any) {
-			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+
+			if (okCount > 0) toast.success(`${okCount} transacción${okCount === 1 ? '' : 'es'} eliminada${okCount === 1 ? '' : 's'} correctamente`);
+			if (errores.length > 0) toast.error(`${errores.length} no se pudieron eliminar: ${errores[0]}`);
+
+			checkedIds = new Set();
+			bulkDeleteModalOpen = false;
 		} finally {
+			bulkDeleting = false;
 			await fetchList();
 			if (calendarCargado) await fetchCalendarData();
 		}
@@ -387,14 +450,44 @@
 		>
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>
+		<div class="flex-1"></div>
+		<button
+			type="button"
+			onclick={openBulkDeleteModal}
+			disabled={checkedIds.size === 0}
+			class="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+		>
+			<Trash2 size={16} /> Eliminar seleccionadas{checkedIds.size > 0 ? ` (${checkedIds.size})` : ''}
+		</button>
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+		{#if items.length > 0}
+			<div class="flex items-center gap-3 px-4 py-2 border-b border-slate-100 bg-slate-50 text-xs text-slate-500">
+				<input
+					type="checkbox"
+					checked={allOnPageChecked}
+					onclick={(e) => e.stopPropagation()}
+					onchange={toggleCheckAllOnPage}
+					class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 shrink-0"
+					aria-label="Seleccionar todas las transacciones de esta página"
+				/>
+				Seleccionar todo en esta página
+			</div>
+		{/if}
 		{#each items as item (item.id_transaccion)}
 			<div
 				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${selectedId === item.id_transaccion ? 'bg-blue-50 hover:bg-blue-50' : ''}`}
 				onclick={() => selectRow(item)}
 			>
+				<input
+					type="checkbox"
+					checked={checkedIds.has(item.id_transaccion)}
+					onclick={(e) => e.stopPropagation()}
+					onchange={() => toggleChecked(item.id_transaccion)}
+					class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 shrink-0"
+					aria-label={`Seleccionar transacción ${item.num_documento || item.id_transaccion}`}
+				/>
 				<div class="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-100 text-slate-500 flex items-center justify-center">
 					{#if item.comprobante_url}
 						<img
@@ -417,6 +510,10 @@
 					</p>
 					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
 					<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
+					<p class="text-[11px] text-slate-400 mt-0.5 truncate">
+						Producto: {productoProveedorLabel(item)}
+						{#if item.tipo_transaccion}· N° Cuota: {item.tipo_transaccion}{/if}
+					</p>
 				</div>
 				<div class="text-right shrink-0">
 					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_total)}</p>
@@ -447,15 +544,6 @@
 					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 						<Pencil size={16} />
 					</button>
-					{#if item.aprobado && !isAdmin()}
-						<span class="p-1.5 text-slate-300" title="Bloqueado: comprobante aprobado, solo un administrador puede eliminarlo">
-							<Lock size={16} />
-						</span>
-					{:else}
-						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-							<Trash2 size={16} />
-						</button>
-					{/if}
 				</div>
 			</div>
 		{:else}
@@ -532,3 +620,11 @@
 <TransaccionModal open={modalOpen} mode={modalMode} transaccion={editingTransaccion} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
 <TransDetalleModal open={detalleModalOpen} idTransaccion={selectedId} detalle={editingDetalle} dynamicOptions={detalleDynamicOptions} onClose={closeDetalleModal} onSaved={handleDetalleSaved} />
 <DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />
+<AdminConfirmModal
+	open={bulkDeleteModalOpen}
+	title="Confirmar eliminación"
+	message={`Vas a eliminar ${checkedIds.size} transacción${checkedIds.size === 1 ? '' : 'es'} y todo su detalle. Si alguna está vinculada a un cobro/pago, ese cobro/pago volverá a quedar pendiente. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.`}
+	confirmLabel="Eliminar"
+	onConfirm={handleBulkDeleteConfirm}
+	onClose={closeBulkDeleteModal}
+/>

@@ -244,17 +244,22 @@
 
 	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_pagar === selectedId) ?? null);
 
-	// fotma_pago=1 (Contado) es "una sola cuota" por definición — no genera filas reales en `pagos`
-	// (a diferencia de Crédito, que las autogenera vía "Fraccionar este pago"). Mientras no se haya
-	// registrado ningún pago real todavía, se muestra una cuota SINTÉTICA (id_pago=-1, nunca existe en
-	// BD) usando el saldo pendiente y una fecha — así el usuario ve "su cuota" igual que vería
-	// cualquier cuota de una cuenta a Crédito, y puede hacer doble clic para registrarla. La fecha
-	// prioriza Fecha Pago Programada (opcional, se llena a mano en Contado) y si no hay, cae a Fecha
-	// Vencimiento — mismo criterio que ya se usa en la lista principal (ver más abajo) — para no dejar
-	// la cuota sin mostrarse solo porque esa fecha opcional quedó vacía.
-	const esContadoSinPagos = $derived(selectedCuenta?.fotma_pago === 1 && selectedPagos.length === 0);
+	// Contado es "una sola cuota" por definición — no genera filas reales en `pagos` (a diferencia de
+	// Crédito, que las autogenera vía "Fraccionar este pago"). Mientras no exista NINGÚN pago real
+	// todavía (ni siquiera uno programado — puede ser Contado, o Crédito sin fraccionar aún) y haya
+	// saldo pendiente real, se muestra una cuota SINTÉTICA (id_pago=-1, nunca existe en BD) usando el
+	// saldo pendiente y una fecha — así el usuario ve "su cuota" en vez de un simple "sin pagos", y
+	// puede hacer doble clic para registrarla. No se filtra por `fotma_pago === 1`: esa comparación
+	// exacta fallaba en la práctica (cuentas Contado reales que igual mostraban "Sin pagos registrados
+	// todavía" pese a tener saldo pendiente) y de todas formas el criterio real es "no hay ninguna
+	// cuota que mostrar", sin importar la Forma de Pago exacta guardada.
+	const esContadoSinPagos = $derived(selectedPagos.length === 0 && Number(selectedCuenta?.saldo_pendiente ?? 0) > 0);
 	const cuotasAMostrar = $derived.by((): Pago[] => {
-		const fechaSintetica = selectedCuenta?.fecha_pago_programada || selectedCuenta?.fecha_vencimiento;
+		// fecha_emision como último respaldo (a diferencia de fecha_pago_programada/fecha_vencimiento,
+		// que son opcionales) — sin esto, una cuenta Contado sin ninguna de esas dos fechas cargadas se
+		// quedaba sin cuota sintética que mostrar y el panel decía "Sin pagos registrados todavía" en
+		// vez de presentar la info de la cuenta, aunque sí tuviera saldo pendiente real.
+		const fechaSintetica = selectedCuenta?.fecha_pago_programada || selectedCuenta?.fecha_vencimiento || selectedCuenta?.fecha_emision;
 		if (esContadoSinPagos && fechaSintetica) {
 			return [
 				{
@@ -343,6 +348,20 @@
 		editingPago = null;
 		pagoInitialValues = {};
 		pagoModalOpen = true;
+	}
+
+	/** El botón "Registrar Pago" de la cabecera del panel de cuotas: si ya hay una cuota programada
+	 * (real o sintética) pendiente, la reutiliza — mismo camino que hacer doble clic sobre ella
+	 * (handleDobleClicCuota) — para pasarla a "Pagado" en vez de insertar una fila nueva y dejar la
+	 * programada intacta (eso duplicaba la cuota: quedaban dos filas para lo mismo). Solo crea un pago
+	 * suelto de verdad cuando no hay ninguna cuota programada esperando (todas ya están pagadas/
+	 * canceladas, o la cuenta no tiene fraccionamiento configurado). */
+	function handleRegistrarPagoClick() {
+		if (cuotaMasProxima) {
+			handleDobleClicCuota();
+		} else {
+			openCreatePago();
+		}
 	}
 	function openEditPago(pago: Pago) {
 		editingPago = pago;
@@ -518,7 +537,10 @@
 							</div>
 							<div class="min-w-0">
 								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-								<p class="text-[11px] text-slate-400 mt-0.5">Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5 truncate">
+									Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}
+									{#if item.proveedor?.vendedor}· {item.proveedor.vendedor}{/if}
+								</p>
 							</div>
 						</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
@@ -581,7 +603,10 @@
 						</div>
 					</div>
 					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
-						<span>Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</span>
+						<span class="truncate">
+							Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}
+							{#if item.proveedor?.vendedor}· {item.proveedor.vendedor}{/if}
+						</span>
 						{#if retraso !== null}
 							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>
 						{/if}
@@ -619,7 +644,7 @@
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
-				<button type="button" onclick={openCreatePago} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
+				<button type="button" onclick={handleRegistrarPagoClick} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
 					<Plus size={14} /> Registrar Pago
 				</button>
 			</div>
@@ -628,7 +653,7 @@
 				<p class="text-sm text-slate-400 text-center py-6">Sin pagos registrados todavía.</p>
 			{:else}
 				{#if esContadoSinPagos}
-					<p class="text-xs text-slate-400 mb-2">Cuenta al Contado: se trata como una sola cuota. Doble clic para registrar el pago.</p>
+					<p class="text-xs text-slate-400 mb-2">Sin cuotas registradas todavía: se muestra el saldo pendiente como una sola cuota. Doble clic para registrar el pago.</p>
 				{:else}
 					<p class="text-xs text-slate-400 mb-2">Doble clic en cualquier fila para registrar/editar la cuota más próxima.</p>
 				{/if}

@@ -52,7 +52,9 @@ export interface CuentaPagar {
 	prioridad: string | null;
 	usuario_registro: string | null;
 	created_at: string;
-	proveedor?: { razon_social: string } | null;
+	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
+	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. */
+	proveedor?: { razon_social: string; vendedor?: string | null } | null;
 }
 
 export interface Pago {
@@ -165,7 +167,7 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 
 	let query = client
 		.from(TABLE_NAME)
-		.select('*, proveedor(razon_social)', { count: 'exact' })
+		.select('*, proveedor(razon_social, vendedor)', { count: 'exact' })
 		.order(sortField, { ascending: sortDir === 'asc' })
 		.range(from, to);
 
@@ -434,7 +436,7 @@ export async function createPago(
 
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, proveedor:id_proveedor(razon_social)')
+		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, monto_comprometido, proveedor:id_proveedor(razon_social)')
 		.eq(PK_COLUMN, idCuentaPagar)
 		.single();
 	if (!cuenta?.id_centro_costo) {
@@ -451,6 +453,19 @@ export async function createPago(
 		usuario_registro: usuarioRegistro,
 		estado_pago: 'programado' // queda así hasta confirmar la transacción — ver confirmarPagoPagado
 	};
+
+	// Un pago suelto (sin cuota programada que reutilizar, ver +page.svelte handleRegistrarPagoClick)
+	// no debe dejar la suma de cuotas (pagado + programado) por ENCIMA del Monto Comprometido — a
+	// diferencia de editar una cuota existente (ver updatePago/rebalancearUltimaCuota, que ajusta OTRA
+	// cuota programada para absorber la diferencia), aquí no hay ninguna cuota que compensar.
+	const disponible = await montoDisponible(client, idCuentaPagar);
+	const montoNuevo = Number((insertData as Record<string, unknown>).monto);
+	if (montoNuevo - disponible > 0.01) {
+		return {
+			success: false,
+			message: `No se puede registrar: el monto (${formatCurrency(montoNuevo)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}). Revisa las demás cuotas antes de continuar.`
+		};
+	}
 
 	const { data, error } = await client.from(PAGO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
@@ -639,6 +654,25 @@ async function verificarSumaTrasCancelar(
 		sumaResultante: Number(sumaResultante.toFixed(2)),
 		montoComprometido
 	};
+}
+
+/**
+ * Cuánto le queda "sin comprometer" a una cuenta: Monto Comprometido menos la suma de todas sus
+ * cuotas activas (pagado + programado; 'cancelado' no cuenta porque ya no representa una obligación
+ * real). Usado por createPago para no dejar que un pago suelto nuevo empuje la suma de cuotas por
+ * ENCIMA del monto total de la cuenta — a diferencia de editar una cuota ya existente (ver
+ * rebalancearUltimaCuota, más abajo), aquí no hay ninguna otra cuota que pueda absorber el exceso.
+ */
+async function montoDisponible(client: SupabaseClient, idCuentaPagar: number): Promise<number> {
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto_comprometido').eq(PK_COLUMN, idCuentaPagar).single();
+	if (!cuenta) return 0;
+
+	const { data: pagos } = await client.from(PAGO_TABLE).select('monto, estado_pago').eq(PARENT_FK_COLUMN, idCuentaPagar);
+	const comprometido = (pagos ?? [])
+		.filter((p: any) => p.estado_pago !== 'cancelado')
+		.reduce((sum: number, p: any) => sum + Number(p.monto), 0);
+
+	return Number((Number(cuenta.monto_comprometido) - comprometido).toFixed(2));
 }
 
 /**

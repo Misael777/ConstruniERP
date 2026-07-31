@@ -478,7 +478,11 @@
 				.filter((p) => p.estado_pago === 'programado')
 				.map((p) => ({ fecha: p.fecha_pago, monto: Number(p.monto) }))
 				.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
-			cuotasCuentaActual = { id: item.id_cuenta_pagar, monto: item.montoTotal, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
+			// FraccionamientoModal solo debe repartir lo que TODAVÍA falta pagar (saldoPendiente), no el
+			// monto_comprometido completo de la cuenta (item.montoTotal) — las cuotas 'pagado' ya son
+			// reales y sincronizarCuotasProgramadas nunca las toca, así que exigir que las 'programado'
+			// sumen el total completo forzaba a inventar cuotas de más (o negativas) solo para cuadrar.
+			cuotasCuentaActual = { id: item.id_cuenta_pagar, monto: item.saldoPendiente, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
 			cuotasModalOpen = true;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar las cuotas de esta cuenta');

@@ -153,7 +153,9 @@
 				.filter((c) => c.estado_cobro === 'programado')
 				.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto) }))
 				.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
-			cuotasCuentaActual = { id: item.id_cuenta_cobrar, monto: item.montoTotal, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
+			// FraccionamientoModal solo debe repartir lo que TODAVÍA falta cobrar (saldoPendiente), no el
+			// monto total de la cuenta (item.montoTotal) — mismo fix que en cuentas-pagar/panoramas.
+			cuotasCuentaActual = { id: item.id_cuenta_cobrar, monto: item.saldoPendiente, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
 			cuotasModalOpen = true;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar las cuotas de esta cuenta');

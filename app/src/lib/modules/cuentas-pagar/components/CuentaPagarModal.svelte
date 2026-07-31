@@ -5,7 +5,7 @@
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import { createCuentaPagar, updateCuentaPagar, getPagos } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
@@ -48,6 +48,10 @@
 	let submitting = $state(false);
 	let fracciones = $state<Fraccion[]>([]);
 	let fraccionamientoOpen = $state(false);
+	/** TODAS las cuotas reales de la cuenta (pagado + programado + cancelado), a diferencia de
+	 * `fracciones` (que solo trae las 'programado', lo único editable en "Fraccionar este pago") — se
+	 * muestran de una vez en el formulario, sin tener que abrir el popup, a pedido del usuario. */
+	let cuotasExistentes = $state<Pago[]>([]);
 
 	/** Fecha de la primera fracción configurada (la más temprana) — usada para autocompletar Fecha
 	 * Pago Programada cuando Forma de Pago es Crédito. Se calcula sobre `fracciones` a propósito (NO
@@ -56,9 +60,32 @@
 	 * este pago") que editando una existente (donde `fracciones` se precarga desde sus pagos
 	 * 'programado' reales, ver el $effect de abajo). '' si no hay ninguna fracción configurada.
 	 */
+	const cuotaEstadoLabel: Record<Pago['estado_pago'], string> = { pagado: 'Pagado', programado: 'Pendiente', cancelado: 'Anulado' };
+	const cuotaEstadoBadge: Record<Pago['estado_pago'], string> = {
+		pagado: 'bg-emerald-100 text-emerald-700',
+		programado: 'bg-amber-100 text-amber-700',
+		cancelado: 'bg-slate-200 text-slate-500'
+	};
+	function formatDate(value: string | null | undefined): string {
+		if (!value) return '—';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+	}
+
 	function primeraFechaFraccion(lista: Fraccion[]): string {
 		if (lista.length === 0) return '';
 		return lista.reduce((min, f) => (f.fecha < min.fecha ? f : min)).fecha;
+	}
+
+	/** Fecha de la fracción más cercana a HOY (por diferencia absoluta en días, no solo la más próxima
+	 * en el futuro) — usada para "Fecha Vencimiento" en vez de la última cuota, a pedido del usuario. */
+	function fechaMasCercanaAHoy(lista: Fraccion[]): string {
+		if (lista.length === 0) return '';
+		const hoy = new Date();
+		hoy.setHours(0, 0, 0, 0);
+		const diff = (fecha: string) => Math.abs(new Date(fecha + 'T00:00:00').getTime() - hoy.getTime());
+		return lista.reduce((cercana, f) => (diff(f.fecha) < diff(cercana.fecha) ? f : cercana), lista[0]).fecha;
 	}
 
 	/** Contado ('1') -> Fecha Pago Programada en blanco, se pide a mano. Crédito (cualquier otro
@@ -75,9 +102,11 @@
 		formValues = buildInitialValues();
 		fieldErrors = {};
 		fracciones = [];
+		cuotasExistentes = [];
 		if (mode === 'edit' && cuenta) {
 			(async () => {
 				const pagos = await getPagos(supabase, cuenta.id_cuenta_pagar);
+				cuotasExistentes = [...pagos].sort((a, b) => (a.fecha_pago < b.fecha_pago ? -1 : a.fecha_pago > b.fecha_pago ? 1 : 0));
 				fracciones = pagos
 					.filter((p) => p.estado_pago === 'programado')
 					.map((p) => ({ fecha: p.fecha_pago, monto: Number(p.monto) }))
@@ -108,14 +137,13 @@
 	});
 
 	// Al confirmar las cuotas (siempre con Forma de Pago distinta de Contado, único caso en que esta
-	// ventana es alcanzable), la fecha de la última cuota pasa a ser la Fecha Vencimiento de la
-	// cuenta — evita que quede desalineada con el calendario que el usuario acaba de definir a mano.
-	// La PRIMERA cuota, a su vez, autocompleta Fecha Pago Programada (ver primeraFechaFraccion).
+	// ventana es alcanzable), la Fecha Vencimiento de la cuenta pasa a ser la de la cuota más cercana a
+	// HOY (no la última) — a pedido del usuario. La PRIMERA cuota, a su vez, autocompleta Fecha Pago
+	// Programada (ver primeraFechaFraccion).
 	function onFraccionesConfirmadas(nuevas: Fraccion[]) {
 		fracciones = nuevas;
 		if (esFraccionable && nuevas.length > 0) {
-			const ultimaFecha = nuevas.reduce((max, f) => (f.fecha > max ? f.fecha : max), nuevas[0].fecha);
-			formValues = { ...formValues, fecha_vencimiento: ultimaFecha };
+			formValues = { ...formValues, fecha_vencimiento: fechaMasCercanaAHoy(nuevas) };
 		}
 		actualizarFechaPagoProgramada(String(formValues.fotma_pago ?? ''));
 	}
@@ -163,6 +191,14 @@
 	function revalidate() {
 		fieldErrors = validatePayload(FIELDS_CONFIG, formValues);
 	}
+
+	// "Fraccionar este pago" solo debe repartir lo que TODAVÍA no está pagado: las cuotas 'pagado' ya
+	// son reales y sincronizarCuotasProgramadas nunca las toca (solo reemplaza las 'programado'), pero
+	// antes se le exigía al usuario que sus fracciones sumaran el Monto Comprometido COMPLETO (ej.
+	// S/1000) en vez del saldo que falta (ej. S/650 si ya hay S/350 pagados) — eso forzaba a inflar el
+	// calendario con cuotas de más (o negativas, para "cuadrar") solo para poder guardar. Ver
+	// FraccionamientoModal (sumaOk exige sumaFilas === montoTotal) y sincronizarCuotasProgramadas.
+	const montoPendienteFraccionar = $derived(Math.max(Number(formValues.monto_comprometido || 0) - Number(cuenta?.monto_pagado ?? 0), 0));
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(mode === 'create' ? 'Nueva Cuenta por Pagar' : 'Editar Cuenta por Pagar');
@@ -291,7 +327,49 @@
 									<ListOrdered size={16} />
 									{fracciones.length > 0 ? `Configurar Cuotas (${fracciones.length})` : 'Configurar Cuotas'}
 								</button>
-								<p class="mt-1 text-xs text-slate-400">Define fecha y monto de cada cuota.</p>
+								<p class="mt-1 text-xs text-slate-400">
+									Define fecha y monto de cada cuota.
+									{#if Number(cuenta?.monto_pagado ?? 0) > 0}
+										Reparte solo el saldo pendiente ({formatCurrency(montoPendienteFraccionar)}) — lo ya pagado no se toca.
+									{/if}
+								</p>
+
+								{#if mode === 'edit' && cuotasExistentes.length > 0}
+									<div class="mt-2 rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-48 overflow-y-auto">
+										{#each cuotasExistentes as cuota (cuota.id_pago)}
+											<div class="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
+												<span class="text-slate-500">{formatDate(cuota.fecha_pago)}</span>
+												<span class="font-semibold text-slate-700">{formatCurrency(cuota.monto)}</span>
+												<span class={`px-2 py-0.5 rounded-full font-medium shrink-0 ${cuotaEstadoBadge[cuota.estado_pago]}`}>{cuotaEstadoLabel[cuota.estado_pago]}</span>
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{:else if field.key === 'fotma_pago' && mode === 'edit' && !esFraccionable}
+							<div>
+								<span class="block text-sm font-medium text-slate-700 mb-1">Cuota (al Contado)</span>
+								<!-- Contado es "una sola cuota" por definición (ver esContadoSinPagos en +page.svelte) —
+								se presenta con el mismo formato fecha/monto/estado que una cuota de Crédito, en vez de
+								no mostrar nada solo porque no hay fraccionamiento configurado. -->
+								{#if cuotasExistentes.length > 0}
+									<div class="rounded-lg border border-slate-200 divide-y divide-slate-100">
+										{#each cuotasExistentes as cuota (cuota.id_pago)}
+											<div class="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
+												<span class="text-slate-500">{formatDate(cuota.fecha_pago)}</span>
+												<span class="font-semibold text-slate-700">{formatCurrency(cuota.monto)}</span>
+												<span class={`px-2 py-0.5 rounded-full font-medium shrink-0 ${cuotaEstadoBadge[cuota.estado_pago]}`}>{cuotaEstadoLabel[cuota.estado_pago]}</span>
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<div class="flex items-center justify-between gap-2 px-3 py-1.5 text-xs rounded-lg border border-slate-200">
+										<span class="text-slate-500">{formatDate(cuenta?.fecha_pago_programada || cuenta?.fecha_vencimiento)}</span>
+										<span class="font-semibold text-slate-700">{formatCurrency(cuenta?.saldo_pendiente ?? Number(formValues.monto_comprometido || 0))}</span>
+										<span class="px-2 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 text-amber-700">Por registrar</span>
+									</div>
+								{/if}
+								<p class="mt-1 text-xs text-slate-400">Al Contado se paga en una sola cuota — se registra desde "Registrar Pago" en el listado de la cuenta.</p>
 							</div>
 						{/if}
 					{/each}
@@ -313,7 +391,7 @@
 
 <FraccionamientoModal
 	open={fraccionamientoOpen}
-	montoTotal={Number(formValues.monto_comprometido) || 0}
+	montoTotal={montoPendienteFraccionar}
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}
 	fraccionesIniciales={fracciones}

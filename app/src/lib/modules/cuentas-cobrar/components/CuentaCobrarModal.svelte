@@ -136,6 +136,13 @@
 		fieldErrors = validatePayload(FIELDS_CONFIG, formValues);
 	}
 
+	// "Fraccionar este pago" solo debe repartir lo que TODAVÍA no está cobrado: las cuotas 'cobrado' ya
+	// son reales y sincronizarCuotasProgramadas nunca las toca, pero antes se le exigía al usuario que
+	// sus fracciones sumaran el Monto completo (ej. S/1000) en vez del saldo que falta (ej. S/650 si ya
+	// hay S/350 cobrados) — eso forzaba a inflar el calendario con cuotas de más solo para cuadrar. Ver
+	// mismo fix en CuentaPagarModal.svelte.
+	const montoPendienteFraccionar = $derived(Math.max(Number(formValues.monto || 0) - Number(cuenta?.monto_cobrado ?? 0), 0));
+
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(mode === 'create' ? 'Nueva Cuenta por Cobrar' : 'Editar Cuenta por Cobrar');
 
@@ -261,7 +268,12 @@
 									<ListOrdered size={16} />
 									{fracciones.length > 0 ? `Configurar Cuotas (${fracciones.length})` : 'Configurar Cuotas'}
 								</button>
-								<p class="mt-1 text-xs text-slate-400">Define fecha y monto de cada cuota.</p>
+								<p class="mt-1 text-xs text-slate-400">
+								Define fecha y monto de cada cuota.
+								{#if Number(cuenta?.monto_cobrado ?? 0) > 0}
+									Reparte solo el saldo pendiente ({formatCurrency(montoPendienteFraccionar)}) — lo ya cobrado no se toca.
+								{/if}
+							</p>
 							</div>
 						{/if}
 					{/each}
@@ -284,7 +296,7 @@
 <FraccionamientoModal
 	open={fraccionamientoOpen}
 	titulo="Fraccionar Cobros"
-	montoTotal={Number(formValues.monto) || 0}
+	montoTotal={montoPendienteFraccionar}
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}
 	fraccionesIniciales={fracciones}

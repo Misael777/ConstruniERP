@@ -7,6 +7,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
+	import { FIELDS_CONFIG as COBRO_FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
 	import {
 		getCuentasCobrar,
 		deleteCuentaCobrar,
@@ -46,6 +47,7 @@
 		vencido: 'bg-red-50/60'
 	};
 
+	const medioCobroField = COBRO_FIELDS_CONFIG.find((f) => f.key === 'medio_cobro')!;
 	const prioridadField = FIELDS_CONFIG.find((f) => f.key === 'prioridad')!;
 	const prioridadBadgeClass: Record<string, string> = {
 		alto: 'bg-red-100 text-red-700',
@@ -92,6 +94,9 @@
 	let editingCuenta = $state<CuentaCobrar | null>(null);
 	let cobroModalOpen = $state(false);
 	let editingCobro = $state<Cobro | null>(null);
+	/** Prellenar Monto/Fecha de Cobro al abrir "Registrar Cobro" desde la cuota sintética de una cuenta
+	 * al Contado (ver cuotasAMostrar) — ver CobroModal.svelte. */
+	let cobroInitialValues = $state<Record<string, string>>({});
 	let transaccionModalOpen = $state(false);
 	let transaccionPrefill = $state<Record<string, unknown> | null>(null);
 	/** Cobro que se está confirmando como 'cobrado' vía el TransaccionModal — ver
@@ -232,6 +237,81 @@
 
 	const selectedCuenta = $derived(items.find((i) => i.id_cuenta_cobrar === selectedId) ?? null);
 
+	// Contado es "una sola cuota" por definición — no genera filas reales en `cobros` (a diferencia de
+	// Crédito, que las autogenera vía "Fraccionar este pago"). Mientras no exista NINGÚN cobro real
+	// todavía (puede ser Contado, o Crédito sin fraccionar aún) y haya saldo pendiente real, se muestra
+	// una cuota SINTÉTICA (id_cobro=-1, nunca existe en BD) — mismo criterio que cuentas-pagar/+page.svelte.
+	// No se filtra por `forma_pago === 1`: esa comparación exacta fallaba en la práctica (ver el mismo
+	// fix en cuentas-pagar/+page.svelte) y el criterio real es "no hay ninguna cuota que mostrar".
+	const esContadoSinCobros = $derived(selectedCobros.length === 0 && Number(selectedCuenta?.saldo_pendiente ?? 0) > 0);
+	const cobrosAMostrar = $derived.by((): Cobro[] => {
+		const fechaSintetica = selectedCuenta?.fecha_vencimiento || selectedCuenta?.fecha_emision;
+		if (esContadoSinCobros && fechaSintetica) {
+			return [
+				{
+					id_cobro: -1,
+					id_cuenta_cobrar: selectedCuenta!.id_cuenta_cobrar,
+					monto: selectedCuenta!.saldo_pendiente,
+					fecha_cobro: fechaSintetica,
+					medio_cobro: null,
+					num_operacion: null,
+					cuenta_banco: null,
+					usuario_registro: null,
+					referencia: null,
+					created_at: '',
+					estado_cobro: 'programado',
+					id_transaccion: null,
+					transaccion: null
+				}
+			];
+		}
+		return selectedCobros;
+	});
+
+	/** La cuota 'programado' de fecha_cobro más temprana entre las que se están mostrando — la que se
+	 * abre al hacer doble clic sobre cualquier fila (mismo criterio que cuentas-pagar/+page.svelte). */
+	const cuotaMasProxima = $derived.by(() => {
+		const programadas = cobrosAMostrar.filter((c) => c.estado_cobro === 'programado');
+		if (programadas.length === 0) return null;
+		return programadas.reduce((min, c) => (c.fecha_cobro < min.fecha_cobro ? c : min));
+	});
+
+	/** Una cuota (real o sintética) sin cobrar cuya fecha programada ya pasó se muestra como "Vencido"
+	 * en vez de "Programado"/"Por registrar" — comparación por día calendario, no por hora. */
+	function esCuotaVencida(cobro: Cobro): boolean {
+		if (cobro.estado_cobro !== 'programado' || !cobro.fecha_cobro) return false;
+		const hoy = new Date();
+		hoy.setHours(0, 0, 0, 0);
+		return new Date(cobro.fecha_cobro + 'T00:00:00') < hoy;
+	}
+
+	/** Doble clic en cualquier cuota -> siempre abre/registra la "más próxima" (no la que se clickeó),
+	 * mismo criterio que cuentas-pagar/+page.svelte. Si es la sintética (Contado sin cobros aún) abre
+	 * "Registrar Cobro" prellenado con su monto/fecha; si es una cuota real, abre la edición normal. */
+	function handleDobleClicCuota() {
+		if (!cuotaMasProxima) return;
+		if (cuotaMasProxima.id_cobro === -1) {
+			editingCobro = null;
+			cobroInitialValues = { monto: String(cuotaMasProxima.monto), fecha_cobro: cuotaMasProxima.fecha_cobro };
+			cobroModalOpen = true;
+		} else {
+			openEditCobro(cuotaMasProxima);
+		}
+	}
+
+	/** El botón "Registrar Cobro" de la cabecera del panel de cuotas: si ya hay una cuota programada
+	 * (real o sintética) pendiente, la reutiliza — mismo camino que hacer doble clic sobre ella — para
+	 * pasarla a "Cobrado" en vez de insertar una fila nueva y dejar la programada intacta (eso
+	 * duplicaba la cuota). Solo crea un cobro suelto de verdad cuando no hay ninguna cuota programada
+	 * esperando. Mismo fix que handleRegistrarPagoClick en cuentas-pagar/+page.svelte. */
+	function handleRegistrarCobroClick() {
+		if (cuotaMasProxima) {
+			handleDobleClicCuota();
+		} else {
+			openCreateCobro();
+		}
+	}
+
 	async function handleDelete(item: CuentaCobrar) {
 		if (!confirm('¿Eliminar esta cuenta por cobrar y todos sus cobros registrados? Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer.')) return;
 		try {
@@ -264,6 +344,7 @@
 
 	function openCreateCobro() {
 		editingCobro = null;
+		cobroInitialValues = {};
 		cobroModalOpen = true;
 	}
 	function openEditCobro(cobro: Cobro) {
@@ -273,6 +354,7 @@
 	function closeCobroModal() {
 		cobroModalOpen = false;
 		editingCobro = null;
+		cobroInitialValues = {};
 	}
 
 	async function handleSaved() {
@@ -562,31 +644,41 @@
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
-				<button type="button" onclick={openCreateCobro} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
+				<button type="button" onclick={handleRegistrarCobroClick} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
 					<Plus size={14} /> Registrar Cobro
 				</button>
 			</div>
 
-			{#if selectedCobros.length === 0}
+			{#if cobrosAMostrar.length === 0}
 				<p class="text-sm text-slate-400 text-center py-6">Sin cobros registrados todavía.</p>
 			{:else}
+				{#if esContadoSinCobros}
+					<p class="text-xs text-slate-400 mb-2">Sin cuotas registradas todavía: se muestra el saldo pendiente como una sola cuota. Doble clic para registrar el cobro.</p>
+				{:else}
+					<p class="text-xs text-slate-400 mb-2">Doble clic en cualquier fila para registrar/editar la cuota más próxima.</p>
+				{/if}
 				<div class="overflow-x-auto">
-					<ResponsiveDataView items={selectedCobros} keyField="id_cobro" columns={[
+					<ResponsiveDataView items={cobrosAMostrar} keyField="id_cobro" onRowDblClick={handleDobleClicCuota} columns={[
 						{ label: 'Fecha' },
 						{ label: 'Monto' },
+						{ label: 'Medio' },
 						{ label: 'N° Operación' },
 						{ label: 'Estado' },
 						{ label: 'Acciones', align: 'right' }
 					]}>
 						{#snippet row(cobro)}
-							{@const bloqueado = !!cobro.transaccion?.aprobado && !isAdmin()}
+							{@const sintetica = cobro.id_cobro === -1}
+							{@const bloqueado = !sintetica && !!cobro.transaccion?.aprobado && !isAdmin()}
 							<td class="px-3 py-2">{formatDate(cobro.fecha_cobro)}</td>
 							<td class="px-3 py-2">{formatCurrency(cobro.monto)}</td>
+							<td class="px-3 py-2">{cobro.medio_cobro ? getOptionLabel(medioCobroField, String(cobro.medio_cobro)) : '—'}</td>
 							<td class="px-3 py-2">{cobro.num_operacion ?? '—'}</td>
 							<td class="px-3 py-2">
 								<div class="flex items-center gap-1.5">
-									{#if cobro.estado_cobro === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{#if cobro.estado_cobro === 'programado' && esCuotaVencida(cobro)}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
+									{:else if cobro.estado_cobro === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
 									{:else if cobro.estado_cobro === 'cancelado'}
 										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
@@ -598,7 +690,9 @@
 								</div>
 							</td>
 							<td class="px-3 py-2 text-right">
-								{#if bloqueado}
+								{#if sintetica}
+									<span class="text-[11px] text-slate-400">Doble clic para registrar</span>
+								{:else if bloqueado}
 									<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
 										<Lock size={16} />
 									</span>
@@ -615,15 +709,18 @@
 							</td>
 						{/snippet}
 						{#snippet card(cobro)}
-							{@const bloqueado = !!cobro.transaccion?.aprobado && !isAdmin()}
+							{@const sintetica = cobro.id_cobro === -1}
+							{@const bloqueado = !sintetica && !!cobro.transaccion?.aprobado && !isAdmin()}
 							<div class="flex items-start justify-between gap-3 mb-2">
 								<div class="min-w-0">
 									<div class="font-semibold text-slate-800">{formatCurrency(cobro.monto)}</div>
 									<div class="text-xs text-slate-400 mt-0.5">{formatDate(cobro.fecha_cobro)}</div>
 								</div>
 								<div class="flex items-center gap-1.5 shrink-0">
-									{#if cobro.estado_cobro === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">Programado</span>
+									{#if cobro.estado_cobro === 'programado' && esCuotaVencida(cobro)}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
+									{:else if cobro.estado_cobro === 'programado'}
+										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
 									{:else if cobro.estado_cobro === 'cancelado'}
 										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
 									{:else}
@@ -635,10 +732,14 @@
 								</div>
 							</div>
 							<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
+								<span class="text-slate-400">Medio</span>
+								<span class="text-right text-slate-700">{cobro.medio_cobro ? getOptionLabel(medioCobroField, String(cobro.medio_cobro)) : '—'}</span>
 								<span class="text-slate-400">N° Operación</span>
 								<span class="text-right text-slate-700">{cobro.num_operacion ?? '—'}</span>
 							</div>
-							{#if bloqueado}
+							{#if sintetica}
+								<p class="text-center text-[11px] text-slate-400 pt-2 border-t border-slate-100">Doble clic para registrar el cobro</p>
+							{:else if bloqueado}
 								<div class="flex items-center justify-center gap-2 text-slate-400 text-xs pt-2 border-t border-slate-100">
 									<Lock size={14} /> Bloqueado: transacción aprobada
 								</div>
@@ -667,6 +768,7 @@
 	open={cobroModalOpen}
 	idCuentaCobrar={selectedId}
 	cobro={editingCobro}
+	initialValues={cobroInitialValues}
 	onClose={closeCobroModal}
 	onSaved={handleCobroSaved}
 	onTransaccionSugerida={handleTransaccionSugerida}

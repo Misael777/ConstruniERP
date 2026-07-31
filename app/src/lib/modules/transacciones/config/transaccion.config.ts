@@ -105,6 +105,32 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		// Posición intercambiada con 'fecha' (a pedido del usuario) — ver 'fecha' justo abajo.
+		key: 'tipo',
+		label: 'Tipo',
+		tipo: 'select',
+		options: [
+			{ value: 'ingreso', label: 'Ingreso' },
+			{ value: 'egreso', label: 'Egreso' },
+			{ value: 'financiamiento', label: 'Financiamiento' },
+			// 'financiamiento' y 'transferencia' se mantienen en `options` (no se borran) porque siguen
+			// siendo valores válidos guardados en BD: 'transferencia' se autoselecciona y se bloquea
+			// cuando "Alcance de la Transacción" = Interna (ver TransaccionModal.svelte), y ambos deben
+			// poder traducirse a su label en badges/filtros de transacciones ya existentes. `optionsWhen`
+			// de abajo es lo único que decide qué se OFRECE en el <select> manual — a pedido del usuario,
+			// solo Egreso/Ingreso (con Egreso por defecto, ver buildInitialValues en TransaccionModal.svelte).
+			{ value: 'transferencia', label: 'Transferencia' }
+		],
+		optionsWhen: () => [
+			{ value: 'egreso', label: 'Egreso' },
+			{ value: 'ingreso', label: 'Ingreso' }
+		],
+		showInTable: true,
+		showInForm: true,
+		sortable: true
+	},
+	{
+		// Posición intercambiada con 'tipo' — ver arriba.
 		key: 'fecha',
 		label: 'Fecha',
 		tipo: 'date',
@@ -113,22 +139,6 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		showInForm: true,
 		sortable: true,
 		defaultSort: 'desc'
-	},
-	{
-		key: 'tipo',
-		label: 'Tipo',
-		tipo: 'select',
-		options: [
-			{ value: 'ingreso', label: 'Ingreso' },
-			{ value: 'egreso', label: 'Egreso' },
-			{ value: 'financiamiento', label: 'Financiamiento' },
-			// Se autoselecciona y se bloquea cuando "Alcance de la Transacción" = Interna — ver
-			// TransaccionModal.svelte. También queda disponible para elegir a mano en una Externa.
-			{ value: 'transferencia', label: 'Transferencia' }
-		],
-		showInTable: true,
-		showInForm: true,
-		sortable: true
 	},
 	{
 		// Catálogo de categorías por tipo de movimiento (definido por el usuario, ver mockup

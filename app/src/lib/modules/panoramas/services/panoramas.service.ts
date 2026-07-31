@@ -474,6 +474,10 @@ export interface IngresoPendienteItem {
 	clienteNombre: string;
 	proyectoNombre: string | null;
 	monto: number;
+	/** saldo_pendiente de TODA la cuenta (no solo lo visible en esta tarjeta/cluster) — para el popup
+	 * de cuotas (ver abrirCuotasDe en +page.svelte), que debe repartir solo lo que falta cobrar, no
+	 * el monto total de la cuenta. Mismo criterio que PagoPendienteItem.saldoPendiente. */
+	saldoPendiente: number;
 	fechaVencimiento: string | null;
 	idProyecto: number | null;
 	idCliente: number | null;
@@ -501,6 +505,7 @@ function mapCobroRow(row: any, fracciones: FraccionPanorama[]): IngresoPendiente
 		// Ver nota equivalente en mapRow: si está fraccionada, `monto` es la suma de solo las cuotas
 		// visibles en esta tarjeta, no el saldo pendiente completo de la cuenta.
 		monto: fracciones.length > 0 ? fracciones.reduce((s, f) => s + f.monto, 0) : Number(row.saldo_pendiente),
+		saldoPendiente: Number(row.saldo_pendiente),
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.id_proyecto,
 		idCliente: row.id_cliente,

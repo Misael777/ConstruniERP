@@ -363,6 +363,18 @@ export async function createCobro(
 		estado_cobro: 'programado' // queda así hasta confirmar la transacción — ver confirmarCobroCobrado
 	};
 
+	// Un cobro suelto (sin cuota programada que reutilizar, ver +page.svelte handleRegistrarCobroClick)
+	// no debe dejar la suma de cuotas (cobrado + programado) por ENCIMA del Monto de la cuenta — mismo
+	// guard que createPago en cuentasPagar.service.ts.
+	const disponible = await montoDisponible(client, idCuentaCobrar);
+	const montoNuevo = Number((insertData as Record<string, unknown>).monto);
+	if (montoNuevo - disponible > 0.01) {
+		return {
+			success: false,
+			message: `No se puede registrar: el monto (${formatCurrency(montoNuevo)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}). Revisa las demás cuotas antes de continuar.`
+		};
+	}
+
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
@@ -545,6 +557,25 @@ async function verificarSumaTrasCancelar(
 		sumaResultante: Number(sumaResultante.toFixed(2)),
 		monto
 	};
+}
+
+/**
+ * Cuánto le queda "sin comprometer" a una cuenta: Monto menos la suma de todas sus cuotas activas
+ * (cobrado + programado; 'cancelado' no cuenta). Usado por createCobro para no dejar que un cobro
+ * suelto nuevo empuje la suma de cuotas por ENCIMA del monto total de la cuenta — a diferencia de
+ * editar una cuota ya existente (ver rebalancearUltimaCuota, más abajo), aquí no hay ninguna otra
+ * cuota que pueda absorber el exceso. Mismo criterio que montoDisponible en cuentasPagar.service.ts.
+ */
+async function montoDisponible(client: SupabaseClient, idCuentaCobrar: number): Promise<number> {
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuentaCobrar).single();
+	if (!cuenta) return 0;
+
+	const { data: cobros } = await client.from(COBRO_TABLE).select('monto, estado_cobro').eq(PARENT_FK_COLUMN, idCuentaCobrar);
+	const comprometido = (cobros ?? [])
+		.filter((c: any) => c.estado_cobro !== 'cancelado')
+		.reduce((sum: number, c: any) => sum + Number(c.monto), 0);
+
+	return Number((Number(cuenta.monto) - comprometido).toFixed(2));
 }
 
 /**
