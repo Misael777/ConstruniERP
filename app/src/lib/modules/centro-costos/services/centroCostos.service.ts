@@ -68,6 +68,25 @@ const COLUMNA_POR_TIPO: Record<EntidadCentroCosto, 'id_proyecto' | 'id_cliente' 
 	empleado: 'id_empleado'
 };
 
+/** Prefijos para los centros de costo creados A MANO desde "Nuevo Centro de Costo" (ver
+ * FIELDS_CONFIG.tipo.formOptions en centroCostos.config.ts) — a diferencia de
+ * PREFIJO_CODIGO_POR_TIPO (arriba), que es para los automáticos de proyecto/cliente/proveedor/empleado. */
+const PREFIJO_CODIGO_MANUAL: Record<string, string> = {
+	obra: 'OBRA',
+	consultoria: 'CONS',
+	'bolsa general': 'BG'
+};
+
+/** Genera el código de un centro de costo creado a mano — a pedido del usuario, el campo 'codigo'
+ * ya no se escribe desde el formulario (ver showInForm:false en centroCostos.config.ts).
+ * Esquema: PREFIJO-NNN, con NNN = cantidad de centros de ese `tipo` ya existentes + 1. */
+async function generarCodigoCentroCostoManual(client: SupabaseClient, tipo: string): Promise<string> {
+	const prefijo = PREFIJO_CODIGO_MANUAL[tipo] ?? (tipo.toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 6) || 'CC');
+	const { count } = await client.from(TABLE_NAME).select('id_centro_costo', { count: 'exact', head: true }).eq('tipo', tipo);
+	const siguiente = (count ?? 0) + 1;
+	return `${prefijo}-${String(siguiente).padStart(3, '0')}`;
+}
+
 export interface ListParams {
 	page?: number;
 	pageSize?: number;
@@ -129,17 +148,19 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		// "Cuentas Internas" — proyecto queda fuera a propósito, ver doc de ListParams.vinculado.
 		query = query.or('id_cliente.not.is.null,id_proveedor.not.is.null,id_empleado.not.is.null');
 	} else if (params.vinculado === false) {
-		// "Centros de Costos" — a pedido del usuario, solo se muestran los de tipo 'bolsa general' y
-		// los vinculados a un proyecto que YA es una venta cerrada (estado_proyecto='venta_cerrada') —
-		// un proyecto todavía en negociación, u otros tipos manuales (ej. consultoría), quedan fuera.
-		// PostgREST no permite mezclar en un solo .or() una condición de columna propia (tipo) con una
-		// del embed (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se traen los
-		// ids de proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo='bolsa general'.
+		// "Centros de Costos" — todos los creados a mano desde "Nuevo Centro de Costo" (los 3 tipos de
+		// formOptions: obra/consultoría/bolsa general — antes solo se dejaba pasar 'bolsa general' por
+		// error, dejando fuera obra/consultoría pese a que el propio formulario los ofrece como opción)
+		// MÁS los vinculados a un proyecto que YA es una venta cerrada (estado_proyecto='venta_cerrada',
+		// a pedido del usuario: un proyecto todavía en negociación no cuenta como centro de costo activo
+		// todavía). PostgREST no permite mezclar en un solo .or() una condición de columna propia (tipo)
+		// con una del embed (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se
+		// traen los ids de proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo manual.
 		const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
 		if (errorCerrados) throw errorCerrados;
 		const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
 		const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
-		query = query.or(`tipo.eq.bolsa general,${idProyectoFilter}`);
+		query = query.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`);
 	}
 
 	const search = params.search?.trim();
@@ -173,9 +194,10 @@ export async function createCentroCosto(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
+	const codigo = await generarCodigoCentroCostoManual(client, String(payload.tipo ?? ''));
 	const { data, error } = await client
 		.from(TABLE_NAME)
-		.insert(buildWritablePayload(payload))
+		.insert({ ...buildWritablePayload(payload), codigo })
 		.select('*')
 		.single();
 
@@ -296,6 +318,43 @@ export async function getOrCrearCentroCostoParaEntidad(
 			if (reintento) return reintento.id_centro_costo;
 		}
 		console.error(`[centroCostos.service] No se pudo crear el centro de costo para ${tipo} #${idEntidad}:`, error);
+		return null;
+	}
+
+	return creado?.id_centro_costo ?? null;
+}
+
+/**
+ * Centro de costo COMPARTIDO por TODOS los proyectos de un mismo tipo de venta — a diferencia de
+ * getOrCrearCentroCostoParaEntidad (uno POR proyecto, usado para Obra), esto busca/crea UNA sola
+ * fila `tipo=X AND id_proyecto IS NULL` y la reutiliza para cada venta de ese tipo (hoy solo
+ * 'consultoria', a pedido explícito del usuario: todas las ventas de Consultoría comparten una
+ * misma bolsa de centro de costo, en vez de una por proyecto). Idempotente vía el índice único
+ * parcial `uq_centro_costo_consultoria_compartido` (ver proyecto_tipo_venta_migration.sql).
+ * Nunca lanza — mismo criterio que getOrCrearCentroCostoParaEntidad.
+ */
+export async function getOrCrearCentroCostoCompartido(
+	client: SupabaseClient,
+	tipo: 'consultoria',
+	nombre = 'Consultoría General'
+): Promise<number | null> {
+	const { data: existente } = await client.from(TABLE_NAME).select('id_centro_costo').eq('tipo', tipo).is('id_proyecto', null).maybeSingle();
+	if (existente) return existente.id_centro_costo;
+
+	const codigo = await generarCodigoCentroCostoManual(client, tipo);
+	const { data: creado, error } = await client
+		.from(TABLE_NAME)
+		.insert({ codigo, nombre, tipo, monto_actual: 0 })
+		.select('id_centro_costo')
+		.single();
+
+	if (error) {
+		if (error.code === '23505') {
+			// Carrera: otra llamada ya creó el centro de costo compartido justo antes — se usa ese.
+			const { data: reintento } = await client.from(TABLE_NAME).select('id_centro_costo').eq('tipo', tipo).is('id_proyecto', null).maybeSingle();
+			if (reintento) return reintento.id_centro_costo;
+		}
+		console.error(`[centroCostos.service] No se pudo crear el centro de costo compartido de ${tipo}:`, error);
 		return null;
 	}
 

@@ -36,7 +36,7 @@
 		{ label: 'Razón Social' },
 		{ label: 'RUC / DNI' },
 		{ label: 'Contacto Principal' },
-		{ label: 'Producto y Servicio' },
+		{ label: 'Producto o Servicio' },
 		{ label: 'Acciones', align: 'center' as const }
 	];
 </script>

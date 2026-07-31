@@ -164,7 +164,10 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		placeholder: 'CC-001',
 		helpText: 'Identificador corto y único del centro de costo.',
 		showInTable: true,
-		showInForm: true,
+		// showInForm: false a pedido del usuario — el código ya no se escribe a mano, se genera solo
+		// (ver generarCodigoCentroCostoManual en centroCostos.service.ts, mismo criterio que
+		// PREFIJO_CODIGO_POR_TIPO usa para los centros automáticos de proyecto/cliente/proveedor/empleado).
+		showInForm: false,
 		sortable: true
 	},
 	{

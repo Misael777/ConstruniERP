@@ -369,15 +369,24 @@ export async function getCentroCostoOptionsPagos(client: SupabaseClient): Promis
  * 'venta_cerrada'); excluye bolsa general/consultoría y proyectos aún en negociación. Etiqueta
  * "código - nombre del proyecto" (mismo formato que getCentroCostoOptions). */
 export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	// Obra: cada venta cerrada tiene su propio centro de costo (id_proyecto). Consultoría: TODAS
+	// comparten un único centro de costo (id_proyecto IS NULL, tipo='consultoria' — ver
+	// getOrCrearCentroCostoCompartido en centroCostos.service.ts), así que no puede buscarse por
+	// id_proyecto — se incluye ese centro compartido si hay al menos una consultoría ya cerrada.
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto, tipo_venta').eq('estado_proyecto', 'venta_cerrada');
 	if (errorCerrados) throw errorCerrados;
-	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
-	if (idsCerrados.length === 0) return [];
+	const idsObraCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta !== 'consultoria').map((p: any) => p.id_proyecto);
+	const hayConsultoriaCerrada = (cerrados ?? []).some((p: any) => p.tipo_venta === 'consultoria');
+
+	const filtros: string[] = [];
+	if (idsObraCerrados.length > 0) filtros.push(`id_proyecto.in.(${idsObraCerrados.join(',')})`);
+	if (hayConsultoriaCerrada) filtros.push('and(tipo.eq.consultoria,id_proyecto.is.null)');
+	if (filtros.length === 0) return [];
 
 	const { data, error } = await client
 		.from('centro_costo')
 		.select('id_centro_costo, codigo, nombre')
-		.in('id_proyecto', idsCerrados)
+		.or(filtros.join(','))
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
@@ -385,23 +394,43 @@ export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient
 
 /** id_centro_costo (como texto) -> precio_venta de la venta cerrada vinculada — para
  * CuentaCobrarModal.svelte: autocompletar "Monto" al elegir el Centro de Costo (ver
- * getCentroCostoOptionsVentasCerradas, misma fuente de centros de costo). */
+ * getCentroCostoOptionsVentasCerradas, misma fuente de centros de costo). Para el centro
+ * compartido de Consultoría, el monto sugerido es la SUMA de precio_venta de todas las
+ * consultorías cerradas (varias ventas caen en el mismo centro de costo — ver nota arriba). */
 export async function getCentroCostoMontoVentaCerrada(client: SupabaseClient): Promise<Record<string, number>> {
-	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto, precio_venta, tipo_venta').eq('estado_proyecto', 'venta_cerrada');
 	if (errorCerrados) throw errorCerrados;
-	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
-	if (idsCerrados.length === 0) return {};
-
-	const { data, error } = await client
-		.from('centro_costo')
-		.select('id_centro_costo, proyecto:id_proyecto(precio_venta)')
-		.in('id_proyecto', idsCerrados);
-	if (error) throw error;
+	const obraCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta !== 'consultoria');
+	const consultoriaCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta === 'consultoria');
 
 	const mapa: Record<string, number> = {};
-	for (const row of (data ?? []) as any[]) {
-		mapa[String(row.id_centro_costo)] = Number(row.proyecto?.precio_venta) || 0;
+
+	const idsObra = obraCerrados.map((p: any) => p.id_proyecto);
+	if (idsObra.length > 0) {
+		const { data, error } = await client
+			.from('centro_costo')
+			.select('id_centro_costo, proyecto:id_proyecto(precio_venta)')
+			.in('id_proyecto', idsObra);
+		if (error) throw error;
+		for (const row of (data ?? []) as any[]) {
+			mapa[String(row.id_centro_costo)] = Number(row.proyecto?.precio_venta) || 0;
+		}
 	}
+
+	if (consultoriaCerrados.length > 0) {
+		const { data: compartido, error: errorCompartido } = await client
+			.from('centro_costo')
+			.select('id_centro_costo')
+			.eq('tipo', 'consultoria')
+			.is('id_proyecto', null)
+			.maybeSingle();
+		if (errorCompartido) throw errorCompartido;
+		if (compartido) {
+			const totalConsultoria = consultoriaCerrados.reduce((sum: number, p: any) => sum + (Number(p.precio_venta) || 0), 0);
+			mapa[String(compartido.id_centro_costo)] = totalConsultoria;
+		}
+	}
+
 	return mapa;
 }
 

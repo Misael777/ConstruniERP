@@ -283,19 +283,21 @@
 								</td>
 								{#each roles as rol}
 									{@const isChecked = hasPermiso(rol.id, sub.dbId!)}
+									{@const isLockedAdmin = rol.nombre === 'administrador' && isChecked}
 									<td class="p-4 text-center border-r border-slate-100 align-middle">
 										<label class="flex items-center justify-center cursor-pointer w-full h-full group/chk">
 											<div class="relative flex items-center justify-center">
-												<input 
-													type="checkbox" 
+												<input
+													type="checkbox"
 													checked={isChecked}
 													onchange={() => togglePermiso(rol.id, sub.dbId!, isChecked)}
-													disabled={rol.nombre === 'administrador'}
+													disabled={isLockedAdmin}
+													title={rol.nombre === 'administrador' ? (isChecked ? 'Los administradores siempre tienen este permiso' : 'Falta este permiso para Administrador — actívalo') : ''}
 													class={`w-5 h-5 rounded cursor-pointer appearance-none outline-none ring-offset-1 transition-all ${
-														isChecked 
-															? 'bg-blue-600 ring-2 ring-blue-600 border-transparent' 
+														isChecked
+															? 'bg-blue-600 ring-2 ring-blue-600 border-transparent'
 															: 'bg-white border-2 border-slate-300 group-hover/chk:border-blue-400 group-hover/chk:bg-blue-50'
-													} ${rol.nombre === 'administrador' ? 'opacity-70 cursor-not-allowed' : ''}`}
+													} ${isLockedAdmin ? 'opacity-70 cursor-not-allowed' : ''}`}
 												/>
 												{#if isChecked}
 													<i class="fas fa-check absolute text-white text-xs pointer-events-none"></i>
@@ -376,6 +378,7 @@
 						<div class="space-y-1">
 							{#each mod.submodules as sub}
 								{@const isChecked = hasPermiso(selectedRole.id, sub.dbId!)}
+								{@const isLockedAdmin = selectedRole.nombre === 'administrador' && isChecked}
 								<label class="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-100 active:bg-slate-50">
 									<div class="min-w-0">
 										<div class="text-sm font-medium text-slate-700">{sub.label}</div>
@@ -385,7 +388,8 @@
 										type="checkbox"
 										checked={isChecked}
 										onchange={() => togglePermiso(selectedRole.id, sub.dbId!, isChecked)}
-										disabled={selectedRole.nombre === 'administrador'}
+										disabled={isLockedAdmin}
+										title={selectedRole.nombre === 'administrador' ? (isChecked ? 'Los administradores siempre tienen este permiso' : 'Falta este permiso para Administrador — actívalo') : ''}
 										class="w-6 h-6 shrink-0 rounded cursor-pointer accent-blue-600 disabled:opacity-70 disabled:cursor-not-allowed"
 									/>
 								</label>
