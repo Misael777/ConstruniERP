@@ -14,6 +14,7 @@
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
 	import { getCentroCostos } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
+	import CentroCostoDetalleModal from '$lib/modules/centro-costos/components/CentroCostoDetalleModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
@@ -52,6 +53,19 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	let modalOpen = $state(false);
+
+	let detalleOpen = $state(false);
+	let detalleCentro = $state<CentroCosto | null>(null);
+
+	function openDetalle(item: CentroCosto) {
+		detalleCentro = item;
+		detalleOpen = true;
+	}
+
+	function closeDetalle() {
+		detalleOpen = false;
+		detalleCentro = null;
+	}
 
 	async function fetchList() {
 		loading = true;
@@ -270,7 +284,7 @@
 	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + (activeTab === 'cuentas' ? 1 : 0)} {emptyMessage}>
+			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + (activeTab === 'cuentas' ? 1 : 0)} {emptyMessage} onRowClick={openDetalle}>
 				{#snippet header()}
 					{#each tableFields as field}
 						<th class="text-left px-4 py-3 font-semibold text-slate-600">
@@ -366,3 +380,4 @@
 </div>
 
 <CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={fetchList} />
+<CentroCostoDetalleModal open={detalleOpen} centro={detalleCentro} onClose={closeDetalle} />

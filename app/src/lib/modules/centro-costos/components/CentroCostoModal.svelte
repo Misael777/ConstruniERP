@@ -8,8 +8,8 @@
 		applyFieldMask,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { createCentroCosto, updateCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
-	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { createCentroCosto, updateCentroCosto, resolveEntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import type { CentroCosto, EntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
 		open = false,
@@ -46,7 +46,7 @@
 	// de costo. Este banner de solo lectura resuelve eso: busca el nombre ACTUAL de la entidad
 	// vinculada (no el `centro.nombre` guardado, que podría haber quedado desactualizado si la
 	// entidad se renombró después) y lo muestra arriba del formulario.
-	let linkedEntity = $state<{ tipo: string; id: number; nombre: string } | null>(null);
+	let linkedEntity = $state<EntidadVinculada | null>(null);
 	let loadingLink = $state(false);
 	const hasLink = $derived(
 		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado)
@@ -57,27 +57,7 @@
 		if (!centro) return;
 		loadingLink = true;
 		try {
-			if (centro.id_proyecto) {
-				const { data } = await supabase
-					.from('proyecto')
-					.select('nombre_proyecto')
-					.eq('id_proyecto', centro.id_proyecto)
-					.maybeSingle();
-				linkedEntity = { tipo: 'Proyecto', id: centro.id_proyecto, nombre: data?.nombre_proyecto ?? centro.nombre };
-			} else if (centro.id_cliente) {
-				const { data } = await supabase.from('cliente').select('nombre').eq('id_cliente', centro.id_cliente).maybeSingle();
-				linkedEntity = { tipo: 'Cliente', id: centro.id_cliente, nombre: data?.nombre ?? centro.nombre };
-			} else if (centro.id_proveedor) {
-				const { data } = await supabase
-					.from('proveedor')
-					.select('razon_social')
-					.eq('id_proveedor', centro.id_proveedor)
-					.maybeSingle();
-				linkedEntity = { tipo: 'Proveedor', id: centro.id_proveedor, nombre: data?.razon_social ?? centro.nombre };
-			} else if (centro.id_empleado) {
-				const { data } = await supabase.from('empleados').select('nombre').eq('id', centro.id_empleado).maybeSingle();
-				linkedEntity = { tipo: 'Empleado', id: centro.id_empleado, nombre: data?.nombre ?? centro.nombre };
-			}
+			linkedEntity = await resolveEntidadVinculada(supabase, centro);
 		} finally {
 			loadingLink = false;
 		}

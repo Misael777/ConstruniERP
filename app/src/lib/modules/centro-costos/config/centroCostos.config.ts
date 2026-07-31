@@ -245,6 +245,17 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		sortable: true
 	},
 	{
+		key: 'descripcion',
+		label: 'Descripción',
+		tipo: 'text',
+		required: false,
+		maxLength: 500, // TEXT en BD, sin límite real — se acota acá solo para mantener el formulario manejable
+		placeholder: 'Notas u observaciones sobre este centro de costo (opcional)',
+		showInTable: false, // se muestra en el panel de detalle, no como columna extra en la tabla
+		showInForm: true,
+		sortable: false
+	},
+	{
 		key: 'created_at',
 		label: 'Creado',
 		tipo: 'readonly',

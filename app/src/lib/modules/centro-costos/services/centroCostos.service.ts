@@ -36,6 +36,7 @@ export interface CentroCosto {
 	nombre: string;
 	tipo: string;
 	monto_actual: number; // nombre real de la columna en BD (los .sql locales tienen un typo, ver centroCostos.config.ts)
+	descripcion: string | null;
 	created_at: string;
 	/** Vinculación a la entidad dueña de este centro de costo — como mucho UNA de las cuatro no-nula
 	 * (ver chk_centro_costo_una_entidad, centro_costo_vinculacion_migration.sql +
@@ -50,6 +51,39 @@ export interface CentroCosto {
 	 * de ese proveedor (columna real `proveedor.vendedor`, ver ProveedorModal.svelte) — se trae con un
 	 * embed, no es una columna propia de centro_costo. null para filas sin proveedor vinculado. */
 	producto: string | null;
+}
+
+export interface EntidadVinculada {
+	tipo: 'Proyecto' | 'Cliente' | 'Proveedor' | 'Empleado';
+	id: number;
+	nombre: string;
+}
+
+/**
+ * Resuelve el nombre ACTUAL de la entidad vinculada a un centro de costo (no el `centro.nombre`
+ * guardado, que podría haber quedado desactualizado si la entidad se renombró después). Usado
+ * tanto por el banner de vinculación de CentroCostoModal.svelte (modo edición) como por el panel
+ * de detalle de centros-de-costos/+page.svelte — antes duplicado en el modal, consolidado acá.
+ * null si el centro de costo no está vinculado a ninguna entidad (creado a mano).
+ */
+export async function resolveEntidadVinculada(client: SupabaseClient, centro: CentroCosto): Promise<EntidadVinculada | null> {
+	if (centro.id_proyecto) {
+		const { data } = await client.from('proyecto').select('nombre_proyecto').eq('id_proyecto', centro.id_proyecto).maybeSingle();
+		return { tipo: 'Proyecto', id: centro.id_proyecto, nombre: data?.nombre_proyecto ?? centro.nombre };
+	}
+	if (centro.id_cliente) {
+		const { data } = await client.from('cliente').select('nombre').eq('id_cliente', centro.id_cliente).maybeSingle();
+		return { tipo: 'Cliente', id: centro.id_cliente, nombre: data?.nombre ?? centro.nombre };
+	}
+	if (centro.id_proveedor) {
+		const { data } = await client.from('proveedor').select('razon_social').eq('id_proveedor', centro.id_proveedor).maybeSingle();
+		return { tipo: 'Proveedor', id: centro.id_proveedor, nombre: data?.razon_social ?? centro.nombre };
+	}
+	if (centro.id_empleado) {
+		const { data } = await client.from('empleados').select('nombre').eq('id', centro.id_empleado).maybeSingle();
+		return { tipo: 'Empleado', id: centro.id_empleado, nombre: data?.nombre ?? centro.nombre };
+	}
+	return null;
 }
 
 export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor' | 'empleado';
