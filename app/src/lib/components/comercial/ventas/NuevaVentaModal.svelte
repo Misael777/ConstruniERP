@@ -3,7 +3,8 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
-	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { sanitizeFileSegment } from '$lib/shared/fileNaming';
+	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
@@ -103,7 +104,7 @@
 	}
 
 let codigoGenerado = $derived(
-	`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos} - ${mes}${anio.substring(2)} - ${distrito} - ${getClienteNombreActual() || 'Cliente'}`
+	`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
 );
 
 	let comisionMonto = $derived((Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
@@ -335,6 +336,7 @@ let codigoGenerado = $derived(
 			departamento: departamento ? departamento.substring(0, 4).trim() : null,
 			costo_estima: precioVenta,
 			estado_proyecto: 'activo',
+			tipo_venta: caracteristicasTab,
 			ubicacion: distrito,
 			direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 			usuario_registro: asesorUserId,
@@ -368,8 +370,13 @@ let codigoGenerado = $derived(
 			console.log('[NuevaVentaModal] Nuevo ID_PROYECTO:', nuevoProyectoId);
 
 			// === Centro de costo del proyecto (getOrCrear — idempotente, ver centroCostos.service.ts) ===
-			console.log('[NuevaVentaModal] Asegurando centro de costo del proyecto...');
-			const idCentroCosto = await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
+			// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
+			// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito
+			// del usuario (ver getOrCrearCentroCostoCompartido).
+			console.log('[NuevaVentaModal] Asegurando centro de costo del proyecto...', caracteristicasTab);
+			const idCentroCosto = caracteristicasTab === 'consultoria'
+				? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
+				: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
 			if (!idCentroCosto) {
 				console.warn('[NuevaVentaModal] No se pudo crear el centro de costo del proyecto — la venta se guardó, pero las transacciones de sus cobros/pagos no van a poder generarse hasta que exista.');
 			} else {
@@ -542,7 +549,16 @@ let codigoGenerado = $derived(
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
-								<input type="text" bind:value={valorVenta} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+								<input
+									type="text"
+									bind:value={valorVenta}
+									disabled={!contratoFile}
+									title={!contratoFile ? 'Adjunta el contrato para poder ingresar el valor de venta' : ''}
+									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+								>
+								{#if !contratoFile}
+									<span class="text-[10px] text-slate-400 mt-0.5">Adjunta el contrato para habilitar este campo</span>
+								{/if}
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Dirección del predio</label>

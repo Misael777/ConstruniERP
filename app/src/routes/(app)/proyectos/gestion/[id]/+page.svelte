@@ -7,7 +7,7 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
-	import { generateUniqueFileName } from '$lib/shared/fileNaming';
+	import { generateUniqueFileName, sanitizeFileSegment } from '$lib/shared/fileNaming';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
@@ -82,7 +82,7 @@
 		const mes = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getMonth() + 1).padStart(2, '0') : '';
 		const anio = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getFullYear()).slice(2) : '';
 		const clienteNombre = p.cliente?.nombre?.trim() || 'Cliente';
-		return `${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${p.nro_pisos ?? ''} - ${mes}${anio} - ${p.distrito ?? ''} - ${clienteNombre}`;
+		return `${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${p.nro_pisos ?? ''}_${mes}${anio}_${sanitizeFileSegment(p.distrito ?? '')}_${sanitizeFileSegment(clienteNombre)}`;
 	}
 
 	function seedForm(p: Proyecto): FormFields {

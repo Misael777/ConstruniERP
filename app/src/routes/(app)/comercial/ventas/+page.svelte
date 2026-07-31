@@ -156,7 +156,7 @@ import { describeError } from '$lib/shared/describeError';
 			// dos personas distintas).
 			let query = supabase
 				.from('proyecto')
-				.select('id_proyecto,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato,estado_proyecto');
+				.select('id_proyecto,id_cliente,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato,estado_proyecto,tipo_venta,cliente:id_cliente(nombre)');
 
 			if (!isAdmin()) {
 				const { data: userData } = await supabase.auth.getUser();
@@ -203,6 +203,8 @@ import { describeError } from '$lib/shared/describeError';
 
 				return {
 					id: project.id_proyecto,
+					id_cliente: project.id_cliente ?? null,
+					clienteNombre: project.cliente?.nombre || null,
 					proyecto: project.nombre_proyecto || 'Proyecto sin nombre',
 					valor,
 					tipo,
@@ -213,7 +215,8 @@ import { describeError } from '$lib/shared/describeError';
 					comision: Math.round(valor * (comisionPct / 100)),
 					descripcion: project.descripcion || '',
 					contrato: project.contrato || '',
-					estado_proyecto: project.estado_proyecto || 'activo'
+					estado_proyecto: project.estado_proyecto || 'activo',
+					tipoVenta: project.tipo_venta || 'obra'
 				};
 			});
 
@@ -398,7 +401,7 @@ import { describeError } from '$lib/shared/describeError';
 	// Gestión de proformas (múltiples por venta) + cierre formal de la venta — ver
 	// ProformasVentaModal.svelte. Reemplaza al viejo handleViewProforma de un solo archivo.
 	let proformasModalOpen = $state(false);
-	let proformasModalProyecto: { id_proyecto: number; nombre_proyecto: string; contrato: string; estado_proyecto: string } | null = $state(null);
+	let proformasModalProyecto: { id_proyecto: number; nombre_proyecto: string; contrato: string; estado_proyecto: string; id_cliente: number | null; clienteNombre: string | null; precioVenta: number | null; tipoVenta: string } | null = $state(null);
 
 	function handleGestionarProformas(e: CustomEvent) {
 		const row = e.detail.row;
@@ -407,7 +410,11 @@ import { describeError } from '$lib/shared/describeError';
 			id_proyecto: row.id,
 			nombre_proyecto: row.proyecto,
 			contrato: row.contrato || '',
-			estado_proyecto: row.estado_proyecto || 'activo'
+			id_cliente: row.id_cliente ?? null,
+			clienteNombre: row.clienteNombre ?? null,
+			precioVenta: row.valor ?? null,
+			estado_proyecto: row.estado_proyecto || 'activo',
+			tipoVenta: row.tipoVenta || 'obra'
 		};
 		proformasModalOpen = true;
 	}

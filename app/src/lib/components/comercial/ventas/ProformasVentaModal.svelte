@@ -3,6 +3,9 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
 	import { describeError } from '$lib/shared/describeError';
+	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { permisosState } from '$lib/stores/permisos.svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	interface ProyectoRef {
@@ -10,6 +13,10 @@
 		nombre_proyecto: string;
 		contrato?: string | null;
 		estado_proyecto?: string | null;
+		id_cliente?: number | string | null;
+		clienteNombre?: string | null;
+		precioVenta?: number | null;
+		tipoVenta?: string | null;
 	}
 
 	interface ProformaDoc {
@@ -45,6 +52,17 @@
 	let isClosing = $state(false);
 	let actionError = $state('');
 
+	// Monto final de la venta — el "Valor venta" registrado al crear la venta es provisional; al
+	// cerrarla se confirma/ajusta el monto DEFINITIVO (puede haber cambiado durante la negociación
+	// de las proformas), y eso es lo que queda en proyecto.precio_venta.
+	let montoFinalVenta = $state('');
+
+	// Adelanto inicial — comprobante de pago obligatorio para poder cerrar la venta (a pedido del
+	// usuario: cerrar sin esto significaba "venta cerrada" sin ninguna prueba de que se cobró algo).
+	let adelantoMonto = $state('');
+	let adelantoFecha = $state(new Date().toISOString().slice(0, 10));
+	let adelantoFile = $state<File | null>(null);
+
 	let previewOpen = $state(false);
 	let previewUrl = $state('');
 	let previewTitle = $state('');
@@ -56,6 +74,10 @@
 			actionError = '';
 			localContratoUrl = proyecto.contrato || null;
 			localEstado = proyecto.estado_proyecto || 'activo';
+			montoFinalVenta = proyecto.precioVenta ? String(proyecto.precioVenta) : '';
+			adelantoMonto = '';
+			adelantoFecha = new Date().toISOString().slice(0, 10);
+			adelantoFile = null;
 			loadProformas();
 		}
 	});
@@ -182,13 +204,74 @@
 		}
 	}
 
-	let canClose = $derived(localEstado !== 'venta_cerrada' && !!localContratoUrl && selectedFinalId !== null);
+	let canClose = $derived(
+		localEstado !== 'venta_cerrada' &&
+		!!localContratoUrl &&
+		selectedFinalId !== null &&
+		Number(montoFinalVenta) > 0 &&
+		!!adelantoFile &&
+		Number(adelantoMonto) > 0 &&
+		Number(adelantoMonto) <= Number(montoFinalVenta) &&
+		!!adelantoFecha
+	);
+
+	function handleAdelantoFile(event: Event) {
+		const file = (event.currentTarget as HTMLInputElement).files?.[0];
+		(event.currentTarget as HTMLInputElement).value = '';
+		if (file) adelantoFile = file;
+	}
 
 	async function handleCerrarVenta() {
-		if (!canClose || !proyecto || selectedFinalId === null) return;
+		if (!canClose || !proyecto || selectedFinalId === null || !adelantoFile) return;
 		isClosing = true;
 		actionError = '';
 		try {
+			// 1. Centro de costo del proyecto y del cliente (idempotente — ya existen en casi todos los
+			// casos, ver getOrCrearCentroCostoParaEntidad; se re-consultan aquí como respaldo). Obra:
+			// centro de costo propio del proyecto. Consultoría: el único compartido entre todas las
+			// ventas de ese tipo — ver getOrCrearCentroCostoCompartido.
+			const idCentroProyecto = proyecto.tipoVenta === 'consultoria'
+				? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
+				: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', Number(proyecto.id_proyecto), proyecto.nombre_proyecto);
+			if (!idCentroProyecto) throw new Error('No se pudo obtener el centro de costo del proyecto.');
+
+			if (!proyecto.id_cliente) throw new Error('El proyecto no tiene un cliente asociado — no se puede registrar el adelanto.');
+			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(
+				supabase, 'cliente', Number(proyecto.id_cliente), proyecto.clienteNombre || `Cliente #${proyecto.id_cliente}`
+			);
+			if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente.');
+
+			// 2. Comprobante del adelanto.
+			const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
+				type: 'comprobante',
+				projectId: proyecto.id_proyecto,
+				projectName: proyecto.nombre_proyecto
+			});
+
+			// 3. Transacción del adelanto — mismo criterio que un cobro confirmado en Cuentas por
+			// Cobrar (ver construirPayloadTransaccionPorCobro): origen = centro de costo del cliente
+			// (de donde sale el dinero), destino = centro de costo del proyecto (donde entra). Solo si
+			// esto tiene éxito se procede a cerrar la venta — si falla, la venta queda como estaba.
+			const { data: userData } = await supabase.auth.getUser();
+			const transResult = await createTransaccion(
+				supabase,
+				{
+					tipo_alcance: 'externa',
+					id_centro_costo_origen: idCentroCliente,
+					id_centro_costo_destino: idCentroProyecto,
+					fecha: adelantoFecha,
+					monto_total: Number(adelantoMonto),
+					tipo: 'ingreso',
+					estado: 'activo',
+					comprobante_url: comprobanteUrl,
+					descripcion: `Adelanto inicial - ${proyecto.nombre_proyecto}`
+				},
+				userData?.user?.email ?? null,
+				permisosState.userName || null
+			);
+			if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+
+			// 4. Recién con el adelanto confirmado: fijar la proforma final y cerrar la venta.
 			const { error: clearError } = await supabase
 				.from('documento_proyecto')
 				.update({ es_proforma_final: false })
@@ -204,7 +287,7 @@
 
 			const { error: closeError } = await supabase
 				.from('proyecto')
-				.update({ estado_proyecto: 'venta_cerrada' })
+				.update({ estado_proyecto: 'venta_cerrada', precio_venta: Number(montoFinalVenta) })
 				.eq('id_proyecto', proyecto.id_proyecto);
 			if (closeError) throw closeError;
 
@@ -341,6 +424,50 @@
 						</label>
 					{/if}
 				</section>
+
+				<!-- Cierre financiero: monto final de la venta + adelanto inicial -->
+				{#if localEstado !== 'venta_cerrada'}
+					<section class="border-t border-slate-100 pt-5">
+						<h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+							<div class="w-1.5 h-4 bg-emerald-500 rounded-full"></div>
+							Monto final de la venta
+						</h3>
+						<p class="text-xs text-slate-400 mb-3">Confirma el valor definitivo de la venta (puede ajustarse respecto al registrado al crearla) — obligatorio para cerrarla.</p>
+						<div class="flex flex-col gap-1 mb-1">
+							<label class="text-xs font-semibold text-[#0f3b5e]">Valor final (S/)</label>
+							<input type="number" min="0.01" step="0.01" bind:value={montoFinalVenta} placeholder="0.00" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+						</div>
+					</section>
+
+					<section class="border-t border-slate-100 pt-5">
+						<h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+							<div class="w-1.5 h-4 bg-emerald-500 rounded-full"></div>
+							Adelanto inicial
+						</h3>
+						<p class="text-xs text-slate-400 mb-3">Comprobante del pago inicial que confirma la venta — obligatorio para cerrarla.</p>
+						<div class="grid grid-cols-2 gap-3 mb-1">
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Monto (S/)</label>
+								<input type="number" min="0.01" step="0.01" bind:value={adelantoMonto} placeholder="0.00" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Fecha</label>
+								<input type="date" bind:value={adelantoFecha} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+							</div>
+						</div>
+						{#if Number(adelantoMonto) > 0 && Number(montoFinalVenta) > 0 && Number(adelantoMonto) > Number(montoFinalVenta)}
+							<p class="text-xs text-rose-500 mb-2">El adelanto no puede ser mayor al monto final de la venta.</p>
+						{/if}
+						<label class="cursor-pointer px-3 py-2 border border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors mt-2">
+							<input type="file" accept="image/*,application/pdf" class="hidden" onchange={handleAdelantoFile} />
+							{#if adelantoFile}
+								<i class="far fa-file-pdf text-rose-500"></i> <span class="truncate">{adelantoFile.name}</span>
+							{:else}
+								<i class="fas fa-cloud-upload-alt"></i> Adjuntar comprobante del adelanto
+							{/if}
+						</label>
+					</section>
+				{/if}
 			</div>
 
 			<!-- Footer -->
@@ -352,7 +479,7 @@
 					<button
 						onclick={handleCerrarVenta}
 						disabled={!canClose || isClosing}
-						title={!canClose ? 'Sube el contrato y marca una proforma como final para poder cerrar la venta' : ''}
+						title={!canClose ? 'Sube el contrato, marca una proforma como final, confirma el monto final de la venta y adjunta el comprobante del adelanto (monto ≤ monto final, con fecha) para poder cerrar la venta' : ''}
 						class="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						{#if isClosing}

@@ -12,7 +12,8 @@
 		row,
 		card,
 		emptyMessage = 'No hay datos para mostrar.',
-		onRowDblClick
+		onRowDblClick,
+		onRowClick
 	}: {
 		items: any[];
 		keyField: string;
@@ -24,6 +25,8 @@
 		emptyMessage?: string;
 		/** Opcional — doble clic en una fila (tabla) o tarjeta (móvil). Nada si no se pasa. */
 		onRowDblClick?: (item: any) => void;
+		/** Opcional — un solo clic en una fila (tabla) o tarjeta (móvil). Nada si no se pasa. */
+		onRowClick?: (item: any) => void;
 	} = $props();
 
 	function alignClass(align?: Column['align']) {
@@ -55,7 +58,11 @@
 			</tr>
 		{:else}
 			{#each items as item (item[keyField])}
-				<tr class="hover:bg-slate-50/80 transition-colors group" ondblclick={() => onRowDblClick?.(item)}>
+				<tr
+					class={`hover:bg-slate-50/80 transition-colors group ${onRowClick ? 'cursor-pointer' : ''}`}
+					onclick={() => onRowClick?.(item)}
+					ondblclick={() => onRowDblClick?.(item)}
+				>
 					{@render row(item)}
 				</tr>
 			{/each}
@@ -69,13 +76,14 @@
 		<div class="rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">{emptyMessage}</div>
 	{:else}
 		{#each items as item (item[keyField])}
-			{#if onRowDblClick}
+			{#if onRowDblClick || onRowClick}
 				<div
-					class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
-					ondblclick={() => onRowDblClick(item)}
+					class={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${onRowClick ? 'cursor-pointer active:bg-slate-50' : ''}`}
+					onclick={() => onRowClick?.(item)}
+					ondblclick={() => onRowDblClick?.(item)}
 					role="button"
 					tabindex="0"
-					onkeydown={(e) => { if (e.key === 'Enter') onRowDblClick(item); }}
+					onkeydown={(e) => { if (e.key === 'Enter') (onRowClick ?? onRowDblClick)?.(item); }}
 				>
 					{@render card(item)}
 				</div>
