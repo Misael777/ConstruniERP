@@ -13,15 +13,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
-export type TipoEntidadSolicitud = 'cliente' | 'proyecto';
-export type TipoAccionSolicitud = 'editar' | 'eliminar' | 'cerrar_venta';
+// 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
+// una exportación no apunta a una fila puntual — id_entidad queda null para este caso (ver migración
+// solicitud_aprobacion_exportar_aviso_migration.sql, que también vuelve la columna nullable).
+export type TipoEntidadSolicitud = 'cliente' | 'proyecto' | 'exportacion';
+export type TipoAccionSolicitud = 'editar' | 'eliminar' | 'cerrar_venta' | 'exportar';
 export type EstadoSolicitud = 'pendiente' | 'aprobado' | 'rechazado';
 
 export interface SolicitudAprobacion {
 	id_solicitud: number;
 	tipo_entidad: TipoEntidadSolicitud;
-	id_entidad: number;
+	id_entidad: number | null;
 	tipo_accion: TipoAccionSolicitud;
 	descripcion_entidad: string | null;
 	payload_cambios: Record<string, unknown> | null;
@@ -32,6 +36,9 @@ export interface SolicitudAprobacion {
 	resuelto_en: string | null;
 	created_at: string;
 	visto_por_solicitante: boolean;
+	/** Igual que visto_por_solicitante pero del lado admin — solo se usa para los AVISOS informativos
+	 * de cierre de venta (ver getAvisosInformativos), no para las solicitudes pendientes normales. */
+	visto_por_admin: boolean;
 }
 
 export interface ServiceResult {
@@ -41,29 +48,36 @@ export interface ServiceResult {
 
 const TABLE_NAME = 'solicitud_aprobacion';
 
-/** Crea una solicitud pendiente — resuelve "quién la pide" internamente (permisosState.userName +
+/** Crea una solicitud — resuelve "quién la pide" internamente (permisosState.userName +
  * auth.getUser().id) para que cada llamador no tenga que repetirlo. */
 export async function crearSolicitud(
 	client: SupabaseClient,
 	params: {
 		tipoEntidad: TipoEntidadSolicitud;
-		idEntidad: number;
+		idEntidad: number | null;
 		tipoAccion: TipoAccionSolicitud;
 		descripcionEntidad?: string | null;
 		payloadCambios?: Record<string, unknown> | null;
+		/** true = la acción YA se aplicó directo (ej. un asesor cerrando su propia venta libremente,
+		 * sin pasar por aprobación) — la fila se inserta ya 'aprobado'/auto-resuelta, como un AVISO
+		 * informativo para los admins (ver getAvisosInformativos), no como algo pendiente de su acción. */
+		autoResuelto?: boolean;
 	}
 ): Promise<ServiceResult> {
 	try {
 		const { data: userData } = await client.auth.getUser();
+		const solicitanteNombre = permisosState.userName || null;
 		const { error } = await client.from(TABLE_NAME).insert({
 			tipo_entidad: params.tipoEntidad,
 			id_entidad: params.idEntidad,
 			tipo_accion: params.tipoAccion,
 			descripcion_entidad: params.descripcionEntidad ?? null,
 			payload_cambios: params.payloadCambios ?? null,
-			solicitado_por: permisosState.userName || null,
+			solicitado_por: solicitanteNombre,
 			solicitado_por_id: userData?.user?.id ?? null,
-			estado: 'pendiente'
+			estado: params.autoResuelto ? 'aprobado' : 'pendiente',
+			resuelto_por: params.autoResuelto ? solicitanteNombre : null,
+			resuelto_en: params.autoResuelto ? new Date().toISOString() : null
 		});
 		if (error) return { success: false, message: error.message };
 		return { success: true };
@@ -101,6 +115,35 @@ export async function getMisSolicitudes(client: SupabaseClient): Promise<Solicit
 export async function marcarSolicitudesVistas(client: SupabaseClient, ids: number[]): Promise<ServiceResult> {
 	if (ids.length === 0) return { success: true };
 	const { error } = await client.from(TABLE_NAME).update({ visto_por_solicitante: true }).in('id_solicitud', ids);
+	if (error) return { success: false, message: error.message };
+	return { success: true };
+}
+
+/** Avisos informativos para los admins: ventas cerradas DIRECTO por su propio asesor, sin pasar por
+ * aprobación (a pedido del usuario: cerrar una venta ya no requiere aprobación, pero los admins deben
+ * enterarse igual). Son filas 'cerrar_venta' + estado='aprobado' donde resuelto_por === solicitado_por
+ * (se auto-resolvieron solas, ver crearSolicitud con autoResuelto) — un cierre aprobado de verdad por
+ * un admin nunca pasa por esta tabla (cerrarVentaAprobada se llama directo, sin crear solicitud), así
+ * que esa condición alcanza para no mezclar avisos con aprobaciones reales pasadas. Son de solo
+ * lectura — no tienen Aprobar/Rechazar, solo se marcan como vistas (ver marcarAvisosVistos). */
+export async function getAvisosInformativos(client: SupabaseClient): Promise<SolicitudAprobacion[]> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('*')
+		.eq('tipo_accion', 'cerrar_venta')
+		.eq('estado', 'aprobado')
+		.order('created_at', { ascending: false })
+		.limit(30);
+	if (error) throw error;
+	return ((data ?? []) as SolicitudAprobacion[]).filter((s) => s.resuelto_por && s.resuelto_por === s.solicitado_por);
+}
+
+/** Marca como vistos (por algún admin) los avisos informativos indicados — el estado de "visto" es
+ * compartido entre todos los admins (una vez que alguno lo vio, se considera atendido), a diferencia
+ * de visto_por_solicitante que es individual por definición (cada solicitud tiene un único dueño). */
+export async function marcarAvisosVistos(client: SupabaseClient, ids: number[]): Promise<ServiceResult> {
+	if (ids.length === 0) return { success: true };
+	const { error } = await client.from(TABLE_NAME).update({ visto_por_admin: true }).in('id_solicitud', ids);
 	if (error) return { success: false, message: error.message };
 	return { success: true };
 }
@@ -316,6 +359,12 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 	} else if (solicitud.tipo_accion === 'cerrar_venta') {
 		const { data: userData } = await client.auth.getUser();
 		result = await cerrarVentaAprobada(client, solicitud.payload_cambios as unknown as CerrarVentaParams, userData?.user?.email ?? null, resueltoPor);
+	} else if (solicitud.tipo_accion === 'exportar') {
+		// "Aprobar" acá significa: el admin genera y descarga el export EN SU PROPIO navegador, en
+		// nombre de quien lo pidió (scopeToUserId filtra a las ventas de esa persona, no todo el
+		// portafolio) — no hay un canal para mandarle el archivo al solicitante dentro del ERP, así que
+		// queda en manos del admin compartirlo por fuera si corresponde.
+		result = await exportarVentasCSV(client, solicitud.solicitado_por_id);
 	} else {
 		const table = solicitud.tipo_entidad === 'cliente' ? 'cliente' : 'proyecto';
 		const pk = solicitud.tipo_entidad === 'cliente' ? 'id_cliente' : 'id_proyecto';

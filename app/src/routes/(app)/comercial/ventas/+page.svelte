@@ -10,6 +10,7 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import { describeError } from '$lib/shared/describeError';
 import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -295,6 +296,36 @@ import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/
 	}
 
 	let isDeleting = $state(false);
+	let isExporting = $state(false);
+
+	/** A pedido del usuario: el botón "Exportar" (antes 100% decorativo) ahora genera un CSV real.
+	 * Igual criterio que editar/eliminar: un admin exporta directo, un no-admin manda una solicitud
+	 * de aprobación (ver crearSolicitud/aprobarSolicitud en aprobaciones.service.ts — al aprobarla, el
+	 * admin es quien termina generando y descargando el archivo, en nombre de quien lo pidió). */
+	async function handleExportar() {
+		if (!isAdmin()) {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'exportacion',
+				idEntidad: null,
+				tipoAccion: 'exportar',
+				descripcionEntidad: 'Exportación de ventas'
+			});
+			if (result.success) {
+				alert('No tienes permisos de administrador. Se envió una solicitud de exportación para que un administrador la apruebe.');
+			} else {
+				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+			}
+			return;
+		}
+
+		isExporting = true;
+		try {
+			const result = await exportarVentasCSV(supabase);
+			if (!result.success) alert(`No se pudo exportar. ${result.message ?? ''}`);
+		} finally {
+			isExporting = false;
+		}
+	}
 
 	function closeModal() {
 		isModalOpen = false;
@@ -419,8 +450,12 @@ import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/
 		</div>
 		
 		<div class="flex items-center gap-3">
-			<button class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2">
-				<i class="fas fa-download"></i> Exportar
+			<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				{#if isExporting}
+					<i class="fas fa-spinner fa-spin"></i> Exportando...
+				{:else}
+					<i class="fas fa-download"></i> Exportar
+				{/if}
 			</button>
 			<button onclick={openModal} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
 				<i class="fas fa-plus"></i> Nueva venta

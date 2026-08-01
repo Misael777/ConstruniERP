@@ -42,6 +42,11 @@
 
 	let contratoFile = $state<File | null>(null);
 	let proformaFiles = $state<File[]>([]);
+	// A pedido del usuario: en modo creación también se puede elegir cuál de los PDFs recién
+	// adjuntados será la proforma final, para poder crear y cerrar la venta en un solo paso (sin
+	// tener que guardarla primero y reabrirla en edición). Es un índice sobre `proformaFiles` — recién
+	// se traduce a un id_documento real de la BD dentro de crearVentaYSubirDocumentos.
+	let selectedFinalFileIndex = $state<number | null>(null);
 	// Adelanto inicial (opcional acá, solo en modo creación) — mismo criterio que en la sección de
 	// gestión al cerrar la venta: el monto solo se habilita una vez adjuntado el comprobante. Si se
 	// completa acá, no hace falta volver a pedirlo al cerrar la venta (ver checkAdelantoExistente).
@@ -76,8 +81,11 @@
 	let isSaving = $state(false);
 	let saveError = $state('');
 	let caracteristicasTab = $state<'consultoria' | 'obra'>('consultoria');
-	// A pedido del usuario: "Información general" arranca colapsada cada vez que se abre el popup.
+	// A pedido del usuario: "Información general" arranca colapsada cada vez que se abre el popup
+	// (en edición) o desplegada (en creación) — ver el $effect de reseteo más abajo, que fija el
+	// valor inicial correcto según `mode` cada vez que se abre.
 	let infoGeneralExpanded = $state(false);
+	let caracteristicasExpanded = $state(false);
 
 	// ── Estado exclusivo del modo edición: carga inicial + gestión de proformas/contrato/cierre ──
 	// (fusionado desde el antiguo ProformasVentaModal.svelte — mismo popup ahora, a pedido del usuario)
@@ -117,7 +125,11 @@
 	$effect(() => {
 		if (isOpen) {
 			saveError = '';
-			infoGeneralExpanded = false;
+			// A pedido del usuario: en el pop up de NUEVA venta, "Información general" arranca
+			// desplegada y "Características del proyecto nuevo" arranca colapsada (al revés que en
+			// edición, donde "Información general" arranca colapsada — ya establecido antes).
+			infoGeneralExpanded = mode !== 'edit';
+			caracteristicasExpanded = mode === 'edit';
 			if (mode === 'edit' && ventaId) {
 				loadVentaParaEditar(ventaId);
 			} else {
@@ -139,6 +151,7 @@
 				distrito = '';
 				contratoFile = null;
 				proformaFiles = [];
+				selectedFinalFileIndex = null;
 				adelantoFile = null;
 				adelantoMonto = '';
 				adelantoFecha = new Date().toISOString().slice(0, 10);
@@ -490,13 +503,50 @@ let codigoGenerado = $derived(
 		}
 	}
 
+	// A pedido del usuario: "Cerrar venta" ya no depende solo de la sección de cierre (contrato,
+	// proforma final, monto, adelanto) — también exige que TODOS los campos obligatorios (*) de
+	// "Información general" y "Características del proyecto" estén completos. Obra todavía no tiene
+	// campos propios implementados ("Todavía no hay campos configurados para Obra" más abajo), así
+	// que ese sub-chequeo solo aplica a Consultoría.
+	let infoGeneralCompleta = $derived(
+		!!proyectoNombre.trim() &&
+		!!fechaVenta &&
+		!!selectedClienteId && selectedClienteId !== '__new__' &&
+		!!departamento &&
+		!!provincia &&
+		!!distrito &&
+		Number(valorVenta) > 0 &&
+		comisionPorcentaje !== '' && !Number.isNaN(Number(comisionPorcentaje)) &&
+		(caracteristicasTab !== 'consultoria' ||
+			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && !!tipoEdificacion2 && Number(numeroPisos) > 0))
+	);
+
 	let canClose = $derived(
 		mode === 'edit' &&
 		localEstado !== 'venta_cerrada' &&
+		infoGeneralCompleta &&
 		!!localContratoUrl &&
 		selectedFinalId !== null &&
 		Number(montoFinalVenta) > 0 &&
 		(adelantoYaRegistrado || (!!adelantoFile && Number(adelantoMonto) > 0 && Number(adelantoMonto) <= Number(montoFinalVenta) && !!adelantoFecha))
+	);
+
+	// A pedido del usuario: también se puede cerrar la venta de una sola vez desde el pop up de
+	// CREACIÓN (registrar + cerrar en un solo clic), en vez de guardar primero y recién cerrar desde
+	// "Editar" — mismo criterio de campos obligatorios que `canClose`, pero usando los archivos
+	// sueltos que todavía no se subieron (`proformaFiles`/`selectedFinalFileIndex`) en vez de los ya
+	// guardados en `documento_proyecto`.
+	let canCloseCreate = $derived(
+		mode === 'create' &&
+		infoGeneralCompleta &&
+		contratoPresente &&
+		proformaFiles.length > 0 &&
+		selectedFinalFileIndex !== null &&
+		Number(valorVenta) > 0 &&
+		!!adelantoFile &&
+		Number(adelantoMonto) > 0 &&
+		Number(adelantoMonto) <= Number(valorVenta) &&
+		!!adelantoFecha
 	);
 
 	function handleAdelantoFileGestion(event: Event) {
@@ -512,10 +562,7 @@ let codigoGenerado = $derived(
 		saveError = '';
 		try {
 			// El adelanto puede haberse registrado ya al crear la venta — en ese caso no hace falta
-			// pedirlo/crearlo de nuevo acá. El comprobante SÍ se sube ya mismo aunque no seas admin —
-			// es un adjunto, no una edición/cierre (mismo criterio que proformas/contrato), así que no
-			// requiere aprobación; lo que sí la requiere es la transacción + el cambio de estado, que
-			// cerrarVentaAprobada hace recién cuando un admin actúa (directo o al aprobar).
+			// pedirlo/crearlo de nuevo acá.
 			let comprobanteUrl: string | undefined;
 			if (!adelantoYaRegistrado && adelantoFile) {
 				const uploaded = await uploadProjectDocument(adelantoFile, {
@@ -540,28 +587,27 @@ let codigoGenerado = $derived(
 				comprobanteUrl
 			};
 
-			if (isAdmin()) {
-				const { data: userData } = await supabase.auth.getUser();
-				const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
-				if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
-				localEstado = 'venta_cerrada';
-				await loadProformas();
-				onSaved();
-			} else {
-				// A pedido del usuario: un no-administrador ya no cierra la venta directo — se envía una
-				// solicitud de aprobación con todo lo ya reunido (proforma final, monto, adelanto y su
-				// comprobante ya subido), visible para todos los admins en la campanita.
-				const result = await crearSolicitud(supabase, {
+			// A pedido del usuario: cerrar una venta ya NO requiere aprobación de un admin — cualquiera
+			// puede hacerlo directo. Solo si quien cierra NO es admin, se deja un aviso informativo
+			// (auto-resuelto, sin Aprobar/Rechazar) para que los admins se enteren igual, ver
+			// getAvisosInformativos en aprobaciones.service.ts.
+			const { data: userData } = await supabase.auth.getUser();
+			const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
+			if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
+
+			if (!isAdmin()) {
+				await crearSolicitud(supabase, {
 					tipoEntidad: 'proyecto',
 					idEntidad: Number(ventaId),
 					tipoAccion: 'cerrar_venta',
 					descripcionEntidad: proyectoNombre,
-					payloadCambios: cierreParams
+					autoResuelto: true
 				});
-				if (!result.success) throw new Error(result.message || 'No se pudo enviar la solicitud.');
-				alert('No tienes permisos de administrador. Se envió una solicitud de cierre de venta para que un administrador la apruebe.');
-				onSaved();
 			}
+
+			localEstado = 'venta_cerrada';
+			await loadProformas();
+			onSaved();
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
 			alert(`No se pudo cerrar la venta.\n${describeError(err)}`);
@@ -570,172 +616,89 @@ let codigoGenerado = $derived(
 		}
 	}
 
-	async function handleGuardar() {
-		console.log('[NuevaVentaModal] === INICIO handleGuardar ===');
-	try {
-		console.log('[NuevaVentaModal] Estado inicial:', {
-			mode,
-			proyectoNombre,
-			fechaVenta,
-			asesor,
-			selectedClienteId,
-			nuevoClienteNombre,
-			valorVenta,
-			comisionPorcentaje,
-			contratoFile: contratoFile?.name || null,
-			proformaFiles: proformaFiles.map((f) => f.name)
-		});
+	interface DatosBasicosVenta {
+		clienteId: number;
+		asesorFinal: string;
+		asesorUserId: string | null;
+		clienteNombreFinal: string;
+		precioVenta: number;
+		comision: number;
+		numeroPisosValue: number | null;
+		fechaInicio: string;
+		sessionEmail: string | null;
+	}
 
+	/** Validaciones + resolución del cliente compartidas por "Guardar venta" y "Guardar y cerrar
+	 * venta" (creación) — antes vivían inline al principio de handleGuardar. Devuelve null (con
+	 * saveError ya seteado) si algo falta. */
+	async function validarYResolverDatosBasicos(): Promise<DatosBasicosVenta | null> {
 		saveError = '';
 
-		// === Validación 1: Nombre del proyecto ===
-		console.log('[NuevaVentaModal] Validando nombre del proyecto...');
 		if (!proyectoNombre.trim()) {
 			saveError = 'Debes ingresar un nombre de proyecto.';
-			console.warn('[NuevaVentaModal] ❌ ERROR: Nombre del proyecto vacío');
-			return;
+			return null;
 		}
-		console.log('[NuevaVentaModal] ✓ Nombre del proyecto OK:', proyectoNombre);
-
-		// === Validación 2: Fecha de venta ===
-		console.log('[NuevaVentaModal] Validando fecha de venta...');
 		if (!fechaVenta) {
 			saveError = 'Debes seleccionar la fecha de venta.';
-			console.warn('[NuevaVentaModal] ❌ ERROR: Fecha de venta vacía');
-			return;
+			return null;
 		}
-		console.log('[NuevaVentaModal] ✓ Fecha de venta OK:', fechaVenta);
-
-		// === Determinación del Cliente ID ===
-		console.log('[NuevaVentaModal] Determinando cliente ID...');
-		console.log('[NuevaVentaModal]   selectedClienteId:', selectedClienteId);
-		console.log('[NuevaVentaModal]   nuevoClienteNombre:', nuevoClienteNombre);
-		console.log('[NuevaVentaModal]   clienteNombreGen:', clienteNombreGen);
 
 		let clienteId: number | null = null;
-
 		if (selectedClienteId && selectedClienteId !== '__new__') {
-			// Cliente seleccionado del dropdown
 			clienteId = Number(selectedClienteId);
-			console.log('[NuevaVentaModal] ✓ Cliente seleccionado del dropdown, ID:', clienteId);
 		} else if (selectedClienteId === '__new__') {
-			// Crear nuevo cliente
-			console.log('[NuevaVentaModal] Opción "Nuevo cliente" seleccionada');
 			if (!nuevoClienteNombre.trim()) {
 				saveError = 'Debes ingresar el nombre del cliente.';
-				console.warn('[NuevaVentaModal] ❌ ERROR: Nombre del nuevo cliente vacío');
-				return;
+				return null;
 			}
-			console.log('[NuevaVentaModal] Creando nuevo cliente:', nuevoClienteNombre);
 			clienteId = await ensureCliente(nuevoClienteNombre);
-			console.log('[NuevaVentaModal] Nuevo cliente creado con ID:', clienteId);
 		} else {
 			const nombreClienteFallback = getClienteNombreActual().trim();
 			if (!nombreClienteFallback) {
 				saveError = 'Debes seleccionar o ingresar el nombre del cliente.';
-				console.warn('[NuevaVentaModal] ❌ ERROR: Cliente fallback vacío');
-				return;
+				return null;
 			}
-			console.log('[NuevaVentaModal] Buscando o creando cliente:', nombreClienteFallback);
 			clienteId = await ensureCliente(nombreClienteFallback);
-			console.log('[NuevaVentaModal] Cliente obtenido/creado con ID:', clienteId);
 		}
 
 		if (!clienteId) {
 			saveError = 'No se pudo obtener o crear el cliente.';
-			console.error('[NuevaVentaModal] ❌ ERROR: No se pudo obtener clienteId');
-			return;
+			return null;
 		}
-		console.log('[NuevaVentaModal] ✓ clienteId final:', clienteId);
 
-		// === Preparación de datos ===
-		console.log('[NuevaVentaModal] Preparando datos para inserción...');
 		const precioVenta = Number(valorVenta) || 0;
 		const comision = Number(comisionPorcentaje) || 0;
 		const numeroPisosValue = Number(numeroPisos) || null;
 		const fechaInicio = fechaVenta;
-		const asesorFinal = (asesor || '').trim() || await resolveCurrentAsesorName();
+		const asesorFinal = (asesor || '').trim() || (await resolveCurrentAsesorName());
 		const clienteNombreFinal = getClienteNombreActual().trim();
 		const { data: { session } } = await supabase.auth.getSession();
 		const asesorUserId = session?.user?.id ?? null;
 		asesor = asesorFinal;
 
-		console.log('[NuevaVentaModal] Datos calculados:', {
+		return {
+			clienteId,
+			asesorFinal,
+			asesorUserId,
+			clienteNombreFinal,
 			precioVenta,
 			comision,
 			numeroPisosValue,
 			fechaInicio,
-			clienteNombreFinal
-		});
+			sessionEmail: session?.user?.email ?? null
+		};
+	}
 
-		isSaving = true;
-		console.log('[NuevaVentaModal] isSaving = true');
+	/** INSERT del proyecto (modo creación) + centro de costo + subida de contrato/proformas/adelanto
+	 * — antes era la segunda mitad de handleGuardar. Ahora reusable también por "Guardar y cerrar
+	 * venta". Devuelve el id del proyecto recién creado y, en el mismo orden que `proformaFiles`, el
+	 * id_documento de cada proforma ya insertada (para poder elegir "cuál es la final" sin haber
+	 * tenido ids de antemano). Devuelve null (con saveError ya seteado) si algo falla. */
+	async function crearVentaYSubirDocumentos(
+		basicos: DatosBasicosVenta
+	): Promise<{ proyectoId: number; idCentroCosto: number | string | null; proformaDocIds: (number | null)[] } | null> {
+		const { clienteId, asesorFinal, asesorUserId, clienteNombreFinal, precioVenta, comision, numeroPisosValue, fechaInicio, sessionEmail } = basicos;
 
-		// === Modo edición: UPDATE de los campos generales, sin tocar estado_proyecto (solo "Cerrar
-		// venta" lo cambia) ni asesor_comercial_id/usuario_registro (deben seguir apuntando al asesor
-		// original — ventas/+page.svelte los usa para filtrar "mis ventas" de un no-administrador; si
-		// un admin edita la venta de otro asesor, no debe reasignarse solo por guardar cambios). ===
-		if (mode === 'edit' && ventaId) {
-			const proyectoUpdatePayload = {
-				id_cliente: clienteId,
-				nombre_proyecto: proyectoNombre,
-				fecha_inicio_plan: fechaInicio,
-				precio_venta: precioVenta,
-				comision_asesor: comision,
-				responsable: asesorFinal,
-				tip_proyecto: tipoProyecto,
-				estado_predio: estadoPredio,
-				tipo_edifica: tipoEdificacion,
-				tipo_edificacion2: tipoEdificacion2 || null,
-				nro_pisos: numeroPisosValue,
-				distrito: distrito ? distrito.substring(0, 4).trim() : null,
-				provincia: provincia ? provincia.substring(0, 4).trim() : null,
-				departamento: departamento ? departamento.substring(0, 4).trim() : null,
-				costo_estima: precioVenta,
-				tipo_venta: caracteristicasTab,
-				ubicacion: distrito,
-				direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
-				descripcion: observaciones?.trim() ? observaciones.trim() : null
-			};
-
-			console.log('[NuevaVentaModal] Payload de edición para proyecto:', proyectoUpdatePayload);
-
-			// A pedido del usuario: un no-administrador ya no guarda los cambios directo — se envía una
-			// solicitud de aprobación con el payload propuesto, visible para todos los admins en la
-			// campanita (ver aprobaciones.service.ts).
-			if (!isAdmin()) {
-				const result = await crearSolicitud(supabase, {
-					tipoEntidad: 'proyecto',
-					idEntidad: Number(ventaId),
-					tipoAccion: 'editar',
-					descripcionEntidad: proyectoNombre,
-					payloadCambios: proyectoUpdatePayload
-				});
-				isSaving = false;
-				if (!result.success) {
-					saveError = `No se pudo enviar la solicitud. ${result.message ?? ''}`;
-					return;
-				}
-				alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
-				onSaved();
-				return;
-			}
-
-			const { error } = await supabase.from('proyecto').update(proyectoUpdatePayload).eq('id_proyecto', ventaId);
-
-			isSaving = false;
-			if (error) {
-				console.error('[NuevaVentaModal] Error al actualizar proyecto:', error);
-				saveError = `Error guardando los cambios: ${error.message ?? 'Error desconocido.'}`;
-				return;
-			}
-
-			console.log('[NuevaVentaModal] ✓ Cambios guardados. Permanece abierto para seguir gestionando la venta.');
-			onSaved();
-			return;
-		}
-
-		// === Construcción del Payload (modo creación) ===
 		const proyectoPayload = {
 			id_cliente: clienteId,
 			nombre_proyecto: proyectoNombre,
@@ -761,68 +724,41 @@ let codigoGenerado = $derived(
 			descripcion: observaciones?.trim() ? observaciones.trim() : null
 		};
 
-		console.log('[NuevaVentaModal] Payload para proyecto:', proyectoPayload);
-
-		// === INSERT proyecto ===
-		console.log('[NuevaVentaModal] Insertando proyecto en Supabase...');
-		console.log('[NuevaVentaModal] Llamando a supabase.from("proyecto").insert()...');
-
-		const { data, error } = await supabase
-			.from('proyecto')
-			.insert([proyectoPayload])
-			.select('id_proyecto')
-			.single();
-
-		if (error) {
+		const { data, error } = await supabase.from('proyecto').insert([proyectoPayload]).select('id_proyecto').single();
+		if (error || !data?.id_proyecto) {
 			console.error('[NuevaVentaModal] Error al insertar proyecto:', error);
-			saveError = `Error guardando la venta: ${error.message ?? 'Error desconocido.'}`;
-			isSaving = false;
-			return;
+			saveError = `Error guardando la venta: ${error?.message ?? 'Error desconocido.'}`;
+			return null;
 		}
 
-		console.log('[NuevaVentaModal] ✓ Proyecto insertado exitosamente');
-		console.log('[NuevaVentaModal] Datos retornados:', data);
+		const nuevoProyectoId = data.id_proyecto;
 
-		if (data?.id_proyecto) {
-			const nuevoProyectoId = data.id_proyecto;
-			console.log('[NuevaVentaModal] Nuevo ID_PROYECTO:', nuevoProyectoId);
+		// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
+		// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito del
+		// usuario (ver getOrCrearCentroCostoCompartido).
+		const idCentroCosto = caracteristicasTab === 'consultoria'
+			? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
+			: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
+		if (!idCentroCosto) {
+			console.warn('[NuevaVentaModal] No se pudo crear el centro de costo del proyecto — la venta se guardó, pero las transacciones de sus cobros/pagos no van a poder generarse hasta que exista.');
+		}
 
-			// === Centro de costo del proyecto (getOrCrear — idempotente, ver centroCostos.service.ts) ===
-			// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
-			// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito
-			// del usuario (ver getOrCrearCentroCostoCompartido).
-			console.log('[NuevaVentaModal] Asegurando centro de costo del proyecto...', caracteristicasTab);
-			const idCentroCosto = caracteristicasTab === 'consultoria'
-				? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
-				: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
-			if (!idCentroCosto) {
-				console.warn('[NuevaVentaModal] No se pudo crear el centro de costo del proyecto — la venta se guardó, pero las transacciones de sus cobros/pagos no van a poder generarse hasta que exista.');
-			} else {
-				console.log('[NuevaVentaModal] ✓ Centro de costo del proyecto listo, id:', idCentroCosto);
+		const proformaDocIds: (number | null)[] = [];
+		try {
+			if (contratoFile) {
+				const contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId, proyectoNombre);
+				await supabase.from('proyecto').update({ contrato: contratoUrl }).eq('id_proyecto', nuevoProyectoId);
 			}
 
-			// === UPLOAD documentos ===
-			try {
-				console.log('[NuevaVentaModal] Verificando documentos para subir...');
-				console.log('[NuevaVentaModal]   contratoFile:', contratoFile ? `${contratoFile.name} (${contratoFile.size} bytes)` : 'null');
-				console.log('[NuevaVentaModal]   proformaFiles:', proformaFiles.map((f) => `${f.name} (${f.size} bytes)`));
-
-				if (contratoFile) {
-					console.log('[NuevaVentaModal] Subiendo contrato...');
-					const contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId, proyectoNombre);
-					console.log('[NuevaVentaModal] ✓ Contrato subido exitosamente. URL:', contratoUrl);
-					await supabase.from('proyecto').update({ contrato: contratoUrl }).eq('id_proyecto', nuevoProyectoId);
-				}
-
-				// Cada proforma se registra como una fila propia en documento_proyecto — la venta
-				// puede tener varias mientras sigue en negociación (ver la sección de gestión de este
-				// mismo modal en modo edición, donde luego se elige cuál es la final para cerrar).
-				for (const file of proformaFiles) {
-					console.log('[NuevaVentaModal] Subiendo proforma:', file.name);
-					const proformaUrl = await uploadDocument('proforma', file, nuevoProyectoId, proyectoNombre);
-					console.log('[NuevaVentaModal] ✓ Proforma subida exitosamente. URL:', proformaUrl);
-
-					const { error: docError } = await supabase.from('documento_proyecto').insert({
+			// Cada proforma se registra como una fila propia en documento_proyecto — la venta puede
+			// tener varias mientras sigue en negociación. Se captura el id_documento de cada una (en el
+			// mismo orden que proformaFiles) para poder resolver "cuál es la final" si esto se llamó
+			// desde "Guardar y cerrar venta".
+			for (const file of proformaFiles) {
+				const proformaUrl = await uploadDocument('proforma', file, nuevoProyectoId, proyectoNombre);
+				const { data: docData, error: docError } = await supabase
+					.from('documento_proyecto')
+					.insert({
 						id_proyecto: nuevoProyectoId,
 						nombre: file.name.replace(/\.[^.]+$/, ''),
 						tipo_documento: 'Proforma',
@@ -833,72 +769,185 @@ let codigoGenerado = $derived(
 						file_type: file.type,
 						creado_por: asesorFinal,
 						responsable: asesorFinal
-					});
-					if (docError) throw docError;
-				}
-
-				// Adelanto inicial — mismo mecanismo que "Cerrar venta": asegura el centro de costo del
-				// cliente, sube el comprobante y crea la transacción (ingreso) de una vez. Requiere
-				// ambos (archivo Y monto) — el campo de monto ya viene deshabilitado en el formulario
-				// mientras no haya comprobante adjunto.
-				if (adelantoFile && Number(adelantoMonto) > 0) {
-					console.log('[NuevaVentaModal] Registrando adelanto inicial...');
-					const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', clienteId, clienteNombreFinal || `Cliente #${clienteId}`);
-					if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente para registrar el adelanto.');
-
-					const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
-						type: 'comprobante',
-						projectId: nuevoProyectoId,
-						projectName: proyectoNombre
-					});
-
-					const transResult = await createTransaccion(
-						supabase,
-						{
-							tipo_alcance: 'externa',
-							id_centro_costo_origen: idCentroCliente,
-							id_centro_costo_destino: idCentroCosto,
-							fecha: fechaInicio,
-							monto_total: Number(adelantoMonto),
-							tipo: 'ingreso',
-							estado: 'activo',
-							comprobante_url: comprobanteUrl,
-							descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
-						},
-						session?.user?.email ?? null,
-						permisosState.userName || null
-					);
-					if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
-					console.log('[NuevaVentaModal] ✓ Adelanto inicial registrado');
-				}
-
-				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
-			} catch (uploadError) {
-				console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
-				saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
-				isSaving = false;
-				return;
+					})
+					.select('id_documento')
+					.single();
+				if (docError) throw docError;
+				proformaDocIds.push(docData?.id_documento ?? null);
 			}
-		} else {
-			console.warn('[NuevaVentaModal] ⚠️ Advertencia: data no contiene id_proyecto');
+
+			// Adelanto inicial — mismo mecanismo que "Cerrar venta": asegura el centro de costo del
+			// cliente, sube el comprobante y crea la transacción (ingreso) de una vez. Requiere ambos
+			// (archivo Y monto) — el campo de monto ya viene deshabilitado en el formulario mientras no
+			// haya comprobante adjunto.
+			if (adelantoFile && Number(adelantoMonto) > 0) {
+				const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', clienteId, clienteNombreFinal || `Cliente #${clienteId}`);
+				if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente para registrar el adelanto.');
+
+				const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
+					type: 'comprobante',
+					projectId: nuevoProyectoId,
+					projectName: proyectoNombre
+				});
+
+				const transResult = await createTransaccion(
+					supabase,
+					{
+						tipo_alcance: 'externa',
+						id_centro_costo_origen: idCentroCliente,
+						id_centro_costo_destino: idCentroCosto,
+						fecha: fechaInicio,
+						monto_total: Number(adelantoMonto),
+						tipo: 'ingreso',
+						estado: 'activo',
+						comprobante_url: comprobanteUrl,
+						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
+					},
+					sessionEmail,
+					permisosState.userName || null
+				);
+				if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+			}
+		} catch (uploadError) {
+			console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
+			saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
+			return null;
 		}
 
-		// === Finalización ===
+		return { proyectoId: nuevoProyectoId, idCentroCosto, proformaDocIds };
+	}
+
+	async function handleGuardar() {
+		const basicos = await validarYResolverDatosBasicos();
+		if (!basicos) return;
+
+		isSaving = true;
+
+		// === Modo edición: UPDATE de los campos generales, sin tocar estado_proyecto (solo "Cerrar
+		// venta" lo cambia) ni asesor_comercial_id/usuario_registro (deben seguir apuntando al asesor
+		// original — ventas/+page.svelte los usa para filtrar "mis ventas" de un no-administrador; si
+		// un admin edita la venta de otro asesor, no debe reasignarse solo por guardar cambios). ===
+		if (mode === 'edit' && ventaId) {
+			const proyectoUpdatePayload = {
+				id_cliente: basicos.clienteId,
+				nombre_proyecto: proyectoNombre,
+				fecha_inicio_plan: basicos.fechaInicio,
+				precio_venta: basicos.precioVenta,
+				comision_asesor: basicos.comision,
+				responsable: basicos.asesorFinal,
+				tip_proyecto: tipoProyecto,
+				estado_predio: estadoPredio,
+				tipo_edifica: tipoEdificacion,
+				tipo_edificacion2: tipoEdificacion2 || null,
+				nro_pisos: basicos.numeroPisosValue,
+				distrito: distrito ? distrito.substring(0, 4).trim() : null,
+				provincia: provincia ? provincia.substring(0, 4).trim() : null,
+				departamento: departamento ? departamento.substring(0, 4).trim() : null,
+				costo_estima: basicos.precioVenta,
+				tipo_venta: caracteristicasTab,
+				ubicacion: distrito,
+				direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
+				descripcion: observaciones?.trim() ? observaciones.trim() : null
+			};
+
+			// A pedido del usuario: un no-administrador ya no guarda los cambios directo — se envía una
+			// solicitud de aprobación con el payload propuesto, visible para todos los admins en la
+			// campanita (ver aprobaciones.service.ts).
+			if (!isAdmin()) {
+				const result = await crearSolicitud(supabase, {
+					tipoEntidad: 'proyecto',
+					idEntidad: Number(ventaId),
+					tipoAccion: 'editar',
+					descripcionEntidad: proyectoNombre,
+					payloadCambios: proyectoUpdatePayload
+				});
+				isSaving = false;
+				if (!result.success) {
+					saveError = `No se pudo enviar la solicitud. ${result.message ?? ''}`;
+					return;
+				}
+				alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
+				onSaved();
+				return;
+			}
+
+			const { error } = await supabase.from('proyecto').update(proyectoUpdatePayload).eq('id_proyecto', ventaId);
+			isSaving = false;
+			if (error) {
+				console.error('[NuevaVentaModal] Error al actualizar proyecto:', error);
+				saveError = `Error guardando los cambios: ${error.message ?? 'Error desconocido.'}`;
+				return;
+			}
+			onSaved();
+			return;
+		}
+
+		const resultado = await crearVentaYSubirDocumentos(basicos);
 		isSaving = false;
-		console.log('[NuevaVentaModal] isSaving = false');
-		console.log('[NuevaVentaModal] Llamando onSaved()...');
+		if (!resultado) return;
 		onSaved();
-		console.log('[NuevaVentaModal] Llamando onClose()...');
 		onClose();
-		console.log('[NuevaVentaModal] === FIN handleGuardar (exitoso) ===');
-	} catch (fatal: unknown) {
-		console.error('[NuevaVentaModal] Error inesperado:', fatal);
-		saveError = `Error inesperado: ${fatal instanceof Error ? fatal.message : String(fatal)}`;
-		isSaving = false;
-	}
 	}
 
+	/** A pedido del usuario: registrar y cerrar la venta en un solo paso desde el pop up de
+	 * CREACIÓN, sin necesidad de guardar primero y reabrir en "Editar". Reusa exactamente la misma
+	 * lógica de cierre que el modo edición (cerrarVentaAprobada / crearSolicitud si no es admin) —
+	 * solo cambia de dónde sale el id_documento de la proforma final: acá recién se conoce después de
+	 * crearVentaYSubirDocumentos, porque el archivo todavía no existía en la BD. */
+	async function handleGuardarYCerrarVenta() {
+		if (!canCloseCreate || selectedFinalFileIndex === null) return;
 
+		const basicos = await validarYResolverDatosBasicos();
+		if (!basicos) return;
+
+		isClosing = true;
+		try {
+			const resultado = await crearVentaYSubirDocumentos(basicos);
+			if (!resultado) return; // saveError ya seteado por crearVentaYSubirDocumentos
+
+			const idDocumentoFinal = resultado.proformaDocIds[selectedFinalFileIndex];
+			if (!idDocumentoFinal) throw new Error('No se pudo determinar la proforma final recién subida.');
+
+			const cierreParams = {
+				idProyecto: resultado.proyectoId,
+				proyectoNombre,
+				tipoVenta: caracteristicasTab,
+				idCliente: basicos.clienteId,
+				clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`,
+				selectedFinalId: idDocumentoFinal,
+				montoFinalVenta: basicos.precioVenta,
+				// El adelanto ya se creó dentro de crearVentaYSubirDocumentos (la creación de una venta
+				// nunca estuvo gateada por aprobación, a diferencia de cerrarla) — cerrarVentaAprobada no
+				// debe volver a crear la transacción.
+				adelantoYaRegistrado: true
+			};
+
+			// A pedido del usuario: cerrar una venta ya no requiere aprobación — se aplica directo, sin
+			// importar el rol. Solo si quien cierra no es admin queda un aviso informativo para los
+			// admins (auto-resuelto, sin Aprobar/Rechazar).
+			const { data: userData } = await supabase.auth.getUser();
+			const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
+			if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
+
+			if (!isAdmin()) {
+				await crearSolicitud(supabase, {
+					tipoEntidad: 'proyecto',
+					idEntidad: resultado.proyectoId,
+					tipoAccion: 'cerrar_venta',
+					descripcionEntidad: proyectoNombre,
+					autoResuelto: true
+				});
+			}
+
+			onSaved();
+			onClose();
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error creando y cerrando la venta:', err);
+			saveError = `No se pudo cerrar la venta.\n${describeError(err)}`;
+		} finally {
+			isClosing = false;
+		}
+	}
 </script>
 
 {#if isOpen}
@@ -1020,13 +1069,8 @@ let codigoGenerado = $derived(
 								<input
 									type="text"
 									bind:value={valorVenta}
-									disabled={!contratoPresente}
-									title={!contratoPresente ? 'Adjunta el contrato para poder ingresar el valor de venta' : ''}
-									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700"
 								>
-								{#if !contratoPresente}
-									<span class="text-[10px] text-slate-400 mt-0.5">Adjunta el contrato para habilitar este campo</span>
-								{/if}
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Dirección del predio</label>
@@ -1058,14 +1102,35 @@ let codigoGenerado = $derived(
 									</label>
 									{#if proformaFiles.length > 0}
 										<div class="flex flex-col gap-1 mt-1">
+											<!-- A pedido del usuario: también se puede elegir la proforma final acá mismo,
+											     al crear, para poder cerrar la venta de una vez con "Cerrar venta" abajo. -->
 											{#each proformaFiles as file, i}
-												<div class="flex items-center justify-between gap-2 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
-													<span class="truncate">{file.name}</span>
-													<button type="button" onclick={() => proformaFiles = proformaFiles.filter((_, idx) => idx !== i)} class="text-slate-400 hover:text-rose-600 shrink-0" aria-label="Quitar proforma">
+												<div class="flex items-center gap-2 px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
+													<input
+														type="radio"
+														name="proforma-final-create"
+														checked={selectedFinalFileIndex === i}
+														onchange={() => (selectedFinalFileIndex = i)}
+														class="shrink-0 accent-blue-600"
+														aria-label="Marcar como proforma final"
+														title="Marcar como proforma final"
+													/>
+													<span class="truncate flex-1">{file.name}</span>
+													<button
+														type="button"
+														onclick={() => {
+															proformaFiles = proformaFiles.filter((_, idx) => idx !== i);
+															if (selectedFinalFileIndex === i) selectedFinalFileIndex = null;
+															else if (selectedFinalFileIndex !== null && selectedFinalFileIndex > i) selectedFinalFileIndex -= 1;
+														}}
+														class="text-slate-400 hover:text-rose-600 shrink-0"
+														aria-label="Quitar proforma"
+													>
 														<i class="fas fa-times"></i>
 													</button>
 												</div>
 											{/each}
+											<span class="text-[10px] text-slate-400 mt-0.5">Marca el radio de la proforma final si vas a usar "Cerrar venta" abajo.</span>
 										</div>
 									{/if}
 								</div>
@@ -1266,13 +1331,23 @@ let codigoGenerado = $derived(
 					</section>
 					{/if}
 
-					<!-- Características del proyecto nuevo -->
+					<!-- Características del proyecto nuevo (colapsable — a pedido del usuario: arranca
+					     desplegada en edición y colapsada al crear una venta nueva, ver el $effect de
+					     reseteo más arriba) -->
 					<section class="border-t border-slate-100 pt-6">
-						<h3 class="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-							<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
-							Características del proyecto nuevo
-						</h3>
-
+						<button
+							type="button"
+							onclick={() => (caracteristicasExpanded = !caracteristicasExpanded)}
+							class="w-full flex items-center justify-between gap-2 mb-4 text-left"
+							aria-expanded={caracteristicasExpanded}
+						>
+							<span class="text-sm font-bold text-slate-800 flex items-center gap-2">
+								<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
+								Características del proyecto nuevo
+							</span>
+							<i class={`fas fa-chevron-down text-slate-400 text-xs transition-transform ${caracteristicasExpanded ? 'rotate-180' : ''}`}></i>
+						</button>
+						{#if caracteristicasExpanded}
 						<div class="flex gap-1 mb-4 border-b border-slate-200">
 							<button
 								type="button"
@@ -1400,6 +1475,7 @@ let codigoGenerado = $derived(
 						{:else}
 						<p class="text-sm text-slate-400 text-center py-10">Todavía no hay campos configurados para Obra.</p>
 						{/if}
+						{/if}
 					</section>
 
 					<!-- Observaciones -->
@@ -1435,7 +1511,21 @@ let codigoGenerado = $derived(
 					<button
 						onclick={handleCerrarVenta}
 						disabled={!canClose || isClosing}
-						title={!canClose ? 'Sube el contrato, marca una proforma como final, confirma el monto final de la venta y adjunta el comprobante del adelanto (monto ≤ monto final, con fecha) para poder cerrar la venta' : ''}
+						title={!canClose ? 'Completa todos los campos obligatorios (*) de Información general y Características, sube el contrato, marca una proforma como final, confirma el monto final de la venta y adjunta el comprobante del adelanto (monto ≤ monto final, con fecha) para poder cerrar la venta' : ''}
+						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						{#if isClosing}
+							<i class="fas fa-spinner fa-spin"></i> Cerrando...
+						{:else}
+							<i class="fas fa-lock"></i> Cerrar venta
+						{/if}
+					</button>
+				{/if}
+				{#if mode === 'create'}
+					<button
+						onclick={handleGuardarYCerrarVenta}
+						disabled={!canCloseCreate || isClosing || isSaving}
+						title={!canCloseCreate ? 'Completa todos los campos obligatorios (*) de Información general y Características, adjunta el contrato, agrega al menos una proforma y márcala como final, y adjunta el comprobante del adelanto (monto ≤ valor de venta, con fecha) para registrar y cerrar la venta de una vez' : ''}
 						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						{#if isClosing}

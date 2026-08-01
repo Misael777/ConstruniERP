@@ -11,7 +11,9 @@
 	import {
 		getSolicitudesPendientes,
 		getMisSolicitudes,
+		getAvisosInformativos,
 		marcarSolicitudesVistas,
+		marcarAvisosVistos,
 		aprobarSolicitud,
 		rechazarSolicitud,
 		type SolicitudAprobacion,
@@ -27,6 +29,9 @@
 
 	let solicitudesAdmin = $state<SolicitudAprobacion[]>([]);
 	let misSolicitudes = $state<SolicitudAprobacion[]>([]);
+	// Avisos informativos para el admin: ventas cerradas directo por su asesor, sin pasar por
+	// aprobación (a pedido del usuario) — de solo lectura, sin Aprobar/Rechazar.
+	let avisos = $state<SolicitudAprobacion[]>([]);
 
 	let isLoading = $state(false);
 	let isOpen = $state(false);
@@ -34,6 +39,7 @@
 	let errorMsg = $state('');
 
 	let seenPendingIds = new Set<number>();
+	let seenAvisoIds = new Set<number>();
 	let lastEstados = new Map<number, EstadoSolicitud>();
 	let firstLoad = true;
 	let audioCtx: AudioContext | null = null;
@@ -71,11 +77,14 @@
 	function etiquetaAccion(tipo: SolicitudAprobacion['tipo_accion']) {
 		if (tipo === 'eliminar') return 'Eliminar';
 		if (tipo === 'cerrar_venta') return 'Cerrar venta';
+		if (tipo === 'exportar') return 'Exportar';
 		return 'Editar';
 	}
 
 	function etiquetaEntidad(tipo: SolicitudAprobacion['tipo_entidad']) {
-		return tipo === 'cliente' ? 'Cliente' : 'Venta';
+		if (tipo === 'cliente') return 'Cliente';
+		if (tipo === 'exportacion') return 'Exportación';
+		return 'Venta';
 	}
 
 	function etiquetaEstado(estado: EstadoSolicitud) {
@@ -98,6 +107,11 @@
 
 	/** Texto del sonido/toast nativo — distinto según a quién le llega el aviso. */
 	function descripcionNotificacion(s: SolicitudAprobacion, paraAdmin: boolean): string {
+		if (s.tipo_accion === 'exportar') {
+			if (paraAdmin) return 'Nueva solicitud: exportar ventas.';
+			const resultado = s.estado === 'aprobado' ? 'aprobada' : 'rechazada';
+			return `Tu solicitud para exportar ventas fue ${resultado}.`;
+		}
 		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
 		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
 		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
@@ -106,22 +120,36 @@
 		return `Tu solicitud para ${accion} ${entidad} "${nombre}" fue ${resultado}.`;
 	}
 
+	/** Texto del sonido/toast nativo para un aviso informativo de cierre de venta (ver avisos). */
+	function descripcionAviso(s: SolicitudAprobacion): string {
+		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
+		return `${s.solicitado_por || 'Un asesor'} cerró la venta "${nombre}".`;
+	}
+
 	async function cargarAdmin() {
 		isLoading = true;
 		try {
-			const nuevas = await getSolicitudesPendientes(supabase);
-			// Suena/notifica solo por solicitudes NUEVAS desde la última revisión — nunca en la primera
-			// carga (no queremos un aviso solo por tener solicitudes viejas ya pendientes al abrir la app).
+			const [nuevas, nuevosAvisos] = await Promise.all([
+				getSolicitudesPendientes(supabase),
+				getAvisosInformativos(supabase)
+			]);
+
+			// Suena/notifica solo por solicitudes/avisos NUEVOS desde la última revisión — nunca en la
+			// primera carga (no queremos un aviso solo por tener cosas viejas ya pendientes al abrir la app).
 			if (!firstLoad) {
 				const nuevasNoVistas = nuevas.filter((s) => !seenPendingIds.has(s.id_solicitud));
-				if (nuevasNoVistas.length > 0) {
+				const avisosNuevos = nuevosAvisos.filter((a) => !seenAvisoIds.has(a.id_solicitud));
+				if (nuevasNoVistas.length > 0 || avisosNuevos.length > 0) {
 					playChime();
 					for (const s of nuevasNoVistas) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, true));
+					for (const a of avisosNuevos) sendNotificacionNativa('Construni ERP', descripcionAviso(a));
 				}
 			}
 			seenPendingIds = new Set(nuevas.map((s) => s.id_solicitud));
+			seenAvisoIds = new Set(nuevosAvisos.map((a) => a.id_solicitud));
 			firstLoad = false;
 			solicitudesAdmin = nuevas;
+			avisos = nuevosAvisos;
 		} catch (err) {
 			console.error('[NotificacionesBell] Error cargando solicitudes pendientes:', err);
 		} finally {
@@ -173,11 +201,12 @@
 		if (pollIntervalId) clearInterval(pollIntervalId);
 	});
 
-	// Admin: el badge es la cuenta de pendientes (todas necesitan acción). Solicitante: el badge es
-	// solo lo YA resuelto que todavía no vio — lo "pendiente" se lista pero no cuenta como nuevo.
+	// Admin: el badge suma pendientes (necesitan acción) + avisos informativos no vistos (no
+	// necesitan acción, pero sí que el admin se entere). Solicitante: el badge es solo lo YA resuelto
+	// que todavía no vio — lo "pendiente" se lista pero no cuenta como nuevo.
 	let badgeCount = $derived(
 		isAdmin()
-			? solicitudesAdmin.length
+			? solicitudesAdmin.length + avisos.filter((a) => !a.visto_por_admin).length
 			: misSolicitudes.filter((s) => s.estado !== 'pendiente' && !s.visto_por_solicitante).length
 	);
 
@@ -195,6 +224,16 @@
 					);
 				} else {
 					console.error('[NotificacionesBell] No se pudo marcar como vistas:', result.message);
+				}
+			}
+		} else {
+			const avisosNoVistos = avisos.filter((a) => !a.visto_por_admin).map((a) => a.id_solicitud);
+			if (avisosNoVistos.length > 0) {
+				const result = await marcarAvisosVistos(supabase, avisosNoVistos);
+				if (result.success) {
+					avisos = avisos.map((a) => (avisosNoVistos.includes(a.id_solicitud) ? { ...a, visto_por_admin: true } : a));
+				} else {
+					console.error('[NotificacionesBell] No se pudo marcar avisos como vistos:', result.message);
 				}
 			}
 		}
@@ -274,66 +313,87 @@
 					<i class="fas fa-spinner fa-spin"></i> Cargando...
 				</div>
 			{:else if isAdmin()}
-				{#if solicitudesAdmin.length === 0}
+				{#if solicitudesAdmin.length === 0 && avisos.length === 0}
 					<div class="p-8 text-center text-slate-400 text-sm">
 						<i class="fas fa-check-circle text-2xl mb-2 block"></i>
-						No hay solicitudes pendientes.
+						No hay novedades.
 					</div>
 				{:else}
-					<div class="divide-y divide-slate-100">
-						{#each solicitudesAdmin as s (s.id_solicitud)}
-							<div class="p-4">
-								<div class="flex items-start justify-between gap-2 mb-1.5">
+					{#if solicitudesAdmin.length > 0}
+						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Pendientes de aprobar</p>
+						<div class="divide-y divide-slate-100">
+							{#each solicitudesAdmin as s (s.id_solicitud)}
+								<div class="p-4">
+									<div class="flex items-start justify-between gap-2 mb-1.5">
+										<div class="min-w-0">
+											<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200 mr-1.5">
+												{etiquetaEntidad(s.tipo_entidad)}
+											</span>
+											<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-amber-50 text-amber-700 border border-amber-200">
+												{etiquetaAccion(s.tipo_accion)}
+											</span>
+											<p class="text-sm font-semibold text-slate-800 truncate mt-1">{s.descripcion_entidad || `#${s.id_entidad}`}</p>
+										</div>
+									</div>
+									<p class="text-[11px] text-slate-400 mb-2">
+										Pedido por <span class="font-medium text-slate-500">{s.solicitado_por || 'Usuario'}</span> · {fmtFecha(s.created_at)}
+									</p>
+
+									{#if s.payload_cambios && Object.keys(s.payload_cambios).length > 0}
+										<div class="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-100 space-y-0.5 max-h-28 overflow-y-auto">
+											{#each Object.entries(s.payload_cambios) as [campo, valor]}
+												<div class="flex items-start gap-2 text-[11px]">
+													<span class="text-slate-400 shrink-0">{campo}:</span>
+													<span class="text-slate-700 truncate">{typeof valor === 'object' ? JSON.stringify(valor) : String(valor)}</span>
+												</div>
+											{/each}
+										</div>
+									{/if}
+
+									<div class="flex gap-2">
+										<button
+											type="button"
+											onclick={() => handleAprobar(s)}
+											disabled={processingId === s.id_solicitud}
+											class="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+										>
+											{#if processingId === s.id_solicitud}
+												<i class="fas fa-spinner fa-spin"></i>
+											{:else}
+												<i class="fas fa-check"></i> Aprobar
+											{/if}
+										</button>
+										<button
+											type="button"
+											onclick={() => handleRechazar(s)}
+											disabled={processingId === s.id_solicitud}
+											class="flex-1 px-3 py-1.5 bg-white border border-slate-200 hover:border-rose-300 hover:text-rose-600 text-slate-500 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
+										>
+											Rechazar
+										</button>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if avisos.length > 0}
+						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Avisos</p>
+						<div class="divide-y divide-slate-100">
+							{#each avisos as a (a.id_solicitud)}
+								<div class="p-4 flex items-start gap-2.5">
+									<i class="fas fa-circle-info text-blue-500 mt-0.5 shrink-0"></i>
 									<div class="min-w-0">
-										<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200 mr-1.5">
-											{etiquetaEntidad(s.tipo_entidad)}
-										</span>
-										<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-amber-50 text-amber-700 border border-amber-200">
-											{etiquetaAccion(s.tipo_accion)}
-										</span>
-										<p class="text-sm font-semibold text-slate-800 truncate mt-1">{s.descripcion_entidad || `#${s.id_entidad}`}</p>
+										<p class="text-sm text-slate-700">
+											<span class="font-semibold">{a.solicitado_por || 'Un asesor'}</span> cerró la venta
+											<span class="font-semibold">"{a.descripcion_entidad || `#${a.id_entidad}`}"</span>.
+										</p>
+										<p class="text-[11px] text-slate-400 mt-0.5">{fmtFecha(a.resuelto_en || a.created_at)}</p>
 									</div>
 								</div>
-								<p class="text-[11px] text-slate-400 mb-2">
-									Pedido por <span class="font-medium text-slate-500">{s.solicitado_por || 'Usuario'}</span> · {fmtFecha(s.created_at)}
-								</p>
-
-								{#if s.payload_cambios && Object.keys(s.payload_cambios).length > 0}
-									<div class="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-100 space-y-0.5 max-h-28 overflow-y-auto">
-										{#each Object.entries(s.payload_cambios) as [campo, valor]}
-											<div class="flex items-start gap-2 text-[11px]">
-												<span class="text-slate-400 shrink-0">{campo}:</span>
-												<span class="text-slate-700 truncate">{typeof valor === 'object' ? JSON.stringify(valor) : String(valor)}</span>
-											</div>
-										{/each}
-									</div>
-								{/if}
-
-								<div class="flex gap-2">
-									<button
-										type="button"
-										onclick={() => handleAprobar(s)}
-										disabled={processingId === s.id_solicitud}
-										class="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
-									>
-										{#if processingId === s.id_solicitud}
-											<i class="fas fa-spinner fa-spin"></i>
-										{:else}
-											<i class="fas fa-check"></i> Aprobar
-										{/if}
-									</button>
-									<button
-										type="button"
-										onclick={() => handleRechazar(s)}
-										disabled={processingId === s.id_solicitud}
-										class="flex-1 px-3 py-1.5 bg-white border border-slate-200 hover:border-rose-300 hover:text-rose-600 text-slate-500 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50"
-									>
-										Rechazar
-									</button>
-								</div>
-							</div>
-						{/each}
-					</div>
+							{/each}
+						</div>
+					{/if}
 				{/if}
 			{:else if misSolicitudes.length === 0}
 				<div class="p-8 text-center text-slate-400 text-sm">
