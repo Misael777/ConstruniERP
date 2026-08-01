@@ -7,9 +7,9 @@ import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
-import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import { describeError } from '$lib/shared/describeError';
+import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -294,12 +294,7 @@ import { describeError } from '$lib/shared/describeError';
 		isModalOpen = true;
 	}
 
-	let confirmRow: any = $state(null);
 	let isDeleting = $state(false);
-	/** true = el modal de advertencia + contraseña de admin ya se muestra para `confirmRow`. La
-	 * eliminación real (performDelete) solo se dispara desde el callback onConfirmed de ese modal,
-	 * nunca directo desde el click en el botón — ver handleDeleteEvent. */
-	let showDeleteConfirm = $state(false);
 
 	function closeModal() {
 		isModalOpen = false;
@@ -310,65 +305,39 @@ import { describeError } from '$lib/shared/describeError';
 		openEditModal(e.detail.row);
 	}
 
-	function handleDeleteEvent(e: CustomEvent) {
-		confirmRow = e.detail.row;
-		if (!confirmRow) return;
-		showDeleteConfirm = true;
-	}
+	/** A pedido del usuario: un no-administrador ya no puede eliminar una venta directo — se envía
+	 * una solicitud de aprobación (reemplaza al viejo ConfirmDeleteVentaModal de contraseña de
+	 * admin). Un admin sigue eliminando directo, con el mismo cascade de siempre
+	 * (eliminarVentaCascade en aprobaciones.service.ts). */
+	async function handleDeleteEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
 
-	function cancelDelete() {
-		showDeleteConfirm = false;
-		confirmRow = null;
-	}
+		if (!isAdmin()) {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'proyecto',
+				idEntidad: row.id,
+				tipoAccion: 'eliminar',
+				descripcionEntidad: row.proyecto
+			});
+			if (result.success) {
+				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
+			} else {
+				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+			}
+			return;
+		}
 
-	function handleDeleteConfirmed() {
-		showDeleteConfirm = false;
-		performDelete();
-	}
+		if (!confirm(`¿Eliminar la venta "${row.proyecto}"? Esto borra en cascada su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.). Esta acción no se puede deshacer.`)) return;
 
-	async function performDelete() {
-		if (!confirmRow) return;
 		isDeleting = true;
-		let step = 'inicio';
-
 		try {
-			const id = confirmRow.id;
-			console.log('[Ventas] performDelete: iniciando borrado de proyecto id=', id);
-
-			// Delete tables that reference proyecto WITHOUT ON DELETE CASCADE
-			// presupuesto_detalle cascades from presupuesto, so deleting presupuesto covers it
-			step = 'borrar presupuesto';
-			const { error: e1 } = await supabase.from('presupuesto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e1 ?? 'OK');
-			if (e1) throw e1;
-
-			step = 'borrar adelanto';
-			const { error: e2 } = await supabase.from('adelanto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e2 ?? 'OK');
-			if (e2) throw e2;
-
-			step = 'borrar contrato_proyecto';
-			const { error: e3 } = await supabase.from('contrato_proyecto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e3 ?? 'OK');
-			if (e3) throw e3;
-
-			// cuentas_cobrar has a nullable FK — nullify to preserve payment records
-			step = 'desvincular cuentas_cobrar';
-			const { error: e4 } = await supabase.from('cuentas_cobrar').update({ id_proyecto: null }).eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e4 ?? 'OK');
-			if (e4) throw e4;
-
-			// All other FK references have ON DELETE CASCADE and will auto-delete
-			step = 'borrar proyecto';
-			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, error ?? 'OK');
-			if (error) throw error;
-
-			confirmRow = null;
+			const result = await eliminarVentaCascade(supabase, row.id);
+			if (!result.success) throw new Error(result.message);
 			fetchVentas();
 		} catch (err) {
-			console.error(`[Ventas] Error deleting project en paso "${step}":`, err);
-			alert(`No se pudo eliminar el proyecto.\nPaso: ${step}\n${describeError(err)}`);
+			console.error('[Ventas] Error eliminando venta:', err);
+			alert(`No se pudo eliminar el proyecto.\n${describeError(err)}`);
 		} finally {
 			isDeleting = false;
 		}
@@ -510,14 +479,6 @@ import { describeError } from '$lib/shared/describeError';
 
 <!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
 <NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={fetchVentas} />
-
-<!-- Confirmación de eliminación (advertencia + contraseña de admin) -->
-<ConfirmDeleteVentaModal
-	open={showDeleteConfirm}
-	ventaNombre={confirmRow?.proyecto ?? ''}
-	onCancel={cancelDelete}
-	onConfirmed={handleDeleteConfirmed}
-/>
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />

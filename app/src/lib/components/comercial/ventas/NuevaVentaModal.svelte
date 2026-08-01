@@ -7,7 +7,8 @@
 	import { describeError } from '$lib/shared/describeError';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
-	import { permisosState } from '$lib/stores/permisos.svelte';
+	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
+	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
@@ -511,75 +512,56 @@ let codigoGenerado = $derived(
 		saveError = '';
 		try {
 			// El adelanto puede haberse registrado ya al crear la venta — en ese caso no hace falta
-			// pedirlo/crearlo de nuevo acá.
+			// pedirlo/crearlo de nuevo acá. El comprobante SÍ se sube ya mismo aunque no seas admin —
+			// es un adjunto, no una edición/cierre (mismo criterio que proformas/contrato), así que no
+			// requiere aprobación; lo que sí la requiere es la transacción + el cambio de estado, que
+			// cerrarVentaAprobada hace recién cuando un admin actúa (directo o al aprobar).
+			let comprobanteUrl: string | undefined;
 			if (!adelantoYaRegistrado && adelantoFile) {
-				// 1. Centro de costo del proyecto y del cliente (idempotente — ya existen en casi todos
-				// los casos; se re-consultan aquí como respaldo). Obra: centro de costo propio del
-				// proyecto. Consultoría: el único compartido entre todas las ventas de ese tipo.
-				const idCentroProyecto = caracteristicasTab === 'consultoria'
-					? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
-					: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', Number(ventaId), proyectoNombre);
-				if (!idCentroProyecto) throw new Error('No se pudo obtener el centro de costo del proyecto.');
-
-				if (!selectedClienteId || selectedClienteId === '__new__') throw new Error('El proyecto no tiene un cliente asociado — no se puede registrar el adelanto.');
-				const idCentroCliente = await getOrCrearCentroCostoParaEntidad(
-					supabase, 'cliente', Number(selectedClienteId), getClienteNombreActual() || `Cliente #${selectedClienteId}`
-				);
-				if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente.');
-
-				// 2. Comprobante del adelanto.
-				const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
+				const uploaded = await uploadProjectDocument(adelantoFile, {
 					type: 'comprobante',
 					projectId: ventaId,
 					projectName: proyectoNombre
 				});
-
-				// 3. Transacción del adelanto — origen = centro de costo del cliente (de donde sale el
-				// dinero), destino = centro de costo del proyecto (donde entra). Solo si esto tiene
-				// éxito se procede a cerrar la venta — si falla, la venta queda como estaba.
-				const { data: userData } = await supabase.auth.getUser();
-				const transResult = await createTransaccion(
-					supabase,
-					{
-						tipo_alcance: 'externa',
-						id_centro_costo_origen: idCentroCliente,
-						id_centro_costo_destino: idCentroProyecto,
-						fecha: adelantoFecha,
-						monto_total: Number(adelantoMonto),
-						tipo: 'ingreso',
-						estado: 'activo',
-						comprobante_url: comprobanteUrl,
-						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${ventaId})`
-					},
-					userData?.user?.email ?? null,
-					permisosState.userName || null
-				);
-				if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+				comprobanteUrl = uploaded.url;
 			}
 
-			// 4. Recién con el adelanto confirmado: fijar la proforma final y cerrar la venta.
-			const { error: clearError } = await supabase
-				.from('documento_proyecto')
-				.update({ es_proforma_final: false })
-				.eq('id_proyecto', ventaId)
-				.eq('es_proforma_final', true);
-			if (clearError) throw clearError;
+			const cierreParams = {
+				idProyecto: Number(ventaId),
+				proyectoNombre,
+				tipoVenta: caracteristicasTab,
+				idCliente: Number(selectedClienteId),
+				clienteNombre: getClienteNombreActual() || `Cliente #${selectedClienteId}`,
+				selectedFinalId,
+				montoFinalVenta: Number(montoFinalVenta),
+				adelantoYaRegistrado,
+				adelantoMonto: Number(adelantoMonto),
+				adelantoFecha,
+				comprobanteUrl
+			};
 
-			const { error: setError } = await supabase
-				.from('documento_proyecto')
-				.update({ es_proforma_final: true })
-				.eq('id_documento', selectedFinalId);
-			if (setError) throw setError;
-
-			const { error: closeError } = await supabase
-				.from('proyecto')
-				.update({ estado_proyecto: 'venta_cerrada', precio_venta: Number(montoFinalVenta) })
-				.eq('id_proyecto', ventaId);
-			if (closeError) throw closeError;
-
-			localEstado = 'venta_cerrada';
-			await loadProformas();
-			onSaved();
+			if (isAdmin()) {
+				const { data: userData } = await supabase.auth.getUser();
+				const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
+				if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
+				localEstado = 'venta_cerrada';
+				await loadProformas();
+				onSaved();
+			} else {
+				// A pedido del usuario: un no-administrador ya no cierra la venta directo — se envía una
+				// solicitud de aprobación con todo lo ya reunido (proforma final, monto, adelanto y su
+				// comprobante ya subido), visible para todos los admins en la campanita.
+				const result = await crearSolicitud(supabase, {
+					tipoEntidad: 'proyecto',
+					idEntidad: Number(ventaId),
+					tipoAccion: 'cerrar_venta',
+					descripcionEntidad: proyectoNombre,
+					payloadCambios: cierreParams
+				});
+				if (!result.success) throw new Error(result.message || 'No se pudo enviar la solicitud.');
+				alert('No tienes permisos de administrador. Se envió una solicitud de cierre de venta para que un administrador la apruebe.');
+				onSaved();
+			}
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
 			alert(`No se pudo cerrar la venta.\n${describeError(err)}`);
@@ -717,6 +699,28 @@ let codigoGenerado = $derived(
 			};
 
 			console.log('[NuevaVentaModal] Payload de edición para proyecto:', proyectoUpdatePayload);
+
+			// A pedido del usuario: un no-administrador ya no guarda los cambios directo — se envía una
+			// solicitud de aprobación con el payload propuesto, visible para todos los admins en la
+			// campanita (ver aprobaciones.service.ts).
+			if (!isAdmin()) {
+				const result = await crearSolicitud(supabase, {
+					tipoEntidad: 'proyecto',
+					idEntidad: Number(ventaId),
+					tipoAccion: 'editar',
+					descripcionEntidad: proyectoNombre,
+					payloadCambios: proyectoUpdatePayload
+				});
+				isSaving = false;
+				if (!result.success) {
+					saveError = `No se pudo enviar la solicitud. ${result.message ?? ''}`;
+					return;
+				}
+				alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
+				onSaved();
+				return;
+			}
+
 			const { error } = await supabase.from('proyecto').update(proyectoUpdatePayload).eq('id_proyecto', ventaId);
 
 			isSaving = false;

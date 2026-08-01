@@ -2,6 +2,8 @@
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { crearSolicitud } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 
 	let { isOpen = false, clienteEdit = null, onClose = () => {}, onSave = () => {} } = $props<{
 		isOpen?: boolean;
@@ -81,6 +83,25 @@
 			};
 
 			if (clienteEdit) {
+				// A pedido del usuario: un no-administrador ya no puede editar un cliente directo — se
+				// envía una solicitud de aprobación en vez de guardar, visible para todos los admins en
+				// la campanita (ver aprobaciones.service.ts). El alta de un cliente nuevo (rama else de
+				// abajo) sigue libre para cualquiera, esto solo aplica a EDITAR uno existente.
+				if (!isAdmin()) {
+					const result = await crearSolicitud(supabase, {
+						tipoEntidad: 'cliente',
+						idEntidad: clienteEdit.id_cliente,
+						tipoAccion: 'editar',
+						descripcionEntidad: nombre,
+						payloadCambios: payload
+					});
+					if (!result.success) throw new Error(result.message || 'No se pudo enviar la solicitud.');
+					alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
+					onSave();
+					onClose();
+					return;
+				}
+
 				// Update
 				const { error } = await supabase
 					.from('cliente')
