@@ -17,7 +17,7 @@
 		type SolicitudAprobacion,
 		type EstadoSolicitud
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
-	import { sendNotificacionNativa } from '$lib/modules/aprobaciones/services/notificacionNativa';
+	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
 
 	// No hay infraestructura realtime en este ERP (sin websockets/Supabase Realtime) — a pedido del
 	// usuario, en vez de depender solo de "hago clic en la campanita para revisar", se hace polling
@@ -161,6 +161,10 @@
 	}
 
 	onMount(() => {
+		// Se pide el permiso de notificaciones del SO apenas carga la app (no en medio de un poll en
+		// segundo plano) — en Android 13+ esto dispara el diálogo del sistema mientras el usuario ya
+		// está mirando la pantalla.
+		ensureNotificacionPermission();
 		cargar();
 		pollIntervalId = setInterval(cargar, POLL_INTERVAL_MS);
 	});
@@ -246,7 +250,12 @@
 	{#if isOpen}
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 		<div class="fixed inset-0 z-30" onclick={() => (isOpen = false)}></div>
-		<div class="absolute right-0 mt-2 w-96 max-h-[70vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 z-40">
+		<!-- Responsive: en pantallas angostas (celular) se ancla al viewport completo (fixed + left/right
+		     con margen) en vez de al botón de la campanita — con `w-96` fijo y `absolute right-0`, el
+		     panel se salía por la izquierda de la pantalla en un teléfono porque la campanita no está
+		     pegada al borde derecho real del header (hay avatar/nombre/logout después de ella). Desde
+		     `sm:` para arriba vuelve al comportamiento de dropdown anclado al botón. -->
+		<div class="fixed left-3 right-3 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 max-h-[70vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 z-40">
 			<div class="p-4 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl">
 				<h3 class="text-sm font-bold text-slate-800">{isAdmin() ? 'Solicitudes de aprobación' : 'Mis solicitudes'}</h3>
 				<p class="text-xs text-slate-400 mt-0.5">
