@@ -31,6 +31,7 @@ export interface SolicitudAprobacion {
 	resuelto_por: string | null;
 	resuelto_en: string | null;
 	created_at: string;
+	visto_por_solicitante: boolean;
 }
 
 export interface ServiceResult {
@@ -79,6 +80,29 @@ export async function getSolicitudesPendientes(client: SupabaseClient): Promise<
 		.order('created_at', { ascending: false });
 	if (error) throw error;
 	return (data ?? []) as SolicitudAprobacion[];
+}
+
+/** Solicitudes del USUARIO ACTUAL (cualquier estado) — para que el propio solicitante vea en su
+ * campanita si sigue pendiente, o si ya fue aprobada/rechazada. */
+export async function getMisSolicitudes(client: SupabaseClient): Promise<SolicitudAprobacion[]> {
+	const { data: userData } = await client.auth.getUser();
+	if (!userData?.user?.id) return [];
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('*')
+		.eq('solicitado_por_id', userData.user.id)
+		.order('created_at', { ascending: false });
+	if (error) throw error;
+	return (data ?? []) as SolicitudAprobacion[];
+}
+
+/** Marca como vistas (por el solicitante) las solicitudes ya resueltas que le pertenecen — se llama
+ * cuando abre el panel de su campanita, para que el badge de "no leídas" baje a 0. */
+export async function marcarSolicitudesVistas(client: SupabaseClient, ids: number[]): Promise<ServiceResult> {
+	if (ids.length === 0) return { success: true };
+	const { error } = await client.from(TABLE_NAME).update({ visto_por_solicitante: true }).in('id_solicitud', ids);
+	if (error) return { success: false, message: error.message };
+	return { success: true };
 }
 
 /** Borra una venta (proyecto) y todo lo que cuelga de ella sin ON DELETE CASCADE — mismo cuerpo que
