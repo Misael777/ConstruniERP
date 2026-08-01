@@ -1,6 +1,5 @@
 <script lang="ts">
 import { onMount } from 'svelte';
-import { goto } from '$app/navigation';
 import { supabase } from '$lib/supabaseClient';
 import { isAdmin } from '$lib/stores/permisos.svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
@@ -9,7 +8,6 @@ import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
 import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
-import ProformasVentaModal from '$lib/components/comercial/ventas/ProformasVentaModal.svelte';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import { describeError } from '$lib/shared/describeError';
 
@@ -72,7 +70,12 @@ import { describeError } from '$lib/shared/describeError';
 		comisionesPorMes: Array(12).fill(0)
 	});
 
+	// Un solo popup (NuevaVentaModal.svelte) para crear Y editar/gestionar una venta — a pedido del
+	// usuario: antes "Editar" navegaba a /proyectos/gestion/{id} y el botón de Proforma abría un
+	// popup aparte (ProformasVentaModal.svelte, ahora fusionado ahí mismo); ambos confluyen acá.
 	let isModalOpen = $state(false);
+	let modalMode = $state<'create' | 'edit'>('create');
+	let editingVentaId = $state<number | null>(null);
 
 	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
 	// de abajo, a pedido del usuario. Por defecto: el año en curso. Se recalcula con una consulta
@@ -273,6 +276,21 @@ import { describeError } from '$lib/shared/describeError';
 	});
 
 	function openModal() {
+		modalMode = 'create';
+		editingVentaId = null;
+		isModalOpen = true;
+	}
+
+	/** Abre el mismo popup en modo edición — usado tanto por "Editar" (lápiz) como por "Proforma"
+	 * (pdf), que antes llevaban a lugares distintos. */
+	function openEditModal(row: any) {
+		const id = row?.id ?? row?.id_proyecto;
+		if (!id) {
+			console.warn('[Ventas] Editar falló: id no encontrado en row', row);
+			return;
+		}
+		modalMode = 'edit';
+		editingVentaId = Number(id);
 		isModalOpen = true;
 	}
 
@@ -285,29 +303,11 @@ import { describeError } from '$lib/shared/describeError';
 
 	function closeModal() {
 		isModalOpen = false;
+		editingVentaId = null;
 	}
 
 	function handleEditEvent(e: CustomEvent) {
-		const row = e.detail.row;
-		const id = row?.id ?? row?.id_proyecto;
-		const url = `/proyectos/gestion/${id}`;
-		console.log('[Ventas] Editar proyecto', { row, id, url });
-		if (!id) {
-			console.warn('[Ventas] Editar falló: id no encontrado en row', row);
-			return;
-		}
-		const serializableRow = {
-			id: row?.id ?? row?.id_proyecto ?? null,
-			id_proyecto: row?.id_proyecto ?? row?.id ?? null,
-			nombre_proyecto: row?.proyecto ?? row?.nombre_proyecto ?? '',
-			precio_venta: row?.valor ?? row?.precio_venta ?? null,
-			tip_proyecto: row?.tipo ?? row?.tip_proyecto ?? '',
-			fecha_inicio_plan: row?.fecha ?? null,
-			responsable: row?.asesor ?? row?.responsable ?? '',
-			descripcion: row?.descripcion ?? '',
-			contrato: row?.contrato ?? ''
-		};
-		goto(url, { state: { row: serializableRow } });
+		openEditModal(e.detail.row);
 	}
 
 	function handleDeleteEvent(e: CustomEvent) {
@@ -398,30 +398,35 @@ import { describeError } from '$lib/shared/describeError';
 		isPdfPreviewOpen = true;
 	}
 
-	// Gestión de proformas (múltiples por venta) + cierre formal de la venta — ver
-	// ProformasVentaModal.svelte. Reemplaza al viejo handleViewProforma de un solo archivo.
-	let proformasModalOpen = $state(false);
-	let proformasModalProyecto: { id_proyecto: number; nombre_proyecto: string; contrato: string; estado_proyecto: string; id_cliente: number | null; clienteNombre: string | null; precioVenta: number | null; tipoVenta: string } | null = $state(null);
-
-	function handleGestionarProformas(e: CustomEvent) {
+	// El botón "Proforma" (pdf) de VentasTable es solo una vista rápida de la ÚLTIMA proforma subida
+	// (mismo criterio que "Ver Contrato" de arriba) — a pedido del usuario, NO abre el popup completo
+	// de edición; para gestionar todas las proformas (agregar, elegir la final, cerrar la venta) hay
+	// que usar "Editar" (lápiz).
+	async function handleViewProforma(e: CustomEvent) {
 		const row = e.detail.row;
-		if (!row?.id) return;
-		proformasModalProyecto = {
-			id_proyecto: row.id,
-			nombre_proyecto: row.proyecto,
-			contrato: row.contrato || '',
-			id_cliente: row.id_cliente ?? null,
-			clienteNombre: row.clienteNombre ?? null,
-			precioVenta: row.valor ?? null,
-			estado_proyecto: row.estado_proyecto || 'activo',
-			tipoVenta: row.tipoVenta || 'obra'
-		};
-		proformasModalOpen = true;
-	}
-
-	function closeProformasModal() {
-		proformasModalOpen = false;
-		proformasModalProyecto = null;
+		const id = row?.id ?? row?.id_proyecto;
+		if (!id) return;
+		try {
+			const { data, error } = await supabase
+				.from('documento_proyecto')
+				.select('storage_url, nombre')
+				.eq('id_proyecto', id)
+				.eq('tipo_documento', 'Proforma')
+				.order('created_at', { ascending: false })
+				.limit(1)
+				.maybeSingle();
+			if (error) throw error;
+			if (!data?.storage_url) {
+				alert('No se encontró ninguna proforma para este proyecto.');
+				return;
+			}
+			pdfPreviewUrl = data.storage_url;
+			pdfPreviewTitle = `Proforma - ${row.proyecto}`;
+			isPdfPreviewOpen = true;
+		} catch (err) {
+			console.error('[Ventas] Error cargando la última proforma:', err);
+			alert(`No se pudo cargar la proforma. ${describeError(err)}`);
+		}
 	}
 </script>
 
@@ -471,7 +476,7 @@ import { describeError } from '$lib/shared/describeError';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleGestionarProformas} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -499,8 +504,8 @@ import { describeError } from '$lib/shared/describeError';
 	</div>
 </div>
 
-<!-- Modal Overlay -->
-<NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} onSaved={fetchVentas} />
+<!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
+<NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={fetchVentas} />
 
 <!-- Confirmación de eliminación (advertencia + contraseña de admin) -->
 <ConfirmDeleteVentaModal
@@ -512,11 +517,3 @@ import { describeError } from '$lib/shared/describeError';
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
-
-<!-- Gestión de proformas (múltiples) + cierre formal de venta -->
-<ProformasVentaModal
-	open={proformasModalOpen}
-	proyecto={proformasModalProyecto}
-	onClose={closeProformasModal}
-	onUpdated={fetchVentas}
-/>
