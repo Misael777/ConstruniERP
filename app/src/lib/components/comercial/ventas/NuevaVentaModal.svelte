@@ -5,6 +5,8 @@
 	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
 	import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 
 	let { isOpen = false, onClose = () => {}, onSaved = () => {} } = $props<{ isOpen?: boolean, onClose?: () => void, onSaved?: () => void }>();
@@ -22,6 +24,11 @@
 
 	let contratoFile = $state<File | null>(null);
 	let proformaFiles = $state<File[]>([]);
+	// Adelanto inicial (opcional acá) — mismo criterio que en ProformasVentaModal.svelte al cerrar la
+	// venta: el monto solo se habilita una vez adjuntado el comprobante. Si se completa acá, no hace
+	// falta volver a pedirlo al cerrar la venta (ver ProformasVentaModal, detecta si ya existe).
+	let adelantoFile = $state<File | null>(null);
+	let adelantoMonto = $state('');
 
 	// Generation fields
 	let tipoProyecto = $state('');
@@ -77,6 +84,8 @@
 			distrito = '';
 			contratoFile = null;
 			proformaFiles = [];
+			adelantoFile = null;
+			adelantoMonto = '';
 			observaciones = '';
 			caracteristicasTab = 'consultoria';
 		}
@@ -419,6 +428,41 @@ let codigoGenerado = $derived(
 					if (docError) throw docError;
 				}
 
+				// Adelanto inicial — mismo mecanismo que ProformasVentaModal.svelte al cerrar la venta:
+				// asegura el centro de costo del cliente, sube el comprobante y crea la transacción
+				// (ingreso) de una vez. Requiere ambos (archivo Y monto) — el campo de monto ya viene
+				// deshabilitado en el formulario mientras no haya comprobante adjunto.
+				if (adelantoFile && Number(adelantoMonto) > 0) {
+					console.log('[NuevaVentaModal] Registrando adelanto inicial...');
+					const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', clienteId, clienteNombreFinal || `Cliente #${clienteId}`);
+					if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente para registrar el adelanto.');
+
+					const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
+						type: 'comprobante',
+						projectId: nuevoProyectoId,
+						projectName: proyectoNombre
+					});
+
+					const transResult = await createTransaccion(
+						supabase,
+						{
+							tipo_alcance: 'externa',
+							id_centro_costo_origen: idCentroCliente,
+							id_centro_costo_destino: idCentroCosto,
+							fecha: fechaInicio,
+							monto_total: Number(adelantoMonto),
+							tipo: 'ingreso',
+							estado: 'activo',
+							comprobante_url: comprobanteUrl,
+							descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
+						},
+						session?.user?.email ?? null,
+						permisosState.userName || null
+					);
+					if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+					console.log('[NuevaVentaModal] ✓ Adelanto inicial registrado');
+				}
+
 				console.log('[NuevaVentaModal] ✓ Todos los documentos procesados');
 			} catch (uploadError) {
 				console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
@@ -611,6 +655,34 @@ let codigoGenerado = $derived(
 											<span>Adjuntar PDF</span>
 										{/if}
 									</label>
+								</div>
+								<div class="flex flex-col gap-1">
+									<label class="text-xs font-semibold text-[#0f3b5e]">Comprobante del adelanto</label>
+									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
+										<i class="fas fa-file-pdf text-rose-500"></i>
+										<input type="file" accept="image/*,application/pdf" onchange={(event) => adelantoFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null} class="hidden" />
+										{#if adelantoFile}
+											<span class="text-xs text-slate-500 truncate max-w-[120px]">{adelantoFile.name}</span>
+										{:else}
+											<span>Adjuntar comprobante</span>
+										{/if}
+									</label>
+								</div>
+								<div class="flex flex-col gap-1">
+									<label class="text-xs font-semibold text-[#0f3b5e]">Monto del adelanto (S/)</label>
+									<input
+										type="number"
+										min="0.01"
+										step="0.01"
+										bind:value={adelantoMonto}
+										disabled={!adelantoFile}
+										placeholder="0.00"
+										title={!adelantoFile ? 'Adjunta el comprobante para poder ingresar el monto del adelanto' : ''}
+										class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+									>
+									{#if !adelantoFile}
+										<span class="text-[10px] text-slate-400 mt-0.5">Adjunta el comprobante para habilitar este campo</span>
+									{/if}
 								</div>
 							</div>
 						</div>

@@ -59,9 +59,13 @@
 
 	// Adelanto inicial — comprobante de pago obligatorio para poder cerrar la venta (a pedido del
 	// usuario: cerrar sin esto significaba "venta cerrada" sin ninguna prueba de que se cobró algo).
+	// También se puede registrar desde "Nueva venta" al crear la venta (ver NuevaVentaModal.svelte) —
+	// si ya se hizo ahí, no se vuelve a pedir acá (ver checkAdelantoExistente/adelantoYaRegistrado).
 	let adelantoMonto = $state('');
 	let adelantoFecha = $state(new Date().toISOString().slice(0, 10));
 	let adelantoFile = $state<File | null>(null);
+	let adelantoYaRegistrado = $state(false);
+	let isCheckingAdelanto = $state(false);
 
 	let previewOpen = $state(false);
 	let previewUrl = $state('');
@@ -79,8 +83,34 @@
 			adelantoFecha = new Date().toISOString().slice(0, 10);
 			adelantoFile = null;
 			loadProformas();
+			checkAdelantoExistente();
 		}
 	});
+
+	/** Busca si ya existe una transacción de "adelanto inicial" para este proyecto (registrada acá o
+	 * desde NuevaVentaModal.svelte al crear la venta) — de haberla, no se vuelve a pedir comprobante
+	 * ni monto para poder cerrar. Se identifica por el tag "(proyecto #ID)" en la descripción, mismo
+	 * formato que usa NuevaVentaModal.svelte. */
+	async function checkAdelantoExistente() {
+		if (!proyecto) return;
+		adelantoYaRegistrado = false;
+		isCheckingAdelanto = true;
+		try {
+			const { data, error } = await supabase
+				.from('transaccion')
+				.select('id_transaccion')
+				.eq('tipo', 'ingreso')
+				.ilike('descripcion', `%(proyecto #${proyecto.id_proyecto})%`)
+				.limit(1)
+				.maybeSingle();
+			if (error) throw error;
+			adelantoYaRegistrado = !!data;
+		} catch (err) {
+			console.error('[ProformasVentaModal] Error verificando adelanto existente:', err);
+		} finally {
+			isCheckingAdelanto = false;
+		}
+	}
 
 	async function loadProformas() {
 		if (!proyecto) return;
@@ -209,10 +239,7 @@
 		!!localContratoUrl &&
 		selectedFinalId !== null &&
 		Number(montoFinalVenta) > 0 &&
-		!!adelantoFile &&
-		Number(adelantoMonto) > 0 &&
-		Number(adelantoMonto) <= Number(montoFinalVenta) &&
-		!!adelantoFecha
+		(adelantoYaRegistrado || (!!adelantoFile && Number(adelantoMonto) > 0 && Number(adelantoMonto) <= Number(montoFinalVenta) && !!adelantoFecha))
 	);
 
 	function handleAdelantoFile(event: Event) {
@@ -222,54 +249,59 @@
 	}
 
 	async function handleCerrarVenta() {
-		if (!canClose || !proyecto || selectedFinalId === null || !adelantoFile) return;
+		if (!canClose || !proyecto || selectedFinalId === null) return;
+		if (!adelantoYaRegistrado && !adelantoFile) return;
 		isClosing = true;
 		actionError = '';
 		try {
-			// 1. Centro de costo del proyecto y del cliente (idempotente — ya existen en casi todos los
-			// casos, ver getOrCrearCentroCostoParaEntidad; se re-consultan aquí como respaldo). Obra:
-			// centro de costo propio del proyecto. Consultoría: el único compartido entre todas las
-			// ventas de ese tipo — ver getOrCrearCentroCostoCompartido.
-			const idCentroProyecto = proyecto.tipoVenta === 'consultoria'
-				? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
-				: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', Number(proyecto.id_proyecto), proyecto.nombre_proyecto);
-			if (!idCentroProyecto) throw new Error('No se pudo obtener el centro de costo del proyecto.');
+			// El adelanto puede haberse registrado ya al crear la venta (ver NuevaVentaModal.svelte +
+			// checkAdelantoExistente) — en ese caso no hace falta pedirlo/crearlo de nuevo acá.
+			if (!adelantoYaRegistrado && adelantoFile) {
+				// 1. Centro de costo del proyecto y del cliente (idempotente — ya existen en casi todos los
+				// casos, ver getOrCrearCentroCostoParaEntidad; se re-consultan aquí como respaldo). Obra:
+				// centro de costo propio del proyecto. Consultoría: el único compartido entre todas las
+				// ventas de ese tipo — ver getOrCrearCentroCostoCompartido.
+				const idCentroProyecto = proyecto.tipoVenta === 'consultoria'
+					? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
+					: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', Number(proyecto.id_proyecto), proyecto.nombre_proyecto);
+				if (!idCentroProyecto) throw new Error('No se pudo obtener el centro de costo del proyecto.');
 
-			if (!proyecto.id_cliente) throw new Error('El proyecto no tiene un cliente asociado — no se puede registrar el adelanto.');
-			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(
-				supabase, 'cliente', Number(proyecto.id_cliente), proyecto.clienteNombre || `Cliente #${proyecto.id_cliente}`
-			);
-			if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente.');
+				if (!proyecto.id_cliente) throw new Error('El proyecto no tiene un cliente asociado — no se puede registrar el adelanto.');
+				const idCentroCliente = await getOrCrearCentroCostoParaEntidad(
+					supabase, 'cliente', Number(proyecto.id_cliente), proyecto.clienteNombre || `Cliente #${proyecto.id_cliente}`
+				);
+				if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente.');
 
-			// 2. Comprobante del adelanto.
-			const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
-				type: 'comprobante',
-				projectId: proyecto.id_proyecto,
-				projectName: proyecto.nombre_proyecto
-			});
+				// 2. Comprobante del adelanto.
+				const { url: comprobanteUrl } = await uploadProjectDocument(adelantoFile, {
+					type: 'comprobante',
+					projectId: proyecto.id_proyecto,
+					projectName: proyecto.nombre_proyecto
+				});
 
-			// 3. Transacción del adelanto — mismo criterio que un cobro confirmado en Cuentas por
-			// Cobrar (ver construirPayloadTransaccionPorCobro): origen = centro de costo del cliente
-			// (de donde sale el dinero), destino = centro de costo del proyecto (donde entra). Solo si
-			// esto tiene éxito se procede a cerrar la venta — si falla, la venta queda como estaba.
-			const { data: userData } = await supabase.auth.getUser();
-			const transResult = await createTransaccion(
-				supabase,
-				{
-					tipo_alcance: 'externa',
-					id_centro_costo_origen: idCentroCliente,
-					id_centro_costo_destino: idCentroProyecto,
-					fecha: adelantoFecha,
-					monto_total: Number(adelantoMonto),
-					tipo: 'ingreso',
-					estado: 'activo',
-					comprobante_url: comprobanteUrl,
-					descripcion: `Adelanto inicial - ${proyecto.nombre_proyecto}`
-				},
-				userData?.user?.email ?? null,
-				permisosState.userName || null
-			);
-			if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+				// 3. Transacción del adelanto — mismo criterio que un cobro confirmado en Cuentas por
+				// Cobrar (ver construirPayloadTransaccionPorCobro): origen = centro de costo del cliente
+				// (de donde sale el dinero), destino = centro de costo del proyecto (donde entra). Solo si
+				// esto tiene éxito se procede a cerrar la venta — si falla, la venta queda como estaba.
+				const { data: userData } = await supabase.auth.getUser();
+				const transResult = await createTransaccion(
+					supabase,
+					{
+						tipo_alcance: 'externa',
+						id_centro_costo_origen: idCentroCliente,
+						id_centro_costo_destino: idCentroProyecto,
+						fecha: adelantoFecha,
+						monto_total: Number(adelantoMonto),
+						tipo: 'ingreso',
+						estado: 'activo',
+						comprobante_url: comprobanteUrl,
+						descripcion: `Adelanto inicial - ${proyecto.nombre_proyecto} (proyecto #${proyecto.id_proyecto})`
+					},
+					userData?.user?.email ?? null,
+					permisosState.userName || null
+				);
+				if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+			}
 
 			// 4. Recién con el adelanto confirmado: fijar la proforma final y cerrar la venta.
 			const { error: clearError } = await supabase
@@ -444,28 +476,37 @@
 							<div class="w-1.5 h-4 bg-emerald-500 rounded-full"></div>
 							Adelanto inicial
 						</h3>
-						<p class="text-xs text-slate-400 mb-3">Comprobante del pago inicial que confirma la venta — obligatorio para cerrarla.</p>
-						<div class="grid grid-cols-2 gap-3 mb-1">
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Monto (S/)</label>
-								<input type="number" min="0.01" step="0.01" bind:value={adelantoMonto} placeholder="0.00" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+						{#if isCheckingAdelanto}
+							<p class="text-xs text-slate-400">Verificando si ya se registró un adelanto...</p>
+						{:else if adelantoYaRegistrado}
+							<div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-sm flex items-center gap-2">
+								<i class="fas fa-check-circle"></i>
+								<span>El adelanto ya se registró (al crear la venta o antes). No hace falta volver a subirlo.</span>
 							</div>
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Fecha</label>
-								<input type="date" bind:value={adelantoFecha} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+						{:else}
+							<p class="text-xs text-slate-400 mb-3">Comprobante del pago inicial que confirma la venta — obligatorio para cerrarla.</p>
+							<div class="grid grid-cols-2 gap-3 mb-1">
+								<div class="flex flex-col gap-1">
+									<label class="text-xs font-semibold text-[#0f3b5e]">Monto (S/)</label>
+									<input type="number" min="0.01" step="0.01" bind:value={adelantoMonto} placeholder="0.00" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+								</div>
+								<div class="flex flex-col gap-1">
+									<label class="text-xs font-semibold text-[#0f3b5e]">Fecha</label>
+									<input type="date" bind:value={adelantoFecha} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+								</div>
 							</div>
-						</div>
-						{#if Number(adelantoMonto) > 0 && Number(montoFinalVenta) > 0 && Number(adelantoMonto) > Number(montoFinalVenta)}
-							<p class="text-xs text-rose-500 mb-2">El adelanto no puede ser mayor al monto final de la venta.</p>
-						{/if}
-						<label class="cursor-pointer px-3 py-2 border border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors mt-2">
-							<input type="file" accept="image/*,application/pdf" class="hidden" onchange={handleAdelantoFile} />
-							{#if adelantoFile}
-								<i class="far fa-file-pdf text-rose-500"></i> <span class="truncate">{adelantoFile.name}</span>
-							{:else}
-								<i class="fas fa-cloud-upload-alt"></i> Adjuntar comprobante del adelanto
+							{#if Number(adelantoMonto) > 0 && Number(montoFinalVenta) > 0 && Number(adelantoMonto) > Number(montoFinalVenta)}
+								<p class="text-xs text-rose-500 mb-2">El adelanto no puede ser mayor al monto final de la venta.</p>
 							{/if}
-						</label>
+							<label class="cursor-pointer px-3 py-2 border border-dashed border-slate-300 rounded-xl text-sm text-slate-500 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors mt-2">
+								<input type="file" accept="image/*,application/pdf" class="hidden" onchange={handleAdelantoFile} />
+								{#if adelantoFile}
+									<i class="far fa-file-pdf text-rose-500"></i> <span class="truncate">{adelantoFile.name}</span>
+								{:else}
+									<i class="fas fa-cloud-upload-alt"></i> Adjuntar comprobante del adelanto
+								{/if}
+							</label>
+						{/if}
 					</section>
 				{/if}
 			</div>

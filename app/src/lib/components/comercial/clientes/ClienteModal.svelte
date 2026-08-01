@@ -54,6 +54,11 @@
 		else if (tipPersona === 'J') tipoDoc = 'RUC';
 	});
 
+	// A pedido del usuario: el campo "Razón Social" pasa a llamarse "Nombre Completo" apenas el Tipo
+	// de Documento es DNI o CE (documentos de persona natural), sin importar qué Tipo de Persona
+	// esté seleccionado — reacciona directo al Tipo de Documento, no solo al efecto de arriba.
+	let esPersonaNatural = $derived(tipoDoc === 'DNI' || tipoDoc === 'CE');
+
 	async function handleGuardar() {
 		if (!nombre || !numDocumento) {
 			errorMsg = 'El nombre y documento son obligatorios.';
@@ -157,8 +162,8 @@
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
-							<label class="text-xs font-semibold text-[#0f3b5e]">{tipPersona === 'J' ? 'Razón Social' : 'Nombre Completo'} *</label>
-							<input type="text" bind:value={nombre} disabled={isSaving} placeholder={tipPersona === 'J' ? "Ej. Constructora ABC S.A.C." : "Ej. Juan Pérez"} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+							<label class="text-xs font-semibold text-[#0f3b5e]">{esPersonaNatural ? 'Nombre Completo' : 'Razón Social'} *</label>
+							<input type="text" bind:value={nombre} disabled={isSaving} placeholder={esPersonaNatural ? "Ej. Juan Pérez" : "Ej. Constructora ABC S.A.C."} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">

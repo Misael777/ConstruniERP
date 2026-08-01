@@ -12,6 +12,7 @@
 	import DocumentosTab from '$lib/components/proyecto/DocumentosTab.svelte';
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
 	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	let projectId = $state<string | undefined>(undefined);
 	let lastLoadedProjectId = $state<string | undefined>(undefined);
@@ -186,23 +187,91 @@
 		}
 	}
 
-	// ── DOCUMENTO DEL PROYECTO (proforma / contrato) ────────────────────────────
-	// Un solo slot (columna proyecto.contrato) que evoluciona con el trato: hoy
-	// puede tener la proforma, más adelante se reemplaza por el contrato firmado
-	// — mismo mecanismo de subida (Drive) que usa el resto del ERP.
+	// ── TAB "Venta": Proformas / Contrato / Adelanto inicial ────────────────────
+	// Tres áreas separadas (a pedido del usuario) que reflejan lo que ya se gestiona desde
+	// Ventas (NuevaVentaModal.svelte / ProformasVentaModal.svelte) — acá es solo consulta para
+	// Proformas y Adelanto (su alta/gestión vive en Ventas); Contrato sigue siendo editable acá
+	// también, igual que antes.
 	let contratoUploading = $state(false);
-	let showContratoPreview = $state(false);
 
+	// Previsualización compartida (contrato / proforma / comprobante de adelanto) — mismo componente
+	// reusado en Ventas y Transacciones, en vez de un iframe a medida por cada tipo de documento.
+	let previewOpen = $state(false);
+	let previewUrl = $state('');
+	let previewTitle = $state('');
+	function openPreview(url: string | null | undefined, title: string) {
+		if (!url) return;
+		previewUrl = url;
+		previewTitle = title;
+		previewOpen = true;
+	}
 
-	// Mismo mecanismo que usa el submódulo de Ventas para previsualizar el
-	// contrato/proforma: el visor propio de Google Drive embebido en un
-	// iframe (vía /file/d/{id}/preview) renderiza tanto PDFs como imágenes,
-	// a diferencia de un <img> plano que solo sirve para imágenes.
-	let contratoPreviewUrl = $derived.by(() => {
-		if (!proyecto?.contrato) return null;
-		const fileId = extractDriveFileId(proyecto.contrato);
-		return fileId ? `https://drive.google.com/file/d/${fileId}/preview` : null;
+	type ProformaProyecto = { id_documento: number; nombre: string; storage_url: string | null; file_size: number | null; created_at: string; es_proforma_final: boolean };
+	let proformasProyecto = $state<ProformaProyecto[]>([]);
+	let isLoadingProformas = $state(false);
+
+	type AdelantoProyecto = { id_transaccion: number; fecha: string; monto_total: number; comprobante_url: string | null };
+	let adelantosProyecto = $state<AdelantoProyecto[]>([]);
+	let isLoadingAdelantos = $state(false);
+
+	async function loadProformasProyecto() {
+		if (!proyecto) return;
+		isLoadingProformas = true;
+		try {
+			const { data, error } = await supabase
+				.from('documento_proyecto')
+				.select('id_documento,nombre,storage_url,file_size,created_at,es_proforma_final')
+				.eq('id_proyecto', proyecto.id_proyecto)
+				.eq('tipo_documento', 'Proforma')
+				.order('created_at', { ascending: false });
+			if (error) throw error;
+			proformasProyecto = (data ?? []) as ProformaProyecto[];
+		} catch (err) {
+			console.error('[Gestión] Error cargando proformas del proyecto:', err);
+		} finally {
+			isLoadingProformas = false;
+		}
+	}
+
+	/** El adelanto se registra como una transacción de ingreso (ver NuevaVentaModal.svelte /
+	 * ProformasVentaModal.svelte) — se identifica por el tag "(proyecto #ID)" en la descripción, mismo
+	 * formato que usan esos dos flujos. */
+	async function loadAdelantosProyecto() {
+		if (!proyecto) return;
+		isLoadingAdelantos = true;
+		try {
+			const { data, error } = await supabase
+				.from('transaccion')
+				.select('id_transaccion,fecha,monto_total,comprobante_url')
+				.eq('tipo', 'ingreso')
+				.ilike('descripcion', `%(proyecto #${proyecto.id_proyecto})%`)
+				.order('fecha', { ascending: false });
+			if (error) throw error;
+			adelantosProyecto = (data ?? []) as AdelantoProyecto[];
+		} catch (err) {
+			console.error('[Gestión] Error cargando adelantos del proyecto:', err);
+		} finally {
+			isLoadingAdelantos = false;
+		}
+	}
+
+	$effect(() => {
+		if (activeTab === 'venta' && proyecto) {
+			loadProformasProyecto();
+			loadAdelantosProyecto();
+		}
 	});
+
+	function fmtMonto(value: number | null | undefined) {
+		return new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(Number(value) || 0);
+	}
+
+	function fmtFecha(value: string | null | undefined) {
+		if (!value) return '—';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
+	}
 
 	async function deleteContratoAnterior(fileId: string): Promise<void> {
 		try {
@@ -258,10 +327,6 @@
 		} finally {
 			contratoUploading = false;
 		}
-	}
-
-	function abrirPreviewContrato() {
-		showContratoPreview = true;
 	}
 </script>
 
@@ -349,6 +414,12 @@
 			onclick={() => activeTab = 'documentos'}
 		>
 			<i class="fas fa-folder-open"></i> Documentos
+		</button>
+		<button
+			class={`px-5 py-3 text-sm font-bold flex items-center gap-2 rounded-t-xl transition-colors border-b-2 ${activeTab === 'venta' ? 'text-orange-600 border-orange-600 bg-orange-50/50' : 'text-slate-500 border-transparent hover:text-slate-800 hover:bg-slate-50'}`}
+			onclick={() => activeTab = 'venta'}
+		>
+			<i class="fas fa-file-invoice-dollar"></i> Venta
 		</button>
 	</div>
 
@@ -451,46 +522,11 @@
 					</div>
 				</div>
 
-				<h3 class="text-lg font-bold text-slate-800 mb-4 mt-8 border-b border-slate-100 pb-2">Documento del Proyecto</h3>
-				<p class="text-xs text-slate-400 -mt-2 mb-4">Proforma o contrato firmado — sube uno nuevo para reemplazar el actual.</p>
-				<div class="flex items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-					{#if proyecto.contrato}
-						<button
-							type="button"
-							onclick={abrirPreviewContrato}
-							class="w-14 h-14 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-orange-500 text-xl shrink-0 hover:border-orange-300 transition-colors"
-							title="Previsualizar documento"
-						>
-							<i class="fas fa-file-lines"></i>
-						</button>
-						<div class="flex-1 min-w-0">
-							<p class="text-sm font-semibold text-slate-700">Documento cargado</p>
-							<button type="button" onclick={abrirPreviewContrato} class="text-xs text-orange-600 hover:underline font-medium">
-								Ver previsualización
-							</button>
-						</div>
-					{:else}
-						<div class="w-14 h-14 rounded-xl bg-white border border-dashed border-slate-300 flex items-center justify-center text-slate-300 text-xl shrink-0">
-							<i class="fas fa-file-circle-plus"></i>
-						</div>
-						<div class="flex-1 min-w-0">
-							<p class="text-sm font-semibold text-slate-500">Sin documento cargado</p>
-							<p class="text-xs text-slate-400">Sube la proforma o el contrato en PDF o imagen.</p>
-						</div>
-					{/if}
-
-					<label class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-medium transition-colors cursor-pointer shrink-0 flex items-center gap-2 {contratoUploading ? 'opacity-60 pointer-events-none' : ''}">
-						{#if contratoUploading}
-							<i class="fas fa-circle-notch fa-spin"></i> Subiendo…
-						{:else}
-							<i class="fas fa-upload"></i> {proyecto.contrato ? 'Reemplazar' : 'Subir documento'}
-						{/if}
-						<input type="file" accept="application/pdf,image/*" class="hidden" onchange={onContratoFileChange} disabled={contratoUploading} />
-					</label>
-				</div>
-
 				<p class="text-[11px] text-slate-400 mt-6">
 					Registrado por {proyecto.usuario_registro || '—'} · Creado {proyecto.created_at ? new Date(proyecto.created_at).toLocaleDateString('es-PE') : '—'} · Actualizado {proyecto.updated_at ? new Date(proyecto.updated_at).toLocaleDateString('es-PE') : '—'}
+				</p>
+				<p class="text-[11px] text-slate-400 mt-1">
+					Proformas, contrato y adelanto inicial se ven en la pestaña <span class="font-semibold text-slate-500">Venta</span>.
 				</p>
 			</div>
 		{/if}
@@ -521,58 +557,120 @@
 			/>
 		{/if}
 
-	</div>
-
-	<!-- Previsualización del documento del proyecto (proforma / contrato) -->
-	{#if showContratoPreview && proyecto?.contrato}
-		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-		<div
-			class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4"
-			onclick={(e) => { if (e.target === e.currentTarget) showContratoPreview = false; }}
-		>
-			<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col">
-				<div class="flex items-center justify-between p-5 border-b border-slate-100">
-					<h4 class="text-base font-bold text-slate-800">Documento del Proyecto</h4>
-					<button
-						onclick={() => showContratoPreview = false}
-						class="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
-					>
-						<i class="fas fa-times"></i>
-					</button>
-				</div>
-				<div class="flex-1 min-h-0 p-5">
-					{#if contratoPreviewUrl}
-						<iframe
-							src={contratoPreviewUrl}
-							title="Documento del proyecto"
-							class="w-full h-full border-none rounded-xl border border-slate-200 shadow-sm"
-							allowfullscreen
-						></iframe>
+		{#if activeTab === 'venta'}
+			<div class="animate-in fade-in duration-300 max-w-4xl space-y-8">
+				<!-- Proformas -->
+				<section>
+					<h3 class="text-lg font-bold text-slate-800 mb-1 border-b border-slate-100 pb-2 flex items-center gap-2">
+						<i class="fas fa-file-invoice text-orange-500"></i> Proformas
+					</h3>
+					<p class="text-xs text-slate-400 mb-4">Se agregan/gestionan desde Comercial → Ventas.</p>
+					{#if isLoadingProformas}
+						<div class="text-center py-6 text-slate-400 text-sm"><i class="fas fa-circle-notch fa-spin"></i> Cargando proformas...</div>
+					{:else if proformasProyecto.length === 0}
+						<div class="text-center py-6 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-sm">
+							Aún no se ha adjuntado ninguna proforma.
+						</div>
 					{:else}
-						<div class="flex flex-col items-center justify-center py-14 border-2 border-dashed border-slate-200 rounded-xl text-center">
-							<i class="fas fa-file-lines text-4xl text-slate-300 mb-3"></i>
-							<p class="text-sm font-semibold text-slate-600 mb-1">Vista previa no disponible</p>
-							<p class="text-xs text-slate-400 mb-5">Ábrelo directamente para verlo.</p>
+						<div class="space-y-2">
+							{#each proformasProyecto as doc (doc.id_documento)}
+								<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
+									<i class="far fa-file-pdf text-rose-500 shrink-0"></i>
+									<div class="min-w-0 flex-1">
+										<p class="text-sm font-medium text-slate-700 truncate">{doc.nombre}</p>
+										<p class="text-[11px] text-slate-400">{fmtFecha(doc.created_at)}</p>
+									</div>
+									{#if doc.es_proforma_final}
+										<span class="shrink-0 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold border border-emerald-200">Final</span>
+									{/if}
+									<button onclick={() => openPreview(doc.storage_url, doc.nombre)} class="shrink-0 text-slate-400 hover:text-orange-600 p-1.5 rounded transition-colors" title="Ver" aria-label="Ver proforma">
+										<i class="fas fa-eye"></i>
+									</button>
+								</div>
+							{/each}
 						</div>
 					{/if}
-				</div>
-				<div class="p-4 border-t border-slate-100 flex justify-between items-center">
-					<a
-						href={proyecto.contrato}
-						target="_blank"
-						rel="noopener noreferrer"
-						class="text-xs text-orange-600 hover:underline font-medium flex items-center gap-1.5"
-					>
-						<i class="fas fa-arrow-up-right-from-square"></i> Abrir en una pestaña nueva
-					</a>
-					<button
-						onclick={() => showContratoPreview = false}
-						class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition-colors"
-					>
-						Cerrar
-					</button>
-				</div>
+				</section>
+
+				<!-- Contrato -->
+				<section>
+					<h3 class="text-lg font-bold text-slate-800 mb-1 border-b border-slate-100 pb-2 flex items-center gap-2">
+						<i class="fas fa-file-signature text-orange-500"></i> Contrato
+					</h3>
+					<p class="text-xs text-slate-400 mb-4">Sube uno nuevo para reemplazar el actual.</p>
+					<div class="flex items-center gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+						{#if proyecto.contrato}
+							<button
+								type="button"
+								onclick={() => openPreview(proyecto?.contrato, `Contrato - ${proyecto?.nombre_proyecto ?? ''}`)}
+								class="w-14 h-14 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-orange-500 text-xl shrink-0 hover:border-orange-300 transition-colors"
+								title="Previsualizar contrato"
+							>
+								<i class="fas fa-file-lines"></i>
+							</button>
+							<div class="flex-1 min-w-0">
+								<p class="text-sm font-semibold text-slate-700">Contrato cargado</p>
+								<button type="button" onclick={() => openPreview(proyecto?.contrato, `Contrato - ${proyecto?.nombre_proyecto ?? ''}`)} class="text-xs text-orange-600 hover:underline font-medium">
+									Ver previsualización
+								</button>
+							</div>
+						{:else}
+							<div class="w-14 h-14 rounded-xl bg-white border border-dashed border-slate-300 flex items-center justify-center text-slate-300 text-xl shrink-0">
+								<i class="fas fa-file-circle-plus"></i>
+							</div>
+							<div class="flex-1 min-w-0">
+								<p class="text-sm font-semibold text-slate-500">Sin contrato cargado</p>
+								<p class="text-xs text-slate-400">Sube el contrato en PDF o imagen.</p>
+							</div>
+						{/if}
+
+						<label class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-medium transition-colors cursor-pointer shrink-0 flex items-center gap-2 {contratoUploading ? 'opacity-60 pointer-events-none' : ''}">
+							{#if contratoUploading}
+								<i class="fas fa-circle-notch fa-spin"></i> Subiendo…
+							{:else}
+								<i class="fas fa-upload"></i> {proyecto.contrato ? 'Reemplazar' : 'Subir contrato'}
+							{/if}
+							<input type="file" accept="application/pdf,image/*" class="hidden" onchange={onContratoFileChange} disabled={contratoUploading} />
+						</label>
+					</div>
+				</section>
+
+				<!-- Adelanto inicial -->
+				<section>
+					<h3 class="text-lg font-bold text-slate-800 mb-1 border-b border-slate-100 pb-2 flex items-center gap-2">
+						<i class="fas fa-hand-holding-dollar text-orange-500"></i> Adelanto inicial
+					</h3>
+					<p class="text-xs text-slate-400 mb-4">Se registra desde Comercial → Ventas, al crear o cerrar la venta.</p>
+					{#if isLoadingAdelantos}
+						<div class="text-center py-6 text-slate-400 text-sm"><i class="fas fa-circle-notch fa-spin"></i> Cargando adelanto...</div>
+					{:else if adelantosProyecto.length === 0}
+						<div class="text-center py-6 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-sm">
+							Aún no se ha registrado ningún adelanto.
+						</div>
+					{:else}
+						<div class="space-y-2">
+							{#each adelantosProyecto as row (row.id_transaccion)}
+								<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
+									<i class="fas fa-sack-dollar text-emerald-500 shrink-0"></i>
+									<div class="min-w-0 flex-1">
+										<p class="text-sm font-semibold text-slate-700">{fmtMonto(row.monto_total)}</p>
+										<p class="text-[11px] text-slate-400">{fmtFecha(row.fecha)}</p>
+									</div>
+									{#if row.comprobante_url}
+										<button onclick={() => openPreview(row.comprobante_url, `Comprobante adelanto - ${fmtFecha(row.fecha)}`)} class="shrink-0 text-slate-400 hover:text-orange-600 p-1.5 rounded transition-colors" title="Ver comprobante" aria-label="Ver comprobante del adelanto">
+											<i class="fas fa-eye"></i>
+										</button>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</section>
 			</div>
-		</div>
-	{/if}
+		{/if}
+
+	</div>
+
+	<!-- Previsualización compartida (contrato / proforma / comprobante de adelanto) -->
+	<DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />
 {/if}
