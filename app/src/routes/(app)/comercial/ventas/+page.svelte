@@ -398,23 +398,27 @@ import { describeError } from '$lib/shared/describeError';
 		isPdfPreviewOpen = true;
 	}
 
-	// El botón "Proforma" (pdf) de VentasTable es solo una vista rápida de la ÚLTIMA proforma subida
-	// (mismo criterio que "Ver Contrato" de arriba) — a pedido del usuario, NO abre el popup completo
-	// de edición; para gestionar todas las proformas (agregar, elegir la final, cerrar la venta) hay
-	// que usar "Editar" (lápiz).
+	// El botón "Proforma" (pdf) de VentasTable es solo una vista rápida — a pedido del usuario, NO
+	// abre el popup completo de edición; para gestionar todas las proformas (agregar, elegir la
+	// final, cerrar la venta) hay que usar "Editar" (lápiz). Si la venta YA está cerrada, muestra la
+	// proforma marcada como FINAL (la que realmente aplica); si sigue en negociación, no hay una
+	// final elegida todavía, así que muestra la ÚLTIMA subida.
 	async function handleViewProforma(e: CustomEvent) {
 		const row = e.detail.row;
 		const id = row?.id ?? row?.id_proyecto;
 		if (!id) return;
 		try {
-			const { data, error } = await supabase
+			let query = supabase
 				.from('documento_proyecto')
 				.select('storage_url, nombre')
 				.eq('id_proyecto', id)
-				.eq('tipo_documento', 'Proforma')
-				.order('created_at', { ascending: false })
-				.limit(1)
-				.maybeSingle();
+				.eq('tipo_documento', 'Proforma');
+
+			query = row?.estado_proyecto === 'venta_cerrada'
+				? query.eq('es_proforma_final', true)
+				: query.order('created_at', { ascending: false });
+
+			const { data, error } = await query.limit(1).maybeSingle();
 			if (error) throw error;
 			if (!data?.storage_url) {
 				alert('No se encontró ninguna proforma para este proyecto.');
@@ -424,7 +428,7 @@ import { describeError } from '$lib/shared/describeError';
 			pdfPreviewTitle = `Proforma - ${row.proyecto}`;
 			isPdfPreviewOpen = true;
 		} catch (err) {
-			console.error('[Ventas] Error cargando la última proforma:', err);
+			console.error('[Ventas] Error cargando la proforma:', err);
 			alert(`No se pudo cargar la proforma. ${describeError(err)}`);
 		}
 	}
