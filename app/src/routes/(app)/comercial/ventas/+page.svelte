@@ -1,6 +1,5 @@
 <script lang="ts">
 import { onMount } from 'svelte';
-import { goto } from '$app/navigation';
 import { supabase } from '$lib/supabaseClient';
 import { isAdmin } from '$lib/stores/permisos.svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
@@ -8,10 +7,10 @@ import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
-import ConfirmDeleteVentaModal from '$lib/components/comercial/ventas/ConfirmDeleteVentaModal.svelte';
-import ProformasVentaModal from '$lib/components/comercial/ventas/ProformasVentaModal.svelte';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import { describeError } from '$lib/shared/describeError';
+import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -72,7 +71,12 @@ import { describeError } from '$lib/shared/describeError';
 		comisionesPorMes: Array(12).fill(0)
 	});
 
+	// Un solo popup (NuevaVentaModal.svelte) para crear Y editar/gestionar una venta — a pedido del
+	// usuario: antes "Editar" navegaba a /proyectos/gestion/{id} y el botón de Proforma abría un
+	// popup aparte (ProformasVentaModal.svelte, ahora fusionado ahí mismo); ambos confluyen acá.
 	let isModalOpen = $state(false);
+	let modalMode = $state<'create' | 'edit'>('create');
+	let editingVentaId = $state<number | null>(null);
 
 	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
 	// de abajo, a pedido del usuario. Por defecto: el año en curso. Se recalcula con una consulta
@@ -273,102 +277,98 @@ import { describeError } from '$lib/shared/describeError';
 	});
 
 	function openModal() {
+		modalMode = 'create';
+		editingVentaId = null;
 		isModalOpen = true;
 	}
 
-	let confirmRow: any = $state(null);
-	let isDeleting = $state(false);
-	/** true = el modal de advertencia + contraseña de admin ya se muestra para `confirmRow`. La
-	 * eliminación real (performDelete) solo se dispara desde el callback onConfirmed de ese modal,
-	 * nunca directo desde el click en el botón — ver handleDeleteEvent. */
-	let showDeleteConfirm = $state(false);
-
-	function closeModal() {
-		isModalOpen = false;
-	}
-
-	function handleEditEvent(e: CustomEvent) {
-		const row = e.detail.row;
+	/** Abre el mismo popup en modo edición — usado tanto por "Editar" (lápiz) como por "Proforma"
+	 * (pdf), que antes llevaban a lugares distintos. */
+	function openEditModal(row: any) {
 		const id = row?.id ?? row?.id_proyecto;
-		const url = `/proyectos/gestion/${id}`;
-		console.log('[Ventas] Editar proyecto', { row, id, url });
 		if (!id) {
 			console.warn('[Ventas] Editar falló: id no encontrado en row', row);
 			return;
 		}
-		const serializableRow = {
-			id: row?.id ?? row?.id_proyecto ?? null,
-			id_proyecto: row?.id_proyecto ?? row?.id ?? null,
-			nombre_proyecto: row?.proyecto ?? row?.nombre_proyecto ?? '',
-			precio_venta: row?.valor ?? row?.precio_venta ?? null,
-			tip_proyecto: row?.tipo ?? row?.tip_proyecto ?? '',
-			fecha_inicio_plan: row?.fecha ?? null,
-			responsable: row?.asesor ?? row?.responsable ?? '',
-			descripcion: row?.descripcion ?? '',
-			contrato: row?.contrato ?? ''
-		};
-		goto(url, { state: { row: serializableRow } });
+		modalMode = 'edit';
+		editingVentaId = Number(id);
+		isModalOpen = true;
 	}
 
-	function handleDeleteEvent(e: CustomEvent) {
-		confirmRow = e.detail.row;
-		if (!confirmRow) return;
-		showDeleteConfirm = true;
-	}
+	let isDeleting = $state(false);
+	let isExporting = $state(false);
 
-	function cancelDelete() {
-		showDeleteConfirm = false;
-		confirmRow = null;
-	}
+	/** A pedido del usuario: el botón "Exportar" (antes 100% decorativo) ahora genera un CSV real.
+	 * Igual criterio que editar/eliminar: un admin exporta directo, un no-admin manda una solicitud
+	 * de aprobación (ver crearSolicitud/aprobarSolicitud en aprobaciones.service.ts — al aprobarla, el
+	 * admin es quien termina generando y descargando el archivo, en nombre de quien lo pidió). */
+	async function handleExportar() {
+		if (!isAdmin()) {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'exportacion',
+				idEntidad: null,
+				tipoAccion: 'exportar',
+				descripcionEntidad: 'Exportación de ventas'
+			});
+			if (result.success) {
+				alert('No tienes permisos de administrador. Se envió una solicitud de exportación para que un administrador la apruebe.');
+			} else {
+				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+			}
+			return;
+		}
 
-	function handleDeleteConfirmed() {
-		showDeleteConfirm = false;
-		performDelete();
-	}
-
-	async function performDelete() {
-		if (!confirmRow) return;
-		isDeleting = true;
-		let step = 'inicio';
-
+		isExporting = true;
 		try {
-			const id = confirmRow.id;
-			console.log('[Ventas] performDelete: iniciando borrado de proyecto id=', id);
+			const result = await exportarVentasCSV(supabase);
+			if (!result.success) alert(`No se pudo exportar. ${result.message ?? ''}`);
+		} finally {
+			isExporting = false;
+		}
+	}
 
-			// Delete tables that reference proyecto WITHOUT ON DELETE CASCADE
-			// presupuesto_detalle cascades from presupuesto, so deleting presupuesto covers it
-			step = 'borrar presupuesto';
-			const { error: e1 } = await supabase.from('presupuesto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e1 ?? 'OK');
-			if (e1) throw e1;
+	function closeModal() {
+		isModalOpen = false;
+		editingVentaId = null;
+	}
 
-			step = 'borrar adelanto';
-			const { error: e2 } = await supabase.from('adelanto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e2 ?? 'OK');
-			if (e2) throw e2;
+	function handleEditEvent(e: CustomEvent) {
+		openEditModal(e.detail.row);
+	}
 
-			step = 'borrar contrato_proyecto';
-			const { error: e3 } = await supabase.from('contrato_proyecto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e3 ?? 'OK');
-			if (e3) throw e3;
+	/** A pedido del usuario: un no-administrador ya no puede eliminar una venta directo — se envía
+	 * una solicitud de aprobación (reemplaza al viejo ConfirmDeleteVentaModal de contraseña de
+	 * admin). Un admin sigue eliminando directo, con el mismo cascade de siempre
+	 * (eliminarVentaCascade en aprobaciones.service.ts). */
+	async function handleDeleteEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
 
-			// cuentas_cobrar has a nullable FK — nullify to preserve payment records
-			step = 'desvincular cuentas_cobrar';
-			const { error: e4 } = await supabase.from('cuentas_cobrar').update({ id_proyecto: null }).eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, e4 ?? 'OK');
-			if (e4) throw e4;
+		if (!isAdmin()) {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'proyecto',
+				idEntidad: row.id,
+				tipoAccion: 'eliminar',
+				descripcionEntidad: row.proyecto
+			});
+			if (result.success) {
+				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
+			} else {
+				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+			}
+			return;
+		}
 
-			// All other FK references have ON DELETE CASCADE and will auto-delete
-			step = 'borrar proyecto';
-			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', id);
-			console.log(`[Ventas] performDelete: ${step} ->`, error ?? 'OK');
-			if (error) throw error;
+		if (!confirm(`¿Eliminar la venta "${row.proyecto}"? Esto borra en cascada su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.). Esta acción no se puede deshacer.`)) return;
 
-			confirmRow = null;
+		isDeleting = true;
+		try {
+			const result = await eliminarVentaCascade(supabase, row.id);
+			if (!result.success) throw new Error(result.message);
 			fetchVentas();
 		} catch (err) {
-			console.error(`[Ventas] Error deleting project en paso "${step}":`, err);
-			alert(`No se pudo eliminar el proyecto.\nPaso: ${step}\n${describeError(err)}`);
+			console.error('[Ventas] Error eliminando venta:', err);
+			alert(`No se pudo eliminar el proyecto.\n${describeError(err)}`);
 		} finally {
 			isDeleting = false;
 		}
@@ -398,30 +398,39 @@ import { describeError } from '$lib/shared/describeError';
 		isPdfPreviewOpen = true;
 	}
 
-	// Gestión de proformas (múltiples por venta) + cierre formal de la venta — ver
-	// ProformasVentaModal.svelte. Reemplaza al viejo handleViewProforma de un solo archivo.
-	let proformasModalOpen = $state(false);
-	let proformasModalProyecto: { id_proyecto: number; nombre_proyecto: string; contrato: string; estado_proyecto: string; id_cliente: number | null; clienteNombre: string | null; precioVenta: number | null; tipoVenta: string } | null = $state(null);
-
-	function handleGestionarProformas(e: CustomEvent) {
+	// El botón "Proforma" (pdf) de VentasTable es solo una vista rápida — a pedido del usuario, NO
+	// abre el popup completo de edición; para gestionar todas las proformas (agregar, elegir la
+	// final, cerrar la venta) hay que usar "Editar" (lápiz). Si la venta YA está cerrada, muestra la
+	// proforma marcada como FINAL (la que realmente aplica); si sigue en negociación, no hay una
+	// final elegida todavía, así que muestra la ÚLTIMA subida.
+	async function handleViewProforma(e: CustomEvent) {
 		const row = e.detail.row;
-		if (!row?.id) return;
-		proformasModalProyecto = {
-			id_proyecto: row.id,
-			nombre_proyecto: row.proyecto,
-			contrato: row.contrato || '',
-			id_cliente: row.id_cliente ?? null,
-			clienteNombre: row.clienteNombre ?? null,
-			precioVenta: row.valor ?? null,
-			estado_proyecto: row.estado_proyecto || 'activo',
-			tipoVenta: row.tipoVenta || 'obra'
-		};
-		proformasModalOpen = true;
-	}
+		const id = row?.id ?? row?.id_proyecto;
+		if (!id) return;
+		try {
+			let query = supabase
+				.from('documento_proyecto')
+				.select('storage_url, nombre')
+				.eq('id_proyecto', id)
+				.eq('tipo_documento', 'Proforma');
 
-	function closeProformasModal() {
-		proformasModalOpen = false;
-		proformasModalProyecto = null;
+			query = row?.estado_proyecto === 'venta_cerrada'
+				? query.eq('es_proforma_final', true)
+				: query.order('created_at', { ascending: false });
+
+			const { data, error } = await query.limit(1).maybeSingle();
+			if (error) throw error;
+			if (!data?.storage_url) {
+				alert('No se encontró ninguna proforma para este proyecto.');
+				return;
+			}
+			pdfPreviewUrl = data.storage_url;
+			pdfPreviewTitle = `Proforma - ${row.proyecto}`;
+			isPdfPreviewOpen = true;
+		} catch (err) {
+			console.error('[Ventas] Error cargando la proforma:', err);
+			alert(`No se pudo cargar la proforma. ${describeError(err)}`);
+		}
 	}
 </script>
 
@@ -441,8 +450,12 @@ import { describeError } from '$lib/shared/describeError';
 		</div>
 		
 		<div class="flex items-center gap-3">
-			<button class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2">
-				<i class="fas fa-download"></i> Exportar
+			<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				{#if isExporting}
+					<i class="fas fa-spinner fa-spin"></i> Exportando...
+				{:else}
+					<i class="fas fa-download"></i> Exportar
+				{/if}
 			</button>
 			<button onclick={openModal} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
 				<i class="fas fa-plus"></i> Nueva venta
@@ -471,7 +484,7 @@ import { describeError } from '$lib/shared/describeError';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleGestionarProformas} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -499,24 +512,8 @@ import { describeError } from '$lib/shared/describeError';
 	</div>
 </div>
 
-<!-- Modal Overlay -->
-<NuevaVentaModal isOpen={isModalOpen} onClose={closeModal} onSaved={fetchVentas} />
-
-<!-- Confirmación de eliminación (advertencia + contraseña de admin) -->
-<ConfirmDeleteVentaModal
-	open={showDeleteConfirm}
-	ventaNombre={confirmRow?.proyecto ?? ''}
-	onCancel={cancelDelete}
-	onConfirmed={handleDeleteConfirmed}
-/>
+<!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
+<NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={fetchVentas} />
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
-
-<!-- Gestión de proformas (múltiples) + cierre formal de venta -->
-<ProformasVentaModal
-	open={proformasModalOpen}
-	proyecto={proformasModalProyecto}
-	onClose={closeProformasModal}
-	onUpdated={fetchVentas}
-/>

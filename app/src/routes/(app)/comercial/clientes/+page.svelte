@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { crearSolicitud, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import ClientesTable from '$lib/components/comercial/clientes/ClientesTable.svelte';
 	import ClienteModal from '$lib/components/comercial/clientes/ClienteModal.svelte';
 
@@ -45,18 +47,33 @@
 	}
 
 	async function handleDelete(id: number) {
+		const cliente = clientes.find((c) => c.id_cliente === id);
+		const nombre = cliente?.nombre || `Cliente #${id}`;
+
+		// A pedido del usuario: un no-administrador ya no puede eliminar un cliente directo — se
+		// envía una solicitud de aprobación, visible para todos los admins en la campanita.
+		if (!isAdmin()) {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'cliente',
+				idEntidad: id,
+				tipoAccion: 'eliminar',
+				descripcionEntidad: nombre
+			});
+			if (result.success) {
+				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
+			} else {
+				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+			}
+			return;
+		}
+
 		if (confirm('¿Estás seguro de eliminar este cliente? Esta acción no se puede deshacer.')) {
-			try {
-				const { error } = await supabase
-					.from('cliente')
-					.delete()
-					.eq('id_cliente', id);
-				
-				if (error) throw error;
+			const result = await deleteClienteCascade(supabase, id);
+			if (result.success) {
 				await fetchClientes(); // Refresh
-			} catch (err) {
-				console.error('Error deleting cliente:', err);
-				alert('Ocurrió un error al eliminar el cliente. Es posible que esté referenciado en otras tablas.');
+			} else {
+				console.error('Error deleting cliente:', result.message);
+				alert(`Ocurrió un error al eliminar el cliente. ${result.message ?? ''}`);
 			}
 		}
 	}

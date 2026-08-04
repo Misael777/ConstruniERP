@@ -24,7 +24,9 @@
 			// los de toda la cartera — mismo criterio ya usado en Ventas (ver comercial/ventas/
 			// +page.svelte, fetchVentas). Se filtra por asesor_comercial_id (UUID de auth de quien
 			// creó el proyecto/venta), no por `responsable` (texto libre, no confiable).
-			let query = supabase.from('proyecto').select('*');
+			// A pedido del usuario: acá solo deben verse las ventas YA CERRADAS (proyectos reales, con
+			// Gantt/Presupuesto/Documentos) — las que siguen en negociación se gestionan en Ventas.
+			let query = supabase.from('proyecto').select('*').eq('estado_proyecto', 'venta_cerrada');
 			if (!isAdmin()) {
 				const { data: userData } = await supabase.auth.getUser();
 				const currentUserId = userData?.user?.id;
