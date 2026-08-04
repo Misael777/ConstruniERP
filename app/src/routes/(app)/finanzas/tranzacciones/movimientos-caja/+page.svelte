@@ -342,7 +342,7 @@
 	{/if}
 
 	<!-- KPIs -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><Wallet size={16} /></div>

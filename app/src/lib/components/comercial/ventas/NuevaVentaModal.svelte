@@ -27,8 +27,21 @@
 	let tipoProyecto = $state('');
 	let estadoPredio = $state('');
 	let tipoEdificacion = $state('');
-	let tipoEdificacion2 = $state('');
 	let numeroPisos = $state('');
+	// Campos de la pestaña "Obra" (características del proyecto) — separados de los de Consultoría de
+	// arriba: aunque comparten alguna etiqueta (ej. "Tipo de edificación"), sus catálogos de opciones
+	// son distintos, y reusar la misma variable dejaría un valor inválido pegado al cambiar de pestaña.
+	// AJUSTAR: todavía no se mandan en proyectoPayload (ver handleSubmit) — faltan confirmar las
+	// columnas reales en la tabla `proyecto` para tipo_obra/tipo_tramite/tipo_intervencion antes de
+	// guardarlos, para no romper el guardado completo con un nombre de columna inventado.
+	let tipoObra = $state('');
+	let tipoTramite = $state('');
+	let tipoIntervencion = $state('');
+	let tipoEdificacionObra = $state('');
+	// Mes y Año propios de Obra (a diferencia de Consultoría, que los deriva solo de Fecha de venta
+	// para el visualizador del código) — el usuario los pide como campos aparte para pedir directamente.
+	let mesObra = $state('');
+	let anioObra = $state('');
 	let departamento = $state('Lima');
 	let provincia = $state('Lima');
 	let distrito = $state('');
@@ -70,8 +83,13 @@
 			tipoProyecto = '';
 			estadoPredio = '';
 			tipoEdificacion = '';
-			tipoEdificacion2 = '';
 			numeroPisos = '';
+			tipoObra = '';
+			tipoTramite = '';
+			tipoIntervencion = '';
+			tipoEdificacionObra = '';
+			mesObra = '';
+			anioObra = '';
 			departamento = 'Lima';
 			provincia = 'Lima';
 			distrito = '';
@@ -329,7 +347,6 @@ let codigoGenerado = $derived(
 			tip_proyecto: tipoProyecto,
 			estado_predio: estadoPredio,
 			tipo_edifica: tipoEdificacion,
-			tipo_edificacion2: tipoEdificacion2 || null,
 			nro_pisos: numeroPisosValue,
 			distrito: distrito ? distrito.substring(0, 4).trim() : null,
 			provincia: provincia ? provincia.substring(0, 4).trim() : null,
@@ -564,7 +581,7 @@ let codigoGenerado = $derived(
 								<label class="text-xs font-semibold text-[#0f3b5e]">Dirección del predio</label>
 								<input type="text" bind:value={direccionPredio} placeholder="Ej. Jr. Los Álamos 123" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
-							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
+							<div class="grid grid-cols-2 gap-2 md:col-span-1">
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Comisión (%) *</label>
 									<input type="number" bind:value={comisionPorcentaje} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
@@ -574,7 +591,7 @@ let codigoGenerado = $derived(
 									<input type="text" readonly value={comisionMonto} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								</div>
 							</div>
-							<div class="flex flex-col gap-1 md:col-span-1 grid grid-cols-2 gap-2">
+							<div class="grid grid-cols-2 gap-2 md:col-span-1">
 								<div class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Proformas</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
@@ -646,8 +663,12 @@ let codigoGenerado = $derived(
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
 								<select bind:value={tipoProyecto} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 									<option value="">-- Selecciona --</option>
-									<option value="O">Proyecto de Obra (O)</option>
-									<option value="M">Mantenimiento (M)</option>
+									<option value="L">Licencia (L)</option>
+									<option value="O">Proyecto de obra (O)</option>
+									<option value="DF">Declaración de fábrica (DF)</option>
+									<option value="I">Independización (I)</option>
+									<option value="DF + I">Declaratoria de fábrica + Independización (DF + I)</option>
+									<option value="EMS">Estudio de mecánica de suelos (EMS)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
@@ -656,6 +677,7 @@ let codigoGenerado = $derived(
 									<option value="">-- Selecciona --</option>
 									<option value="A">Ampliación (A)</option>
 									<option value="N">Nuevo (N)</option>
+									<option value="R">Reforzamiento (R)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
@@ -664,14 +686,7 @@ let codigoGenerado = $derived(
 									<option value="">-- Selecciona --</option>
 									<option value="M">Viv. Multifamiliar (M)</option>
 									<option value="U">Viv. Unifamiliar (U)</option>
-								</select>
-							</div>
-							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación (2) *</label>
-								<select bind:value={tipoEdificacion2} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-									<option value="">-- Selecciona --</option>
-									<option value="F">Familiar (F)</option>
-									<option value="C">Comercial (C)</option>
+									<option value="C">Comercio (C)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
@@ -748,7 +763,76 @@ let codigoGenerado = $derived(
 							</div>
 						</div>
 						{:else}
-						<p class="text-sm text-slate-400 text-center py-10">Todavía no hay campos configurados para Obra.</p>
+						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de obra *</label>
+								<select bind:value={tipoObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="OBRA">Ejecución de Obra (OBRA)</option>
+									<option value="EXP">Expediente Técnico (EXP)</option>
+									<option value="SUP">Supervisión (SUP)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de trámite *</label>
+								<select bind:value={tipoTramite} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="L">Con licencia de edificación (L)</option>
+									<option value="O">Obra Sin licencia (O)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Intervención *</label>
+								<select bind:value={tipoIntervencion} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="A">Ampliación (A)</option>
+									<option value="R">Reforzamiento (R)</option>
+									<option value="AR">Ampliación + reforzamiento (AR)</option>
+									<option value="DP">Demolición parcial (DP)</option>
+									<option value="DT">Demolición total (DT)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
+								<select bind:value={tipoEdificacionObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="M">Vivienda multifamiliar (M)</option>
+									<option value="U">Vivienda unifamiliar (U)</option>
+									<option value="X">Comercio (X)</option>
+									<option value="I">Industrial (I)</option>
+									<option value="O">Oficinas (O)</option>
+									<option value="E">Educativo (E)</option>
+									<option value="S">Salud (S)</option>
+									<option value="MX">Uso mixto (MX)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
+								<input type="number" bind:value={numeroPisos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Mes *</label>
+								<select bind:value={mesObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+									<option value="">-- Selecciona --</option>
+									<option value="01">Enero</option>
+									<option value="02">Febrero</option>
+									<option value="03">Marzo</option>
+									<option value="04">Abril</option>
+									<option value="05">Mayo</option>
+									<option value="06">Junio</option>
+									<option value="07">Julio</option>
+									<option value="08">Agosto</option>
+									<option value="09">Septiembre</option>
+									<option value="10">Octubre</option>
+									<option value="11">Noviembre</option>
+									<option value="12">Diciembre</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Año *</label>
+								<input type="number" bind:value={anioObra} placeholder="Ej. 2026" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+							</div>
+						</div>
 						{/if}
 					</section>
 
