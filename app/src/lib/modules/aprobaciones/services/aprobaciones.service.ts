@@ -13,7 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
-import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
+import { generarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
 // 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
 // una exportación no apunta a una fila puntual — id_entidad queda null para este caso (ver migración
@@ -351,6 +351,12 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 	if (fetchError || !solicitud) return { success: false, message: fetchError?.message || 'Solicitud no encontrada.' };
 
 	let result: ServiceResult;
+	// Solo la rama 'exportar' completa esto — el archivo generado se guarda en payload_cambios de la
+	// MISMA solicitud (junto con el UPDATE de estado más abajo) para que el solicitante lo descargue
+	// desde su propia campanita (ver descargarArchivoSolicitud en NotificacionesBell.svelte). Genérico
+	// a propósito: cualquier módulo futuro con su propio botón "Exportar" que siga este mismo patrón
+	// (guardar archivoContenido/archivoNombre/archivoMime acá) queda soportado sin tocar la campanita.
+	let payloadCambiosExtra: Record<string, unknown> | null = null;
 
 	if (solicitud.tipo_accion === 'eliminar') {
 		result = solicitud.tipo_entidad === 'cliente'
@@ -360,11 +366,21 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 		const { data: userData } = await client.auth.getUser();
 		result = await cerrarVentaAprobada(client, solicitud.payload_cambios as unknown as CerrarVentaParams, userData?.user?.email ?? null, resueltoPor);
 	} else if (solicitud.tipo_accion === 'exportar') {
-		// "Aprobar" acá significa: el admin genera y descarga el export EN SU PROPIO navegador, en
-		// nombre de quien lo pidió (scopeToUserId filtra a las ventas de esa persona, no todo el
-		// portafolio) — no hay un canal para mandarle el archivo al solicitante dentro del ERP, así que
-		// queda en manos del admin compartirlo por fuera si corresponde.
-		result = await exportarVentasCSV(client, solicitud.solicitado_por_id);
+		// "Aprobar" acá significa: el admin genera el export EN NOMBRE de quien lo pidió
+		// (solicitado_por_id filtra a las ventas de esa persona, no todo el portafolio) — a pedido del
+		// usuario, ya NO se descarga en el navegador del admin; el archivo queda guardado en la propia
+		// solicitud para que el solicitante lo descargue desde su campanita.
+		const generado = await generarVentasCSV(client, solicitud.solicitado_por_id);
+		if (generado.success) {
+			payloadCambiosExtra = {
+				archivoContenido: generado.archivo.contenido,
+				archivoNombre: generado.archivo.nombre,
+				archivoMime: generado.archivo.mime
+			};
+			result = { success: true };
+		} else {
+			result = { success: false, message: generado.message };
+		}
 	} else {
 		const table = solicitud.tipo_entidad === 'cliente' ? 'cliente' : 'proyecto';
 		const pk = solicitud.tipo_entidad === 'cliente' ? 'id_cliente' : 'id_proyecto';
@@ -376,7 +392,12 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 
 	const { error: updateError } = await client
 		.from(TABLE_NAME)
-		.update({ estado: 'aprobado', resuelto_por: resueltoPor, resuelto_en: new Date().toISOString() })
+		.update({
+			estado: 'aprobado',
+			resuelto_por: resueltoPor,
+			resuelto_en: new Date().toISOString(),
+			...(payloadCambiosExtra ? { payload_cambios: payloadCambiosExtra } : {})
+		})
 		.eq('id_solicitud', idSolicitud);
 	if (updateError) return { success: false, message: updateError.message };
 

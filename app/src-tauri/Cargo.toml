@@ -25,4 +25,6 @@ log = "0.4"
 tauri = { version = "2.0.0-rc.17", default-features = false, features = ["rustls-tls", "wry", "devtools"] }
 tauri-plugin-log = "2.0.0-rc"
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 chrono = { version = "0.4", features = ["serde"] }
