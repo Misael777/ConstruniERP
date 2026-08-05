@@ -16,6 +16,15 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 
 	function formatDate(value: string | Date | null | undefined) {
 		if (!value) return '';
+		// Fechas "solo día" (YYYY-MM-DD, ej. fecha_inicio_plan) se parsean directo del string en vez de
+		// pasar por `new Date()` — `new Date('YYYY-MM-DD')` las interpreta como medianoche UTC, y
+		// leerlas de vuelta con getDate()/getMonth() (hora LOCAL) las corría un día atrás en husos
+		// horarios detrás de UTC (Perú, UTC-5) — por eso esta fecha no coincidía con la que muestra el
+		// popup de Editar Venta (que usa un <input type="date"> nativo, sin este problema).
+		if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+			const [year, month, day] = value.split('-');
+			return `${day}/${month}/${year}`;
+		}
 		const date = new Date(value);
 		if (Number.isNaN(date.getTime())) return '';
 		const day = String(date.getDate()).padStart(2, '0');
@@ -276,6 +285,15 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 		fetchResumenVentas();
 	});
 
+	/** Al guardar o cerrar una venta desde el popup (NuevaVentaModal onSaved) — antes solo refrescaba
+	 * la tabla/gráficos (fetchVentas), y el panel "Resumen de ventas" (que tiene su propio filtro de
+	 * fechas y su propia consulta, ver fetchResumenVentas) se quedaba con los datos de antes de cerrar
+	 * la venta hasta que el usuario tocara a mano el filtro de fechas del panel. */
+	function handleVentaGuardada() {
+		fetchVentas();
+		fetchResumenVentas();
+	}
+
 	function openModal() {
 		modalMode = 'create';
 		editingVentaId = null;
@@ -513,7 +531,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 </div>
 
 <!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
-<NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={fetchVentas} />
+<NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={handleVentaGuardada} />
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />

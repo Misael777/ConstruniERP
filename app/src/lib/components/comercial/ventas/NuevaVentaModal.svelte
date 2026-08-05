@@ -66,9 +66,10 @@
 	// Campos de la pestaña "Obra" (características del proyecto) — separados de los de Consultoría de
 	// arriba: aunque comparten alguna etiqueta (ej. "Tipo de edificación"), sus catálogos de opciones
 	// son distintos, y reusar la misma variable dejaría un valor inválido pegado al cambiar de pestaña.
-	// AJUSTAR: todavía no se mandan en proyectoPayload (ver handleSubmit) — faltan confirmar las
-	// columnas reales en la tabla `proyecto` para tipo_obra/tipo_tramite/tipo_intervencion antes de
-	// guardarlos, para no romper el guardado completo con un nombre de columna inventado.
+	// Se guardan en tipo_obra/tipo_tramite/tipo_intervencion/tipo_edificacion_obra/mes_obra/anio_obra
+	// (ver proyectoPayload/proyectoUpdatePayload) — columnas agregadas por
+	// proyecto_caracteristicas_obra_migration.sql, hay que correr esa migración antes de usar esta
+	// pestaña o el guardado falla con "column does not exist".
 	let tipoObra = $state('');
 	let tipoTramite = $state('');
 	let tipoIntervencion = $state('');
@@ -81,6 +82,18 @@
 	let provincia = $state('Lima');
 	let distrito = $state('');
 	let clienteNombreGen = $state('');
+
+	/** "Hoy" en fecha LOCAL (YYYY-MM-DD), para prellenar <input type="date">. A propósito, NO usa
+	 * `new Date().toISOString()` (esa siempre da la fecha en UTC): en Perú (UTC-5), desde las 7pm hora
+	 * local en adelante el día en UTC ya es el de MAÑANA, así que Fecha de venta/Adelanto terminaban
+	 * mostrando la fecha del día siguiente en vez de la de hoy. */
+	function hoyLocalISO(): string {
+		const d = new Date();
+		const year = d.getFullYear();
+		const month = String(d.getMonth() + 1).padStart(2, '0');
+		const day = String(d.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	}
 
 	function getMesFromFecha() {
 		const parsedDate = new Date(fechaVenta);
@@ -119,7 +132,7 @@
 	let montoFinalVenta = $state('');
 	let adelantoYaRegistrado = $state(false);
 	let isCheckingAdelanto = $state(false);
-	let adelantoFecha = $state(new Date().toISOString().slice(0, 10));
+	let adelantoFecha = $state(hoyLocalISO());
 	let previewOpen = $state(false);
 	let previewUrl = $state('');
 	let previewTitle = $state('');
@@ -152,7 +165,7 @@
 				loadVentaParaEditar(ventaId);
 			} else {
 				proyectoNombre = '';
-				fechaVenta = new Date().toISOString().slice(0, 10);
+				fechaVenta = hoyLocalISO();
 				loadCurrentAsesor();
 				selectedClienteId = '';
 				nuevoClienteNombre = '';
@@ -178,7 +191,7 @@
 				selectedFinalFileIndex = null;
 				adelantoFile = null;
 				adelantoMonto = '';
-				adelantoFecha = new Date().toISOString().slice(0, 10);
+				adelantoFecha = hoyLocalISO();
 				observaciones = '';
 				caracteristicasTab = 'consultoria';
 				proformas = [];
@@ -202,8 +215,23 @@
 			if (error) throw error;
 
 			proyectoNombre = data.nombre_proyecto || '';
-			fechaVenta = data.fecha_inicio_plan || new Date().toISOString().slice(0, 10);
+			// Mismo criterio y mismo orden de respaldo que la columna "Fecha" del listado de Ventas (ver
+			// fechaRaw en comercial/ventas/+page.svelte: fecha_inicio_plan, y si no hay, created_at) —
+			// antes esto solo miraba fecha_inicio_plan y caía directo a "hoy" si estaba vacía, lo que
+			// podía mostrar una fecha distinta a la que el listado ya mostraba para la misma venta.
+			// El .slice(0, 10) corta cualquier timestamp completo a solo la fecha (YYYY-MM-DD): sin esto,
+			// un valor con hora/zona horaria (ej. created_at) podía desplazar el día mostrado en el
+			// <input type="date"> por la diferencia de huso horario.
+			fechaVenta = ((data.fecha_inicio_plan || data.created_at) as string | null)?.slice(0, 10) || hoyLocalISO();
 			selectedClienteId = data.id_cliente ? String(data.id_cliente) : '';
+			// Blindaje: el cliente de ESTA venta puede no estar (todavía, o nunca) en `clientes` — la
+			// carga general (loadClientes) es asíncrona y puede no haber terminado, además de haber
+			// tenido antes un tope de 200 registros (ver loadClientes). Sin su propia opción en la
+			// lista, el <select> de "Clientes" se ve vacío aunque selectedClienteId sí tenga el id
+			// correcto. `data.cliente` ya viene con el nombre por el JOIN de este mismo select.
+			if (data.id_cliente && !clientes.some((c) => String(c.id_cliente) === String(data.id_cliente))) {
+				clientes = [...clientes, { id_cliente: data.id_cliente, nombre: (data as any).cliente?.nombre || `Cliente #${data.id_cliente}` }];
+			}
 			nuevoClienteNombre = '';
 			valorVenta = data.precio_venta != null ? String(data.precio_venta) : '';
 			comisionPorcentaje = data.comision_asesor != null ? String(data.comision_asesor) : '';
@@ -213,6 +241,12 @@
 			tipoEdificacion = data.tipo_edifica || '';
 			tipoEdificacion2 = data.tipo_edificacion2 || '';
 			numeroPisos = data.nro_pisos != null ? String(data.nro_pisos) : '';
+			tipoObra = data.tipo_obra || '';
+			tipoTramite = data.tipo_tramite || '';
+			tipoIntervencion = data.tipo_intervencion || '';
+			tipoEdificacionObra = data.tipo_edificacion_obra || '';
+			mesObra = data.mes_obra || '';
+			anioObra = data.anio_obra != null ? String(data.anio_obra) : '';
 			departamento = resolveTruncatedOption(DEPARTAMENTOS, data.departamento) || 'Lima';
 			provincia = resolveTruncatedOption(PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [], data.provincia) || 'Lima';
 			// `ubicacion` guarda el distrito SIN truncar (ver payload de guardado) — se prefiere sobre
@@ -226,7 +260,9 @@
 			proformaFiles = [];
 			adelantoFile = null;
 			adelantoMonto = '';
-			adelantoFecha = new Date().toISOString().slice(0, 10);
+			// A pedido del usuario: en Editar Venta, el Adelanto inicial arranca con la Fecha de venta
+			// del registro (no la fecha de hoy) — fechaVenta ya quedó fijada un par de líneas arriba.
+			adelantoFecha = fechaVenta;
 
 			localContratoUrl = data.contrato || null;
 			localEstado = data.estado_proyecto || 'activo';
@@ -268,6 +304,32 @@
 let codigoGenerado = $derived(
 	`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
 );
+
+// A pedido del usuario: el ícono de copiar junto al Código generado no hacía nada — ahora copia el
+// código al portapapeles para poder pegarlo (Ctrl+V) en otro lado. navigator.clipboard requiere un
+// contexto seguro (ok en el navegador y en el webview de Tauri) y un gesto directo del usuario (este
+// clic lo es); execCommand queda como respaldo por si el navegador/webview bloquea la API moderna.
+let codigoCopiado = $state(false);
+async function copiarCodigoGenerado() {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(codigoGenerado);
+		} else {
+			const textarea = document.createElement('textarea');
+			textarea.value = codigoGenerado;
+			textarea.style.position = 'fixed';
+			textarea.style.opacity = '0';
+			document.body.appendChild(textarea);
+			textarea.select();
+			document.execCommand('copy');
+			textarea.remove();
+		}
+		codigoCopiado = true;
+		setTimeout(() => (codigoCopiado = false), 1500);
+	} catch (err) {
+		console.error('[NuevaVentaModal] No se pudo copiar el código generado:', err);
+	}
+}
 
 	let comisionMonto = $derived((Number(valorVenta) || 0) * (Number(comisionPorcentaje) || 0) / 100);
 	let contratoPresente = $derived(!!contratoFile || !!localContratoUrl);
@@ -357,7 +419,11 @@ let codigoGenerado = $derived(
 		console.log('[NuevaVentaModal] loadClientes() iniciado');
 		try {
 			console.log('[NuevaVentaModal] Consultando supabase.from("cliente")...');
-			const { data, error } = await supabase.from('cliente').select('id_cliente,nombre').order('nombre', { ascending: true }).limit(200);
+			// Sin .limit(): con un tope fijo, un cliente que quedara fuera de los primeros N (orden
+			// alfabético) hacía que el <select> de "Clientes" no tuviera ninguna opción que calzara con
+			// el id_cliente ya guardado de la venta — se veía vacío en Editar Venta aunque el dato sí
+			// estuviera ahí.
+			const { data, error } = await supabase.from('cliente').select('id_cliente,nombre').order('nombre', { ascending: true });
 			if (error) throw error;
 			clientes = data || [];
 			console.log(`[NuevaVentaModal] ✓ ${clientes.length} clientes cargados`);
@@ -435,7 +501,10 @@ let codigoGenerado = $derived(
 
 	function fmtDate(d: string | null | undefined): string {
 		if (!d) return '—';
-		return new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
+		// timeZone: 'UTC' evita el corrimiento de un día que 'new Date("YYYY-MM-DD")' produce en husos
+		// horarios detrás de UTC (Perú, UTC-5) al leerse de vuelta en hora local — ver mismo fix en
+		// comercial/ventas/+page.svelte (formatDate).
+		return new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
 	}
 
 	async function handleAddProformaFileGestion(event: Event) {
@@ -546,6 +615,17 @@ let codigoGenerado = $derived(
 		(caracteristicasTab !== 'consultoria' ||
 			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && Number(numeroPisos) > 0))
 	);
+
+	// A pedido del usuario: una vez cerrada la venta, ya no se puede cambiar de Consultoría a Obra (ni
+	// al revés) — el tipo de proyecto queda fijo. Solo en modo edición, y solo aplica una vez cerrada
+	// (mientras la venta sigue abierta, se puede seguir ajustando la pestaña con normalidad).
+	let tabsBloqueadosPorCierre = $derived(mode === 'edit' && localEstado === 'venta_cerrada');
+
+	// A pedido del usuario: en Nueva Venta, "Características del proyecto nuevo" no se puede abrir
+	// hasta adjuntar el Comprobante del adelanto Y poner su Monto — una vez ambos están completos, la
+	// sección se desbloquea. Solo aplica al crear (en edición ya viene con datos, no hay nada que
+	// bloquear).
+	let caracteristicasBloqueada = $derived(mode === 'create' && (!adelantoFile || !(Number(adelantoMonto) > 0)));
 
 	let canClose = $derived(
 		mode === 'edit' &&
@@ -737,6 +817,12 @@ let codigoGenerado = $derived(
 			estado_predio: estadoPredio,
 			tipo_edifica: tipoEdificacion,
 			nro_pisos: numeroPisosValue,
+			tipo_obra: tipoObra || null,
+			tipo_tramite: tipoTramite || null,
+			tipo_intervencion: tipoIntervencion || null,
+			tipo_edificacion_obra: tipoEdificacionObra || null,
+			mes_obra: mesObra || null,
+			anio_obra: anioObra ? Number(anioObra) : null,
 			distrito: distrito ? distrito.substring(0, 4).trim() : null,
 			provincia: provincia ? provincia.substring(0, 4).trim() : null,
 			departamento: departamento ? departamento.substring(0, 4).trim() : null,
@@ -865,6 +951,12 @@ let codigoGenerado = $derived(
 				tipo_edifica: tipoEdificacion,
 				tipo_edificacion2: tipoEdificacion2 || null,
 				nro_pisos: basicos.numeroPisosValue,
+				tipo_obra: tipoObra || null,
+				tipo_tramite: tipoTramite || null,
+				tipo_intervencion: tipoIntervencion || null,
+				tipo_edificacion_obra: tipoEdificacionObra || null,
+				mes_obra: mesObra || null,
+				anio_obra: anioObra ? Number(anioObra) : null,
 				distrito: distrito ? distrito.substring(0, 4).trim() : null,
 				provincia: provincia ? provincia.substring(0, 4).trim() : null,
 				departamento: departamento ? departamento.substring(0, 4).trim() : null,
@@ -1023,15 +1115,21 @@ let codigoGenerado = $derived(
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Clientes *</label>
-								<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
-									<option value="">-- Selecciona cliente --</option>
-									{#each clientes as c}
-										<option value={c.id_cliente}>{c.nombre}</option>
-									{/each}
-									<option value="__new__">+ Nuevo cliente</option>
-								</select>
-								{#if selectedClienteId === '__new__'}
-									<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+								{#if mode === 'edit'}
+									<!-- A pedido del usuario: en Editar Venta el cliente ya quedó fijado al crear la
+									     venta — se muestra como texto de solo lectura en vez de un <select> editable. -->
+									<input type="text" readonly value={getClienteNombreActual() || `Cliente #${selectedClienteId}`} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
+								{:else}
+									<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
+										<option value="">-- Selecciona cliente --</option>
+										{#each clientes as c}
+											<option value={c.id_cliente}>{c.nombre}</option>
+										{/each}
+										<option value="__new__">+ Nuevo cliente</option>
+									</select>
+									{#if selectedClienteId === '__new__'}
+										<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+									{/if}
 								{/if}
 							</div>
 							<div class="flex flex-col gap-1">
@@ -1362,33 +1460,52 @@ let codigoGenerado = $derived(
 					<section class="border-t border-slate-100 pt-6">
 						<button
 							type="button"
-							onclick={() => (caracteristicasExpanded = !caracteristicasExpanded)}
-							class="w-full flex items-center justify-between gap-2 mb-4 text-left"
+							onclick={() => { if (!caracteristicasBloqueada) caracteristicasExpanded = !caracteristicasExpanded; }}
+							disabled={caracteristicasBloqueada}
+							class={`w-full flex items-center justify-between gap-2 mb-1 text-left ${caracteristicasBloqueada ? 'opacity-50 cursor-not-allowed' : ''}`}
 							aria-expanded={caracteristicasExpanded}
+							title={caracteristicasBloqueada ? 'Adjunta el comprobante del adelanto y su monto para poder completar las características del proyecto' : ''}
 						>
 							<span class="text-sm font-bold text-slate-800 flex items-center gap-2">
 								<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
 								Características del proyecto nuevo
+								{#if caracteristicasBloqueada}<i class="fas fa-lock text-[10px] text-slate-400"></i>{/if}
 							</span>
 							<i class={`fas fa-chevron-down text-slate-400 text-xs transition-transform ${caracteristicasExpanded ? 'rotate-180' : ''}`}></i>
 						</button>
-						{#if caracteristicasExpanded}
-						<div class="flex gap-1 mb-4 border-b border-slate-200">
+						{#if caracteristicasBloqueada}
+							<p class="text-[11px] text-slate-400 mb-4">Adjunta el comprobante del adelanto y su monto (en "Información general") para poder completar esta sección.</p>
+						{:else}
+							<div class="mb-4"></div>
+						{/if}
+						{#if caracteristicasExpanded && !caracteristicasBloqueada}
+						<div class="flex gap-1 mb-1 border-b border-slate-200">
 							<button
 								type="button"
 								onclick={() => (caracteristicasTab = 'consultoria')}
-								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${caracteristicasTab === 'consultoria' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+								disabled={tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria'}
+								title={tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria' ? 'La venta ya está cerrada como Obra — no se puede cambiar a Consultoría' : ''}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'consultoria' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
 							>
 								Consultoría
+								{#if tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria'}<i class="fas fa-lock text-[10px]"></i>{/if}
 							</button>
 							<button
 								type="button"
 								onclick={() => (caracteristicasTab = 'obra')}
-								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+								disabled={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'}
+								title={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'La venta ya está cerrada como Consultoría — no se puede cambiar a Obra' : ''}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
 							>
 								Obra
+								{#if tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'}<i class="fas fa-lock text-[10px]"></i>{/if}
 							</button>
 						</div>
+						{#if tabsBloqueadosPorCierre}
+							<p class="text-[11px] text-slate-400 mb-3">La venta ya está cerrada — el tipo de proyecto ({caracteristicasTab === 'obra' ? 'Obra' : 'Consultoría'}) ya no se puede cambiar.</p>
+						{:else}
+							<div class="mb-3"></div>
+						{/if}
 
 						{#if caracteristicasTab === 'consultoria'}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -1491,7 +1608,15 @@ let codigoGenerado = $derived(
 								<span class="text-sm font-bold text-slate-800">Código generado:</span>
 								<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex-1 md:flex-none flex items-center justify-between">
 									{codigoGenerado}
-									<button class="ml-4 text-blue-400 hover:text-blue-600"><i class="far fa-copy"></i></button>
+									<button
+										type="button"
+										onclick={copiarCodigoGenerado}
+										class={`ml-4 ${codigoCopiado ? 'text-emerald-500' : 'text-blue-400 hover:text-blue-600'}`}
+										title={codigoCopiado ? 'Copiado' : 'Copiar código'}
+										aria-label="Copiar código generado"
+									>
+										<i class={codigoCopiado ? 'fas fa-check' : 'far fa-copy'}></i>
+									</button>
 								</div>
 							</div>
 						</div>

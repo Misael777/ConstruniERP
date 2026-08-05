@@ -285,7 +285,9 @@
 	function fmt(d: Date)  { return d.toISOString().slice(0, 10); }
 	function fmtDisp(s: string | null) {
 		if (!s) return '—';
-		return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: 'short' });
+		// timeZone: 'UTC' evita el corrimiento de un día que 'new Date("YYYY-MM-DD")' produce en husos
+		// horarios detrás de UTC (Perú, UTC-5) al leerse de vuelta en hora local.
+		return new Date(s).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', timeZone: 'UTC' });
 	}
 
 	// Clamp vertical del popover de restricción rápida (quickR) — mismo criterio que
@@ -802,7 +804,7 @@
 			{#if planBaseDate}
 				<span class="text-slate-400 flex items-center gap-1">
 					<i class="fas fa-bookmark text-slate-300"></i>
-					Plan Base: <strong class="text-slate-600">{new Date(planBaseDate).toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'})}</strong>
+					Plan Base: <strong class="text-slate-600">{new Date(planBaseDate).toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric',timeZone:'UTC'})}</strong>
 				</span>
 			{/if}
 
@@ -1062,7 +1064,7 @@
 									<td class="px-3 py-2 text-slate-600">{r.responsable ?? '—'}</td>
 									<td class="px-3 py-2">
 										<span class="{isOverdue ? 'text-rose-600 font-bold' : 'text-slate-600'}">
-											{new Date(r.fecha_maxima).toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'})}
+											{new Date(r.fecha_maxima).toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric',timeZone:'UTC'})}
 											{#if isOverdue}<i class="fas fa-exclamation-triangle ml-1 text-[10px]"></i>{/if}
 										</span>
 									</td>

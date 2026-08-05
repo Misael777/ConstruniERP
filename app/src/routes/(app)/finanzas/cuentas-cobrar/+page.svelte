@@ -212,7 +212,9 @@
 		if (!value) return '—';
 		const date = new Date(value);
 		if (Number.isNaN(date.getTime())) return '—';
-		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+		// timeZone: 'UTC' evita el corrimiento de un día que 'new Date("YYYY-MM-DD")' produce en husos
+		// horarios detrás de UTC (Perú, UTC-5) al leerse de vuelta en hora local.
+		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
 	}
 
 	function openCreate() {

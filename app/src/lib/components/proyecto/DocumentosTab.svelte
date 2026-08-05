@@ -235,7 +235,9 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
 
     function fmtDate(d: string | null | undefined): string {
         if (!d) return '—';
-        return new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
+        // timeZone: 'UTC' evita el corrimiento de un día que 'new Date("YYYY-MM-DD")' produce en husos
+        // horarios detrás de UTC (Perú, UTC-5) al leerse de vuelta en hora local.
+        return new Date(d).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
     }
 
     function onFileInput(e: Event) {
