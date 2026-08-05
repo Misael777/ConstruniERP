@@ -52,15 +52,21 @@ export async function ensureNotificacionPermission(): Promise<boolean> {
  * y el permiso ya fue concedido. Falla en silencio (con log) si no — la campanita + sonido dentro de
  * la app ya cubrieron el aviso de todos modos. */
 export async function sendNotificacionNativa(titulo: string, cuerpo: string): Promise<void> {
-	if (!isRunningInTauri()) return;
+	if (!isRunningInTauri()) {
+		console.log('[notificacionNativa] No estamos en la app empaquetada (Tauri) — no se manda toast nativo, solo el sonido/badge dentro de la app.', { titulo, cuerpo });
+		return;
+	}
 
 	try {
 		const granted = await ensureNotificacionPermission();
-		if (!granted) return;
+		if (!granted) {
+			console.warn('[notificacionNativa] Permiso NO concedido — no se pudo mandar este toast.', { titulo, cuerpo });
+			return;
+		}
 
 		const { sendNotification } = await import('@tauri-apps/plugin-notification');
 		sendNotification({ title: titulo, body: cuerpo });
-		console.info('[notificacionNativa] Notificación nativa enviada:', titulo, '-', cuerpo);
+		console.info('[notificacionNativa] Notificación nativa ENVIADA a Windows/Android:', titulo, '-', cuerpo);
 	} catch (err) {
 		console.error('[notificacionNativa] No se pudo enviar la notificación nativa:', err);
 	}
