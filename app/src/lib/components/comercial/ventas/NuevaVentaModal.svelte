@@ -89,18 +89,6 @@
 	let distrito = $state('');
 	let clienteNombreGen = $state('');
 
-	/** "Hoy" en fecha LOCAL (YYYY-MM-DD), para prellenar <input type="date">. A propósito, NO usa
-	 * `new Date().toISOString()` (esa siempre da la fecha en UTC): en Perú (UTC-5), desde las 7pm hora
-	 * local en adelante el día en UTC ya es el de MAÑANA, así que Fecha de venta/Adelanto terminaban
-	 * mostrando la fecha del día siguiente en vez de la de hoy. */
-	function hoyLocalISO(): string {
-		const d = new Date();
-		const year = d.getFullYear();
-		const month = String(d.getMonth() + 1).padStart(2, '0');
-		const day = String(d.getDate()).padStart(2, '0');
-		return `${year}-${month}-${day}`;
-	}
-
 	function getMesFromFecha() {
 		const parsedDate = new Date(fechaVenta);
 		return Number.isNaN(parsedDate.getTime()) ? '02' : String(parsedDate.getMonth() + 1).padStart(2, '0');
@@ -138,7 +126,7 @@
 	let montoFinalVenta = $state('');
 	let adelantoYaRegistrado = $state(false);
 	let isCheckingAdelanto = $state(false);
-	let adelantoFecha = $state(hoyLocalISO());
+	let adelantoFecha = $state(getFechaLocalHoy());
 	let previewOpen = $state(false);
 	let previewUrl = $state('');
 	let previewTitle = $state('');
@@ -171,7 +159,7 @@
 				loadVentaParaEditar(ventaId);
 			} else {
 				proyectoNombre = '';
-				fechaVenta = hoyLocalISO();
+				fechaVenta = getFechaLocalHoy();
 				loadCurrentAsesor();
 				selectedClienteId = '';
 				nuevoClienteNombre = '';
@@ -197,7 +185,7 @@
 				selectedFinalFileIndex = null;
 				adelantoFile = null;
 				adelantoMonto = '';
-				adelantoFecha = hoyLocalISO();
+				adelantoFecha = getFechaLocalHoy();
 				observaciones = '';
 				caracteristicasTab = 'consultoria';
 				proformas = [];
@@ -228,7 +216,7 @@
 			// El .slice(0, 10) corta cualquier timestamp completo a solo la fecha (YYYY-MM-DD): sin esto,
 			// un valor con hora/zona horaria (ej. created_at) podía desplazar el día mostrado en el
 			// <input type="date"> por la diferencia de huso horario.
-			fechaVenta = ((data.fecha_inicio_plan || data.created_at) as string | null)?.slice(0, 10) || hoyLocalISO();
+			fechaVenta = ((data.fecha_inicio_plan || data.created_at) as string | null)?.slice(0, 10) || getFechaLocalHoy();
 			selectedClienteId = data.id_cliente ? String(data.id_cliente) : '';
 			// Blindaje: el cliente de ESTA venta puede no estar (todavía, o nunca) en `clientes` — la
 			// carga general (loadClientes) es asíncrona y puede no haber terminado, además de haber
@@ -632,12 +620,6 @@ async function copiarCodigoGenerado() {
 	// al revés) — el tipo de proyecto queda fijo. Solo en modo edición, y solo aplica una vez cerrada
 	// (mientras la venta sigue abierta, se puede seguir ajustando la pestaña con normalidad).
 	let tabsBloqueadosPorCierre = $derived(mode === 'edit' && localEstado === 'venta_cerrada');
-
-	// A pedido del usuario: en Nueva Venta, "Características del proyecto nuevo" no se puede abrir
-	// hasta adjuntar el Comprobante del adelanto Y poner su Monto — una vez ambos están completos, la
-	// sección se desbloquea. Solo aplica al crear (en edición ya viene con datos, no hay nada que
-	// bloquear).
-	let caracteristicasBloqueada = $derived(mode === 'create' && (!adelantoFile || !(Number(adelantoMonto) > 0)));
 
 	let canClose = $derived(
 		mode === 'edit' &&
@@ -1483,25 +1465,25 @@ async function copiarCodigoGenerado() {
 					<section class="border-t border-slate-100 pt-6">
 						<button
 							type="button"
-							onclick={() => { if (!caracteristicasBloqueada) caracteristicasExpanded = !caracteristicasExpanded; }}
-							disabled={caracteristicasBloqueada}
-							class={`w-full flex items-center justify-between gap-2 mb-1 text-left ${caracteristicasBloqueada ? 'opacity-50 cursor-not-allowed' : ''}`}
+							onclick={() => { if (documentosCierreListos) caracteristicasExpanded = !caracteristicasExpanded; }}
+							disabled={!documentosCierreListos}
+							class={`w-full flex items-center justify-between gap-2 mb-1 text-left ${!documentosCierreListos ? 'opacity-50 cursor-not-allowed' : ''}`}
 							aria-expanded={caracteristicasExpanded}
-							title={caracteristicasBloqueada ? 'Adjunta el comprobante del adelanto y su monto para poder completar las características del proyecto' : ''}
+							title={!documentosCierreListos ? 'Adjunta el contrato, el comprobante del adelanto y marca una proforma como final para poder completar las características del proyecto' : ''}
 						>
 							<span class="text-sm font-bold text-slate-800 flex items-center gap-2">
 								<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
 								Características del proyecto nuevo
-								{#if caracteristicasBloqueada}<i class="fas fa-lock text-[10px] text-slate-400"></i>{/if}
+								{#if !documentosCierreListos}<i class="fas fa-lock text-[10px] text-slate-400"></i>{/if}
 							</span>
 							<i class={`fas fa-chevron-down text-slate-400 text-xs transition-transform ${caracteristicasExpanded ? 'rotate-180' : ''}`}></i>
 						</button>
-						{#if caracteristicasBloqueada}
-							<p class="text-[11px] text-slate-400 mb-4">Adjunta el comprobante del adelanto y su monto (en "Información general") para poder completar esta sección.</p>
+						{#if !documentosCierreListos}
+							<p class="text-[11px] text-slate-400 mb-4">Adjunta el contrato, el comprobante del adelanto y marca una proforma como final para poder completar esta sección.</p>
 						{:else}
 							<div class="mb-4"></div>
 						{/if}
-						{#if caracteristicasExpanded && !caracteristicasBloqueada}
+						{#if caracteristicasExpanded && documentosCierreListos}
 						<div class="flex gap-1 mb-1 border-b border-slate-200">
 							<button
 								type="button"
