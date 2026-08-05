@@ -9,6 +9,7 @@
 	import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
@@ -31,7 +32,12 @@
 
 	// Form State
 	let proyectoNombre = $state('');
-	let fechaVenta = $state('2026-05-20');
+	// A pedido del usuario: la fecha de venta debe aparecer con la fecha de hoy por defecto (antes
+	// quedaba una fecha de ejemplo vieja hardcodeada) — el $effect de reseteo más abajo también la
+	// fija al abrir el popup, esto cubre el valor inicial antes de que ese efecto corra. Usa
+	// getFechaLocalHoy(), NO toISOString() — ver dateUtils.ts, toISOString() da la fecha en UTC y en
+	// Perú (UTC-5) eso muestra "mañana" desde ~7pm hora local en adelante.
+	let fechaVenta = $state(getFechaLocalHoy());
 	let asesor = $state('');
 	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
@@ -301,8 +307,14 @@
 		return clienteNombreGen.trim();
 	}
 
+// A pedido del usuario: el código de Obra sigue su propio esquema —
+// {OBRA|SUP}-{tramite}{intervención}{edificación}{pisos}_{mes}{año}_{distrito}_{cliente} — usando el
+// mes/año propios de esa pestaña (mesObra/anioObra), no los derivados de la fecha de venta como en
+// Consultoría.
 let codigoGenerado = $derived(
-	`${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+	caracteristicasTab === 'obra'
+		? `${tipoObra}-${tipoTramite}${tipoIntervencion}${tipoEdificacionObra}${numeroPisos}_${mesObra}${String(anioObra).slice(-2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+		: `${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
 );
 
 // A pedido del usuario: el ícono de copiar junto al Código generado no hacía nada — ahora copia el
@@ -642,6 +654,17 @@ async function copiarCodigoGenerado() {
 	// "Editar" — mismo criterio de campos obligatorios que `canClose`, pero usando los archivos
 	// sueltos que todavía no se subieron (`proformaFiles`/`selectedFinalFileIndex`) en vez de los ya
 	// guardados en `documento_proyecto`.
+	// A pedido del usuario: la sección "Características del proyecto nuevo" queda BLOQUEADA (todos sus
+	// campos deshabilitados) hasta que estén el contrato, el comprobante del adelanto y la proforma
+	// marcada como final — tanto en "Nueva venta" (usa los archivos sueltos todavía no subidos) como
+	// en "Editar" (usa lo ya gestionado en la sección de Proformas/contrato/cierre, que aparece antes
+	// en el formulario).
+	let documentosCierreListos = $derived(
+		mode === 'edit'
+			? !!localContratoUrl && (adelantoYaRegistrado || !!adelantoFile) && selectedFinalId !== null
+			: contratoPresente && !!adelantoFile && selectedFinalFileIndex !== null
+	);
+
 	let canCloseCreate = $derived(
 		mode === 'create' &&
 		infoGeneralCompleta &&
@@ -1511,7 +1534,7 @@ async function copiarCodigoGenerado() {
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
-								<select bind:value={tipoProyecto} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={tipoProyecto} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="L">Licencia (L)</option>
 									<option value="O">Proyecto de obra (O)</option>
@@ -1523,7 +1546,7 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
-								<select bind:value={estadoPredio} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={estadoPredio} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="A">Ampliación (A)</option>
 									<option value="N">Nuevo (N)</option>
@@ -1532,7 +1555,7 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
-								<select bind:value={tipoEdificacion} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={tipoEdificacion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="M">Viv. Multifamiliar (M)</option>
 									<option value="U">Viv. Unifamiliar (U)</option>
@@ -1541,7 +1564,7 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
-								<input type="number" bind:value={numeroPisos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<input type="number" bind:value={numeroPisos} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 							</div>
 
 						</div>
@@ -1624,16 +1647,20 @@ async function copiarCodigoGenerado() {
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de obra *</label>
-								<select bind:value={tipoObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<!-- A pedido del usuario: EXP (Expediente Técnico) es exclusivo de la pestaña
+								     Consultoría — acá solo se elige entre OBRA (ejecución) y SUP (supervisión), ese
+								     valor es el prefijo del código generado y también decide el centro de costo:
+								     solo OBRA y SUP crean uno propio por proyecto (igual que Consultoría ya
+								     comparte uno único — ver caracteristicasTab en getOrCrearCentroCosto...). -->
+								<select bind:value={tipoObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="OBRA">Ejecución de Obra (OBRA)</option>
-									<option value="EXP">Expediente Técnico (EXP)</option>
 									<option value="SUP">Supervisión (SUP)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de trámite *</label>
-								<select bind:value={tipoTramite} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={tipoTramite} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="L">Con licencia de edificación (L)</option>
 									<option value="O">Obra Sin licencia (O)</option>
@@ -1641,8 +1668,9 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Intervención *</label>
-								<select bind:value={tipoIntervencion} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={tipoIntervencion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
+									<option value="N">Obra nueva (N)</option>
 									<option value="A">Ampliación (A)</option>
 									<option value="R">Reforzamiento (R)</option>
 									<option value="AR">Ampliación + reforzamiento (AR)</option>
@@ -1652,13 +1680,13 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
-								<select bind:value={tipoEdificacionObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={tipoEdificacionObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="M">Vivienda multifamiliar (M)</option>
 									<option value="U">Vivienda unifamiliar (U)</option>
 									<option value="X">Comercio (X)</option>
 									<option value="I">Industrial (I)</option>
-									<option value="O">Oficinas (O)</option>
+									<option value="OF">Oficinas (OF)</option>
 									<option value="E">Educativo (E)</option>
 									<option value="S">Salud (S)</option>
 									<option value="MX">Uso mixto (MX)</option>
@@ -1666,11 +1694,11 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
-								<input type="number" bind:value={numeroPisos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<input type="number" bind:value={numeroPisos} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Mes *</label>
-								<select bind:value={mesObra} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<select bind:value={mesObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									<option value="01">Enero</option>
 									<option value="02">Febrero</option>
@@ -1688,7 +1716,23 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Año *</label>
-								<input type="number" bind:value={anioObra} placeholder="Ej. 2026" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+								<input type="number" bind:value={anioObra} disabled={!documentosCierreListos} placeholder="Ej. 2026" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+							</div>
+						</div>
+
+						<div class="mt-6 flex items-center gap-4 bg-white px-4 py-3 rounded-lg border border-slate-200">
+							<span class="text-sm font-bold text-slate-800">Código generado:</span>
+							<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex-1 md:flex-none flex items-center justify-between">
+								{codigoGenerado}
+								<button
+									type="button"
+									onclick={copiarCodigoGenerado}
+									class="ml-4 text-blue-400 hover:text-blue-600"
+									aria-label="Copiar código generado"
+									title={codigoCopiado ? 'Copiado' : 'Copiar código'}
+								>
+									<i class={codigoCopiado ? 'fas fa-check text-emerald-500' : 'far fa-copy'}></i>
+								</button>
 							</div>
 						</div>
 						{/if}

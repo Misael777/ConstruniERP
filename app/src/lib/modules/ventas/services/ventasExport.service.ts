@@ -1,23 +1,32 @@
 /**
- * Exportación a CSV del listado de Ventas — reusable desde dos lugares: el botón "Exportar" de
- * comercial/ventas/+page.svelte (admin, exporta directo) y aprobaciones.service.ts (cuando un admin
- * aprueba la solicitud de exportación de un no-administrador, ver crearSolicitud/aprobarSolicitud).
- * Mismo patrón Blob + <a download> ya usado en panoramas/+page.svelte — no se agrega ninguna
- * librería nueva (xlsx/exceljs) para mantener el bundle liviano.
+ * Exportación a CSV del listado de Ventas — reusable desde tres lugares: el botón "Exportar" de
+ * comercial/ventas/+page.svelte (admin, descarga directo en su navegador), y aprobaciones.service.ts
+ * (cuando un admin aprueba la solicitud de exportación de un no-administrador — ahí NO se descarga en
+ * el navegador del admin, se genera el texto y se guarda en la solicitud para que el propio
+ * solicitante lo descargue desde su campanita, ver NotificacionesBell.svelte). Mismo patrón Blob +
+ * <a download> ya usado en panoramas/+page.svelte — no se agrega ninguna librería nueva
+ * (xlsx/exceljs) para mantener el bundle liviano.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { guardarArchivoDeTexto } from '$lib/shared/saveFile';
 
 export interface ServiceResult {
 	success: boolean;
 	message?: string;
 }
 
-/** Exporta el listado de ventas (tabla `proyecto`) a un CSV descargado en el navegador actual.
- * `scopeToUserId`: si viene, filtra solo las ventas de ese asesor (`asesor_comercial_id`) — se usa
- * cuando un admin aprueba la exportación de OTRA persona, para que el archivo refleje lo que esa
- * persona vería, no todo el portafolio. Si se omite, exporta todas las ventas (uso directo por un
- * admin desde el botón "Exportar"). */
-export async function exportarVentasCSV(client: SupabaseClient, scopeToUserId?: string | null): Promise<ServiceResult> {
+export interface ArchivoGenerado {
+	contenido: string;
+	nombre: string;
+	mime: string;
+}
+
+/** Genera el CSV del listado de ventas como TEXTO plano — sin efectos secundarios de navegador (sin
+ * Blob/URL/`<a>`), para poder guardarlo (ej. en payload_cambios de una solicitud) o descargarlo,
+ * según lo decida el llamador. `scopeToUserId`: si viene, filtra solo las ventas de ese asesor
+ * (`asesor_comercial_id`) — se usa cuando el archivo es para OTRA persona (aprobación de su
+ * solicitud), para que el archivo refleje lo que esa persona vería, no todo el portafolio. */
+export async function generarVentasCSV(client: SupabaseClient, scopeToUserId?: string | null): Promise<{ success: true; archivo: ArchivoGenerado } | { success: false; message: string }> {
 	try {
 		let query = client
 			.from('proyecto')
@@ -47,16 +56,28 @@ export async function exportarVentasCSV(client: SupabaseClient, scopeToUserId?: 
 			.map((fila) => fila.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
 			.join('\n');
 
-		const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `ventas_${new Date().toISOString().slice(0, 10)}.csv`;
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
+		return {
+			success: true,
+			archivo: {
+				contenido: csv,
+				nombre: `ventas_${new Date().toISOString().slice(0, 10)}.csv`,
+				mime: 'text/csv;charset=utf-8;'
+			}
+		};
+	} catch (err: any) {
+		return { success: false, message: err?.message || String(err) };
+	}
+}
 
+/** Genera el CSV y lo guarda de inmediato — usado por el botón "Exportar" cuando un admin lo clickea
+ * directo (no por aprobación). En la app empaquetada (Tauri) muestra el diálogo nativo "Guardar
+ * como"; en navegador normal usa la descarga estándar (ver guardarArchivoDeTexto). */
+export async function exportarVentasCSV(client: SupabaseClient, scopeToUserId?: string | null): Promise<ServiceResult> {
+	const resultado = await generarVentasCSV(client, scopeToUserId);
+	if (!resultado.success) return resultado;
+
+	try {
+		await guardarArchivoDeTexto(resultado.archivo.contenido, resultado.archivo.nombre, resultado.archivo.mime);
 		return { success: true };
 	} catch (err: any) {
 		return { success: false, message: err?.message || String(err) };

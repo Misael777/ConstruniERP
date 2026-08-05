@@ -20,6 +20,7 @@
 		type EstadoSolicitud
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
+	import { guardarArchivoDeTexto } from '$lib/shared/saveFile';
 
 	// No hay infraestructura realtime en este ERP (sin websockets/Supabase Realtime) — a pedido del
 	// usuario, en vez de depender solo de "hago clic en la campanita para revisar", se hace polling
@@ -44,6 +45,13 @@
 	let firstLoad = true;
 	let audioCtx: AudioContext | null = null;
 	let pollIntervalId: ReturnType<typeof setInterval> | null = null;
+	// Evita polls superpuestos: si un poll tarda más de POLL_INTERVAL_MS (red lenta, el dispositivo
+	// estuvo dormido y el timer se atrasó, etc.), el siguiente tick de setInterval podía arrancar
+	// antes de que el anterior terminara — ambos leían el mismo seenPendingIds/seenAvisoIds "viejo" y
+	// cada uno disparaba su propio sonido/notificación para el MISMO ítem, sintiéndose como avisos
+	// repetidos para lo mismo. Con este guard, un tick que llega mientras el anterior sigue en curso
+	// simplemente se salta (el siguiente tick, 30s después, ya encuentra todo al día).
+	let isCargando = false;
 
 	/** Chime corto de dos tonos generado con Web Audio (sin archivo externo — funciona igual en la
 	 * app web y empaquetada en Tauri). Los navegadores suspenden el AudioContext hasta que hay algún
@@ -126,6 +134,32 @@
 		return `${s.solicitado_por || 'Un asesor'} cerró la venta "${nombre}".`;
 	}
 
+	/** Descripción legible de QUÉ se está pidiendo, para mostrar dentro de cada tarjeta (a pedido
+	 * del usuario — antes solo se veían los badges de tipo/acción, sin una frase clara). */
+	function descripcionAccion(s: SolicitudAprobacion): string {
+		if (s.tipo_accion === 'exportar') return 'Exportar el listado de ventas a un archivo descargable.';
+		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
+		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
+		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
+		return `${accion.charAt(0).toUpperCase()}${accion.slice(1)} ${entidad} "${nombre}".`;
+	}
+
+	/** Dispara la descarga de un archivo generado y guardado en payload_cambios de una solicitud de
+	 * exportación ya aprobada (ver aprobarSolicitud en aprobaciones.service.ts) — genérico: no sabe
+	 * nada de Ventas puntualmente, cualquier módulo futuro que guarde archivoContenido/archivoNombre
+	 * en el payload de su solicitud de exportación aprobada funciona igual acá, sin tocar la campanita. */
+	async function descargarArchivoSolicitud(s: SolicitudAprobacion) {
+		const contenido = s.payload_cambios?.archivoContenido as string | undefined;
+		const nombre = (s.payload_cambios?.archivoNombre as string | undefined) || 'archivo.csv';
+		const mime = (s.payload_cambios?.archivoMime as string | undefined) || 'text/csv;charset=utf-8;';
+		if (!contenido) return;
+		try {
+			await guardarArchivoDeTexto(contenido, nombre, mime);
+		} catch (err) {
+			console.error('[NotificacionesBell] No se pudo guardar el archivo descargado:', err);
+		}
+	}
+
 	async function cargarAdmin() {
 		isLoading = true;
 		try {
@@ -136,9 +170,12 @@
 
 			// Suena/notifica solo por solicitudes/avisos NUEVOS desde la última revisión — nunca en la
 			// primera carga (no queremos un aviso solo por tener cosas viejas ya pendientes al abrir la app).
+			// El chequeo de avisos también respeta visto_por_admin (persistido en BD) además del Set en
+			// memoria — así un aviso ya marcado como visto en una sesión anterior no vuelve a sonar si la
+			// app se reinicia a mitad de sesión (el Set en memoria por sí solo no sobrevive un reinicio).
 			if (!firstLoad) {
 				const nuevasNoVistas = nuevas.filter((s) => !seenPendingIds.has(s.id_solicitud));
-				const avisosNuevos = nuevosAvisos.filter((a) => !seenAvisoIds.has(a.id_solicitud));
+				const avisosNuevos = nuevosAvisos.filter((a) => !seenAvisoIds.has(a.id_solicitud) && !a.visto_por_admin);
 				if (nuevasNoVistas.length > 0 || avisosNuevos.length > 0) {
 					playChime();
 					for (const s of nuevasNoVistas) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, true));
@@ -163,8 +200,12 @@
 			const nuevas = await getMisSolicitudes(supabase);
 			// "Nueva" para el solicitante = una solicitud que ANTES estaba pendiente (o que no
 			// conocíamos todavía en esta sesión) y AHORA ya tiene resolución — nunca en la primera carga.
+			// También respeta visto_por_solicitante (persistido) por la misma razón que en avisos: sin
+			// esto, reiniciar la app a mitad de sesión podía hacer sonar de nuevo una resolución que ya
+			// se había visto en una sesión anterior (el Map en memoria no sobrevive el reinicio).
 			if (!firstLoad) {
 				const resueltasNuevas = nuevas.filter((s) => {
+					if (s.visto_por_solicitante) return false;
 					const anterior = lastEstados.get(s.id_solicitud);
 					return s.estado !== 'pendiente' && (anterior === undefined || anterior === 'pendiente');
 				});
@@ -184,8 +225,14 @@
 	}
 
 	async function cargar() {
-		if (isAdmin()) await cargarAdmin();
-		else await cargarMias();
+		if (isCargando) return;
+		isCargando = true;
+		try {
+			if (isAdmin()) await cargarAdmin();
+			else await cargarMias();
+		} finally {
+			isCargando = false;
+		}
 	}
 
 	onMount(() => {
@@ -335,6 +382,7 @@
 											<p class="text-sm font-semibold text-slate-800 truncate mt-1">{s.descripcion_entidad || `#${s.id_entidad}`}</p>
 										</div>
 									</div>
+									<p class="text-xs text-slate-600 mb-1.5">{descripcionAccion(s)}</p>
 									<p class="text-[11px] text-slate-400 mb-2">
 										Pedido por <span class="font-medium text-slate-500">{s.solicitado_por || 'Usuario'}</span> · {fmtFecha(s.created_at)}
 									</p>
@@ -418,12 +466,23 @@
 									<p class="text-sm font-semibold text-slate-800 truncate mt-1">{s.descripcion_entidad || `#${s.id_entidad}`}</p>
 								</div>
 							</div>
+							<p class="text-xs text-slate-600 mb-1.5">{descripcionAccion(s)}</p>
 							<p class="text-[11px] text-slate-400">
 								{fmtFecha(s.created_at)}
 								{#if s.estado !== 'pendiente' && s.resuelto_por}
 									· Resuelto por <span class="font-medium text-slate-500">{s.resuelto_por}</span>
 								{/if}
 							</p>
+
+							{#if s.tipo_accion === 'exportar' && s.estado === 'aprobado' && s.payload_cambios?.archivoContenido}
+								<button
+									type="button"
+									onclick={() => descargarArchivoSolicitud(s)}
+									class="mt-2 w-full px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+								>
+									<i class="fas fa-download"></i> Descargar archivo
+								</button>
+							{/if}
 						</div>
 					{/each}
 				</div>
