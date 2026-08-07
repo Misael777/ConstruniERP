@@ -2,8 +2,8 @@
 	import { X, Link, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { getOptionLabel, formatCurrency, FIELDS_CONFIG } from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { resolveEntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
-	import type { CentroCosto, EntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { resolveEntidadVinculada, getProyectosCentroCostoConsultoria } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import type { CentroCosto, EntidadVinculada, ProyectoVinculadoConsultoria } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
 		open = false,
@@ -17,6 +17,12 @@
 
 	let linkedEntity = $state<EntidadVinculada | null>(null);
 	let loadingLink = $state(false);
+	// El centro de costo COMPARTIDO de Consultoría (ver getOrCrearCentroCostoCompartido en
+	// centroCostos.service.ts) no está vinculado a UN proyecto — lo están TODAS sus ventas cerradas a
+	// la vez. Para ese caso, "Entidad vinculada" muestra un dropdown con todas ellas (su código, ver
+	// getProyectosCentroCostoConsultoria) en vez del banner de una sola entidad.
+	let proyectosConsultoria = $state<ProyectoVinculadoConsultoria[]>([]);
+	const esConsultoriaCompartido = $derived(centro?.tipo === 'consultoria' && !centro?.id_proyecto);
 	const tipoField = FIELDS_CONFIG.find((f) => f.key === 'tipo')!;
 
 	function fmtDate(value: string | null | undefined) {
@@ -28,15 +34,26 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'UTC' });
 	}
 
-	// Recarga la entidad vinculada cada vez que se abre el panel para un centro distinto.
+	// Recarga la entidad (o la lista de proyectos de Consultoría) cada vez que se abre el panel para un
+	// centro distinto.
 	$effect(() => {
 		if (open && centro) {
-			loadingLink = true;
-			resolveEntidadVinculada(supabase, centro)
-				.then((res) => (linkedEntity = res))
-				.finally(() => (loadingLink = false));
+			if (centro.tipo === 'consultoria' && !centro.id_proyecto) {
+				linkedEntity = null;
+				loadingLink = true;
+				getProyectosCentroCostoConsultoria(supabase)
+					.then((res) => (proyectosConsultoria = res))
+					.finally(() => (loadingLink = false));
+			} else {
+				proyectosConsultoria = [];
+				loadingLink = true;
+				resolveEntidadVinculada(supabase, centro)
+					.then((res) => (linkedEntity = res))
+					.finally(() => (loadingLink = false));
+			}
 		} else {
 			linkedEntity = null;
+			proyectosConsultoria = [];
 		}
 	});
 </script>
@@ -92,6 +109,22 @@
 						<div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400">
 							<Loader2 size={14} class="animate-spin" /> Buscando entidad vinculada...
 						</div>
+					{:else if esConsultoriaCompartido}
+						{#if proyectosConsultoria.length > 0}
+							<div class="flex items-center gap-2 mb-1 text-sm text-blue-800">
+								<Link size={16} class="shrink-0" />
+								<span>Compartido por {proyectosConsultoria.length} proyecto{proyectosConsultoria.length === 1 ? '' : 's'} de Consultoría:</span>
+							</div>
+							<select class="w-full px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 outline-none focus:ring-2 focus:ring-blue-500">
+								{#each proyectosConsultoria as p (p.id_proyecto)}
+									<option value={p.id_proyecto}>{p.codigo}</option>
+								{/each}
+							</select>
+						{:else}
+							<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+								Centro compartido de Consultoría — todavía no tiene ninguna venta cerrada vinculada.
+							</div>
+						{/if}
 					{:else if linkedEntity}
 						<div class="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
 							<Link size={16} class="shrink-0" />

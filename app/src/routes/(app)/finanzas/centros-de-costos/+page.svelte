@@ -12,11 +12,12 @@
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { getCentroCostos } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { getCentroCostos, getSaldosPorCentroCosto, getSaldosVentaPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import CentroCostoDetalleModal from '$lib/modules/centro-costos/components/CentroCostoDetalleModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	// Módulo 100% client-side (habla directo con Supabase vía la anon key) para funcionar en
 	// cualquier plataforma empaquetada con Tauri (Windows, Android) sin necesitar un servidor
@@ -40,6 +41,19 @@
 	let activeTab = $state<'centros' | 'cuentas'>('centros');
 
 	let items = $state<CentroCosto[]>([]);
+	// Saldo real (ingresos - egresos, ver getSaldosPorCentroCosto) de cada centro de costo de la
+	// página actual — a pedido del usuario, reemplaza a `monto_actual` (que nunca se actualiza) en la
+	// columna "Monto Actual" de la pestaña Centros de Costos. Se recalcula junto con `items` en
+	// fetchList, solo para esa pestaña (no se pidió para Cuentas Internas). Usado para centros SIN
+	// venta vinculada (bolsa general, manuales) — para los que sí la tienen, ver saldosVenta abajo.
+	let saldos = $state<Record<number, number>>({});
+	// Saldo de venta (monto total de la venta cerrada MENOS el adelanto ya cobrado, ver
+	// getSaldosVentaPorCentroCosto) — a pedido del usuario, esto es lo que se muestra en "Monto Actual"
+	// para los centros vinculados a un proyecto (Obra) o el compartido de Consultoría, en vez de la
+	// ficha de caja genérica (saldos). Mismo valor que actualizarSaldoCentroCostoProyecto persiste en
+	// `monto_actual` al cerrar una venta — acá se recalcula en vivo para que la pantalla no dependa de
+	// que ese paso se haya ejecutado (ventas cerradas antes de este cambio, por ejemplo).
+	let saldosVenta = $state<Record<number, number>>({});
 	let total = $state(0);
 	let pageNum = $state(1);
 	let totalPages = $state(1);
@@ -82,6 +96,12 @@
 			total = result.total;
 			totalPages = result.totalPages;
 			loadError = '';
+			saldos = activeTab === 'centros'
+				? await getSaldosPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
+				: {};
+			saldosVenta = activeTab === 'centros'
+				? await getSaldosVentaPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
+				: {};
 		} catch (err: any) {
 			loadError = err.message || 'No se pudo cargar el listado de centros de costo';
 		} finally {
@@ -159,12 +179,47 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
 	}
 
+	// Mismas 2 opciones que el <select> de "Tipo de Obra" en NuevaVentaModal.svelte (tipoObra) — sin
+	// config compartida porque son solo 2 valores fijos del CHECK de la BD (tipo_obra en `proyecto`).
+	function tipoObraLabel(code: string | null | undefined): string {
+		if (code === 'OBRA') return 'Ejecución de Obra';
+		if (code === 'SUP') return 'Supervisión';
+		return getOptionLabel(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, 'proyecto');
+	}
+
+	/** true si el centro está vinculado a una venta (Obra: id_proyecto propio; Consultoría: el
+	 * compartido) — para esos, "Monto Actual" muestra el saldo de venta (monto total menos adelanto,
+	 * ver saldosVenta) en vez de la ficha de caja genérica (saldos). */
+	function esCentroDeVenta(item: CentroCosto): boolean {
+		return item.tipo === 'consultoria' || (item.tipo === 'proyecto' && item.id_proyecto != null);
+	}
+
 	function cellValue(field: (typeof tableFields)[number], item: CentroCosto) {
+		// A pedido del usuario, en la pestaña Centros de Costos: "Tipo" muestra el tipo de OBRA del
+		// proyecto vinculado (en vez del genérico "Proyecto (automático)") cuando ese proyecto es de
+		// Obra, y "Monto Actual" muestra el saldo de venta (monto total de la venta cerrada MENOS el
+		// adelanto ya cobrado, ver getSaldosVentaPorCentroCosto) para centros de proyecto/consultoría,
+		// o la ficha de caja genérica (ingresos-egresos) para el resto — en ambos casos reemplaza a la
+		// columna `monto_actual` cruda, que nunca se mantiene al día por sí sola.
+		if (activeTab === 'centros' && field.key === 'tipo' && item.proyecto?.tipo_venta === 'obra') {
+			return tipoObraLabel(item.proyecto.tipo_obra);
+		}
+		if (activeTab === 'centros' && field.key === 'monto_actual') {
+			const saldo = esCentroDeVenta(item) ? saldosVenta[item.id_centro_costo] : saldos[item.id_centro_costo];
+			return formatCurrency(saldo ?? item.monto_actual);
+		}
+
 		const raw = (item as any)[field.key];
 		if (field.tipo === 'select') return getOptionLabel(field, raw);
 		if (field.tipo === 'currency') return formatCurrency(raw);
 		if (field.key === 'created_at') return formatDate(raw);
 		return raw ?? '—';
+	}
+
+	/** Código real del proyecto vinculado (ver generarCodigoProyecto en codigoProyecto.ts) — '—' si la
+	 * fila no tiene proyecto vinculado (centro manual, o vinculado a cliente/proveedor/empleado). */
+	function codigoProyectoDisplay(item: CentroCosto): string {
+		return item.proyecto ? generarCodigoProyecto(item.proyecto) : '—';
 	}
 
 	function openCreate() {
@@ -286,7 +341,7 @@
 	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + (activeTab === 'cuentas' ? 1 : 0)} {emptyMessage} onRowClick={openDetalle}>
+			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + 1} {emptyMessage} onRowClick={openDetalle}>
 				{#snippet header()}
 					{#each tableFields as field}
 						<th class="text-left px-4 py-3 font-semibold text-slate-600">
@@ -301,6 +356,9 @@
 								{/if}
 							</button>
 						</th>
+						{#if field.key === 'nombre' && activeTab === 'centros'}
+							<th class="text-left px-4 py-3 font-semibold text-slate-600">Código de proyecto</th>
+						{/if}
 					{/each}
 					{#if activeTab === 'cuentas'}
 						<th class="text-left px-4 py-3 font-semibold text-slate-600">
@@ -320,6 +378,9 @@
 				{#snippet row(item)}
 					{#each tableFields as field}
 						<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
+						{#if field.key === 'nombre' && activeTab === 'centros'}
+							<td class="px-4 py-3 text-slate-700">{codigoProyectoDisplay(item)}</td>
+						{/if}
 					{/each}
 					{#if activeTab === 'cuentas'}
 						<td class="px-4 py-3 text-slate-700">
@@ -338,13 +399,17 @@
 							<div class="text-xs text-slate-500 mt-0.5">{item.codigo}</div>
 						</div>
 						<div class="text-right shrink-0">
-							<div class="font-bold text-slate-800">{formatCurrency(item.monto_actual)}</div>
+							<div class="font-bold text-slate-800">{cellValue(FIELDS_CONFIG.find((f) => f.key === 'monto_actual')!, item)}</div>
 							<div class="text-[11px] text-slate-400">{formatDate(item.created_at)}</div>
 						</div>
 					</div>
 					<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500">
 						<span class="text-slate-400">Tipo</span>
-						<span class="text-right text-slate-700">{getOptionLabel(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, item.tipo)}</span>
+						<span class="text-right text-slate-700">{cellValue(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, item)}</span>
+						{#if activeTab === 'centros' && item.proyecto}
+							<span class="text-slate-400">Código proy.</span>
+							<span class="text-right text-slate-700">{codigoProyectoDisplay(item)}</span>
+						{/if}
 						{#if activeTab === 'cuentas' && item.producto}
 							<span class="text-slate-400">Producto</span>
 							<span class="text-right text-slate-700">{item.producto}</span>

@@ -6,6 +6,7 @@
 
 	const columns = [
 		{ label: 'Proyecto' },
+		{ label: 'Cliente' },
 		{ label: 'Estado' },
 		{ label: 'Valor venta' },
 		{ label: 'Tipo proyecto' },
@@ -27,14 +28,25 @@
 	}
 
 	let { data = [
-		{ id: 1, proyecto: 'Edificio Residencial Los Olivos', valor: 350000, tipo: 'Residencial', fecha: '05/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 35000, comisionPct: 10 },
-		{ id: 2, proyecto: 'Centro Comercial San Isidro', valor: 820000, tipo: 'Comercial', fecha: '10/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 82000, comisionPct: 10 },
-		{ id: 3, proyecto: 'Oficinas Corporativas Miraflores', valor: 450000, tipo: 'Corporativo', fecha: '12/01/2026', asesor: 'Maria Condori', asesorInitials: 'MC', comision: 45000, comisionPct: 10 },
-		{ id: 4, proyecto: 'Condominio Vista Azul', valor: 280000, tipo: 'Residencial', fecha: '15/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 28000, comisionPct: 10 },
-		{ id: 5, proyecto: 'Planta Industrial Lurín', valor: 950000, tipo: 'Industrial', fecha: '18/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 95000, comisionPct: 10 },
-		{ id: 6, proyecto: 'Edificio Multifamiliar Surco', valor: 300000, tipo: 'Residencial', fecha: '20/01/2026', asesor: 'Maria Condori', asesorInitials: 'MC', comision: 30000, comisionPct: 10 },
-		{ id: 7, proyecto: 'Local Comercial La Molina', valor: 250000, tipo: 'Comercial', fecha: '22/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 25000, comisionPct: 10 }
+		{ id: 1, codigo: 'ONU3_0126_SJL_Grupo_Andino', clienteNombre: 'Grupo Andino', proyecto: 'Edificio Residencial Los Olivos', valor: 350000, tipo: 'Residencial', fecha: '05/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 35000, comisionPct: 10 },
+		{ id: 2, codigo: 'ONC5_0126_SIS_Inversiones_Sur', clienteNombre: 'Inversiones Sur', proyecto: 'Centro Comercial San Isidro', valor: 820000, tipo: 'Comercial', fecha: '10/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 82000, comisionPct: 10 },
+		{ id: 3, codigo: 'OAC8_0126_MIRA_Corp_Delta', clienteNombre: 'Corp Delta', proyecto: 'Oficinas Corporativas Miraflores', valor: 450000, tipo: 'Corporativo', fecha: '12/01/2026', asesor: 'Maria Condori', asesorInitials: 'MC', comision: 45000, comisionPct: 10 },
+		{ id: 4, codigo: 'ONU4_0126_ATE_Familia_Rojas', clienteNombre: 'Familia Rojas', proyecto: 'Condominio Vista Azul', valor: 280000, tipo: 'Residencial', fecha: '15/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 28000, comisionPct: 10 },
+		{ id: 5, codigo: 'OBRA-NAI2_0126_LURI_Textil_Peru', clienteNombre: 'Textil Perú', proyecto: 'Planta Industrial Lurín', valor: 950000, tipo: 'Industrial', fecha: '18/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 95000, comisionPct: 10 },
+		{ id: 6, codigo: 'ONU6_0126_SURC_Constructora_Vega', clienteNombre: 'Constructora Vega', proyecto: 'Edificio Multifamiliar Surco', valor: 300000, tipo: 'Residencial', fecha: '20/01/2026', asesor: 'Maria Condori', asesorInitials: 'MC', comision: 30000, comisionPct: 10 },
+		{ id: 7, codigo: 'ONC2_0126_MOLI_Retail_Andes', clienteNombre: 'Retail Andes', proyecto: 'Local Comercial La Molina', valor: 250000, tipo: 'Comercial', fecha: '22/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 25000, comisionPct: 10 }
 	] } = $props<{ data?: any[] }>();
+
+	/** La columna "Proyecto" muestra el CÓDIGO del proyecto (`codigo`, recalculado en la página — ver
+	 * codigoProyecto.ts). `proyecto` (nombre_proyecto) queda solo como respaldo para ventas antiguas
+	 * a las que les falten los campos con los que se arma el código. */
+	function getCodigo(row: any) {
+		return row.codigo || row.proyecto || '—';
+	}
+
+	function getCliente(row: any) {
+		return row.clienteNombre || 'Sin cliente';
+	}
 
 	let filtroProyecto = $state('Todos');
 	let filtroTipo     = $state('Todos');
@@ -43,7 +55,7 @@
 	let fechaHasta     = $state('');
 
 	function getProyectosDisponibles() {
-		return Array.from(new Set(data.map(row => row.proyecto))).sort();
+		return Array.from(new Set(data.map(row => getCodigo(row)))).sort();
 	}
 
 	function getTiposDisponibles() {
@@ -83,7 +95,7 @@
 
 	function getFilteredData() {
 		return data.filter(row => {
-			const proyectoMatch = filtroProyecto === 'Todos' || row.proyecto === filtroProyecto;
+			const proyectoMatch = filtroProyecto === 'Todos' || getCodigo(row) === filtroProyecto;
 			const tipoMatch = filtroTipo === 'Todos' || row.tipo === filtroTipo;
 			const asesorMatch = filtroAsesor === 'Todos' || row.asesor === filtroAsesor;
 
@@ -159,7 +171,10 @@
 		<ResponsiveDataView items={getFilteredData()} keyField="id" {columns} emptyMessage="No se encontraron ventas con esos filtros.">
 			{#snippet row(row)}
 				<td class="px-5 py-4 font-medium text-slate-800">
-					<div class="max-w-[200px] truncate">{row.proyecto}</div>
+					<div class="max-w-[220px] truncate" title={getCodigo(row)}>{getCodigo(row)}</div>
+				</td>
+				<td class="px-5 py-4 text-slate-600">
+					<div class="max-w-[180px] truncate" title={getCliente(row)}>{getCliente(row)}</div>
 				</td>
 				<td class="px-5 py-4">
 					<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border whitespace-nowrap ${getEstadoBadge(row.estado_proyecto)}`}>
@@ -216,7 +231,8 @@
 			{#snippet card(row)}
 				<div class="flex items-start justify-between gap-3 mb-2">
 					<div class="min-w-0">
-						<div class="font-semibold text-slate-800 truncate">{row.proyecto}</div>
+						<div class="font-semibold text-slate-800 truncate">{getCodigo(row)}</div>
+						<div class="text-xs text-slate-500 truncate mt-0.5">{getCliente(row)}</div>
 						<div class="flex items-center gap-1.5 mt-1 flex-wrap">
 							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
 								{row.tipo}

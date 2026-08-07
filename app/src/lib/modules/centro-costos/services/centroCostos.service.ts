@@ -29,6 +29,7 @@ import {
 	FIELDS_CONFIG,
 	validateCentroCostoPayload
 } from '../config/centroCostos.config';
+import { generarCodigoProyecto, type ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
 
 export interface CentroCosto {
 	id_centro_costo: number;
@@ -51,6 +52,11 @@ export interface CentroCosto {
 	 * de ese proveedor (columna real `proveedor.vendedor`, ver ProveedorModal.svelte) — se trae con un
 	 * embed, no es una columna propia de centro_costo. null para filas sin proveedor vinculado. */
 	producto: string | null;
+	/** Datos del proyecto vinculado (solo si id_proyecto no es null), traídos con un embed — a pedido
+	 * del usuario, "Centro de Costos y Cuentas Internas" (pestaña Centros de Costos) los usa para
+	 * mostrar el código real del proyecto (ver generarCodigoProyecto en codigoProyecto.ts) y su tipo de
+	 * obra en vez del genérico "Proyecto (automático)". null para filas sin proyecto vinculado. */
+	proyecto: ProyectoCodigoFields | null;
 }
 
 export interface EntidadVinculada {
@@ -68,8 +74,17 @@ export interface EntidadVinculada {
  */
 export async function resolveEntidadVinculada(client: SupabaseClient, centro: CentroCosto): Promise<EntidadVinculada | null> {
 	if (centro.id_proyecto) {
-		const { data } = await client.from('proyecto').select('nombre_proyecto').eq('id_proyecto', centro.id_proyecto).maybeSingle();
-		return { tipo: 'Proyecto', id: centro.id_proyecto, nombre: data?.nombre_proyecto ?? centro.nombre };
+		// El "nombre" de un proyecto es su CÓDIGO (ver codigoProyecto.ts) — se RECALCULA acá en vez de
+		// confiar en `nombre_proyecto` tal cual esté guardado, para que este banner muestre lo mismo que
+		// la columna "Código de proyecto" del listado de Centros de Costos, incluso en ventas cerradas
+		// antes de que nombre_proyecto empezara a guardar el código (ver historial de este archivo).
+		const { data } = await client
+			.from('proyecto')
+			.select('tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, fecha_inicio_plan, created_at, nombre_proyecto, cliente:id_cliente(nombre)')
+			.eq('id_proyecto', centro.id_proyecto)
+			.maybeSingle();
+		const nombre = data ? generarCodigoProyecto(data as unknown as ProyectoCodigoFields) : centro.nombre;
+		return { tipo: 'Proyecto', id: centro.id_proyecto, nombre: nombre || data?.nombre_proyecto || centro.nombre };
 	}
 	if (centro.id_cliente) {
 		const { data } = await client.from('cliente').select('nombre').eq('id_cliente', centro.id_cliente).maybeSingle();
@@ -84,6 +99,38 @@ export async function resolveEntidadVinculada(client: SupabaseClient, centro: Ce
 		return { tipo: 'Empleado', id: centro.id_empleado, nombre: data?.nombre ?? centro.nombre };
 	}
 	return null;
+}
+
+export interface ProyectoVinculadoConsultoria {
+	id_proyecto: number;
+	codigo: string;
+}
+
+/**
+ * Lista de proyectos (su código, ver codigoProyecto.ts) vinculados al centro de costo COMPARTIDO de
+ * Consultoría — a diferencia de Obra (un centro por proyecto, resuelto arriba por
+ * resolveEntidadVinculada), Consultoría comparte UN único centro entre TODAS sus ventas cerradas (ver
+ * getOrCrearCentroCostoCompartido), así que "la entidad vinculada" no es una sola: es una lista — a
+ * pedido del usuario, se muestra como un dropdown en CentroCostoDetalleModal.svelte en vez del banner
+ * de una sola entidad que usa resolveEntidadVinculada para el resto de los tipos.
+ */
+export async function getProyectosCentroCostoConsultoria(client: SupabaseClient): Promise<ProyectoVinculadoConsultoria[]> {
+	const { data, error } = await client
+		.from('proyecto')
+		.select('id_proyecto, tip_proyecto, estado_predio, tipo_edifica, distrito, fecha_inicio_plan, created_at, tipo_venta, cliente:id_cliente(nombre)')
+		.eq('estado_proyecto', 'venta_cerrada')
+		.eq('tipo_venta', 'consultoria')
+		.order('fecha_inicio_plan', { ascending: false });
+
+	if (error) {
+		console.error('[centroCostos.service] No se pudo cargar los proyectos de Consultoría vinculados:', error);
+		return [];
+	}
+
+	return (data ?? []).map((p: any) => ({
+		id_proyecto: p.id_proyecto,
+		codigo: generarCodigoProyecto(p as ProyectoCodigoFields)
+	}));
 }
 
 export type EntidadCentroCosto = 'proyecto' | 'cliente' | 'proveedor' | 'empleado';
@@ -169,9 +216,15 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	const from = (page - 1) * pageSize;
 	const to = from + pageSize - 1;
 
+	// El embed de "proyecto" trae solo los campos que generarCodigoProyecto (codigoProyecto.ts) necesita
+	// para recalcular su código real, más tipo_venta/tipo_obra para la columna "Tipo" — null para filas
+	// sin id_proyecto (centros manuales, o vinculadas a cliente/proveedor/empleado).
 	let query = client
 		.from(TABLE_NAME)
-		.select('*, proveedor(vendedor)', { count: 'exact' })
+		.select(
+			'*, proveedor(vendedor), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
+			{ count: 'exact' }
+		)
 		.range(from, to);
 
 	query = sortByProducto
@@ -393,6 +446,133 @@ export async function getOrCrearCentroCostoCompartido(
 	}
 
 	return creado?.id_centro_costo ?? null;
+}
+
+/**
+ * Saldo real (ingresos - egresos) de cada centro de costo en `ids`, calculado a partir de
+ * `transaccion`: toda transacción activa que tiene a un centro como DESTINO suma a su saldo, toda la
+ * que lo tiene como ORIGEN resta — sin importar su `tipo` (ingreso/egreso/financiamiento/
+ * transferencia), que es solo una etiqueta de categorización; lo que determina el sentido del
+ * movimiento es el par origen->destino, igual que en cualquier libro contable.
+ *
+ * A pedido del usuario: "Centro de Costos y Cuentas Internas" (pestaña Centros de Costos) muestra
+ * esto en la columna "Monto Actual" en vez de la columna `centro_costo.monto_actual` — esa nunca se
+ * mantiene al día (se inserta en 0 para los centros automáticos, ver getOrCrearCentroCostoParaEntidad/
+ * getOrCrearCentroCostoCompartido arriba, y ninguna transacción la actualiza después), así que no
+ * sirve para mostrar el saldo real de un proyecto. Nunca lanza — mismo criterio que el resto de este
+ * archivo: un fallo acá es secundario, se loguea y devuelve 0 para todos.
+ */
+export async function getSaldosPorCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, number>> {
+	const saldos: Record<number, number> = {};
+	for (const id of ids) saldos[id] = 0;
+	if (ids.length === 0) return saldos;
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('id_centro_costo_origen, id_centro_costo_destino, monto_total')
+		.eq('estado', 'activo')
+		.or(`id_centro_costo_origen.in.(${ids.join(',')}),id_centro_costo_destino.in.(${ids.join(',')})`);
+
+	if (error) {
+		console.error('[centroCostos.service] No se pudo calcular el saldo de los centros de costo:', error);
+		return saldos;
+	}
+
+	const idsSet = new Set(ids);
+	for (const row of (data ?? []) as any[]) {
+		const monto = Number(row.monto_total) || 0;
+		if (idsSet.has(row.id_centro_costo_destino)) saldos[row.id_centro_costo_destino] += monto;
+		if (idsSet.has(row.id_centro_costo_origen)) saldos[row.id_centro_costo_origen] -= monto;
+	}
+
+	return saldos;
+}
+
+/**
+ * Saldo PENDIENTE DE COBRO de cada centro de costo de PROYECTO en `ids` — a pedido del usuario: "los
+ * montos de adelanto deben ser restados del monto total" de la venta. Distinto de
+ * getSaldosPorCentroCosto (esa es la ficha de caja de CUALQUIER centro: ingresos-egresos de todas sus
+ * transacciones); esta es específica de venta y solo tiene sentido para centros vinculados a un
+ * proyecto (Obra: uno por proyecto) o el compartido de Consultoría (todas sus ventas cerradas). Para
+ * cualquier otro centro (bolsa general, cliente, proveedor, empleado, o un centro manual sin ventas
+ * cerradas) el resultado es 0 — el llamador debe usar getSaldosPorCentroCosto para esos casos.
+ *
+ * Fórmula: `monto total de la(s) venta(s) CERRADAS vinculadas al centro` menos `total ya cobrado por
+ * adelanto` (transacciones 'ingreso' con destino este centro cuya descripción empieza con "Adelanto
+ * inicial", ver cerrarVentaAprobada/crearVentaYSubirDocumentos). Obra: la venta de ese único proyecto.
+ * Consultoría: TODAS las ventas de consultoría cerradas (comparten un solo centro, ver
+ * getOrCrearCentroCostoCompartido) y TODOS sus adelantos combinados.
+ */
+export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, number>> {
+	const saldos: Record<number, number> = {};
+	for (const id of ids) saldos[id] = 0;
+	if (ids.length === 0) return saldos;
+
+	try {
+		const { data: centros, error: errorCentros } = await client
+			.from(TABLE_NAME)
+			.select('id_centro_costo, tipo, id_proyecto')
+			.in('id_centro_costo', ids);
+		if (errorCentros) throw errorCentros;
+
+		const { data: ventas, error: errorVentas } = await client
+			.from('proyecto')
+			.select('id_proyecto, precio_venta, tipo_venta')
+			.eq('estado_proyecto', 'venta_cerrada');
+		if (errorVentas) throw errorVentas;
+
+		const { data: adelantos, error: errorAdelantos } = await client
+			.from('transaccion')
+			.select('id_centro_costo_destino, monto_total')
+			.in('id_centro_costo_destino', ids)
+			.eq('tipo', 'ingreso')
+			.eq('estado', 'activo')
+			.ilike('descripcion', 'Adelanto inicial%');
+		if (errorAdelantos) throw errorAdelantos;
+
+		const adelantoPorCentro: Record<number, number> = {};
+		for (const t of (adelantos ?? []) as any[]) {
+			adelantoPorCentro[t.id_centro_costo_destino] = (adelantoPorCentro[t.id_centro_costo_destino] ?? 0) + (Number(t.monto_total) || 0);
+		}
+
+		const montoConsultoria = (ventas ?? [])
+			.filter((v: any) => v.tipo_venta === 'consultoria')
+			.reduce((sum: number, v: any) => sum + (Number(v.precio_venta) || 0), 0);
+		const montoPorProyecto: Record<number, number> = {};
+		for (const v of (ventas ?? []) as any[]) {
+			if (v.tipo_venta !== 'consultoria') montoPorProyecto[v.id_proyecto] = Number(v.precio_venta) || 0;
+		}
+
+		for (const centro of (centros ?? []) as any[]) {
+			const montoTotal = centro.tipo === 'consultoria'
+				? montoConsultoria
+				: centro.id_proyecto != null
+					? montoPorProyecto[centro.id_proyecto] ?? 0
+					: 0;
+			saldos[centro.id_centro_costo] = montoTotal - (adelantoPorCentro[centro.id_centro_costo] ?? 0);
+		}
+	} catch (err) {
+		console.error('[centroCostos.service] No se pudo calcular el saldo de venta de los centros de costo:', err);
+	}
+
+	return saldos;
+}
+
+/**
+ * Recalcula y PERSISTE en `monto_actual` el saldo de venta (ver getSaldosVentaPorCentroCosto) de un
+ * único centro de costo — a pedido del usuario: "actualizar saldo en el momento de cerrar la venta".
+ * Se recalcula DESDE CERO (no incrementa sobre el valor anterior) para que sea idempotente: cerrar la
+ * misma venta más de una vez, o que este paso se reintente tras un fallo parcial, siempre da el mismo
+ * resultado correcto. Debe llamarse DESPUÉS de que el UPDATE de `proyecto` (precio_venta,
+ * estado_proyecto='venta_cerrada') ya se haya confirmado, para que el monto total que lee incluya la
+ * venta que se está cerrando. Nunca lanza — actualizar el saldo es secundario al cierre en sí.
+ */
+export async function actualizarSaldoCentroCostoProyecto(client: SupabaseClient, idCentro: number): Promise<void> {
+	const saldos = await getSaldosVentaPorCentroCosto(client, [idCentro]);
+	const { error } = await client.from(TABLE_NAME).update({ monto_actual: saldos[idCentro] ?? 0 }).eq('id_centro_costo', idCentro);
+	if (error) {
+		console.error(`[centroCostos.service] No se pudo actualizar el saldo del centro de costo #${idCentro}:`, error);
+	}
 }
 
 /** Construye el objeto a insertar/actualizar, limitado a las columnas editables de FIELDS_CONFIG. */

@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
-import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
@@ -268,6 +268,12 @@ export interface CerrarVentaParams {
 	adelantoMonto?: number;
 	adelantoFecha?: string;
 	comprobanteUrl?: string;
+	/** Resto de "Información general" + "Características del proyecto" a persistir junto con el cierre
+	 * (ver handleCerrarVenta en NuevaVentaModal.svelte) — mismas columnas que actualiza "Guardar
+	 * cambios", MENOS precio_venta/costo_estima/estado_proyecto, que este servicio ya fija a partir de
+	 * montoFinalVenta. Opcional por compatibilidad con llamadores viejos (aprobarSolicitud, para
+	 * 'cerrar_venta' históricas sin payload_cambios). */
+	datosProyecto?: Record<string, unknown>;
 }
 
 /** Cierra una venta: crea la transacción del adelanto si hace falta, fija la proforma final y pasa
@@ -282,14 +288,23 @@ export async function cerrarVentaAprobada(
 	usuarioNombre: string | null
 ): Promise<ServiceResult> {
 	try {
+		// A pedido del usuario: cerrar una venta SIEMPRE asegura el centro de costo del proyecto —
+		// antes solo se creaba de pasada al registrar la transacción del adelanto (y solo si
+		// !adelantoYaRegistrado), así que una venta cuyo adelanto ya estaba registrado podía cerrarse
+		// sin que su centro de costo llegara a existir nunca. Mismo criterio que al crear la venta
+		// (crearVentaYSubirDocumentos): Consultoría comparte UN centro de costo entre todas sus ventas,
+		// Obra tiene uno propio por proyecto.
+		const idCentroProyecto = params.tipoVenta === 'consultoria'
+			? await getOrCrearCentroCostoCompartido(client, 'consultoria')
+			: await getOrCrearCentroCostoParaEntidad(client, 'proyecto', params.idProyecto, params.proyectoNombre);
+		if (!idCentroProyecto) {
+			console.warn(`[aprobaciones.service] No se pudo asegurar el centro de costo del proyecto #${params.idProyecto} al cerrar la venta.`);
+		}
+
 		if (!params.adelantoYaRegistrado) {
 			if (!params.comprobanteUrl || !params.adelantoMonto) {
 				return { success: false, message: 'Falta el comprobante o el monto del adelanto.' };
 			}
-
-			const idCentroProyecto = params.tipoVenta === 'consultoria'
-				? await getOrCrearCentroCostoCompartido(client, 'consultoria')
-				: await getOrCrearCentroCostoParaEntidad(client, 'proyecto', params.idProyecto, params.proyectoNombre);
 			if (!idCentroProyecto) return { success: false, message: 'No se pudo obtener el centro de costo del proyecto.' };
 
 			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(client, 'cliente', params.idCliente, params.clienteNombre);
@@ -327,11 +342,31 @@ export async function cerrarVentaAprobada(
 			.eq('id_documento', params.selectedFinalId);
 		if (setError) return { success: false, message: setError.message };
 
+		// A pedido del usuario: cerrar la venta también graba todos los datos de "Información general" y
+		// "Características del proyecto" recopilados en el formulario (antes solo se guardaban al
+		// presionar "Guardar cambios" — si se cerraba directo sin pasar por ahí, se perdían). Las claves
+		// explícitas van DESPUÉS del spread para que ganen sobre cualquier valor que datosProyecto
+		// pudiera traer por error — costo_estima se mantiene igual a precio_venta, mismo criterio que en
+		// creación/edición.
 		const { error: closeError } = await client
 			.from('proyecto')
-			.update({ estado_proyecto: 'venta_cerrada', precio_venta: Number(params.montoFinalVenta) })
+			.update({
+				...(params.datosProyecto ?? {}),
+				estado_proyecto: 'venta_cerrada',
+				precio_venta: Number(params.montoFinalVenta),
+				costo_estima: Number(params.montoFinalVenta)
+			})
 			.eq('id_proyecto', params.idProyecto);
 		if (closeError) return { success: false, message: closeError.message };
+
+		// A pedido del usuario: al cerrar la venta, el saldo del centro de costo del proyecto debe
+		// reflejar el monto total de la venta MENOS el adelanto ya cobrado (ver
+		// actualizarSaldoCentroCostoProyecto) — corre DESPUÉS del UPDATE de arriba para que el monto
+		// total que lee ya incluya el precio_venta final de esta venta. Secundario al cierre: si falla,
+		// no debe tumbar un cierre que ya se aplicó correctamente (se loguea, nunca lanza).
+		if (idCentroProyecto) {
+			await actualizarSaldoCentroCostoProyecto(client, idCentroProyecto);
+		}
 
 		return { success: true };
 	} catch (err: any) {

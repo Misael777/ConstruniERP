@@ -11,6 +11,8 @@ import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.sv
 import { describeError } from '$lib/shared/describeError';
 import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
+import { sanitizeFileSegment } from '$lib/shared/fileNaming';
+import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -31,6 +33,13 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 		const month = String(date.getMonth() + 1).padStart(2, '0');
 		const year = date.getFullYear();
 		return `${day}/${month}/${year}`;
+	}
+
+	/** Cómo se identifica una venta en los textos de la pantalla (confirmaciones, solicitudes de
+	 * aprobación, títulos del visor de PDF): por su CÓDIGO, igual que la columna "Proyecto" de la
+	 * tabla. `proyecto` (nombre_proyecto) queda de respaldo para ventas viejas sin código armable. */
+	function etiquetaVenta(row: any) {
+		return row?.codigo || row?.proyecto || 'Venta';
 	}
 
 	function getInitials(name: string) {
@@ -169,7 +178,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 			// dos personas distintas).
 			let query = supabase
 				.from('proyecto')
-				.select('id_proyecto,id_cliente,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato,estado_proyecto,tipo_venta,cliente:id_cliente(nombre)');
+				.select('id_proyecto,id_cliente,nombre_proyecto,precio_venta,tip_proyecto,tipo_edifica,estado_predio,nro_pisos,ubicacion,distrito,tipo_obra,tipo_tramite,tipo_intervencion,tipo_edificacion_obra,mes_obra,anio_obra,fecha_inicio_plan,created_at,comision_asesor,responsable,asesor_comercial_id,descripcion,contrato,estado_proyecto,tipo_venta,cliente:id_cliente(nombre)');
 
 			if (!isAdmin()) {
 				const { data: userData } = await supabase.auth.getUser();
@@ -214,10 +223,18 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 				asesorData.count += 1;
 				asesorMap.set(asesor, asesorData);
 
+				// A pedido del usuario, la columna "Proyecto" del listado muestra el CÓDIGO del proyecto
+				// (el mismo "Código generado" de Nueva Venta) y no el nombre del cliente — que hasta
+				// ahora era lo que terminaba ahí, porque `nombre_proyecto` se autocompleta con el nombre
+				// del cliente al crear la venta. El nombre del cliente pasó a su propia columna.
+				// El código no está guardado en ninguna columna, se recalcula (ver codigoProyecto.ts).
+				const codigo = generarCodigoProyecto(project);
+
 				return {
 					id: project.id_proyecto,
 					id_cliente: project.id_cliente ?? null,
 					clienteNombre: project.cliente?.nombre || null,
+					codigo,
 					proyecto: project.nombre_proyecto || 'Proyecto sin nombre',
 					valor,
 					tipo,
@@ -367,7 +384,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 				tipoEntidad: 'proyecto',
 				idEntidad: row.id,
 				tipoAccion: 'eliminar',
-				descripcionEntidad: row.proyecto
+				descripcionEntidad: etiquetaVenta(row)
 			});
 			if (result.success) {
 				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
@@ -377,7 +394,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 			return;
 		}
 
-		if (!confirm(`¿Eliminar la venta "${row.proyecto}"? Esto borra en cascada su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.). Esta acción no se puede deshacer.`)) return;
+		if (!confirm(`¿Eliminar la venta "${etiquetaVenta(row)}"? Esto borra en cascada su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.). Esta acción no se puede deshacer.`)) return;
 
 		isDeleting = true;
 		try {
@@ -412,7 +429,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 			return;
 		}
 		pdfPreviewUrl = String(row.contrato);
-		pdfPreviewTitle = `Contrato - ${row.proyecto}`;
+		pdfPreviewTitle = `Contrato - ${etiquetaVenta(row)}`;
 		isPdfPreviewOpen = true;
 	}
 
@@ -443,7 +460,7 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 				return;
 			}
 			pdfPreviewUrl = data.storage_url;
-			pdfPreviewTitle = `Proforma - ${row.proyecto}`;
+			pdfPreviewTitle = `Proforma - ${etiquetaVenta(row)}`;
 			isPdfPreviewOpen = true;
 		} catch (err) {
 			console.error('[Ventas] Error cargando la proforma:', err);
