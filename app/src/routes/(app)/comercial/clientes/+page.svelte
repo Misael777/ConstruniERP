@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
@@ -28,8 +29,25 @@
 		}
 	}
 
+	// Tabla en tiempo real (mismo mecanismo que la campanita de notificaciones): apenas cambia algo en
+	// `cliente` — otro usuario crea, edita o aprueba la eliminación de un cliente — este canal se
+	// entera al instante y vuelve a pedir la lista, sin recargar la página. Requiere
+	// ventas_clientes_realtime_migration.sql aplicada en Supabase.
+	let realtimeChannel: RealtimeChannel | null = null;
+
 	onMount(() => {
 		fetchClientes();
+
+		realtimeChannel = supabase
+			.channel('clientes_cliente_changes')
+			.on('postgres_changes', { event: '*', schema: 'public', table: 'cliente' }, () => {
+				fetchClientes();
+			})
+			.subscribe();
+	});
+
+	onDestroy(() => {
+		if (realtimeChannel) supabase.removeChannel(realtimeChannel);
 	});
 
 	function openModal(cliente = null) {

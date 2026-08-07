@@ -423,9 +423,16 @@ async function handleSetupPassword(e: Event) {
 <div class="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4">
 	<div class="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
 		<!-- Branding Header -->
-		<div class="bg-[#1a233a] p-8 text-center flex flex-col items-center">
-			<div class="text-blue-500 text-4xl mb-2">
-				<i class="fas fa-cubes"></i>
+		<div class="bg-brand-marine p-8 text-center flex flex-col items-center">
+			<!-- Insignia hero: halo ambiental en brand-orange (el color de la propia marca) detrás de un
+			     tile redondeado con sombra + anillo sutil para separarlo del fondo, ya que ambos son un
+			     navy casi idéntico — mismo tratamiento que en Sidebar.svelte, más grande acá por ser el
+			     primer momento de marca que ve el usuario. -->
+			<div class="relative mb-3">
+				<div class="absolute inset-0 bg-brand-orange/30 blur-2xl rounded-full scale-125"></div>
+				<div class="relative w-16 h-16 rounded-2xl overflow-hidden shadow-xl shadow-black/40 ring-1 ring-white/10">
+					<img src="/logo.png" alt="Construni ERP" class="w-full h-full object-cover" />
+				</div>
 			</div>
 			<div class="flex flex-col text-white">
 				<h1 class="font-bold text-2xl leading-tight">CONSTRUNI</h1>

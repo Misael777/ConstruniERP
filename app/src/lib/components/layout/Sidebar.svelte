@@ -81,13 +81,19 @@
 >
 	<!-- Logo -->
 	<div class="p-4 border-b border-white/5 mb-4 flex items-center gap-3 bg-white flex-shrink-0">
-		<div class="text-blue-600 text-2xl flex-shrink-0">
-			<i class="fas fa-cubes"></i>
+		<!-- Insignia del logo: halo de color extraído de la propia marca (brand-orange) detrás de un
+		     tile redondeado con sombra + anillo — mismo patrón que usan apps pulidas (Linear, Notion,
+		     Vercel) para mostrar un logomark con fondo propio junto a un wordmark. -->
+		<div class="relative flex-shrink-0">
+			<div class="absolute inset-0 bg-brand-orange/25 blur-md rounded-xl"></div>
+			<div class="relative w-10 h-10 rounded-xl overflow-hidden shadow-md shadow-brand-marine/30 ring-1 ring-black/5">
+				<img src="/logo.png" alt="Construni ERP" class="w-full h-full object-cover" />
+			</div>
 		</div>
 		{#if !collapsed || mobileOpen}
 			<div class="flex flex-col text-brand-marine min-w-0">
 				<h1 class="font-bold text-xl leading-tight">CONSTRUNI</h1>
-				<span class="text-[10px] font-bold text-orange-500 uppercase tracking-widest">ERP</span>
+				<span class="text-[10px] font-bold text-brand-orange uppercase tracking-widest">ERP</span>
 			</div>
 		{/if}
 		<!-- Colapsar a íconos: solo tiene sentido en la franja fija de desktop -->

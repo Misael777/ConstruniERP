@@ -96,6 +96,25 @@ export async function getSolicitudesPendientes(client: SupabaseClient): Promise<
 	return (data ?? []) as SolicitudAprobacion[];
 }
 
+/** Solicitudes YA resueltas (aprobadas o rechazadas) por CUALQUIER admin — a pedido del usuario: una
+ * vez que un admin aprueba/rechaza, el resto debe poder ver el resultado (y quién lo resolvió), no
+ * solo dejar de ver la solicitud sin explicación. De solo lectura — sin Aprobar/Rechazar, esos botones
+ * son exclusivos de las pendientes (getSolicitudesPendientes). Excluye los avisos informativos
+ * (cerrar_venta auto-resueltos por el propio solicitante) — esos ya se muestran aparte, ver
+ * getAvisosInformativos, para no duplicarlos en las dos secciones. */
+export async function getSolicitudesResueltas(client: SupabaseClient): Promise<SolicitudAprobacion[]> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('*')
+		.neq('estado', 'pendiente')
+		.order('resuelto_en', { ascending: false })
+		.limit(30);
+	if (error) throw error;
+	return ((data ?? []) as SolicitudAprobacion[]).filter(
+		(s) => !(s.tipo_accion === 'cerrar_venta' && s.resuelto_por === s.solicitado_por)
+	);
+}
+
 /** Solicitudes del USUARIO ACTUAL (cualquier estado) — para que el propio solicitante vea en su
  * campanita si sigue pendiente, o si ya fue aprobada/rechazada. */
 export async function getMisSolicitudes(client: SupabaseClient): Promise<SolicitudAprobacion[]> {
@@ -144,6 +163,46 @@ export async function getAvisosInformativos(client: SupabaseClient): Promise<Sol
 export async function marcarAvisosVistos(client: SupabaseClient, ids: number[]): Promise<ServiceResult> {
 	if (ids.length === 0) return { success: true };
 	const { error } = await client.from(TABLE_NAME).update({ visto_por_admin: true }).in('id_solicitud', ids);
+	if (error) return { success: false, message: error.message };
+	return { success: true };
+}
+
+const NOTIFICACION_TABLE = 'solicitud_notificacion';
+
+/** Trae, para el USUARIO ACTUAL, el último estado de cada solicitud por el que YA fue notificado
+ * (sonido + toast nativo) — null si nunca se le notificó nada de esa solicitud todavía. Es una fila
+ * por (solicitud, usuario): a diferencia de un booleano compartido en la propia solicitud, cada admin
+ * (o el solicitante) lleva su PROPIO registro — así una solicitud vista por un admin no "silencia" a
+ * los demás. Se usa para detectar el flanco: si el estado ACTUAL de la solicitud es distinto a esto,
+ * corresponde notificar de nuevo (ver marcarNotificaciones). */
+export async function getEstadosNotificados(client: SupabaseClient, idsSolicitud: number[]): Promise<Map<number, string | null>> {
+	if (idsSolicitud.length === 0) return new Map();
+	const { data: userData } = await client.auth.getUser();
+	if (!userData?.user?.id) return new Map();
+	const { data, error } = await client
+		.from(NOTIFICACION_TABLE)
+		.select('id_solicitud, estado_anterior')
+		.eq('usuario_id', userData.user.id)
+		.in('id_solicitud', idsSolicitud);
+	if (error) throw error;
+	return new Map((data ?? []).map((r: any) => [r.id_solicitud, r.estado_anterior as string | null]));
+}
+
+/** Registra, para el usuario actual, que ya fue notificado del estado ACTUAL de estas solicitudes —
+ * upsert (una fila por usuario+solicitud) para que el próximo poll no vuelva a sonar mientras el
+ * estado no cambie de nuevo (y si cambia — ej. pendiente -> aprobado — sí vuelva a sonar, porque el
+ * estado_anterior guardado ya no coincide con el estado nuevo). */
+export async function marcarNotificaciones(client: SupabaseClient, items: { idSolicitud: number; estado: string }[]): Promise<ServiceResult> {
+	if (items.length === 0) return { success: true };
+	const { data: userData } = await client.auth.getUser();
+	if (!userData?.user?.id) return { success: false, message: 'No se pudo resolver el usuario actual.' };
+	const filas = items.map((i) => ({
+		id_solicitud: i.idSolicitud,
+		usuario_id: userData.user!.id,
+		estado_anterior: i.estado,
+		notificado_en: new Date().toISOString()
+	}));
+	const { error } = await client.from(NOTIFICACION_TABLE).upsert(filas, { onConflict: 'id_solicitud,usuario_id' });
 	if (error) return { success: false, message: error.message };
 	return { success: true };
 }
@@ -425,6 +484,9 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 
 	if (!result.success) return result;
 
+	// El cambio de estado por sí solo ya es lo que hace que el próximo poll del solicitante vuelva a
+	// notificar (ver getEstadosNotificados/marcarNotificaciones — comparan contra este `estado` nuevo,
+	// que no va a coincidir con lo último que ese usuario tenía registrado).
 	const { error: updateError } = await client
 		.from(TABLE_NAME)
 		.update({

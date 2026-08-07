@@ -6,14 +6,18 @@
 	//  - No-admin (solicitante): ve SUS PROPIAS solicitudes (cualquier estado) para saber si siguen
 	//    pendientes o si un admin ya las aprobó/rechazó — sin botones de acción, es solo informativo.
 	import { onMount, onDestroy } from 'svelte';
+	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import {
 		getSolicitudesPendientes,
+		getSolicitudesResueltas,
 		getMisSolicitudes,
 		getAvisosInformativos,
 		marcarSolicitudesVistas,
 		marcarAvisosVistos,
+		getEstadosNotificados,
+		marcarNotificaciones,
 		aprobarSolicitud,
 		rechazarSolicitud,
 		type SolicitudAprobacion,
@@ -22,13 +26,20 @@
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
 	import { guardarArchivoDeTexto } from '$lib/shared/saveFile';
 
-	// No hay infraestructura realtime en este ERP (sin websockets/Supabase Realtime) — a pedido del
-	// usuario, en vez de depender solo de "hago clic en la campanita para revisar", se hace polling
-	// en segundo plano cada POLL_INTERVAL_MS mientras el layout está montado (persiste entre
-	// navegaciones dentro de (app), se limpia recién al desmontar el layout completo).
-	const POLL_INTERVAL_MS = 30000;
+	// A pedido del usuario ("casi en tiempo real, sin saturar"): el mecanismo PRINCIPAL ya no es
+	// polling — es una suscripción de Supabase Realtime (websocket) a solicitud_aprobacion (ver
+	// solicitud_aprobacion_realtime_migration.sql, hay que habilitarla en la BD). Apenas se
+	// inserta/actualiza una fila, TODOS los clientes conectados se enteran al instante y disparan
+	// cargar(). El polling de acá abajo queda solo como RESPALDO cada POLL_INTERVAL_MS por si el
+	// websocket se cae (red inestable, dispositivo dormido, etc.) — por eso el intervalo puede ser
+	// largo, ya no es lo que hace el trabajo pesado.
+	const POLL_INTERVAL_MS = 60000;
 
 	let solicitudesAdmin = $state<SolicitudAprobacion[]>([]);
+	// A pedido del usuario: una vez que CUALQUIER admin aprueba/rechaza, el resto debe seguir viendo
+	// el resultado (y quién lo resolvió) — de solo lectura, sin botones, esos son exclusivos de las
+	// pendientes de arriba.
+	let resueltas = $state<SolicitudAprobacion[]>([]);
 	let misSolicitudes = $state<SolicitudAprobacion[]>([]);
 	// Avisos informativos para el admin: ventas cerradas directo por su asesor, sin pasar por
 	// aprobación (a pedido del usuario) — de solo lectura, sin Aprobar/Rechazar.
@@ -39,18 +50,13 @@
 	let processingId = $state<number | null>(null);
 	let errorMsg = $state('');
 
-	let seenPendingIds = new Set<number>();
-	let seenAvisoIds = new Set<number>();
-	let lastEstados = new Map<number, EstadoSolicitud>();
-	let firstLoad = true;
 	let audioCtx: AudioContext | null = null;
 	let pollIntervalId: ReturnType<typeof setInterval> | null = null;
+	let realtimeChannel: RealtimeChannel | null = null;
 	// Evita polls superpuestos: si un poll tarda más de POLL_INTERVAL_MS (red lenta, el dispositivo
 	// estuvo dormido y el timer se atrasó, etc.), el siguiente tick de setInterval podía arrancar
-	// antes de que el anterior terminara — ambos leían el mismo seenPendingIds/seenAvisoIds "viejo" y
-	// cada uno disparaba su propio sonido/notificación para el MISMO ítem, sintiéndose como avisos
-	// repetidos para lo mismo. Con este guard, un tick que llega mientras el anterior sigue en curso
-	// simplemente se salta (el siguiente tick, 30s después, ya encuentra todo al día).
+	// antes de que el anterior terminara. Con este guard, un tick que llega mientras el anterior sigue
+	// en curso simplemente se salta (el siguiente tick, unos segundos después, ya encuentra todo al día).
 	let isCargando = false;
 
 	/** Chime corto de dos tonos generado con Web Audio (sin archivo externo — funciona igual en la
@@ -113,19 +119,24 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 	}
 
-	/** Texto del sonido/toast nativo — distinto según a quién le llega el aviso. */
+	/** Texto del sonido/toast nativo — distinto según a quién le llega el aviso. Del lado admin incluye
+	 * QUIÉN pide y QUÉ pide (a pedido del usuario — antes solo decía la acción, sin el solicitante).
+	 * También cubre estado 'pendiente' del lado solicitante: con la detección de flanco (ver
+	 * cargarMias), la primera vez que ve su propia solicitud también cuenta como "cambio de estado". */
 	function descripcionNotificacion(s: SolicitudAprobacion, paraAdmin: boolean): string {
+		const resultadoTexto = (estado: SolicitudAprobacion['estado']) =>
+			estado === 'pendiente' ? 'registrada, en espera de aprobación' : estado === 'aprobado' ? 'aprobada' : 'rechazada';
+		const solicitante = s.solicitado_por || 'Un usuario';
+
 		if (s.tipo_accion === 'exportar') {
-			if (paraAdmin) return 'Nueva solicitud: exportar ventas.';
-			const resultado = s.estado === 'aprobado' ? 'aprobada' : 'rechazada';
-			return `Tu solicitud para exportar ventas fue ${resultado}.`;
+			if (paraAdmin) return `${solicitante} solicita exportar ventas.`;
+			return `Tu solicitud para exportar ventas fue ${resultadoTexto(s.estado)}.`;
 		}
 		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
 		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
 		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
-		if (paraAdmin) return `Nueva solicitud: ${accion} ${entidad} "${nombre}".`;
-		const resultado = s.estado === 'aprobado' ? 'aprobada' : 'rechazada';
-		return `Tu solicitud para ${accion} ${entidad} "${nombre}" fue ${resultado}.`;
+		if (paraAdmin) return `${solicitante} solicita ${accion} ${entidad} "${nombre}".`;
+		return `Tu solicitud para ${accion} ${entidad} "${nombre}" fue ${resultadoTexto(s.estado)}.`;
 	}
 
 	/** Texto del sonido/toast nativo para un aviso informativo de cierre de venta (ver avisos). */
@@ -160,32 +171,60 @@
 		}
 	}
 
+	/** Log con hora local (hh:mm:ss) para poder ubicar cada poll en la consola — a pedido del
+	 * usuario, para diagnosticar por qué las notificaciones seguían repitiéndose. */
+	function logNotif(msg: string, data?: unknown) {
+		const hora = new Date().toLocaleTimeString('es-PE', { hour12: false });
+		if (data !== undefined) console.log(`[NotificacionesBell ${hora}] ${msg}`, data);
+		else console.log(`[NotificacionesBell ${hora}] ${msg}`);
+	}
+
 	async function cargarAdmin() {
 		isLoading = true;
 		try {
-			const [nuevas, nuevosAvisos] = await Promise.all([
+			logNotif('--- poll admin: consultando pendientes + resueltas + avisos ---');
+			const [nuevas, nuevasResueltas, nuevosAvisos] = await Promise.all([
 				getSolicitudesPendientes(supabase),
+				getSolicitudesResueltas(supabase),
 				getAvisosInformativos(supabase)
 			]);
+			logNotif(`Respuesta: ${nuevas.length} pendiente(s), ${nuevosAvisos.length} aviso(s)`, {
+				pendientesIds: nuevas.map((s) => s.id_solicitud),
+				avisosIds: nuevosAvisos.map((a) => a.id_solicitud)
+			});
 
-			// Suena/notifica solo por solicitudes/avisos NUEVOS desde la última revisión — nunca en la
-			// primera carga (no queremos un aviso solo por tener cosas viejas ya pendientes al abrir la app).
-			// El chequeo de avisos también respeta visto_por_admin (persistido en BD) además del Set en
-			// memoria — así un aviso ya marcado como visto en una sesión anterior no vuelve a sonar si la
-			// app se reinicia a mitad de sesión (el Set en memoria por sí solo no sobrevive un reinicio).
-			if (!firstLoad) {
-				const nuevasNoVistas = nuevas.filter((s) => !seenPendingIds.has(s.id_solicitud));
-				const avisosNuevos = nuevosAvisos.filter((a) => !seenAvisoIds.has(a.id_solicitud) && !a.visto_por_admin);
-				if (nuevasNoVistas.length > 0 || avisosNuevos.length > 0) {
-					playChime();
-					for (const s of nuevasNoVistas) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, true));
-					for (const a of avisosNuevos) sendNotificacionNativa('Construni ERP', descripcionAviso(a));
+			// Flanco de subida por USUARIO: getEstadosNotificados trae, para el admin actual, el último
+			// estado por el que YA fue notificado de cada fila (tabla solicitud_notificacion — una fila
+			// por usuario, no compartida entre admins). Si el estado actual no coincide (incluido nunca
+			// haber sido notificado), corresponde notificar de nuevo.
+			const todasIds = [...nuevas.map((s) => s.id_solicitud), ...nuevosAvisos.map((a) => a.id_solicitud)];
+			const estadosNotificados = await getEstadosNotificados(supabase, todasIds);
+
+			const pendientesParaNotificar = nuevas.filter((s) => estadosNotificados.get(s.id_solicitud) !== s.estado);
+			const avisosParaNotificar = nuevosAvisos.filter((a) => estadosNotificados.get(a.id_solicitud) !== a.estado);
+			logNotif(`Flanco detectado en: ${pendientesParaNotificar.length} pendiente(s), ${avisosParaNotificar.length} aviso(s)`, {
+				pendientesIds: pendientesParaNotificar.map((s) => s.id_solicitud),
+				avisosIds: avisosParaNotificar.map((a) => a.id_solicitud)
+			});
+			if (pendientesParaNotificar.length > 0 || avisosParaNotificar.length > 0) {
+				logNotif('>>> SONANDO chime + notificación nativa <<<');
+				playChime();
+				for (const s of pendientesParaNotificar) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, true));
+				for (const a of avisosParaNotificar) sendNotificacionNativa('Construni ERP', descripcionAviso(a));
+				const items = [
+					...pendientesParaNotificar.map((s) => ({ idSolicitud: s.id_solicitud, estado: s.estado })),
+					...avisosParaNotificar.map((a) => ({ idSolicitud: a.id_solicitud, estado: a.estado }))
+				];
+				const marcarResult = await marcarNotificaciones(supabase, items);
+				if (!marcarResult.success) {
+					console.error('[NotificacionesBell] No se pudo registrar la notificación:', marcarResult.message);
 				}
+			} else {
+				logNotif('Sin novedades — no suena.');
 			}
-			seenPendingIds = new Set(nuevas.map((s) => s.id_solicitud));
-			seenAvisoIds = new Set(nuevosAvisos.map((a) => a.id_solicitud));
-			firstLoad = false;
+
 			solicitudesAdmin = nuevas;
+			resueltas = nuevasResueltas;
 			avisos = nuevosAvisos;
 		} catch (err) {
 			console.error('[NotificacionesBell] Error cargando solicitudes pendientes:', err);
@@ -197,25 +236,32 @@
 	async function cargarMias() {
 		isLoading = true;
 		try {
+			logNotif('--- poll solicitante: consultando mis solicitudes ---');
 			const nuevas = await getMisSolicitudes(supabase);
-			// "Nueva" para el solicitante = una solicitud que ANTES estaba pendiente (o que no
-			// conocíamos todavía en esta sesión) y AHORA ya tiene resolución — nunca en la primera carga.
-			// También respeta visto_por_solicitante (persistido) por la misma razón que en avisos: sin
-			// esto, reiniciar la app a mitad de sesión podía hacer sonar de nuevo una resolución que ya
-			// se había visto en una sesión anterior (el Map en memoria no sobrevive el reinicio).
-			if (!firstLoad) {
-				const resueltasNuevas = nuevas.filter((s) => {
-					if (s.visto_por_solicitante) return false;
-					const anterior = lastEstados.get(s.id_solicitud);
-					return s.estado !== 'pendiente' && (anterior === undefined || anterior === 'pendiente');
-				});
-				if (resueltasNuevas.length > 0) {
-					playChime();
-					for (const s of resueltasNuevas) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, false));
+			logNotif(`Respuesta: ${nuevas.length} solicitud(es) mía(s)`, {
+				ids: nuevas.map((s) => `${s.id_solicitud}:${s.estado}`)
+			});
+
+			// Mismo flanco de subida que en cargarAdmin, pero acá mirando TODOS los estados (incluido
+			// 'pendiente' — ver descripcionNotificacion) porque cualquier cambio de estado de una
+			// solicitud propia debe volver a avisar, no solo la resolución final.
+			const estadosNotificados = await getEstadosNotificados(supabase, nuevas.map((s) => s.id_solicitud));
+			const paraNotificar = nuevas.filter((s) => estadosNotificados.get(s.id_solicitud) !== s.estado);
+			logNotif(`Flanco detectado en ${paraNotificar.length} solicitud(es)`, {
+				ids: paraNotificar.map((s) => `${s.id_solicitud}:${s.estado}`)
+			});
+			if (paraNotificar.length > 0) {
+				logNotif('>>> SONANDO chime + notificación nativa <<<');
+				playChime();
+				for (const s of paraNotificar) sendNotificacionNativa('Construni ERP', descripcionNotificacion(s, false));
+				const marcarResult = await marcarNotificaciones(supabase, paraNotificar.map((s) => ({ idSolicitud: s.id_solicitud, estado: s.estado })));
+				if (!marcarResult.success) {
+					console.error('[NotificacionesBell] No se pudo registrar la notificación:', marcarResult.message);
 				}
+			} else {
+				logNotif('Sin novedades — no suena.');
 			}
-			lastEstados = new Map(nuevas.map((s) => [s.id_solicitud, s.estado]));
-			firstLoad = false;
+
 			misSolicitudes = nuevas;
 		} catch (err) {
 			console.error('[NotificacionesBell] Error cargando mis solicitudes:', err);
@@ -225,7 +271,10 @@
 	}
 
 	async function cargar() {
-		if (isCargando) return;
+		if (isCargando) {
+			logNotif('Poll salteado — el anterior todavía no terminó (evita duplicados por solapamiento).');
+			return;
+		}
 		isCargando = true;
 		try {
 			if (isAdmin()) await cargarAdmin();
@@ -236,16 +285,38 @@
 	}
 
 	onMount(() => {
+		logNotif(`Campanita montada — suscribiendo a Realtime + polling de respaldo cada ${POLL_INTERVAL_MS / 1000}s.`);
 		// Se pide el permiso de notificaciones del SO apenas carga la app (no en medio de un poll en
 		// segundo plano) — en Android 13+ esto dispara el diálogo del sistema mientras el usuario ya
 		// está mirando la pantalla.
 		ensureNotificacionPermission();
 		cargar();
+
+		// Mecanismo principal: Supabase Realtime (websocket) — apenas Postgres inserta/actualiza una
+		// fila en solicitud_aprobacion, este callback dispara un cargar() inmediato. Requiere que la
+		// tabla esté agregada a la publicación `supabase_realtime` (ver
+		// solicitud_aprobacion_realtime_migration.sql) — si esa migración no corrió todavía, este canal
+		// simplemente no recibe eventos y el polling de respaldo de abajo sigue cubriendo, más lento.
+		realtimeChannel = supabase
+			.channel('solicitud_aprobacion_changes')
+			.on('postgres_changes', { event: '*', schema: 'public', table: 'solicitud_aprobacion' }, (payload) => {
+				logNotif('>>> Evento Realtime recibido <<<', payload.eventType);
+				cargar();
+			})
+			.subscribe((status) => logNotif(`Estado de la suscripción Realtime: ${status}`));
+
+		// Respaldo: si el websocket se corta (red inestable, el dispositivo estuvo dormido, etc.) esto
+		// igual termina trayendo lo que se perdió, aunque con más demora.
 		pollIntervalId = setInterval(cargar, POLL_INTERVAL_MS);
 	});
 
 	onDestroy(() => {
+		// Si esto aparece seguido de un nuevo "Campanita montada" en la consola, la campanita se está
+		// re-creando (HMR en desarrollo, o algo remontando el layout) — cada remontada resetea la
+		// memoria de "ya visto" y puede sentirse como que las notificaciones "vuelven a empezar".
+		logNotif('Campanita desmontada — se detiene el polling y la suscripción Realtime.');
 		if (pollIntervalId) clearInterval(pollIntervalId);
+		if (realtimeChannel) supabase.removeChannel(realtimeChannel);
 	});
 
 	// Admin: el badge suma pendientes (necesitan acción) + avisos informativos no vistos (no
@@ -360,7 +431,7 @@
 					<i class="fas fa-spinner fa-spin"></i> Cargando...
 				</div>
 			{:else if isAdmin()}
-				{#if solicitudesAdmin.length === 0 && avisos.length === 0}
+				{#if solicitudesAdmin.length === 0 && resueltas.length === 0 && avisos.length === 0}
 					<div class="p-8 text-center text-slate-400 text-sm">
 						<i class="fas fa-check-circle text-2xl mb-2 block"></i>
 						No hay novedades.
@@ -420,6 +491,38 @@
 											Rechazar
 										</button>
 									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if resueltas.length > 0}
+						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Resueltas recientemente</p>
+						<div class="divide-y divide-slate-100">
+							{#each resueltas as s (s.id_solicitud)}
+								<div class="p-4">
+									<div class="flex items-start justify-between gap-2 mb-1.5">
+										<div class="min-w-0">
+											<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200 mr-1.5">
+												{etiquetaEntidad(s.tipo_entidad)}
+											</span>
+											<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200 mr-1.5">
+												{etiquetaAccion(s.tipo_accion)}
+											</span>
+											<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border {claseEstado(s.estado)}">
+												{etiquetaEstado(s.estado)}
+											</span>
+											<p class="text-sm font-semibold text-slate-800 truncate mt-1">{s.descripcion_entidad || `#${s.id_entidad}`}</p>
+										</div>
+									</div>
+									<p class="text-xs text-slate-600 mb-1.5">{descripcionAccion(s)}</p>
+									<p class="text-[11px] text-slate-400">
+										Pedido por <span class="font-medium text-slate-500">{s.solicitado_por || 'Usuario'}</span>
+										{#if s.resuelto_por}
+											· <span class="font-medium {s.estado === 'aprobado' ? 'text-emerald-600' : 'text-rose-600'}">{etiquetaEstado(s.estado)} por {s.resuelto_por}</span>
+										{/if}
+										· {fmtFecha(s.resuelto_en || s.created_at)}
+									</p>
 								</div>
 							{/each}
 						</div>
