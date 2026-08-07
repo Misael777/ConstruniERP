@@ -88,12 +88,25 @@
 				// la campanita (ver aprobaciones.service.ts). El alta de un cliente nuevo (rama else de
 				// abajo) sigue libre para cualquiera, esto solo aplica a EDITAR uno existente.
 				if (!isAdmin()) {
+					// Snapshot del valor ANTERIOR de cada campo (mismas claves que `payload`) — a pedido del
+					// usuario: la campanita del admin debe resaltar cuáles campos realmente cambian, no solo
+					// listar el registro. clienteEdit ya trae la fila completa tal como está en la BD.
+					const payloadAnterior = {
+						tip_persona: clienteEdit.tip_persona ?? null,
+						nombre: clienteEdit.nombre ?? null,
+						tipo_doc: clienteEdit.tipo_doc ?? null,
+						num_documento: clienteEdit.num_documento ?? null,
+						direccion: clienteEdit.direccion ?? null,
+						telefono: clienteEdit.telefono ?? null,
+						email: clienteEdit.email ?? null
+					};
 					const result = await crearSolicitud(supabase, {
 						tipoEntidad: 'cliente',
 						idEntidad: clienteEdit.id_cliente,
 						tipoAccion: 'editar',
 						descripcionEntidad: nombre,
-						payloadCambios: payload
+						payloadCambios: payload,
+						payloadAnterior
 					});
 					if (!result.success) throw new Error(result.message || 'No se pudo enviar la solicitud.');
 					alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');

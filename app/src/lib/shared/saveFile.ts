@@ -8,6 +8,7 @@
  * de siempre, que el navegador ya maneja con su propio flujo de descarga/guardado.
  */
 import { isRunningInTauri } from '$lib/driveUploadClient';
+import { base64ToUint8Array } from '$lib/shared/base64';
 
 /** Descarga/guarda un archivo de texto — reusable por cualquier exportación (Ventas hoy, otros
  * módulos después) sin duplicar la lógica de branching Tauri-vs-navegador. */
@@ -28,6 +29,40 @@ export async function guardarArchivoDeTexto(contenido: string, nombreSugerido: s
 	}
 
 	const blob = new Blob([contenido], { type: mime });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = nombreSugerido;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
+}
+
+/** Igual que guardarArchivoDeTexto pero para contenido BINARIO (ej. un .xlsx generado con exceljs) —
+ * a pedido del usuario, las exportaciones de Ventas/Clientes pasaron de CSV a Excel real, que no es
+ * texto plano. `contenidoBase64` es el archivo ya codificado en base64 (mismo formato en el que se
+ * guarda en payload_cambios de una solicitud de exportación, ver ventasExport/clientesExport
+ * .service.ts) — acá se decodifica antes de escribirlo a disco o armar el Blob de descarga. */
+export async function guardarArchivoBinario(contenidoBase64: string, nombreSugerido: string, mime: string): Promise<void> {
+	const bytes = base64ToUint8Array(contenidoBase64);
+
+	if (isRunningInTauri()) {
+		const { save } = await import('@tauri-apps/plugin-dialog');
+		const { writeFile } = await import('@tauri-apps/plugin-fs');
+
+		const extension = nombreSugerido.includes('.') ? nombreSugerido.split('.').pop()! : 'xlsx';
+		const path = await save({
+			defaultPath: nombreSugerido,
+			filters: [{ name: extension.toUpperCase(), extensions: [extension] }]
+		});
+		if (!path) return; // el usuario canceló el diálogo — no es un error
+
+		await writeFile(path, bytes);
+		return;
+	}
+
+	const blob = new Blob([bytes], { type: mime });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;
