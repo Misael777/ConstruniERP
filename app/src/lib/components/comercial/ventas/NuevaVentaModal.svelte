@@ -1609,14 +1609,18 @@ async function copiarCodigoGenerado() {
 								</div>
 							</div>
 
-							<div class="mt-6 flex items-center gap-4 bg-white px-4 py-3 rounded-lg border border-slate-200">
-								<span class="text-sm font-bold text-slate-800">Código generado:</span>
-								<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex-1 md:flex-none flex items-center justify-between">
-									{codigoGenerado}
+							<!-- Responsive: en celular se apila (label arriba, código abajo) y el texto se
+							     envuelve con break-all en vez de desbordarse horizontalmente — antes, con
+							     todo en una sola fila y sin min-w-0, el código largo se salía del cuadro y
+							     quedaba cortado (el flex item no se achicaba para envolver el texto). -->
+							<div class="mt-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 bg-white px-4 py-3 rounded-lg border border-slate-200">
+								<span class="text-sm font-bold text-slate-800 shrink-0">Código generado:</span>
+								<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex items-center justify-between gap-3 min-w-0 w-full sm:w-auto">
+									<span class="break-all">{codigoGenerado}</span>
 									<button
 										type="button"
 										onclick={copiarCodigoGenerado}
-										class={`ml-4 ${codigoCopiado ? 'text-emerald-500' : 'text-blue-400 hover:text-blue-600'}`}
+										class={`shrink-0 ${codigoCopiado ? 'text-emerald-500' : 'text-blue-400 hover:text-blue-600'}`}
 										title={codigoCopiado ? 'Copiado' : 'Copiar código'}
 										aria-label="Copiar código generado"
 									>
@@ -1702,14 +1706,16 @@ async function copiarCodigoGenerado() {
 							</div>
 						</div>
 
-						<div class="mt-6 flex items-center gap-4 bg-white px-4 py-3 rounded-lg border border-slate-200">
-							<span class="text-sm font-bold text-slate-800">Código generado:</span>
-							<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex-1 md:flex-none flex items-center justify-between">
-								{codigoGenerado}
+						<!-- Responsive: mismo criterio que la versión de Consultoría — se apila en celular y
+						     el texto se envuelve (break-all + min-w-0) en vez de desbordarse. -->
+						<div class="mt-6 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 bg-white px-4 py-3 rounded-lg border border-slate-200">
+							<span class="text-sm font-bold text-slate-800 shrink-0">Código generado:</span>
+							<div class="bg-blue-50 text-blue-700 px-4 py-1.5 rounded text-sm font-bold tracking-wide flex items-center justify-between gap-3 min-w-0 w-full sm:w-auto">
+								<span class="break-all">{codigoGenerado}</span>
 								<button
 									type="button"
 									onclick={copiarCodigoGenerado}
-									class="ml-4 text-blue-400 hover:text-blue-600"
+									class="shrink-0 text-blue-400 hover:text-blue-600"
 									aria-label="Copiar código generado"
 									title={codigoCopiado ? 'Copiado' : 'Copiar código'}
 								>

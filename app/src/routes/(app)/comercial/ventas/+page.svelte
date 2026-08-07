@@ -1,5 +1,6 @@
 <script lang="ts">
-import { onMount } from 'svelte';
+import { onMount, onDestroy } from 'svelte';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '$lib/supabaseClient';
 import { isAdmin } from '$lib/stores/permisos.svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
@@ -280,9 +281,27 @@ import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.ser
 		}
 	}
 
+	// Tabla/KPIs en tiempo real (mismo mecanismo que la campanita de notificaciones): apenas cambia
+	// algo en `proyecto` — otro usuario crea, edita o cierra una venta — este canal se entera al
+	// instante y vuelve a pedir los datos, sin que haga falta recargar la página. Requiere
+	// ventas_clientes_realtime_migration.sql aplicada en Supabase.
+	let realtimeChannel: RealtimeChannel | null = null;
+
 	onMount(() => {
 		fetchVentas();
 		fetchResumenVentas();
+
+		realtimeChannel = supabase
+			.channel('ventas_proyecto_changes')
+			.on('postgres_changes', { event: '*', schema: 'public', table: 'proyecto' }, () => {
+				fetchVentas();
+				fetchResumenVentas();
+			})
+			.subscribe();
+	});
+
+	onDestroy(() => {
+		if (realtimeChannel) supabase.removeChannel(realtimeChannel);
 	});
 
 	/** Al guardar o cerrar una venta desde el popup (NuevaVentaModal onSaved) — antes solo refrescaba

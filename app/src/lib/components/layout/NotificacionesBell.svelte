@@ -119,21 +119,23 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 	}
 
-	/** Texto del sonido/toast nativo — distinto según a quién le llega el aviso. Ahora también cubre
-	 * estado 'pendiente' del lado solicitante: con la detección de flanco (ver cargarMias), la primera
-	 * vez que ve su propia solicitud también cuenta como "cambio de estado" (de nada a pendiente). */
+	/** Texto del sonido/toast nativo — distinto según a quién le llega el aviso. Del lado admin incluye
+	 * QUIÉN pide y QUÉ pide (a pedido del usuario — antes solo decía la acción, sin el solicitante).
+	 * También cubre estado 'pendiente' del lado solicitante: con la detección de flanco (ver
+	 * cargarMias), la primera vez que ve su propia solicitud también cuenta como "cambio de estado". */
 	function descripcionNotificacion(s: SolicitudAprobacion, paraAdmin: boolean): string {
 		const resultadoTexto = (estado: SolicitudAprobacion['estado']) =>
 			estado === 'pendiente' ? 'registrada, en espera de aprobación' : estado === 'aprobado' ? 'aprobada' : 'rechazada';
+		const solicitante = s.solicitado_por || 'Un usuario';
 
 		if (s.tipo_accion === 'exportar') {
-			if (paraAdmin) return 'Nueva solicitud: exportar ventas.';
+			if (paraAdmin) return `${solicitante} solicita exportar ventas.`;
 			return `Tu solicitud para exportar ventas fue ${resultadoTexto(s.estado)}.`;
 		}
 		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
 		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
 		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
-		if (paraAdmin) return `Nueva solicitud: ${accion} ${entidad} "${nombre}".`;
+		if (paraAdmin) return `${solicitante} solicita ${accion} ${entidad} "${nombre}".`;
 		return `Tu solicitud para ${accion} ${entidad} "${nombre}" fue ${resultadoTexto(s.estado)}.`;
 	}
 
