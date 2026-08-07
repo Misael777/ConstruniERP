@@ -140,10 +140,9 @@
 	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
 		<div class="flex flex-col">
 			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
-				<a href="/comercial" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
-				<span class="font-bold text-slate-800 text-2xl ml-2">Directorio de Clientes</span>
+				<span class="font-bold text-slate-800 text-2xl">Directorio de Clientes</span>
 			</div>
-			<p class="text-sm text-slate-500 ml-7">Gestiona la base de datos de tus clientes corporativos y personas naturales.</p>
+			<p class="text-sm text-slate-500">Gestiona la base de datos de tus clientes corporativos y personas naturales.</p>
 		</div>
 		
 		<div class="flex items-center gap-3">
