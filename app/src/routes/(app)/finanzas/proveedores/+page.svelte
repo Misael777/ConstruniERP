@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import ProveedoresTable from '$lib/components/comercial/proveedores/ProveedoresTable.svelte';
-	import ProveedorModal from '$lib/components/comercial/proveedores/ProveedorModal.svelte';
+	import ProveedoresTable from '$lib/components/finanzas/proveedores/ProveedoresTable.svelte';
+	import ProveedorModal from '$lib/components/finanzas/proveedores/ProveedorModal.svelte';
 
 	let proveedores = $state<any[]>([]);
 	let isModalOpen = $state(false);
@@ -63,7 +63,7 @@
 </script>
 
 <svelte:head>
-	<title>Proveedores | Comercial - Construni ERP</title>
+	<title>Proveedores | Finanzas - Construni ERP</title>
 </svelte:head>
 
 <div class="flex flex-col md:h-[calc(100vh-80px)] md:overflow-hidden bg-slate-50/50">
@@ -72,7 +72,7 @@
 	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
 		<div class="flex flex-col">
 			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
-				<a href="/comercial" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
+				<a href="/finanzas" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
 				<span class="font-bold text-slate-800 text-2xl ml-2">Directorio de Proveedores</span>
 			</div>
 			<p class="text-sm text-slate-500 ml-7">Administra los proveedores de materiales, servicios y equipos.</p>

@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { X } from '@lucide/svelte';
     import { createPlantilla } from '$lib/stores/partidas';
+    import { toast } from '$lib/stores/toast';
 
     const dispatch = createEventDispatcher();
     let { isOpen = false } = $props<{ isOpen: boolean }>();
@@ -13,7 +14,6 @@
     let tipo        = $state('');
     let isLoading   = $state(false);
     let errorMsg    = $state('');
-    let successMsg  = $state('');
 
     $effect(() => {
         if (isOpen) {
@@ -22,7 +22,6 @@
             descripcion = '';
             tipo = '';
             errorMsg = '';
-            successMsg = '';
         }
     });
 
@@ -41,9 +40,12 @@
         });
         isLoading = false;
 
+        // A pedido del usuario: todo popup se cierra de inmediato al guardar en vez de mostrar un
+        // mensaje de éxito adentro y esperar — mismo patrón que el resto de los modales (ver
+        // toast.success + cierre inmediato en CuentaBancoModal.svelte y similares).
         if (result.success) {
-            successMsg = result.message;
-            setTimeout(() => dispatch('close'), 1200);
+            toast.success(result.message);
+            dispatch('close');
         } else {
             errorMsg = result.message;
         }
@@ -67,9 +69,6 @@
 
             <!-- Body -->
             <div class="p-6 space-y-4">
-                {#if successMsg}
-                    <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">{successMsg}</div>
-                {/if}
                 {#if errorMsg}
                     <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">{errorMsg}</div>
                 {/if}

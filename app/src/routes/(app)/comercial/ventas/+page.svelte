@@ -9,6 +9,11 @@ import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
 import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
+import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
 import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
@@ -96,6 +101,69 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let isModalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingVentaId = $state<number | null>(null);
+
+	// A pedido del usuario: al cerrar una venta, la transacción (ingreso) del adelanto se abre en el
+	// popup de Transacciones para completar ahí los datos que el cierre de venta no pide (tipo de
+	// documento, N° de documento, forma/medio de pago, categoría) — mismo patrón "onTransaccionSugerida"
+	// que ya usan CobroModal.svelte/PagoModal.svelte en Cuentas por Cobrar/Pagar. Como la transacción ya
+	// quedó creada de verdad (no es un pago/cobro pendiente por confirmar), se abre en modo edición
+	// simple, sin onConfirm ni lockedFields.
+	let transaccionModalOpen = $state(false);
+	let transaccionParaCompletar = $state<Transaccion | null>(null);
+	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
+
+	/** A pedido del usuario: en el <select> de Origen debe verse el centro de costo + nombre del
+	 * CLIENTE, y en el de Destino el centro de costo + código del PROYECTO de esta misma venta cerrada
+	 * — no lo que sea que diga `centro_costo.nombre` (la lista genérica de transaccionDynamicOptions),
+	 * que puede haber quedado desactualizado (ej. antes nombre_proyecto guardaba el nombre del cliente,
+	 * no el código, ver historial de codigoProyecto.ts). Se resuelve el código propio de cada centro
+	 * (columna `centro_costo.codigo`, ej. "CLI-5"/"PROY-12") y se arma la etiqueta fresca con el
+	 * nombre/código que NuevaVentaModal ya resolvió en el momento del cierre — sin tocar el resto de la
+	 * lista, para que el usuario pueda seguir eligiendo cualquier otro centro si hiciera falta.
+	 *
+	 * OJO con la clave de Destino: el adelanto SIEMPRE se crea con tipo_alcance:'externa' y
+	 * tipo:'ingreso' — con esa combinación, TransaccionModal.svelte (ver su función `optionsFor`) NO
+	 * usa `dynamicOptions.id_centro_costo_destino` para el <select> de Destino, usa
+	 * `dynamicOptions.id_centro_costo_destino_externo` (el sufijo "_externo" es la lista mezclada de
+	 * cuentas externas). Origen sí usa la clave plana en este caso puntual (Ingreso tiene una excepción
+	 * para Origen, no para Destino) — por eso hay que escribir en las DOS claves de destino para que
+	 * quede bien sin importar cuál lea el formulario. */
+	async function handleTransaccionSugerida(transaccion: Transaccion, contexto: { clienteNombre: string; proyectoCodigo: string }) {
+		transaccionParaCompletar = transaccion;
+		transaccionModalOpen = true;
+
+		const origenId = transaccion.id_centro_costo_origen;
+		const destinoId = transaccion.id_centro_costo_destino;
+		const { data: centros, error } = await supabase
+			.from('centro_costo')
+			.select('id_centro_costo, codigo')
+			.in('id_centro_costo', [origenId, destinoId]);
+		if (error) {
+			console.error('[Ventas] Error resolviendo códigos de centro de costo para el popup de Transacciones:', error);
+			return;
+		}
+
+		const codigoOrigen = centros?.find((c) => c.id_centro_costo === origenId)?.codigo ?? '';
+		const codigoDestino = centros?.find((c) => c.id_centro_costo === destinoId)?.codigo ?? '';
+
+		function conEtiquetaFresca(opciones: FieldOption[], id: number, label: string): FieldOption[] {
+			const idStr = String(id);
+			return [...opciones.filter((o) => o.value !== idStr), { value: idStr, label }];
+		}
+
+		const destinoLabel = `${codigoDestino} - ${contexto.proyectoCodigo}`;
+		transaccionDynamicOptions = {
+			...transaccionDynamicOptions,
+			id_centro_costo_origen: conEtiquetaFresca(transaccionDynamicOptions.id_centro_costo_origen ?? [], origenId, `${codigoOrigen} - ${contexto.clienteNombre}`),
+			id_centro_costo_destino: conEtiquetaFresca(transaccionDynamicOptions.id_centro_costo_destino ?? [], destinoId, destinoLabel),
+			id_centro_costo_destino_externo: conEtiquetaFresca(transaccionDynamicOptions.id_centro_costo_destino_externo ?? [], destinoId, destinoLabel)
+		};
+	}
+
+	function closeTransaccionModal() {
+		transaccionModalOpen = false;
+		transaccionParaCompletar = null;
+	}
 
 	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
 	// de abajo, a pedido del usuario. Por defecto: el año en curso. Se recalcula con una consulta
@@ -304,9 +372,26 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	// ventas_clientes_realtime_migration.sql aplicada en Supabase.
 	let realtimeChannel: RealtimeChannel | null = null;
 
+	async function fetchTransaccionDynamicOptions() {
+		try {
+			const [centroCostoOptions, cuentaBancoOptions] = await Promise.all([
+				getCentroCostoOptions(supabase),
+				getCuentaBancoOptions(supabase)
+			]);
+			transaccionDynamicOptions = {
+				id_centro_costo_origen: centroCostoOptions,
+				id_centro_costo_destino: centroCostoOptions,
+				cuenta_banco: cuentaBancoOptions
+			};
+		} catch (err) {
+			console.error('[Ventas] Error cargando centros de costo para el popup de Transacciones:', err);
+		}
+	}
+
 	onMount(() => {
 		fetchVentas();
 		fetchResumenVentas();
+		fetchTransaccionDynamicOptions();
 
 		realtimeChannel = supabase
 			.channel('ventas_proyecto_changes')
@@ -567,7 +652,25 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 </div>
 
 <!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
-<NuevaVentaModal isOpen={isModalOpen} mode={modalMode} ventaId={editingVentaId} onClose={closeModal} onSaved={handleVentaGuardada} />
+<NuevaVentaModal
+	isOpen={isModalOpen}
+	mode={modalMode}
+	ventaId={editingVentaId}
+	onClose={closeModal}
+	onSaved={handleVentaGuardada}
+	onTransaccionSugerida={handleTransaccionSugerida}
+/>
 
 <!-- Preview de contrato/proforma -->
 <DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
+
+<!-- Transacción del adelanto (a pedido del usuario: al cerrar una venta, se abre para completar los
+     datos que el cierre de venta no pide) -->
+<TransaccionModal
+	open={transaccionModalOpen}
+	mode="edit"
+	transaccion={transaccionParaCompletar}
+	dynamicOptions={transaccionDynamicOptions}
+	onClose={closeTransaccionModal}
+	onSaved={closeTransaccionModal}
+/>

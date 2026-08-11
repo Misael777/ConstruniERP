@@ -194,13 +194,27 @@
 		return item.tipo === 'consultoria' || (item.tipo === 'proyecto' && item.id_proyecto != null);
 	}
 
+	/** A pedido del usuario, en la pestaña Centros de Costos: "Nombre" muestra el nombre del CLIENTE del
+	 * proyecto vinculado (en vez de `centro.nombre`, que para estos centros guarda el código del
+	 * proyecto — ver codigoProyecto.ts — ya visible aparte en la columna "Código de proyecto"; sin
+	 * esto, "Nombre" y "Código de proyecto" mostraban lo mismo dos veces). Solo aplica a Obra (proyecto
+	 * propio) — el centro compartido de Consultoría no tiene un único cliente, así que conserva su
+	 * `nombre` ("Consultoría General"). Usado tanto por la tabla (cellValue) como por la tarjeta móvil. */
+	function nombreDisplay(item: CentroCosto): string {
+		if (activeTab === 'centros' && item.tipo === 'proyecto' && item.proyecto) {
+			return item.proyecto.clienteNombre || item.proyecto.cliente?.nombre || item.nombre;
+		}
+		return item.nombre;
+	}
+
 	function cellValue(field: (typeof tableFields)[number], item: CentroCosto) {
-		// A pedido del usuario, en la pestaña Centros de Costos: "Tipo" muestra el tipo de OBRA del
-		// proyecto vinculado (en vez del genérico "Proyecto (automático)") cuando ese proyecto es de
-		// Obra, y "Monto Actual" muestra el saldo de venta (monto total de la venta cerrada MENOS el
-		// adelanto ya cobrado, ver getSaldosVentaPorCentroCosto) para centros de proyecto/consultoría,
-		// o la ficha de caja genérica (ingresos-egresos) para el resto — en ambos casos reemplaza a la
-		// columna `monto_actual` cruda, que nunca se mantiene al día por sí sola.
+		if (field.key === 'nombre') return nombreDisplay(item);
+		// "Tipo" muestra el tipo de OBRA del proyecto vinculado (en vez del genérico "Proyecto
+		// (automático)") cuando ese proyecto es de Obra, y "Monto Actual" muestra el saldo de venta
+		// (monto total de la venta cerrada MENOS el adelanto ya cobrado, ver getSaldosVentaPorCentroCosto)
+		// para centros de proyecto/consultoría, o la ficha de caja genérica (ingresos-egresos) para el
+		// resto — en ambos casos reemplaza a la columna `monto_actual` cruda, que nunca se mantiene al
+		// día por sí sola.
 		if (activeTab === 'centros' && field.key === 'tipo' && item.proyecto?.tipo_venta === 'obra') {
 			return tipoObraLabel(item.proyecto.tipo_obra);
 		}
@@ -395,7 +409,7 @@
 				{#snippet card(item)}
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="min-w-0">
-							<div class="font-semibold text-slate-800 truncate">{item.nombre}</div>
+							<div class="font-semibold text-slate-800 truncate">{nombreDisplay(item)}</div>
 							<div class="text-xs text-slate-500 mt-0.5">{item.codigo}</div>
 						</div>
 						<div class="text-right shrink-0">

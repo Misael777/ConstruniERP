@@ -12,7 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto } from '$lib/modules/centro-costos/services/centroCostos.service';
-import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
 
 // 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
@@ -339,13 +339,19 @@ export interface CerrarVentaParams {
  * el proyecto a 'venta_cerrada' — mismo cuerpo que el viejo `handleCerrarVenta` de
  * NuevaVentaModal.svelte, ahora reusable tanto por un admin que cierra directo como por la
  * aprobación de una solicitud 'cerrar_venta' de un no-admin (con el payload que ese solicitante ya
- * armó, incluyendo el comprobante ya subido). */
+ * armó, incluyendo el comprobante ya subido).
+ *
+ * `data` viene con la transacción del adelanto SOLO cuando esta llamada la creó recién (!
+ * adelantoYaRegistrado) — a pedido del usuario, el llamador (NuevaVentaModal.svelte) la usa para
+ * abrir el popup de Transacciones ya prellenado, así el usuario completa ahí los datos que el cierre
+ * de venta no pide (tipo de documento, N° de documento, forma/medio de pago, categoría). Si el
+ * adelanto ya estaba registrado de antes, no hay nada nuevo que abrir y `data` queda undefined. */
 export async function cerrarVentaAprobada(
 	client: SupabaseClient,
 	params: CerrarVentaParams,
 	usuarioEmail: string | null,
 	usuarioNombre: string | null
-): Promise<ServiceResult> {
+): Promise<ServiceResult & { data?: Transaccion }> {
 	try {
 		// A pedido del usuario: cerrar una venta SIEMPRE asegura el centro de costo del proyecto —
 		// antes solo se creaba de pasada al registrar la transacción del adelanto (y solo si
@@ -360,6 +366,7 @@ export async function cerrarVentaAprobada(
 			console.warn(`[aprobaciones.service] No se pudo asegurar el centro de costo del proyecto #${params.idProyecto} al cerrar la venta.`);
 		}
 
+		let transaccionAdelanto: Transaccion | undefined;
 		if (!params.adelantoYaRegistrado) {
 			if (!params.comprobanteUrl || !params.adelantoMonto) {
 				return { success: false, message: 'Falta el comprobante o el monto del adelanto.' };
@@ -386,6 +393,7 @@ export async function cerrarVentaAprobada(
 				usuarioNombre
 			);
 			if (!transResult.success) return { success: false, message: transResult.message || 'No se pudo registrar la transacción del adelanto.' };
+			transaccionAdelanto = transResult.data;
 		}
 
 		const { error: clearError } = await client
@@ -427,7 +435,7 @@ export async function cerrarVentaAprobada(
 			await actualizarSaldoCentroCostoProyecto(client, idCentroProyecto);
 		}
 
-		return { success: true };
+		return { success: true, data: transaccionAdelanto };
 	} catch (err: any) {
 		return { success: false, message: err?.message || String(err) };
 	}
