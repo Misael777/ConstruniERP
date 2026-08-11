@@ -16,7 +16,7 @@ import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/c
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
 import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
-import { exportarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
+import { exportarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
@@ -437,17 +437,20 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let isDeleting = $state(false);
 	let isExporting = $state(false);
 
-	/** A pedido del usuario: el botón "Exportar" (antes 100% decorativo) ahora genera un CSV real.
-	 * Igual criterio que editar/eliminar: un admin exporta directo, un no-admin manda una solicitud
-	 * de aprobación (ver crearSolicitud/aprobarSolicitud en aprobaciones.service.ts — al aprobarla, el
-	 * admin es quien termina generando y descargando el archivo, en nombre de quien lo pidió). */
+	/** A pedido del usuario: el botón "Exportar" (antes 100% decorativo) ahora genera un .xlsx real
+	 * (antes CSV). Igual criterio que editar/eliminar: un admin exporta directo, un no-admin manda una
+	 * solicitud de aprobación (ver crearSolicitud/aprobarSolicitud en aprobaciones.service.ts — al
+	 * aprobarla, el admin es quien termina generando y descargando el archivo, en nombre de quien lo
+	 * pidió). `modulo: 'ventas'` en payloadCambios es lo que le permite a aprobarSolicitud distinguir
+	 * esta exportación de la de Clientes, que comparte el mismo tipo_accion 'exportar'. */
 	async function handleExportar() {
 		if (!isAdmin()) {
 			const result = await crearSolicitud(supabase, {
 				tipoEntidad: 'exportacion',
 				idEntidad: null,
 				tipoAccion: 'exportar',
-				descripcionEntidad: 'Exportación de ventas'
+				descripcionEntidad: 'Exportación de ventas',
+				payloadCambios: { modulo: 'ventas' }
 			});
 			if (result.success) {
 				alert('No tienes permisos de administrador. Se envió una solicitud de exportación para que un administrador la apruebe.');
@@ -459,7 +462,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 		isExporting = true;
 		try {
-			const result = await exportarVentasCSV(supabase);
+			const result = await exportarVentasXLSX(supabase);
 			if (!result.success) alert(`No se pudo exportar. ${result.message ?? ''}`);
 		} finally {
 			isExporting = false;

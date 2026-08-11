@@ -24,7 +24,7 @@
 		type EstadoSolicitud
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
-	import { guardarArchivoDeTexto } from '$lib/shared/saveFile';
+	import { guardarArchivoBinario } from '$lib/shared/saveFile';
 
 	// A pedido del usuario ("casi en tiempo real, sin saturar"): el mecanismo PRINCIPAL ya no es
 	// polling — es una suscripción de Supabase Realtime (websocket) a solicitud_aprobacion (ver
@@ -88,6 +88,63 @@
 		}
 	}
 
+	// Etiquetas legibles para los campos de payload_cambios (cliente + proyecto) — a pedido del usuario,
+	// para que la tarjeta de una solicitud 'editar' muestre "Teléfono: ..." en vez de "telefono: ...".
+	// Un campo sin entrada acá simplemente muestra su nombre de columna tal cual (fallback razonable).
+	const ETIQUETAS_CAMPO: Record<string, string> = {
+		tip_persona: 'Tipo de persona',
+		nombre: 'Nombre',
+		tipo_doc: 'Tipo de documento',
+		num_documento: 'N° de documento',
+		direccion: 'Dirección',
+		telefono: 'Teléfono',
+		email: 'Email',
+		id_cliente: 'Cliente',
+		nombre_proyecto: 'Código del proyecto',
+		fecha_inicio_plan: 'Fecha de inicio',
+		precio_venta: 'Precio de venta',
+		comision_asesor: 'Comisión asesor',
+		responsable: 'Responsable',
+		tip_proyecto: 'Tipo de proyecto',
+		estado_predio: 'Estado del predio',
+		tipo_edifica: 'Tipo de edificación',
+		tipo_edificacion2: 'Tipo de edificación (2)',
+		nro_pisos: 'N° de pisos',
+		tipo_obra: 'Tipo de obra',
+		tipo_tramite: 'Tipo de trámite',
+		tipo_intervencion: 'Tipo de intervención',
+		tipo_edificacion_obra: 'Tipo de edificación (obra)',
+		mes_obra: 'Mes',
+		anio_obra: 'Año',
+		distrito: 'Distrito',
+		provincia: 'Provincia',
+		departamento: 'Departamento',
+		costo_estima: 'Costo estimado',
+		tipo_venta: 'Tipo de venta',
+		ubicacion: 'Ubicación',
+		direccion_predio: 'Dirección del predio',
+		descripcion: 'Observaciones'
+	};
+	function etiquetaCampo(campo: string): string {
+		return ETIQUETAS_CAMPO[campo] || campo;
+	}
+
+	function formatValor(valor: unknown): string {
+		if (valor === null || valor === undefined || valor === '') return '(vacío)';
+		return typeof valor === 'object' ? JSON.stringify(valor) : String(valor);
+	}
+
+	/** true si `campo` realmente cambió respecto a payload_anterior — false tanto si es igual como si no
+	 * hay snapshot anterior disponible (solicitudes creadas antes de esta columna). Normaliza
+	 * null/undefined/'' a la misma cosa para no marcar como "cambio" un campo que solo pasó de null a
+	 * cadena vacía o viceversa. */
+	function campoCambio(s: SolicitudAprobacion, campo: string, valorNuevo: unknown): boolean {
+		if (!s.payload_anterior || !(campo in s.payload_anterior)) return false;
+		const anterior = s.payload_anterior[campo];
+		const norm = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+		return norm(anterior) !== norm(valorNuevo);
+	}
+
 	function etiquetaAccion(tipo: SolicitudAprobacion['tipo_accion']) {
 		if (tipo === 'eliminar') return 'Eliminar';
 		if (tipo === 'cerrar_venta') return 'Cerrar venta';
@@ -129,8 +186,11 @@
 		const solicitante = s.solicitado_por || 'Un usuario';
 
 		if (s.tipo_accion === 'exportar') {
-			if (paraAdmin) return `${solicitante} solicita exportar ventas.`;
-			return `Tu solicitud para exportar ventas fue ${resultadoTexto(s.estado)}.`;
+			// descripcion_entidad ya trae "Exportación de ventas"/"Exportación de clientes" (fijado al
+			// crear la solicitud) — se reusa acá en vez de hardcodear un solo módulo.
+			const que = (s.descripcion_entidad || 'Exportación de datos').toLowerCase();
+			if (paraAdmin) return `${solicitante} solicita una ${que}.`;
+			return `Tu solicitud de ${que} fue ${resultadoTexto(s.estado)}.`;
 		}
 		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
 		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
@@ -148,7 +208,7 @@
 	/** Descripción legible de QUÉ se está pidiendo, para mostrar dentro de cada tarjeta (a pedido
 	 * del usuario — antes solo se veían los badges de tipo/acción, sin una frase clara). */
 	function descripcionAccion(s: SolicitudAprobacion): string {
-		if (s.tipo_accion === 'exportar') return 'Exportar el listado de ventas a un archivo descargable.';
+		if (s.tipo_accion === 'exportar') return `${s.descripcion_entidad || 'Exportación de datos'} a un archivo Excel descargable.`;
 		const entidad = etiquetaEntidad(s.tipo_entidad).toLowerCase();
 		const accion = etiquetaAccion(s.tipo_accion).toLowerCase();
 		const nombre = s.descripcion_entidad || `#${s.id_entidad}`;
@@ -160,12 +220,15 @@
 	 * nada de Ventas puntualmente, cualquier módulo futuro que guarde archivoContenido/archivoNombre
 	 * en el payload de su solicitud de exportación aprobada funciona igual acá, sin tocar la campanita. */
 	async function descargarArchivoSolicitud(s: SolicitudAprobacion) {
+		// A pedido del usuario: las exportaciones pasaron de CSV a Excel real — el contenido guardado en
+		// payload_cambios ahora es el .xlsx codificado en base64 (ver ventasExport/clientesExport
+		// .service.ts), no texto plano, así que se decodifica con guardarArchivoBinario.
 		const contenido = s.payload_cambios?.archivoContenido as string | undefined;
-		const nombre = (s.payload_cambios?.archivoNombre as string | undefined) || 'archivo.csv';
-		const mime = (s.payload_cambios?.archivoMime as string | undefined) || 'text/csv;charset=utf-8;';
+		const nombre = (s.payload_cambios?.archivoNombre as string | undefined) || 'archivo.xlsx';
+		const mime = (s.payload_cambios?.archivoMime as string | undefined) || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 		if (!contenido) return;
 		try {
-			await guardarArchivoDeTexto(contenido, nombre, mime);
+			await guardarArchivoBinario(contenido, nombre, mime);
 		} catch (err) {
 			console.error('[NotificacionesBell] No se pudo guardar el archivo descargado:', err);
 		}
@@ -458,7 +521,26 @@
 										Pedido por <span class="font-medium text-slate-500">{s.solicitado_por || 'Usuario'}</span> · {fmtFecha(s.created_at)}
 									</p>
 
-									{#if s.payload_cambios && Object.keys(s.payload_cambios).length > 0}
+									{#if s.tipo_accion === 'editar' && s.payload_cambios && Object.keys(s.payload_cambios).length > 0}
+										<!-- A pedido del usuario: no solo se lista el registro afectado, se resaltan los
+										     campos que REALMENTE cambian (comparados contra payload_anterior) — los que
+										     quedan igual se muestran atenuados, sin resaltar. -->
+										<div class="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-100 space-y-1 max-h-40 overflow-y-auto">
+											{#each Object.entries(s.payload_cambios).filter(([campo]) => campo !== 'updated_at') as [campo, valor]}
+												{@const cambio = campoCambio(s, campo, valor)}
+												<div class="text-[11px] rounded-md {cambio ? 'bg-amber-50 border border-amber-200 px-1.5 py-1' : 'px-1.5 py-0.5'}">
+													<span class="text-slate-400">{etiquetaCampo(campo)}:</span>
+													{#if cambio}
+														<span class="text-slate-400 line-through ml-1">{formatValor(s.payload_anterior?.[campo])}</span>
+														<i class="fas fa-arrow-right text-amber-500 mx-1 text-[9px]"></i>
+														<span class="text-amber-800 font-semibold">{formatValor(valor)}</span>
+													{:else}
+														<span class="text-slate-600 ml-1">{formatValor(valor)}</span>
+													{/if}
+												</div>
+											{/each}
+										</div>
+									{:else if s.payload_cambios && Object.keys(s.payload_cambios).length > 0}
 										<div class="mb-2 p-2 bg-slate-50 rounded-lg border border-slate-100 space-y-0.5 max-h-28 overflow-y-auto">
 											{#each Object.entries(s.payload_cambios) as [campo, valor]}
 												<div class="flex items-start gap-2 text-[11px]">

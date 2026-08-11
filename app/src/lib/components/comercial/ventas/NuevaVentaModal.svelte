@@ -193,6 +193,10 @@
 	// ── Estado exclusivo del modo edición: carga inicial + gestión de proformas/contrato/cierre ──
 	// (fusionado desde el antiguo ProformasVentaModal.svelte — mismo popup ahora, a pedido del usuario)
 	let isLoadingVenta = $state(false);
+	// Fila cruda de `proyecto` tal como vino de loadVentaParaEditar — se conserva para poder armar un
+	// snapshot "anterior" al enviar una solicitud de edición (ver payloadAnterior en handleGuardar),
+	// sin tener que repetir el fetch. Null en modo creación.
+	let ventaOriginalRaw = $state<any>(null);
 	let proformas = $state<any[]>([]);
 	let isLoadingProformas = $state(false);
 	let selectedFinalId = $state<number | null>(null);
@@ -287,6 +291,7 @@
 				.single();
 			if (error) throw error;
 
+			ventaOriginalRaw = data;
 			proyectoNombre = data.nombre_proyecto || '';
 			// Mismo criterio y mismo orden de respaldo que la columna "Fecha" del listado de Ventas (ver
 			// fechaRaw en comercial/ventas/+page.svelte: fecha_inicio_plan, y si no hay, created_at) —
@@ -1186,12 +1191,20 @@ async function copiarCodigoGenerado() {
 			// solicitud de aprobación con el payload propuesto, visible para todos los admins en la
 			// campanita (ver aprobaciones.service.ts).
 			if (!isAdmin()) {
+				// Snapshot del valor ANTERIOR de cada campo (mismas claves que proyectoUpdatePayload) — a
+				// pedido del usuario: la campanita del admin debe resaltar cuáles campos realmente cambian.
+				// ventaOriginalRaw es la fila cruda que cargó loadVentaParaEditar, previa a cualquier edición
+				// hecha acá en el formulario.
+				const payloadAnterior = ventaOriginalRaw
+					? Object.fromEntries(Object.keys(proyectoUpdatePayload).map((k) => [k, ventaOriginalRaw[k] ?? null]))
+					: null;
 				const result = await crearSolicitud(supabase, {
 					tipoEntidad: 'proyecto',
 					idEntidad: Number(ventaId),
 					tipoAccion: 'editar',
 					descripcionEntidad: proyectoNombre,
-					payloadCambios: proyectoUpdatePayload
+					payloadCambios: proyectoUpdatePayload,
+					payloadAnterior
 				});
 				isSaving = false;
 				if (!result.success) {

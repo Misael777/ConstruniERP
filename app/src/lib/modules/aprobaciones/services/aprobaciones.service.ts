@@ -13,7 +13,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
-import { generarVentasCSV } from '$lib/modules/ventas/services/ventasExport.service';
+import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
+import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 
 // 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
 // una exportación no apunta a una fila puntual — id_entidad queda null para este caso (ver migración
@@ -29,6 +30,11 @@ export interface SolicitudAprobacion {
 	tipo_accion: TipoAccionSolicitud;
 	descripcion_entidad: string | null;
 	payload_cambios: Record<string, unknown> | null;
+	/** Solo para tipo_accion 'editar': valor de cada campo de payload_cambios ANTES de este pedido —
+	 * mismas claves que payload_cambios. Permite resaltar en la campanita cuáles campos son un cambio
+	 * real (ver descripcionCampoCambiado en NotificacionesBell.svelte). Null en solicitudes creadas
+	 * antes de esta columna, o en cualquier tipo_accion que no sea 'editar'. */
+	payload_anterior: Record<string, unknown> | null;
 	solicitado_por: string | null;
 	solicitado_por_id: string | null;
 	estado: EstadoSolicitud;
@@ -58,6 +64,10 @@ export async function crearSolicitud(
 		tipoAccion: TipoAccionSolicitud;
 		descripcionEntidad?: string | null;
 		payloadCambios?: Record<string, unknown> | null;
+		/** Solo tiene sentido junto a tipoAccion: 'editar' — snapshot del valor de cada campo de
+		 * payloadCambios ANTES de este pedido (mismas claves), para que la campanita pueda resaltar
+		 * cuáles campos realmente cambian (ver payload_anterior en el tipo SolicitudAprobacion). */
+		payloadAnterior?: Record<string, unknown> | null;
 		/** true = la acción YA se aplicó directo (ej. un asesor cerrando su propia venta libremente,
 		 * sin pasar por aprobación) — la fila se inserta ya 'aprobado'/auto-resuelta, como un AVISO
 		 * informativo para los admins (ver getAvisosInformativos), no como algo pendiente de su acción. */
@@ -73,6 +83,7 @@ export async function crearSolicitud(
 			tipo_accion: params.tipoAccion,
 			descripcion_entidad: params.descripcionEntidad ?? null,
 			payload_cambios: params.payloadCambios ?? null,
+			payload_anterior: params.payloadAnterior ?? null,
 			solicitado_por: solicitanteNombre,
 			solicitado_por_id: userData?.user?.id ?? null,
 			estado: params.autoResuelto ? 'aprobado' : 'pendiente',
@@ -471,8 +482,14 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 		// "Aprobar" acá significa: el admin genera el export EN NOMBRE de quien lo pidió
 		// (solicitado_por_id filtra a las ventas de esa persona, no todo el portafolio) — a pedido del
 		// usuario, ya NO se descarga en el navegador del admin; el archivo queda guardado en la propia
-		// solicitud para que el solicitante lo descargue desde su campanita.
-		const generado = await generarVentasCSV(client, solicitud.solicitado_por_id);
+		// solicitud para que el solicitante lo descargue desde su campanita. `modulo` en payload_cambios
+		// (fijado al crear la solicitud, ver comercial/ventas|clientes/+page.svelte) distingue de cuál
+		// módulo es el pedido — ambos comparten el mismo tipo_accion 'exportar'. Solicitudes viejas sin
+		// `modulo` (creadas antes de agregar Exportar a Clientes) caen a Ventas por compatibilidad.
+		const modulo = (solicitud.payload_cambios as any)?.modulo === 'clientes' ? 'clientes' : 'ventas';
+		const generado = modulo === 'clientes'
+			? await generarClientesXLSX(client)
+			: await generarVentasXLSX(client, solicitud.solicitado_por_id);
 		if (generado.success) {
 			payloadCambiosExtra = {
 				archivoContenido: generado.archivo.contenido,
