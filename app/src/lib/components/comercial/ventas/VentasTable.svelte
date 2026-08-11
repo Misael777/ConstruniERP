@@ -19,11 +19,13 @@
 	];
 
 	function getEstadoBadge(estado: string) {
+		if (estado === 'baja') return 'bg-red-50 text-red-600 border-red-200';
 		if (estado === 'venta_cerrada') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
 		return 'bg-amber-50 text-amber-600 border-amber-200';
 	}
 
 	function getEstadoLabel(estado: string) {
+		if (estado === 'baja') return 'Dado de baja';
 		return estado === 'venta_cerrada' ? 'Venta Cerrada' : 'En negociación';
 	}
 
@@ -222,9 +224,15 @@
 						<button onclick={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
 							<i class="fas fa-pen"></i>
 						</button>
-						<button onclick={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
-							<i class="fas fa-trash"></i>
-						</button>
+						{#if row.estado_proyecto === 'venta_cerrada'}
+							<button onclick={() => dispatch('darDeBaja', { row })} class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Dar de baja" aria-label="Dar de baja">
+								<i class="fas fa-trash"></i>
+							</button>
+						{:else if row.estado_proyecto !== 'baja'}
+							<button onclick={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
+								<i class="fas fa-trash"></i>
+							</button>
+						{/if}
 					</div>
 				</td>
 			{/snippet}
@@ -267,9 +275,15 @@
 					<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
 						<i class="fas fa-pen"></i>
 					</button>
-					<button onclick={() => dispatch('deleteRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar">
-						<i class="fas fa-trash"></i>
-					</button>
+					{#if row.estado_proyecto === 'venta_cerrada'}
+						<button onclick={() => dispatch('darDeBaja', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja">
+							<i class="fas fa-trash"></i>
+						</button>
+					{:else if row.estado_proyecto !== 'baja'}
+						<button onclick={() => dispatch('deleteRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar">
+							<i class="fas fa-trash"></i>
+						</button>
+					{/if}
 				</div>
 			{/snippet}
 		</ResponsiveDataView>

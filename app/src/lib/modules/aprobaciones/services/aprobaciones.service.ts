@@ -252,6 +252,19 @@ export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: n
 	}
 }
 
+/** Da de baja una venta ya cerrada (estado_proyecto: 'venta_cerrada' -> 'baja') — a diferencia de
+ * eliminarVentaCascade, no borra ningún dato: solo marca el proyecto como inactivo, reemplazando al
+ * botón de Eliminar en la tabla/modal una vez que la venta está cerrada. `estado_proyecto` es VARCHAR
+ * libre (sin CHECK en BD), así que no hace falta migración para agregar este valor. */
+export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number): Promise<ServiceResult> {
+	const { error } = await client
+		.from('proyecto')
+		.update({ estado_proyecto: 'baja' })
+		.eq('id_proyecto', idProyecto);
+	if (error) return { success: false, message: error.message };
+	return { success: true };
+}
+
 export interface ClienteDependencias {
 	tieneConflictos: boolean;
 	proyectos: number;

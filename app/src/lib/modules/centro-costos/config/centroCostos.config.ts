@@ -202,7 +202,7 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
-			{ value: 'bolsa general', label: 'Bolsa General' },
+			{ value: 'bolsa general', label: 'Corporativa' },
 			{ value: 'area', label: 'Área' },
 			{ value: 'otro', label: 'Otro' },
 			{ value: 'proyecto', label: 'Proyecto (automático)' },
@@ -213,7 +213,8 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		formOptions: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
-			{ value: 'bolsa general', label: 'Bolsa General' }
+			{ value: 'bolsa general', label: 'Corporativa' },
+			{ value: 'otro', label: 'Otro' }
 		],
 		helpText: 'Clasificación del centro de costo.',
 		showInTable: true,

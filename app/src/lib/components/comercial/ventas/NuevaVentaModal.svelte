@@ -8,7 +8,7 @@
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
-	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+	import { crearSolicitud, cerrarVentaAprobada, darDeBajaVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
@@ -203,6 +203,7 @@
 	let isUploadingProformaGestion = $state(false);
 	let isUploadingContratoGestion = $state(false);
 	let isClosing = $state(false);
+	let isDandoDeBaja = $state(false);
 	let montoFinalVenta = $state('');
 	let adelantoYaRegistrado = $state(false);
 	let isCheckingAdelanto = $state(false);
@@ -495,7 +496,7 @@ async function copiarCodigoGenerado() {
 	// `precio_venta` a partir de `valorVenta`) y el cálculo de comisión de arriba sigan reflejando el
 	// valor que el usuario realmente ve y edita.
 	$effect(() => {
-		if (mode === 'edit' && localEstado !== 'venta_cerrada' && montoFinalVenta !== '') {
+		if (mode === 'edit' && !ventaFinalizada && montoFinalVenta !== '') {
 			valorVenta = montoFinalVenta;
 		}
 	});
@@ -789,10 +790,15 @@ async function copiarCodigoGenerado() {
 			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && Number(numeroPisos) > 0))
 	);
 
+	// Una venta dada de baja ('baja') quedó cerrada primero (solo se puede dar de baja una venta ya
+	// cerrada, ver handleDarDeBaja) y es un estado igual de definitivo — todos los bloqueos de "venta ya
+	// cerrada" (tabs, edición de proformas/cierre, botón "Cerrar venta") aplican igual para ambos.
+	let ventaFinalizada = $derived(localEstado === 'venta_cerrada' || localEstado === 'baja');
+
 	// A pedido del usuario: una vez cerrada la venta, ya no se puede cambiar de Consultoría a Obra (ni
 	// al revés) — el tipo de proyecto queda fijo. Solo en modo edición, y solo aplica una vez cerrada
 	// (mientras la venta sigue abierta, se puede seguir ajustando la pestaña con normalidad).
-	let tabsBloqueadosPorCierre = $derived(mode === 'edit' && localEstado === 'venta_cerrada');
+	let tabsBloqueadosPorCierre = $derived(mode === 'edit' && ventaFinalizada);
 
 	// A pedido del usuario: cerrar una venta ya NO exige tener el contrato adjunto (antes sí) — solo
 	// necesita el Adelanto inicial completo (monto + comprobante, ya sea recién adjuntado o ya
@@ -800,7 +806,7 @@ async function copiarCodigoGenerado() {
 	// puede seguir adjuntando después, desde la misma sección de Editar venta.
 	let canClose = $derived(
 		mode === 'edit' &&
-		localEstado !== 'venta_cerrada' &&
+		!ventaFinalizada &&
 		infoGeneralCompleta &&
 		selectedFinalId !== null &&
 		Number(montoFinalVenta) > 0 &&
@@ -822,7 +828,7 @@ async function copiarCodigoGenerado() {
 	// espera este chequeo, dejando la sección bloqueada sin salida).
 	let documentosCierreListos = $derived(
 		mode === 'edit'
-			? localEstado === 'venta_cerrada' ||
+			? ventaFinalizada ||
 				((adelantoYaRegistrado || (!!adelantoFile && Number(adelantoMonto) > 0)) && selectedFinalId !== null)
 			: !!adelantoFile && Number(adelantoMonto) > 0 && selectedFinalFileIndex !== null
 	);
@@ -947,6 +953,28 @@ async function copiarCodigoGenerado() {
 			alert(`No se pudo cerrar la venta.\n${describeError(err)}`);
 		} finally {
 			isClosing = false;
+		}
+	}
+
+	/** Reemplaza al recuadro informativo "Venta cerrada" una vez que la venta ya está cerrada — a
+	 * diferencia de "Cerrar venta", no borra ningún dato: solo marca el proyecto como 'baja' (ver
+	 * darDeBajaVenta en aprobaciones.service.ts). */
+	async function handleDarDeBaja() {
+		if (!ventaId || localEstado !== 'venta_cerrada') return;
+		if (!confirm(`¿Dar de baja la venta "${proyectoNombre}"? Quedará marcada como inactiva.`)) return;
+
+		isDandoDeBaja = true;
+		try {
+			const result = await darDeBajaVenta(supabase, Number(ventaId));
+			if (!result.success) throw new Error(result.message || 'No se pudo dar de baja la venta.');
+			localEstado = 'baja';
+			onSaved();
+			onClose();
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error dando de baja la venta:', err);
+			alert(`No se pudo dar de baja la venta.\n${describeError(err)}`);
+		} finally {
+			isDandoDeBaja = false;
 		}
 	}
 
@@ -1451,7 +1479,7 @@ async function copiarCodigoGenerado() {
 							     mostrando en modo creación (todavía no existe la sección de cierre) y en una
 							     venta ya cerrada (la sección de cierre desaparece del todo, así que este vuelve
 							     a ser el único lugar donde se ve el precio final). -->
-							{#if !(mode === 'edit' && localEstado !== 'venta_cerrada')}
+							{#if !(mode === 'edit' && !ventaFinalizada)}
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
 								<input
@@ -1578,9 +1606,24 @@ async function copiarCodigoGenerado() {
 						</h3>
 
 						{#if localEstado === 'venta_cerrada'}
-							<div class="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-700 text-sm flex items-center gap-2">
-								<i class="fas fa-check-circle"></i>
-								<span class="font-semibold">Venta cerrada</span>
+							<!-- A pedido del usuario: una vez cerrada la venta, el recuadro de "Venta cerrada" se
+							     reemplaza por este tachito — al presionarlo, la venta pasa a estado 'baja'. -->
+							<button
+								onclick={handleDarDeBaja}
+								disabled={isDandoDeBaja}
+								title="Dar de baja esta venta"
+								class="mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm font-semibold hover:bg-red-100 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+							>
+								{#if isDandoDeBaja}
+									<i class="fas fa-spinner fa-spin"></i> Dando de baja...
+								{:else}
+									<i class="fas fa-trash"></i> Dar de baja
+								{/if}
+							</button>
+						{:else if localEstado === 'baja'}
+							<div class="mt-3 p-3 bg-red-50 border border-red-300 rounded-lg text-red-700 text-sm flex items-center gap-2">
+								<i class="fas fa-ban"></i>
+								<span class="font-semibold">Venta dada de baja</span>
 							</div>
 						{/if}
 
@@ -1588,7 +1631,7 @@ async function copiarCodigoGenerado() {
 						<div class="mt-4">
 							<div class="flex items-center justify-between mb-3">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide">Proformas</h4>
-								{#if localEstado !== 'venta_cerrada'}
+								{#if !ventaFinalizada}
 									<label class="cursor-pointer px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-colors">
 										<input type="file" accept="application/pdf" class="hidden" onchange={handleAddProformaFileGestion} disabled={isUploadingProformaGestion} />
 										{#if isUploadingProformaGestion}
@@ -1612,7 +1655,7 @@ async function copiarCodigoGenerado() {
 								<div class="space-y-2">
 									{#each proformas as doc (doc.id_documento)}
 										<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
-											{#if localEstado !== 'venta_cerrada'}
+											{#if !ventaFinalizada}
 												<input
 													type="radio"
 													name="proforma-final"
@@ -1637,7 +1680,7 @@ async function copiarCodigoGenerado() {
 											<button onclick={() => handleVerProforma(doc)} class="shrink-0 text-slate-400 hover:text-blue-600 p-1.5 rounded transition-colors" title="Ver" aria-label="Ver proforma">
 												<i class="fas fa-eye"></i>
 											</button>
-											{#if localEstado !== 'venta_cerrada'}
+											{#if !ventaFinalizada}
 												<button onclick={() => handleEliminarProformaGestion(doc)} class="shrink-0 text-slate-400 hover:text-rose-600 p-1.5 rounded transition-colors" title="Eliminar" aria-label="Eliminar proforma">
 													<i class="fas fa-trash-alt"></i>
 												</button>
@@ -1682,7 +1725,7 @@ async function copiarCodigoGenerado() {
 						</div>
 
 						<!-- Cierre financiero: monto final de la venta + adelanto inicial -->
-						{#if localEstado !== 'venta_cerrada'}
+						{#if !ventaFinalizada}
 							<div class="mt-6 border-t border-slate-100 pt-5">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Monto final de la venta</h4>
 								<p class="text-xs text-slate-400 mb-3">Confirma el valor definitivo de la venta — obligatorio para cerrarla.</p>
@@ -2023,7 +2066,7 @@ async function copiarCodigoGenerado() {
 						<i class="fas fa-save"></i> {mode === 'edit' ? 'Guardar cambios' : 'Guardar venta'}
 					{/if}
 				</button>
-				{#if mode === 'edit' && localEstado !== 'venta_cerrada'}
+				{#if mode === 'edit' && !ventaFinalizada}
 					<button
 						onclick={handleCerrarVenta}
 						disabled={!canClose || isClosing}

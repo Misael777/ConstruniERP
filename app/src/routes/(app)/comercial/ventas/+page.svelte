@@ -15,7 +15,7 @@ import { getCentroCostoOptions } from '$lib/modules/transacciones/services/trans
 import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
-import { crearSolicitud, eliminarVentaCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+import { crearSolicitud, eliminarVentaCascade, darDeBajaVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 import { exportarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
@@ -516,6 +516,30 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		}
 	}
 
+	let isDandoDeBaja = $state(false);
+
+	/** Reemplaza a "Eliminar" en la tabla/modal una vez que la venta está cerrada — a diferencia de
+	 * eliminarVentaCascade, no borra nada: solo marca el proyecto como 'baja' (ver darDeBajaVenta en
+	 * aprobaciones.service.ts). No pasa por el flujo de solicitud de aprobación (no es un borrado). */
+	async function handleDarDeBajaEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
+
+		if (!confirm(`¿Dar de baja la venta "${etiquetaVenta(row)}"? Quedará marcada como inactiva.`)) return;
+
+		isDandoDeBaja = true;
+		try {
+			const result = await darDeBajaVenta(supabase, row.id);
+			if (!result.success) throw new Error(result.message);
+			fetchVentas();
+		} catch (err) {
+			console.error('[Ventas] Error dando de baja la venta:', err);
+			alert(`No se pudo dar de baja la venta.\n${describeError(err)}`);
+		} finally {
+			isDandoDeBaja = false;
+		}
+	}
+
 	// Preview de documentos (contrato/proforma) — el modal en sí (conversión de URL de Drive,
 	// descarga, iframe) vive en el componente compartido DocumentPreviewModal.svelte, reusado
 	// también en Transacciones para el comprobante.
@@ -626,7 +650,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:darDeBaja={handleDarDeBajaEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />

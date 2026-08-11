@@ -312,7 +312,7 @@
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
 							{:else if field.key === 'id_partida' && idPartidaBloqueado}
-								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Centro de Costo es "Bolsa General".</p>
+								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Centro de Costo es "Corporativa".</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}
