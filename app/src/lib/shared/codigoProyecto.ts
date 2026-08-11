@@ -23,6 +23,11 @@ export type ProyectoCodigoFields = {
 	// Comunes
 	nro_pisos?: number | string | null;
 	distrito?: string | null;
+	/** Distrito SIN truncar — a diferencia de `distrito` (columna VARCHAR(4)), esta guarda el nombre
+	 * completo y, en Obra, el número consecutivo que distingue proyectos repetidos en el mismo
+	 * distrito, PEGADO sin separador (ej. "Breña1", ver resolverNumeroDistrito en
+	 * NuevaVentaModal.svelte). Se prefiere sobre `distrito` cuando está presente. */
+	ubicacion?: string | null;
 	fecha_inicio_plan?: string | null;
 	created_at?: string | null;
 	cliente?: { nombre?: string | null } | null;
@@ -45,27 +50,25 @@ function mesAnioDeFecha(value: string | null | undefined): { mes: string; anio: 
 }
 
 /**
- * Arma el código del proyecto según su tipo de venta:
- *  - Obra:        `{OBRA|SUP}-{trámite}({intervención})({edificación}){pisos}_{mesObra}{añoObra}_{distrito}_{cliente}`
- *    (usa el mes/año propios de la pestaña Obra — mes_obra/anio_obra — no los de la fecha de venta)
- *  - Consultoría: `EXP_({tipo})({estadoPredio})({edificación}){pisos}_{mes}{año}_{distrito}_{cliente}`
- *    (mes/año derivados de la fecha de la venta; prefijo "EXP_" — de "Expediente" — a pedido del
- *    usuario, Obra no lo lleva porque ya arranca con su propio prefijo OBRA-/SUP-). `tip_proyecto`,
- *    `estado_predio`, `tipo_edifica` (Consultoría) y `tipo_intervencion`, `tipo_edificacion_obra`
- *    (Obra) admiten VARIAS alternativas a la vez (checkboxes en NuevaVentaModal.svelte): se guardan en
- *    BD como letras unidas por "+" (ej. "L+O") y acá se muestran entre paréntesis, ej.
- *    "(L+O)(A+R)(M+I)" — mismo criterio que codigoGenerado en el modal.
+ * Arma el código del proyecto según su tipo de venta — ambos de selección ÚNICA (a pedido del
+ * usuario, sin checkboxes ni combinaciones con "+"):
+ *  - Obra:        `{Tipo de Servicio}_{Permiso Municipal}{Alcance de Obra}{Tipo de Contratación}{pisos}_{distrito+Nº}_{mesObra}{añoObra}_{cliente}`
+ *    (ej. "OBRA_LGC5_Ate1_0525_ClienteSAC" — reestructurado a pedido del usuario según una imagen de
+ *    referencia; usa el mes/año propios de la pestaña Obra — mes_obra/anio_obra — no los de la fecha
+ *    de venta. Todo separado por "_", sin guion medio).
+ *  - Consultoría: `EXP_{tipo}{estadoPredio}{edificación}{pisos}_{mes}{año}_{distrito}_{cliente}`
+ *    (mes/año derivados de la fecha de la venta; prefijo "EXP_" — de "Expediente").
  */
 export function generarCodigoProyecto(p: ProyectoCodigoFields): string {
 	const cliente = sanitizeFileSegment((p.clienteNombre || p.cliente?.nombre || '').trim() || 'Cliente');
-	const distrito = sanitizeFileSegment(p.distrito ?? '');
+	const distrito = sanitizeFileSegment(p.ubicacion || p.distrito || '');
 	const pisos = p.nro_pisos ?? '';
 
 	if (p.tipo_venta === 'obra') {
 		const anioObra = p.anio_obra != null ? String(p.anio_obra).slice(-2) : '';
-		return `${p.tipo_obra ?? ''}-${p.tipo_tramite ?? ''}(${p.tipo_intervencion ?? ''})(${p.tipo_edificacion_obra ?? ''})${pisos}_${p.mes_obra ?? ''}${anioObra}_${distrito}_${cliente}`;
+		return `${p.tipo_obra ?? ''}_${p.tipo_tramite ?? ''}${p.tipo_intervencion ?? ''}${p.tipo_edificacion_obra ?? ''}${pisos}_${distrito}_${p.mes_obra ?? ''}${anioObra}_${cliente}`;
 	}
 
 	const { mes, anio } = mesAnioDeFecha(p.fecha_inicio_plan || p.created_at);
-	return `EXP_(${p.tip_proyecto ?? ''})(${p.estado_predio ?? ''})(${p.tipo_edifica ?? ''})${pisos}_${mes}${anio}_${distrito}_${cliente}`;
+	return `EXP_${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${pisos}_${mes}${anio}_${distrito}_${cliente}`;
 }

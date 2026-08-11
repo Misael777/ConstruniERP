@@ -306,12 +306,14 @@
 
 		bulkDeleting = true;
 		const ids = Array.from(checkedIds);
+		console.log('[Transacciones] Borrado masivo: ids marcados =', ids);
 		let okCount = 0;
 		const errores: string[] = [];
 		try {
 			for (const id of ids) {
 				try {
 					const result = await deleteTransaccion(supabase, id, true);
+					console.log('[Transacciones] deleteTransaccion', id, '->', result);
 					if (result.success) {
 						okCount++;
 						if (selectedId === id) selectedId = null;
@@ -319,10 +321,12 @@
 						errores.push(result.message);
 					}
 				} catch (err: any) {
+					console.error('[Transacciones] Excepción eliminando', id, err);
 					errores.push(err?.message ?? 'Error inesperado');
 				}
 			}
 
+			console.log('[Transacciones] Borrado masivo terminado: okCount =', okCount, 'errores =', errores);
 			if (okCount > 0) toast.success(`${okCount} transacción${okCount === 1 ? '' : 'es'} eliminada${okCount === 1 ? '' : 's'} correctamente`);
 			if (errores.length > 0) toast.error(`${errores.length} no se pudieron eliminar: ${errores[0]}`);
 

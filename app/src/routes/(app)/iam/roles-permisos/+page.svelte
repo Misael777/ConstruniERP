@@ -21,8 +21,7 @@
 			submodules: [
 				{ key: 'ver_comercial', label: 'General Comercial' },
 				{ key: 'ver_comercial_ventas', label: 'Ventas' },
-				{ key: 'ver_comercial_clientes', label: 'Clientes' },
-				{ key: 'ver_comercial_proveedores', label: 'Proveedores' }
+				{ key: 'ver_comercial_clientes', label: 'Clientes' }
 			]
 		},
 		{
@@ -41,7 +40,8 @@
 				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
 				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
 				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' },
-				{ key: 'ver_finanzas_cuentas_bancarias', label: 'Cuentas Bancarias' }
+				{ key: 'ver_finanzas_cuentas_bancarias', label: 'Cuentas Bancarias' },
+				{ key: 'ver_comercial_proveedores', label: 'Proveedores' }
 			]
 		},
 		{

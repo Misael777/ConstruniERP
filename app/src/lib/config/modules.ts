@@ -30,8 +30,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     permiso: 'ver_comercial',
     subItems: [
       { path: '/comercial/clientes', label: 'Clientes', permiso: 'ver_comercial_clientes' },
-      { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' },
-      { path: '/comercial/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }
+      { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' }
     ]
   },
   { 
@@ -55,7 +54,8 @@ export const MODULE_REGISTRY: ModuleItem[] = [
       { path: '/finanzas/cuentas-cobrar', label: 'Cuentas por Cobrar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/cuentas-pagar', label: 'Cuentas por Pagar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/tranzacciones', label: 'Transacciones', permiso: 'ver_finanzas_transacciones' },
-      { path: '/finanzas/cuentas-bancarias', label: 'Cuentas Bancarias', permiso: 'ver_finanzas_cuentas_bancarias' }
+      { path: '/finanzas/cuentas-bancarias', label: 'Cuentas Bancarias', permiso: 'ver_finanzas_cuentas_bancarias' },
+      { path: '/finanzas/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }
     ]
   }
 ];

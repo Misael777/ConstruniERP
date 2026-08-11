@@ -6,7 +6,7 @@
 	import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 	import { describeError } from '$lib/shared/describeError';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
-	import { createTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
@@ -18,7 +18,8 @@
 		mode = 'create',
 		ventaId = null,
 		onClose = () => {},
-		onSaved = () => {}
+		onSaved = () => {},
+		onTransaccionSugerida = () => {}
 	} = $props<{
 		isOpen?: boolean;
 		/** 'edit' reutiliza este mismo popup para editar una venta existente — a pedido del usuario,
@@ -28,15 +29,30 @@
 		ventaId?: number | null;
 		onClose?: () => void;
 		onSaved?: () => void;
+		/** A pedido del usuario: al cerrar una venta, la transacción (ingreso) del adelanto recién
+		 * creada se pasa hacia arriba para que el padre (comercial/ventas/+page.svelte) abra el popup de
+		 * Transacciones ya prellenado con ella, para completar ahí los datos que el cierre de venta no
+		 * pide (tipo de documento, N° de documento, forma/medio de pago, categoría) — mismo patrón que
+		 * `onTransaccionSugerida` en CobroModal.svelte/PagoModal.svelte. Solo se llama cuando el cierre
+		 * SÍ generó una transacción nueva (si el adelanto ya estaba registrado de antes, no hay nada que
+		 * completar). El segundo argumento trae el nombre del cliente y el código del proyecto YA
+		 * resueltos acá (frescos, no lo que haya quedado guardado en `centro_costo.nombre`, que puede
+		 * estar desactualizado) — a pedido del usuario, el padre los usa para que el <select> de Origen
+		 * muestre el centro de costo + nombre del CLIENTE, y el de Destino el centro de costo + código
+		 * del PROYECTO de esta misma venta, en vez de lo que sea que diga la etiqueta genérica. */
+		onTransaccionSugerida?: (transaccion: Transaccion, contexto: { clienteNombre: string; proyectoCodigo: string }) => void;
 	}>();
 
-	// Opciones de "Tipo de proyecto" y "Estado del predio" (Consultoría) — checkboxes, se puede marcar
-	// más de una a la vez (ver tipoProyectoSel/estadoPredioSel más abajo).
+	// Opciones de "Tipo de proyecto", "Estado del predio" y "Tipo de edificación" (Consultoría) — a
+	// pedido del usuario, dropdowns de selección ÚNICA (sin checkboxes: se probó selección múltiple con
+	// checkboxes en una iteración anterior, pero el usuario pidió volver a un dropdown simple). "DF + I"
+	// queda como una opción fija propia de Tipo de proyecto (no se arma combinando dos checkboxes).
 	const TIPO_PROYECTO_OPTIONS = [
 		{ value: 'L', label: 'Licencia' },
 		{ value: 'O', label: 'Proyecto de obra' },
 		{ value: 'DF', label: 'Declaración de fábrica' },
 		{ value: 'I', label: 'Independización' },
+		{ value: 'DF + I', label: 'Declaratoria de fábrica + Independización' },
 		{ value: 'EMS', label: 'Estudio de mecánica de suelos' }
 	];
 	const ESTADO_PREDIO_OPTIONS = [
@@ -46,7 +62,6 @@
 		{ value: 'DP', label: 'Demolición Parcial' },
 		{ value: 'DT', label: 'Demolición total' }
 	];
-	// "Tipo de edificación" — igual que arriba, checkboxes (ver tipoEdificacionSel más abajo).
 	const TIPO_EDIFICACION_OPTIONS = [
 		{ value: 'M', label: 'Viv. Multifamiliar' },
 		{ value: 'U', label: 'Viv. Unifamiliar' },
@@ -58,10 +73,18 @@
 		{ value: 'MX', label: 'Uso Mixto' }
 	];
 
-	// Opciones de "Alcance de obra" y "Tipo de contratación" (Obra) — a pedido del usuario, reemplazan
-	// por completo a las viejas "Tipo de Intervención"/"Tipo de edificación" de Obra (ver
-	// alcanceObra/tipoContratacion más abajo), siguiendo el esquema de código del infográfico
-	// "SISTEMA DE CÓDIGO DE PROYECTOS" que compartió.
+	// Campos de "Obra" (a pedido del usuario) — reemplazan por completo al esquema anterior (Tipo de
+	// trámite/Tipo de Intervención/Tipo de edificación), siguiendo el esquema de 4 códigos:
+	// {Tipo de Servicio}-{Permiso Municipal}{Alcance de Obra}{Tipo de Contratación} — todos de
+	// selección ÚNICA (no admiten combinar varias letras, por eso son <select>, no checkboxes).
+	// "Tipo de Servicio" reusa tipoObra (OBRA/SUP, sin cambios). "Permiso Municipal" reusa tipoTramite
+	// (antes L/O, ahora L/S). "Alcance de Obra" y "Tipo de Contratación" reusan las columnas
+	// tipo_intervencion/tipo_edificacion_obra (antes multi-selección con checkboxes, ver historial de
+	// este archivo) — vuelven a ser selección única porque el nuevo esquema no combina letras.
+	const PERMISO_MUNICIPAL_OPTIONS = [
+		{ value: 'L', label: 'Con permiso' },
+		{ value: 'S', label: 'Sin permiso' }
+	];
 	const ALCANCE_OBRA_OPTIONS = [
 		{ value: 'R', label: 'Casco rojo' },
 		{ value: 'G', label: 'Casco gris' },
@@ -74,12 +97,6 @@
 		{ value: 'S', label: 'Subcontrata' },
 		{ value: 'P', label: 'Por partidas' }
 	];
-
-	/** Agrega/quita `value` de una selección múltiple (checkboxes) — devuelve un array NUEVO para que
-	 * Svelte 5 detecte el cambio sobre el $state. */
-	function toggleSeleccion(lista: string[], value: string): string[] {
-		return lista.includes(value) ? lista.filter((v) => v !== value) : [...lista, value];
-	}
 
 	// Form State
 	let proyectoNombre = $state('');
@@ -111,17 +128,11 @@
 	let adelantoMonto = $state('');
 
 	// Generation fields
-	// A pedido del usuario: "Tipo de proyecto" y "Estado del predio" (Consultoría) aceptan MÚLTIPLES
-	// alternativas a la vez (checkboxes en vez de un <select> de una sola opción) — antes la única forma
-	// de combinar dos códigos era una opción hardcodeada "DF + I" en el <select>, que no cubría ninguna
-	// otra combinación. Se guardan como arrays acá; al persistir se unen con "+" (ver
-	// tip_proyecto/estado_predio en los payloads de guardado) y en el código visual van entre paréntesis
-	// (ver codigoGenerado más abajo), ej. (L+O)(A+R).
-	let tipoProyectoSel = $state<string[]>([]);
-	let estadoPredioSel = $state<string[]>([]);
-	// También checkboxes (a pedido del usuario) — mismo criterio de arrays/join('+')/paréntesis que
-	// tipoProyectoSel/estadoPredioSel de arriba.
-	let tipoEdificacionSel = $state<string[]>([]);
+	// "Tipo de proyecto"/"Estado del predio"/"Tipo de edificación" (Consultoría) — dropdowns de
+	// selección ÚNICA (a pedido del usuario, sin checkboxes — ver TIPO_PROYECTO_OPTIONS más arriba).
+	let tipoProyecto = $state('');
+	let estadoPredio = $state('');
+	let tipoEdificacion = $state('');
 	// Ya no tiene un <select> propio en Consultoría (se eliminó el dropdown duplicado "Tipo de
 	// edificación (2)", a pedido del usuario) — se conserva como campo "de paso" para no perder el
 	// dato de ventas ya guardadas con ese valor: loadVentaParaEditar lo carga y el guardado en modo
@@ -134,18 +145,12 @@
 	// proyecto_caracteristicas_obra_migration.sql y proyecto_codigo_obra_migration.sql, hay que correr
 	// esas migraciones antes de usar esta pestaña o el guardado falla con "column does not exist".
 	let tipoObra = $state('');
-	// A pedido del usuario: sigue el esquema "SISTEMA DE CÓDIGO DE PROYECTOS" que compartió — L=Con
-	// permiso / S=Sin permiso (antes L=Con licencia / O=Sin licencia, mismo campo/columna, otros
-	// valores). Reemplaza por completo a tipoIntervencionSel/tipoEdificacionObraSel (checkboxes viejos).
+	// "Permiso Municipal" (antes "Tipo de trámite") — reusa esta misma variable/columna.
 	let tipoTramite = $state('');
-	let alcanceObra = $state('');
-	let tipoContratacion = $state('');
-	// N° correlativo de esta venta dentro de su distrito (parte 6 del código) — se calcula solo (ver
-	// calcularCorrelativoDistrito) contando las ventas de Obra ya registradas en ese distrito. Queda
-	// FIJO una vez asignado (se guarda en correlativo_distrito) — no se recalcula en cada edición, solo
-	// si el usuario cambia el distrito explícitamente (ver el onchange del <select> de Distrito).
-	let correlativoDistrito = $state<number | null>(null);
-	let isCalculandoCorrelativo = $state(false);
+	// "Alcance de Obra" / "Tipo de Contratación" — selección ÚNICA (ver nota más arriba, junto a
+	// ALCANCE_OBRA_OPTIONS/TIPO_CONTRATACION_OPTIONS), reusan tipo_intervencion/tipo_edificacion_obra.
+	let tipoIntervencion = $state('');
+	let tipoEdificacionObra = $state('');
 	// Mes y Año propios de Obra (a diferencia de Consultoría, que los deriva solo de Fecha de venta
 	// para el visualizador del código) — el usuario los pide como campos aparte para pedir directamente.
 	let mesObra = $state('');
@@ -153,6 +158,11 @@
 	let departamento = $state('Lima');
 	let provincia = $state('Lima');
 	let distrito = $state('');
+	// Solo Obra (a pedido del usuario): número consecutivo que distingue proyectos que caen en el
+	// mismo distrito — se guarda en `ubicacion` como "{distrito}_{N}" (ej. "Breña_1", "Breña_2"), ver
+	// resolverNumeroDistrito/distritoParaGuardar más abajo. null mientras no aplica (Consultoría, o
+	// Obra sin distrito elegido todavía).
+	let distritoNumero = $state<number | null>(null);
 	let clienteNombreGen = $state('');
 
 	function getMesFromFecha() {
@@ -236,21 +246,21 @@
 				valorVenta = '';
 				comisionPorcentaje = '';
 				direccionPredio = '';
-				tipoProyectoSel = [];
-				estadoPredioSel = [];
-				tipoEdificacionSel = [];
+				tipoProyecto = '';
+				estadoPredio = '';
+				tipoEdificacion = '';
 				tipoEdificacion2 = '';
 				numeroPisos = '';
 				tipoObra = '';
 				tipoTramite = '';
-				alcanceObra = '';
-				tipoContratacion = '';
-				correlativoDistrito = null;
+				tipoIntervencion = '';
+				tipoEdificacionObra = '';
 				mesObra = '';
 				anioObra = '';
 				departamento = 'Lima';
 				provincia = 'Lima';
 				distrito = '';
+				distritoNumero = null;
 				contratoFile = null;
 				proformaFiles = [];
 				selectedFinalFileIndex = null;
@@ -304,27 +314,33 @@
 			direccionPredio = data.direccion_predio || '';
 			// tip_proyecto/estado_predio se guardan como letras unidas por "+" (ej. "L+O") cuando el
 			// usuario marcó varios checkboxes — se separan de vuelta acá para precargar la selección.
-			tipoProyectoSel = (data.tip_proyecto || '').split('+').filter(Boolean);
-			estadoPredioSel = (data.estado_predio || '').split('+').filter(Boolean);
-			tipoEdificacionSel = (data.tipo_edifica || '').split('+').filter(Boolean);
+			tipoProyecto = data.tip_proyecto || '';
+			estadoPredio = data.estado_predio || '';
+			tipoEdificacion = data.tipo_edifica || '';
 			tipoEdificacion2 = data.tipo_edificacion2 || '';
 			numeroPisos = data.nro_pisos != null ? String(data.nro_pisos) : '';
 			tipoObra = data.tipo_obra || '';
 			tipoTramite = data.tipo_tramite || '';
-			alcanceObra = data.alcance_obra || '';
-			tipoContratacion = data.tipo_contratacion || '';
-			// El correlativo se carga tal cual quedó guardado — NO se recalcula acá (recalcularlo cada vez
-			// que se abre "Editar venta" podría dar un número distinto si se crearon más ventas en el
-			// mismo distrito después; ver calcularCorrelativoDistrito, que solo corre si el usuario cambia
-			// el distrito a mano).
-			correlativoDistrito = data.correlativo_distrito ?? null;
+			tipoIntervencion = data.tipo_intervencion || '';
+			tipoEdificacionObra = data.tipo_edificacion_obra || '';
 			mesObra = data.mes_obra || '';
 			anioObra = data.anio_obra != null ? String(data.anio_obra) : '';
 			departamento = resolveTruncatedOption(DEPARTAMENTOS, data.departamento) || 'Lima';
 			provincia = resolveTruncatedOption(PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [], data.provincia) || 'Lima';
 			// `ubicacion` guarda el distrito SIN truncar (ver payload de guardado) — se prefiere sobre
-			// la columna `distrito` (VARCHAR(4)) que sí queda truncada.
-			distrito = data.ubicacion || resolveTruncatedOption(DISTRITOS_POR_PROVINCIA[provincia] ?? [], data.distrito) || '';
+			// la columna `distrito` (VARCHAR(4)) que sí queda truncada. En Obra, `ubicacion` trae el
+			// número consecutivo PEGADO sin separador (ej. "Breña1", ver distritoParaGuardar/
+			// resolverNumeroDistrito) — se separa acá para no romper el <select> de Distrito (sus
+			// <option> son nombres planos) y para NO reasignar un número nuevo al reabrir para editar.
+			const ubicacionGuardada = data.ubicacion || resolveTruncatedOption(DISTRITOS_POR_PROVINCIA[provincia] ?? [], data.distrito) || '';
+			if (data.tipo_venta === 'obra') {
+				const match = /^(\D+)(\d+)$/.exec(ubicacionGuardada);
+				distrito = match ? match[1] : ubicacionGuardada;
+				distritoNumero = match ? Number(match[2]) : null;
+			} else {
+				distrito = ubicacionGuardada;
+				distritoNumero = null;
+			}
 			observaciones = data.descripcion || '';
 			caracteristicasTab = data.tipo_venta === 'obra' ? 'obra' : 'consultoria';
 			asesor = data.responsable || '';
@@ -363,78 +379,74 @@
 		return clienteNombreGen.trim();
 	}
 
-	// A pedido del usuario: abreviatura de distrito para el código de Obra (parte 5 del infográfico
-	// "SISTEMA DE CÓDIGO DE PROYECTOS") — sin una tabla propia de abreviaturas por distrito, se genera
-	// una regla automática: nombres de una sola palabra (ej. "Breña", "Ate") se dejan tal cual en
-	// mayúsculas; nombres de varias palabras (ej. "San Juan de Lurigancho") se abrevian a las iniciales
-	// de cada palabra significativa (ignorando conectores como "de"/"del"), ej. "SJL". No siempre va a
-	// coincidir con la abreviatura que ya usan de memoria (ej. "Santiago de Surco" da "SS", no "SUR")
-	// — el usuario aceptó ese trade-off al elegir esta opción sobre pasar la tabla real.
-	const CONECTORES_DISTRITO = new Set(['de', 'del', 'la', 'las', 'el', 'los', 'y']);
-	function abreviarDistrito(nombre: string): string {
-		if (!nombre) return '';
-		const palabras = nombre.trim().split(/\s+/).filter((p) => !CONECTORES_DISTRITO.has(p.toLowerCase()));
-		if (palabras.length <= 1) return (palabras[0] || nombre).slice(0, 4).toUpperCase();
-		return palabras.map((p) => p[0]).join('').toUpperCase();
+	/** Solo Obra, a pedido del usuario: siguiente número consecutivo para un distrito que se repite en
+	 * otro proyecto de Obra — cuenta contra `ubicacion` (guarda el distrito sin truncar) de proyectos
+	 * YA guardados con tipo_venta='obra', toma el número más alto entre los que coincidan con `base`
+	 * (sin distinguir mayúsculas) y devuelve ese máximo + 1 — no un simple conteo, para no repetir un
+	 * número si algún proyecto intermedio se borró. El número va PEGADO al distrito, sin separador (ej.
+	 * "Breña1", "Breña2" — a pedido del usuario, siguiendo el formato de la imagen: dentro de cada
+	 * grupo del código no hay separador, solo "_" ENTRE grupos, ver codigoGenerado). Los nombres de
+	 * distrito de DISTRITOS_POR_PROVINCIA nunca terminan en dígito, así que separar "letras" de
+	 * "números finales" con una regex simple es inambiguo. `excludeProyectoId` deja fuera a la propia
+	 * venta que se está editando (si no, se contaría a sí misma). Nunca lanza: si falla, cae a 1 en vez
+	 * de bloquear el formulario por un problema secundario. */
+	async function resolverNumeroDistrito(base: string, excludeProyectoId: number | null): Promise<number> {
+		if (!base.trim()) return 1;
+		try {
+			let query = supabase.from('proyecto').select('id_proyecto, ubicacion').eq('tipo_venta', 'obra');
+			if (excludeProyectoId) query = query.neq('id_proyecto', excludeProyectoId);
+			const { data, error } = await query;
+			if (error) throw error;
+
+			const baseNormalizada = base.trim().toLowerCase();
+			let max = 0;
+			for (const row of (data ?? []) as any[]) {
+				const match = /^(\D+)(\d+)$/.exec(String(row.ubicacion || ''));
+				if (match && match[1].trim().toLowerCase() === baseNormalizada) {
+					max = Math.max(max, Number(match[2]));
+				}
+			}
+			return max + 1;
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error resolviendo el número de distrito:', err);
+			return 1;
+		}
 	}
 
-	// Calcula el N° correlativo de esta venta dentro de `distritoActual` — cuenta las ventas de Obra ya
-	// registradas en ese distrito (excluyendo la propia venta en modo edición, para no contarse a sí
-	// misma) y suma 1. `requestId` descarta resultados obsoletos si el usuario cambia el distrito varias
-	// veces seguidas antes de que la primera consulta responda.
-	let correlativoRequestId = 0;
-	async function calcularCorrelativoDistrito(distritoActual: string) {
-		if (!distritoActual) {
-			correlativoDistrito = null;
+	/** Dispara resolverNumeroDistrito para el distrito ACTUAL — llamarse solo desde interacción real del
+	 * usuario (elegir/cambiar distrito, o cambiar a la pestaña Obra), nunca durante la carga de una
+	 * venta existente (esa ya trae su número asignado, parseado en loadVentaParaEditar). Descarta el
+	 * resultado si `distrito` cambió de nuevo mientras la consulta estaba en vuelo. */
+	async function actualizarNumeroDistrito() {
+		if (caracteristicasTab !== 'obra' || !distrito) {
+			distritoNumero = null;
 			return;
 		}
-		const requestId = ++correlativoRequestId;
-		isCalculandoCorrelativo = true;
-		try {
-			let query = supabase
-				.from('proyecto')
-				.select('id_proyecto', { count: 'exact', head: true })
-				.eq('tipo_venta', 'obra')
-				.eq('ubicacion', distritoActual);
-			if (mode === 'edit' && ventaId) query = query.neq('id_proyecto', ventaId);
-			const { count, error } = await query;
-			if (error) throw error;
-			if (requestId !== correlativoRequestId) return; // se disparó un cálculo más nuevo mientras esperábamos
-			correlativoDistrito = (count ?? 0) + 1;
-		} catch (err) {
-			console.error('[NuevaVentaModal] Error calculando el correlativo de distrito:', err);
-			if (requestId === correlativoRequestId) correlativoDistrito = null;
-		} finally {
-			if (requestId === correlativoRequestId) isCalculandoCorrelativo = false;
-		}
+		const base = distrito;
+		const excludeId = mode === 'edit' ? ventaId : null;
+		const numero = await resolverNumeroDistrito(base, excludeId);
+		if (distrito === base && caracteristicasTab === 'obra') distritoNumero = numero;
 	}
 
-	// A pedido del usuario: entrar a la pestaña Obra con un distrito ya elegido (desde "Información
-	// general") debe calcular el correlativo solo, sin que el usuario tenga que volver a tocar el
-	// distrito — pero SOLO en modo creación y mientras no se haya calculado todavía (correlativoDistrito
-	// === null), para no pisar el valor ya cargado de una venta existente (ver loadVentaParaEditar).
-	$effect(() => {
-		if (isOpen && mode === 'create' && caracteristicasTab === 'obra' && distrito && correlativoDistrito === null) {
-			calcularCorrelativoDistrito(distrito);
-		}
-	});
+	/** Valor a guardar/mostrar para el distrito — con el número consecutivo PEGADO (sin separador, a
+	 * pedido del usuario) SOLO en Obra, ej. "Breña1" (Consultoría queda igual que siempre, sin
+	 * sufijo). Ver distritoNumero/resolverNumeroDistrito. */
+	let distritoParaGuardar = $derived(
+		caracteristicasTab === 'obra' && distrito && distritoNumero != null ? `${distrito}${distritoNumero}` : distrito
+	);
 
-	// A pedido del usuario: el código de Obra sigue el esquema del infográfico "SISTEMA DE CÓDIGO DE
-	// PROYECTOS" — {servicio}-{permiso}{alcance}{contratación}-{distrito}{N° en distrito}-{mes}{año}-
-	// {cliente/proyecto}, ej. OBRA-LGC-ATE1-0525-EDIF. LOS ANDES SAC. A diferencia de Consultoría, el
-	// segmento de cliente NO pasa por sanitizeFileSegment (que reemplaza espacios por "_") — el
-	// infográfico lo muestra con espacios y puntuación tal cual ("EDIF. LOS ANDES SAC"), y este código
-	// no se usa como nombre de archivo en ningún lado (ver generateUniqueFileName en fileNaming.ts, que
-	// arma sus propios nombres de archivo por separado).
-// A pedido del usuario: en Consultoría el código va prefijado con "EXP_" (de "Expediente") — Obra no
-// lleva este prefijo, ya arranca con su propio prefijo OBRA-/SUP-.
+// A pedido del usuario: el código de Obra sigue el esquema (todo separado por "_", reestructurado
+// según la imagen de referencia que compartió, con "número de pisos" agregado al segundo grupo):
+// {Tipo de Servicio}_{Permiso Municipal}{Alcance de Obra}{Tipo de Contratación}{pisos}_{distrito+Nº
+// secuencial}_{mes}{año}_{cliente} — ej. "OBRA_LGC5_Ate1_0525_ClienteSAC". Usa el mes/año propios de
+// esa pestaña (mesObra/anioObra), no los derivados de la fecha de venta como en Consultoría. Los 4
+// primeros campos son de selección ÚNICA (no checkboxes, ver PERMISO_MUNICIPAL_OPTIONS/
+// ALCANCE_OBRA_OPTIONS/TIPO_CONTRATACION_OPTIONS más arriba).
 let codigoGenerado = $derived(
 	caracteristicasTab === 'obra'
-		? `${tipoObra}-${tipoTramite}${alcanceObra}${tipoContratacion}-${abreviarDistrito(distrito)}${correlativoDistrito ?? ''}-${mesObra}${String(anioObra).slice(-2)}-${(getClienteNombreActual() || 'Cliente').trim()}`
-		// "Tipo de proyecto" y "Estado del predio" admiten varias alternativas a la vez (checkboxes) —
-		// cada grupo va entre paréntesis en el código visual, ej. (L+O)(A+R) — ver TIPO_PROYECTO_OPTIONS/
-		// ESTADO_PREDIO_OPTIONS y tipoProyectoSel/estadoPredioSel arriba.
-		: `EXP_(${tipoProyectoSel.join('+')})(${estadoPredioSel.join('+')})(${tipoEdificacionSel.join('+')})${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+		? `${tipoObra}_${tipoTramite}${tipoIntervencion}${tipoEdificacionObra}${numeroPisos}_${sanitizeFileSegment(distritoParaGuardar)}_${mesObra}${String(anioObra).slice(-2)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+		// A pedido del usuario: en Consultoría el código va prefijado con "EXP_" (de "Expediente").
+		: `EXP_${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
 );
 
 // A pedido del usuario: `nombre_proyecto` debe almacenar el CÓDIGO del proyecto, no el nombre del
@@ -762,10 +774,8 @@ async function copiarCodigoGenerado() {
 	// "Información general" y "Características del proyecto" estén completos. tipoEdificacion2 queda
 	// fuera de este chequeo a propósito: ya no tiene un <select> en la UI (ver su declaración más
 	// arriba), así que exigirlo dejaría el formulario imposible de completar para una venta nueva.
-	// El sub-chequeo de Obra (tipoObra/tipoTramite/alcanceObra/tipoContratacion/mesObra/anioObra) ya
-	// tiene columnas reales donde guardarse (ver proyecto_codigo_obra_migration.sql), así que ahora sí
-	// se exige igual que el de Consultoría — antes quedaba pendiente ("AJUSTAR") porque esos campos
-	// todavía no existían.
+	// AJUSTAR: el sub-chequeo de Obra (tipoObra/tipoTramite/tipoIntervencion/tipoEdificacionObra) se
+	// deja pendiente hasta que esos campos tengan columnas reales donde guardarse (ver su declaración).
 	let infoGeneralCompleta = $derived(
 		!!proyectoNombre.trim() &&
 		!!fechaVenta &&
@@ -775,9 +785,8 @@ async function copiarCodigoGenerado() {
 		!!distrito &&
 		Number(valorVenta) > 0 &&
 		comisionPorcentaje !== '' && !Number.isNaN(Number(comisionPorcentaje)) &&
-		(caracteristicasTab === 'consultoria'
-			? (tipoProyectoSel.length > 0 && estadoPredioSel.length > 0 && tipoEdificacionSel.length > 0 && Number(numeroPisos) > 0)
-			: (!!tipoObra && !!tipoTramite && !!alcanceObra && !!tipoContratacion && !!mesObra && !!anioObra))
+		(caracteristicasTab !== 'consultoria' ||
+			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && Number(numeroPisos) > 0))
 	);
 
 	// A pedido del usuario: una vez cerrada la venta, ya no se puede cambiar de Consultoría a Obra (ni
@@ -803,19 +812,19 @@ async function copiarCodigoGenerado() {
 	// "Editar" — mismo criterio de campos obligatorios que `canClose`, pero usando los archivos
 	// sueltos que todavía no se subieron (`proformaFiles`/`selectedFinalFileIndex`) en vez de los ya
 	// guardados en `documento_proyecto`.
-	// A pedido del usuario: la sección "Características del proyecto nuevo" queda BLOQUEADA (todos sus
-	// campos deshabilitados) hasta que esté completo el Adelanto inicial (monto + comprobante) — tanto
-	// en "Nueva venta" como en "Editar" mientras la venta SIGUE EN NEGOCIACIÓN. Ya NO exige contrato
-	// (antes sí) — pedido explícito: se puede completar las características con solo el adelanto
-	// registrado, aunque el contrato todavía no se haya adjuntado. Si la venta YA está cerrada, ese
-	// requisito ya se cumplió para poder cerrarla (ver `canClose`) — editar una venta cerrada debe poder
-	// tocar sus características SIEMPRE, sin volver a exigir el adelanto (que en ventas antiguas podría
-	// no haber quedado registrado tal cual lo espera este chequeo, dejando la sección bloqueada sin
-	// salida).
+
+	// A pedido del usuario: la sección "Características del proyecto nuevo" queda BLOQUEADA hasta que
+	// estén completos el Adelanto inicial (monto + comprobante, ya sea recién adjuntado o ya registrado
+	// antes) Y la proforma marcada como final — ya NO exige contrato (pedido explícito de una iteración
+	// anterior). Si la venta YA está cerrada, ese requisito ya se cumplió para poder cerrarla (ver
+	// `canClose`) — editar una venta cerrada debe poder tocar sus características SIEMPRE, sin volver a
+	// exigir estos 3 puntos (que en ventas antiguas podrían no haber quedado registrados tal cual lo
+	// espera este chequeo, dejando la sección bloqueada sin salida).
 	let documentosCierreListos = $derived(
 		mode === 'edit'
-			? localEstado === 'venta_cerrada' || adelantoYaRegistrado || (!!adelantoFile && Number(adelantoMonto) > 0)
-			: !!adelantoFile && Number(adelantoMonto) > 0
+			? localEstado === 'venta_cerrada' ||
+				((adelantoYaRegistrado || (!!adelantoFile && Number(adelantoMonto) > 0)) && selectedFinalId !== null)
+			: !!adelantoFile && Number(adelantoMonto) > 0 && selectedFinalFileIndex !== null
 	);
 
 	// Mismo criterio que `canClose`: registrar + cerrar de una vez tampoco exige contrato.
@@ -885,23 +894,22 @@ async function copiarCodigoGenerado() {
 					fecha_inicio_plan: basicos.fechaInicio,
 					comision_asesor: basicos.comision,
 					responsable: basicos.asesorFinal,
-					tip_proyecto: tipoProyectoSel.join('+'),
-					estado_predio: estadoPredioSel.join('+'),
-					tipo_edifica: tipoEdificacionSel.join('+'),
+					tip_proyecto: tipoProyecto,
+					estado_predio: estadoPredio,
+					tipo_edifica: tipoEdificacion,
 					tipo_edificacion2: tipoEdificacion2 || null,
 					nro_pisos: basicos.numeroPisosValue,
 					tipo_obra: tipoObra || null,
 					tipo_tramite: tipoTramite || null,
-					alcance_obra: alcanceObra || null,
-					tipo_contratacion: tipoContratacion || null,
-					correlativo_distrito: correlativoDistrito ?? null,
+					tipo_intervencion: tipoIntervencion || null,
+					tipo_edificacion_obra: tipoEdificacionObra || null,
 					mes_obra: mesObra || null,
 					anio_obra: anioObra ? Number(anioObra) : null,
 					distrito: distrito ? distrito.substring(0, 4).trim() : null,
 					provincia: provincia ? provincia.substring(0, 4).trim() : null,
 					departamento: departamento ? departamento.substring(0, 4).trim() : null,
 					tipo_venta: caracteristicasTab,
-					ubicacion: distrito,
+					ubicacion: distritoParaGuardar,
 					direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 					descripcion: observaciones?.trim() ? observaciones.trim() : null
 				}
@@ -929,6 +937,11 @@ async function copiarCodigoGenerado() {
 			await loadProformas();
 			onSaved();
 			onClose();
+			// A pedido del usuario: el adelanto de la venta recién cerrada debe generar la transacción de
+			// ingreso Y abrir el popup de Transacciones para completar la información que el cierre de
+			// venta no pide — solo si esta llamada creó una transacción nueva (result.data viene undefined
+			// si el adelanto ya estaba registrado de antes, ver cerrarVentaAprobada).
+			if (result.data) onTransaccionSugerida(result.data, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
 			alert(`No se pudo cerrar la venta.\n${describeError(err)}`);
@@ -1017,7 +1030,7 @@ async function copiarCodigoGenerado() {
 	 * tenido ids de antemano). Devuelve null (con saveError ya seteado) si algo falla. */
 	async function crearVentaYSubirDocumentos(
 		basicos: DatosBasicosVenta
-	): Promise<{ proyectoId: number; idCentroCosto: number | string | null; proformaDocIds: (number | null)[] } | null> {
+	): Promise<{ proyectoId: number; idCentroCosto: number | string | null; proformaDocIds: (number | null)[]; transaccionAdelanto: Transaccion | null } | null> {
 		const { clienteId, asesorFinal, asesorUserId, clienteNombreFinal, precioVenta, comision, numeroPisosValue, fechaInicio, sessionEmail } = basicos;
 
 		const proyectoPayload = {
@@ -1028,15 +1041,14 @@ async function copiarCodigoGenerado() {
 			comision_asesor: comision,
 			responsable: asesorFinal,
 			asesor_comercial_id: asesorUserId,
-			tip_proyecto: tipoProyectoSel.join('+'),
-			estado_predio: estadoPredioSel.join('+'),
-			tipo_edifica: tipoEdificacionSel.join('+'),
+			tip_proyecto: tipoProyecto,
+			estado_predio: estadoPredio,
+			tipo_edifica: tipoEdificacion,
 			nro_pisos: numeroPisosValue,
 			tipo_obra: tipoObra || null,
 			tipo_tramite: tipoTramite || null,
-			alcance_obra: alcanceObra || null,
-			tipo_contratacion: tipoContratacion || null,
-			correlativo_distrito: correlativoDistrito ?? null,
+			tipo_intervencion: tipoIntervencion || null,
+			tipo_edificacion_obra: tipoEdificacionObra || null,
 			mes_obra: mesObra || null,
 			anio_obra: anioObra ? Number(anioObra) : null,
 			distrito: distrito ? distrito.substring(0, 4).trim() : null,
@@ -1045,7 +1057,7 @@ async function copiarCodigoGenerado() {
 			costo_estima: precioVenta,
 			estado_proyecto: 'activo',
 			tipo_venta: caracteristicasTab,
-			ubicacion: distrito,
+			ubicacion: distritoParaGuardar,
 			direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 			usuario_registro: asesorUserId,
 			descripcion: observaciones?.trim() ? observaciones.trim() : null
@@ -1071,6 +1083,7 @@ async function copiarCodigoGenerado() {
 		}
 
 		const proformaDocIds: (number | null)[] = [];
+		let transaccionAdelanto: Transaccion | null = null;
 		try {
 			if (contratoFile) {
 				const contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId, proyectoNombre);
@@ -1134,6 +1147,7 @@ async function copiarCodigoGenerado() {
 					permisosState.userName || null
 				);
 				if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+				transaccionAdelanto = transResult.data ?? null;
 			}
 		} catch (uploadError) {
 			console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
@@ -1141,7 +1155,7 @@ async function copiarCodigoGenerado() {
 			return null;
 		}
 
-		return { proyectoId: nuevoProyectoId, idCentroCosto, proformaDocIds };
+		return { proyectoId: nuevoProyectoId, idCentroCosto, proformaDocIds, transaccionAdelanto };
 	}
 
 	async function handleGuardar() {
@@ -1162,16 +1176,15 @@ async function copiarCodigoGenerado() {
 				precio_venta: basicos.precioVenta,
 				comision_asesor: basicos.comision,
 				responsable: basicos.asesorFinal,
-				tip_proyecto: tipoProyectoSel.join('+'),
-				estado_predio: estadoPredioSel.join('+'),
-				tipo_edifica: tipoEdificacionSel.join('+'),
+				tip_proyecto: tipoProyecto,
+				estado_predio: estadoPredio,
+				tipo_edifica: tipoEdificacion,
 				tipo_edificacion2: tipoEdificacion2 || null,
 				nro_pisos: basicos.numeroPisosValue,
 				tipo_obra: tipoObra || null,
 				tipo_tramite: tipoTramite || null,
-				alcance_obra: alcanceObra || null,
-				tipo_contratacion: tipoContratacion || null,
-				correlativo_distrito: correlativoDistrito ?? null,
+				tipo_intervencion: tipoIntervencion || null,
+				tipo_edificacion_obra: tipoEdificacionObra || null,
 				mes_obra: mesObra || null,
 				anio_obra: anioObra ? Number(anioObra) : null,
 				distrito: distrito ? distrito.substring(0, 4).trim() : null,
@@ -1179,7 +1192,7 @@ async function copiarCodigoGenerado() {
 				departamento: departamento ? departamento.substring(0, 4).trim() : null,
 				costo_estima: basicos.precioVenta,
 				tipo_venta: caracteristicasTab,
-				ubicacion: distrito,
+				ubicacion: distritoParaGuardar,
 				direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 				descripcion: observaciones?.trim() ? observaciones.trim() : null
 			};
@@ -1285,6 +1298,11 @@ async function copiarCodigoGenerado() {
 
 			onSaved();
 			onClose();
+			// A pedido del usuario: mismo criterio que handleCerrarVenta — la transacción del adelanto se
+			// crea acá DENTRO de crearVentaYSubirDocumentos (no en cerrarVentaAprobada, que en este flujo
+			// recibe adelantoYaRegistrado:true y no vuelve a crearla), así que se toma de `resultado`, no
+			// de `result.data`.
+			if (resultado.transaccionAdelanto) onTransaccionSugerida(resultado.transaccionAdelanto, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error creando y cerrando la venta:', err);
 			saveError = `No se pudo cerrar la venta.\n${describeError(err)}`;
@@ -1367,6 +1385,7 @@ async function copiarCodigoGenerado() {
 										departamento = (e.currentTarget as HTMLSelectElement).value;
 										provincia = (PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [])[0] ?? '';
 										distrito = '';
+										distritoNumero = null;
 									}}
 									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
 								>
@@ -1379,7 +1398,7 @@ async function copiarCodigoGenerado() {
 								<label class="text-xs font-semibold text-[#0f3b5e]">Provincia *</label>
 								<select
 									value={provincia}
-									onchange={(e) => { provincia = (e.currentTarget as HTMLSelectElement).value; distrito = ''; }}
+									onchange={(e) => { provincia = (e.currentTarget as HTMLSelectElement).value; distrito = ''; distritoNumero = null; }}
 									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
 								>
 									{#each PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [] as p}
@@ -1389,17 +1408,19 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
+								<!-- A pedido del usuario: en Obra, elegir un distrito ya usado en otro proyecto le
+								     agrega un número consecutivo al guardar (ej. "Breña_1", "Breña_2" — ver
+								     actualizarNumeroDistrito/distritoParaGuardar). No usa bind:value porque hace
+								     falta interceptar el cambio para disparar esa resolución. -->
 								<select
 									value={distrito}
 									onchange={(e) => {
 										distrito = (e.currentTarget as HTMLSelectElement).value;
-										// A pedido del usuario: cambiar el distrito a mano (en Obra) recalcula el N°
-										// correlativo para el NUEVO distrito — el que tenía antes pertenecía al distrito
-										// anterior y ya no aplica.
-										if (caracteristicasTab === 'obra') calcularCorrelativoDistrito(distrito);
+										distritoNumero = null;
+										actualizarNumeroDistrito();
 									}}
 									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-									>
+								>
 									{#if (DISTRITOS_POR_PROVINCIA[provincia] ?? []).length === 0}
 										<option value="" disabled>-- Sin distritos cargados para {provincia} --</option>
 									{:else}
@@ -1711,7 +1732,8 @@ async function copiarCodigoGenerado() {
 
 					<!-- Características del proyecto nuevo (colapsable — a pedido del usuario: arranca
 					     desplegada en edición y colapsada al crear una venta nueva, ver el $effect de
-					     reseteo más arriba) -->
+					     reseteo más arriba). Bloqueada hasta completar el Adelanto (monto + comprobante)
+					     y marcar la proforma final — ver documentosCierreListos más arriba. -->
 					<section class="border-t border-slate-100 pt-6">
 						<button
 							type="button"
@@ -1719,7 +1741,7 @@ async function copiarCodigoGenerado() {
 							disabled={!documentosCierreListos}
 							class={`w-full flex items-center justify-between gap-2 mb-1 text-left ${!documentosCierreListos ? 'opacity-50 cursor-not-allowed' : ''}`}
 							aria-expanded={caracteristicasExpanded}
-							title={!documentosCierreListos ? 'Completa el monto y el comprobante del adelanto inicial para poder completar las características del proyecto' : ''}
+							title={!documentosCierreListos ? 'Completa el monto y el comprobante del adelanto inicial, y marca una proforma como final, para poder completar las características del proyecto' : ''}
 						>
 							<span class="text-sm font-bold text-slate-800 flex items-center gap-2">
 								<div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
@@ -1729,7 +1751,7 @@ async function copiarCodigoGenerado() {
 							<i class={`fas fa-chevron-down text-slate-400 text-xs transition-transform ${caracteristicasExpanded ? 'rotate-180' : ''}`}></i>
 						</button>
 						{#if !documentosCierreListos}
-							<p class="text-[11px] text-slate-400 mb-4">Completa el monto y el comprobante del adelanto inicial para poder completar esta sección.</p>
+							<p class="text-[11px] text-slate-400 mb-4">Completa el monto y el comprobante del adelanto inicial, y marca una proforma como final, para poder completar esta sección.</p>
 						{:else}
 							<div class="mb-4"></div>
 						{/if}
@@ -1747,7 +1769,7 @@ async function copiarCodigoGenerado() {
 							</button>
 							<button
 								type="button"
-								onclick={() => (caracteristicasTab = 'obra')}
+								onclick={() => { caracteristicasTab = 'obra'; if (distrito && distritoNumero === null) actualizarNumeroDistrito(); }}
 								disabled={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'}
 								title={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'La venta ya está cerrada como Consultoría — no se puede cambiar a Obra' : ''}
 								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
@@ -1766,60 +1788,30 @@ async function copiarCodigoGenerado() {
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
-								<!-- A pedido del usuario: acepta VARIAS alternativas a la vez — antes era un <select>
-								     de una sola opción (con "DF + I" hardcodeado como única combinación posible). Se
-								     unen con "+" al guardar (ver tip_proyecto en los payloads) y van entre paréntesis
-								     en el código visual, ej. (L+O) — ver codigoGenerado. -->
-								<div class="flex flex-col gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+								<select bind:value={tipoProyecto} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+									<option value="">-- Selecciona --</option>
 									{#each TIPO_PROYECTO_OPTIONS as opt}
-										<label class="flex items-center gap-2 text-sm text-slate-700">
-											<input
-												type="checkbox"
-												checked={tipoProyectoSel.includes(opt.value)}
-												disabled={!documentosCierreListos}
-												onchange={() => (tipoProyectoSel = toggleSeleccion(tipoProyectoSel, opt.value))}
-												class="accent-blue-600 disabled:cursor-not-allowed"
-											/>
-											{opt.label} ({opt.value})
-										</label>
+										<option value={opt.value}>{opt.label} ({opt.value})</option>
 									{/each}
-								</div>
+								</select>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
-								<div class="flex flex-col gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+								<select bind:value={estadoPredio} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+									<option value="">-- Selecciona --</option>
 									{#each ESTADO_PREDIO_OPTIONS as opt}
-										<label class="flex items-center gap-2 text-sm text-slate-700">
-											<input
-												type="checkbox"
-												checked={estadoPredioSel.includes(opt.value)}
-												disabled={!documentosCierreListos}
-												onchange={() => (estadoPredioSel = toggleSeleccion(estadoPredioSel, opt.value))}
-												class="accent-blue-600 disabled:cursor-not-allowed"
-											/>
-											{opt.label} ({opt.value})
-										</label>
+										<option value={opt.value}>{opt.label} ({opt.value})</option>
 									{/each}
-								</div>
+								</select>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
-								<!-- A pedido del usuario: también acepta varias alternativas a la vez — mismo
-								     criterio que Tipo de proyecto/Estado del predio de arriba. -->
-								<div class="flex flex-col gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
+								<select bind:value={tipoEdificacion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+									<option value="">-- Selecciona --</option>
 									{#each TIPO_EDIFICACION_OPTIONS as opt}
-										<label class="flex items-center gap-2 text-sm text-slate-700">
-											<input
-												type="checkbox"
-												checked={tipoEdificacionSel.includes(opt.value)}
-												disabled={!documentosCierreListos}
-												onchange={() => (tipoEdificacionSel = toggleSeleccion(tipoEdificacionSel, opt.value))}
-												class="accent-blue-600 disabled:cursor-not-allowed"
-											/>
-											{opt.label} ({opt.value})
-										</label>
+										<option value={opt.value}>{opt.label} ({opt.value})</option>
 									{/each}
-								</div>
+								</select>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
@@ -1841,19 +1833,19 @@ async function copiarCodigoGenerado() {
 							<!-- Visualizer -->
 							<div class="flex flex-wrap items-center gap-2 text-xs font-bold justify-center md:justify-start">
 								<div class="flex flex-col items-center">
-									<span class="text-emerald-500 text-sm mb-1">({tipoProyectoSel.join('+')})</span>
+									<span class="text-emerald-500 text-sm mb-1">{tipoProyecto}</span>
 									<span class="text-[9px] text-slate-500 font-normal">Tipo de proyecto</span>
 									<span class="text-[9px] text-slate-400 font-normal">(Obra)</span>
 								</div>
 								<span class="text-slate-300">-</span>
 								<div class="flex flex-col items-center">
-									<span class="text-blue-500 text-sm mb-1">({estadoPredioSel.join('+')})</span>
+									<span class="text-blue-500 text-sm mb-1">{estadoPredio}</span>
 									<span class="text-[9px] text-slate-500 font-normal">Estado del predio</span>
 									<span class="text-[9px] text-slate-400 font-normal">(Ampliación)</span>
 								</div>
 								<span class="text-slate-300">-</span>
 								<div class="flex flex-col items-center">
-									<span class="text-purple-500 text-sm mb-1">({tipoEdificacionSel.join('+')})</span>
+									<span class="text-purple-500 text-sm mb-1">{tipoEdificacion}</span>
 									<span class="text-[9px] text-slate-500 font-normal">Tipo de edificación</span>
 									<span class="text-[9px] text-slate-400 font-normal">(Multifamiliar)</span>
 								</div>
@@ -1909,7 +1901,7 @@ async function copiarCodigoGenerado() {
 						{:else}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de obra *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Servicio *</label>
 								<!-- A pedido del usuario: EXP (Expediente Técnico) es exclusivo de la pestaña
 								     Consultoría — acá solo se elige entre OBRA (ejecución) y SUP (supervisión), ese
 								     valor es el prefijo del código generado y también decide el centro de costo:
@@ -1917,21 +1909,22 @@ async function copiarCodigoGenerado() {
 								     comparte uno único — ver caracteristicasTab en getOrCrearCentroCosto...). -->
 								<select bind:value={tipoObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
-									<option value="OBRA">Ejecución de Obra (OBRA)</option>
-									<option value="SUP">Supervisión (SUP)</option>
+									<option value="OBRA">Ejecución de obra (OBRA)</option>
+									<option value="SUP">Supervisión de obra (SUP)</option>
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Permiso municipal *</label>
+								<label class="text-xs font-semibold text-[#0f3b5e]">Permiso Municipal *</label>
 								<select bind:value={tipoTramite} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
-									<option value="L">Con permiso (L)</option>
-									<option value="S">Sin permiso (S)</option>
+									{#each PERMISO_MUNICIPAL_OPTIONS as opt}
+										<option value={opt.value}>{opt.label} ({opt.value})</option>
+									{/each}
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Alcance de obra *</label>
-								<select bind:value={alcanceObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Alcance de Obra *</label>
+								<select bind:value={tipoIntervencion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									{#each ALCANCE_OBRA_OPTIONS as opt}
 										<option value={opt.value}>{opt.label} ({opt.value})</option>
@@ -1939,8 +1932,8 @@ async function copiarCodigoGenerado() {
 								</select>
 							</div>
 							<div class="flex flex-col gap-1">
-								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de contratación *</label>
-								<select bind:value={tipoContratacion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Contratación *</label>
+								<select bind:value={tipoEdificacionObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 									<option value="">-- Selecciona --</option>
 									{#each TIPO_CONTRATACION_OPTIONS as opt}
 										<option value={opt.value}>{opt.label} ({opt.value})</option>

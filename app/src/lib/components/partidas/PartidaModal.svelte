@@ -2,6 +2,7 @@
     import { createEventDispatcher } from 'svelte';
     import { X } from '@lucide/svelte';
     import { createPartida, updatePartida, deletePartida, partidasTree, type PartidaNode } from '$lib/stores/partidas';
+    import { toast } from '$lib/stores/toast';
     
     const dispatch = createEventDispatcher();
     let { isOpen = false, partida = null } = $props<{ isOpen: boolean; partida: PartidaNode | null }>();
@@ -16,9 +17,8 @@
     });
     
     let isLoading = $state(false);
-    let successMessage = $state('');
     let errorMessage = $state('');
-    
+
     $effect(() => {
         if (partida) {
             formData = {
@@ -40,13 +40,14 @@
             };
         }
         errorMessage = '';
-        successMessage = '';
     });
-    
+
+    // A pedido del usuario: todo popup se cierra de inmediato al guardar/eliminar en vez de mostrar un
+    // mensaje de éxito adentro y esperar — mismo patrón que el resto de los modales (ver toast.success
+    // + cierre inmediato en CuentaBancoModal.svelte y similares).
     async function handleSubmit() {
         errorMessage = '';
-        successMessage = '';
-        
+
         if (!formData.codigo.trim()) {
             errorMessage = 'El código es requerido';
             return;
@@ -55,19 +56,17 @@
             errorMessage = 'La descripción es requerida';
             return;
         }
-        
+
         isLoading = true;
-        
+
         try {
             const result = partida
                 ? await updatePartida(partida.id_partida, formData)
                 : await createPartida(formData);
-                
+
             if (result.success) {
-                successMessage = result.message;
-                setTimeout(() => {
-                    dispatch('close');
-                }, 1500);
+                toast.success(result.message);
+                dispatch('close');
             } else {
                 errorMessage = result.message;
             }
@@ -77,22 +76,19 @@
             isLoading = false;
         }
     }
-    
+
     async function handleDelete() {
         if (!partida) return;
         if (!confirm('¿Está seguro que desea eliminar esta partida?')) return;
-        
+
         errorMessage = '';
-        successMessage = '';
         isLoading = true;
-        
+
         try {
             const result = await deletePartida(partida.id_partida);
             if (result.success) {
-                successMessage = result.message;
-                setTimeout(() => {
-                    dispatch('close');
-                }, 1500);
+                toast.success(result.message);
+                dispatch('close');
             } else {
                 errorMessage = result.message;
             }
@@ -140,12 +136,6 @@
             
             <!-- Content -->
             <div class="p-6 space-y-4">
-                {#if successMessage}
-                    <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
-                        {successMessage}
-                    </div>
-                {/if}
-                
                 {#if errorMessage}
                     <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
                         {errorMessage}

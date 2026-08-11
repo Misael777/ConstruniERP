@@ -39,7 +39,7 @@ export async function generarVentasXLSX(client: SupabaseClient, scopeToUserId?: 
 		// columna "Proyecto" del archivo terminaba duplicando la de "Cliente".
 		let query = client
 			.from('proyecto')
-			.select('nombre_proyecto,precio_venta,tip_proyecto,estado_predio,tipo_edifica,tipo_obra,tipo_tramite,tipo_intervencion,tipo_edificacion_obra,mes_obra,anio_obra,nro_pisos,distrito,fecha_inicio_plan,responsable,comision_asesor,estado_proyecto,tipo_venta,cliente:id_cliente(nombre)')
+			.select('nombre_proyecto,precio_venta,tip_proyecto,estado_predio,tipo_edifica,tipo_obra,tipo_tramite,tipo_intervencion,tipo_edificacion_obra,mes_obra,anio_obra,nro_pisos,distrito,ubicacion,fecha_inicio_plan,responsable,comision_asesor,estado_proyecto,tipo_venta,cliente:id_cliente(nombre)')
 			.order('fecha_inicio_plan', { ascending: false });
 		if (scopeToUserId) {
 			query = query.eq('asesor_comercial_id', scopeToUserId);

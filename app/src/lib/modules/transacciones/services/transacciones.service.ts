@@ -249,8 +249,18 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 	}
 
 	// ON DELETE CASCADE en trans_detalle.id_transaccion se encarga de borrar su detalle asociado.
-	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
-	if (error) return { success: false, message: `No se pudo eliminar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	// .select(PK_COLUMN) sirve para detectar borrados que "no fallan" pero tampoco afectan ninguna fila
+	// (ej. RLS bloqueando en silencio, o un id que ya no existe) — sin esto, Postgrest devuelve
+	// error=null incluso si 0 filas fueron realmente eliminadas.
+	const { data, error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id).select(PK_COLUMN);
+	if (error) {
+		console.error('[transacciones.service] deleteTransaccion error:', error);
+		return { success: false, message: `No se pudo eliminar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	}
+	if (!data || data.length === 0) {
+		console.error('[transacciones.service] deleteTransaccion: 0 filas afectadas para id', id);
+		return { success: false, message: `No se pudo eliminar la transacción #${id}: no se afectó ninguna fila (verifica permisos o que aún exista).` };
+	}
 	return { success: true, message: 'Transacción eliminada correctamente' };
 }
 

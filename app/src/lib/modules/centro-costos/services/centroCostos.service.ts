@@ -80,7 +80,7 @@ export async function resolveEntidadVinculada(client: SupabaseClient, centro: Ce
 		// antes de que nombre_proyecto empezara a guardar el código (ver historial de este archivo).
 		const { data } = await client
 			.from('proyecto')
-			.select('tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, fecha_inicio_plan, created_at, nombre_proyecto, cliente:id_cliente(nombre)')
+			.select('tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, nombre_proyecto, cliente:id_cliente(nombre)')
 			.eq('id_proyecto', centro.id_proyecto)
 			.maybeSingle();
 		const nombre = data ? generarCodigoProyecto(data as unknown as ProyectoCodigoFields) : centro.nombre;
@@ -222,7 +222,7 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	let query = client
 		.from(TABLE_NAME)
 		.select(
-			'*, proveedor(vendedor), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
+			'*, proveedor(vendedor), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
 			{ count: 'exact' }
 		)
 		.range(from, to);
