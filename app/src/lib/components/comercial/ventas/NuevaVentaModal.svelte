@@ -1942,10 +1942,11 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">N° de proyecto en el distrito</label>
-								<!-- A pedido del usuario: se calcula solo (ver calcularCorrelativoDistrito) contando
-								     las ventas de Obra ya registradas en el distrito elegido arriba — no es un campo
-								     que el usuario llene, solo informativo/de solo lectura. -->
-								<input type="text" readonly value={isCalculandoCorrelativo ? 'Calculando…' : (correlativoDistrito ?? '—')} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
+								<!-- A pedido del usuario: se calcula solo (ver resolverNumeroDistrito/
+								     actualizarNumeroDistrito) contando las ventas de Obra ya registradas en el
+								     distrito elegido arriba — no es un campo que el usuario llene, solo
+								     informativo/de solo lectura. -->
+								<input type="text" readonly value={distritoNumero ?? '—'} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								<span class="text-[10px] text-slate-400 mt-0.5">Se calcula solo según el distrito elegido.</span>
 							</div>
 							<div class="flex flex-col gap-1">

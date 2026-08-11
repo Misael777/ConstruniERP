@@ -6,6 +6,7 @@
 	// embebible y la descarga viven adentro para que cada llamador solo tenga que pasar la URL cruda.
 	import { toDrivePreviewUrl } from '$lib/shared/drivePreview';
 	import { isRunningInTauri } from '$lib/driveUploadClient';
+	import { toast } from '$lib/stores/toast';
 
 	let {
 		open = false,
@@ -21,21 +22,18 @@
 
 	let previewUrl = $derived(toDrivePreviewUrl(url));
 
-	// A pedido del usuario: el botón "Descargar" no daba ninguna señal de que algo estaba pasando —
-	// ahora muestra un spinner mientras descarga y, si el servidor informa el tamaño del archivo
-	// (header Content-Length — no siempre viene, depende de cómo responda Drive), una barra de
-	// progreso real en vez de solo un spinner indeterminado.
-	let isDownloading = $state(false);
-	let downloadProgress = $state<number | null>(null);
-
 	function sanitizeFilename(name: string) {
 		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
 	}
 
 	// A pedido del usuario: antes de descargar, pedir confirmación y (cuando la plataforma lo permite)
-	// dejar elegir la ruta de destino — en vez de descargar directo al hacer clic en el botón.
+	// dejar elegir la ruta de destino — en vez de descargar directo al hacer clic en el botón. Mientras
+	// descarga, el botón muestra un spinner y, si el servidor informa el tamaño del archivo (header
+	// Content-Length — no siempre viene, depende de cómo responda Drive), una barra de progreso real
+	// (downloadProgress) en vez de solo un spinner indeterminado.
 	let showDownloadConfirm = $state(false);
 	let isDownloading = $state(false);
+	let downloadProgress = $state<number | null>(null);
 	let downloadError = $state('');
 
 	function requestDownload() {
@@ -104,18 +102,40 @@
 
 		const filename = sanitizeFilename(title) + '.pdf';
 		isDownloading = true;
+		downloadProgress = null;
 		downloadError = '';
 		try {
 			const res = await fetch(previewUrl, { mode: 'cors' });
-			if (!res.ok) throw new Error('Fetch failed');
-			const blob = await res.blob();
+			if (!res.ok || !res.body) throw new Error('Fetch failed');
+
+			// Streaming manual (en vez de res.blob() directo) para poder reportar progreso en el camino —
+			// si el header no trae el tamaño total, downloadProgress se queda en null y el botón solo
+			// muestra el spinner (progreso indeterminado), sin barra.
+			const totalStr = res.headers.get('Content-Length');
+			const total = totalStr ? Number(totalStr) : 0;
+			const reader = res.body.getReader();
+			const chunks: BlobPart[] = [];
+			let recibido = 0;
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) {
+					chunks.push(value);
+					recibido += value.byteLength;
+					if (total > 0) downloadProgress = Math.round((recibido / total) * 100);
+				}
+			}
+
+			const blob = new Blob(chunks);
 			await guardarBinario(blob, filename);
+			toast.success(`"${title}" se descargó correctamente.`);
 		} catch (err) {
 			console.warn('[DocumentPreviewModal] descarga por fetch falló, abriendo en nueva pestaña', err);
 			toast.info('No se pudo descargar directamente — se abrió en una nueva pestaña.');
 			window.open(previewUrl, '_blank', 'noopener');
 		} finally {
 			isDownloading = false;
+			downloadProgress = null;
 		}
 	}
 </script>
