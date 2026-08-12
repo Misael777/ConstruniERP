@@ -3,6 +3,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import ProveedoresTable from '$lib/components/finanzas/proveedores/ProveedoresTable.svelte';
 	import ProveedorModal from '$lib/components/finanzas/proveedores/ProveedorModal.svelte';
+	import { darDeBajaCentroCostoDeEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let proveedores = $state<any[]>([]);
 	let isModalOpen = $state(false);
@@ -44,20 +45,29 @@
 		fetchProveedores(); // Refresh list after saving
 	}
 
-	async function handleDelete(id: number) {
-		if (confirm('¿Estás seguro de eliminar este proveedor? Esta acción no se puede deshacer.')) {
-			try {
-				const { error } = await supabase
-					.from('proveedor')
-					.delete()
-					.eq('id_proveedor', id);
-				
-				if (error) throw error;
-				await fetchProveedores(); // Refresh
-			} catch (err) {
-				console.error('Error deleting proveedor:', err);
-				alert('Ocurrió un error al eliminar el proveedor.');
+	/** A pedido del usuario: "Eliminar" (borrado real) se reemplaza por "Dar de baja" — cambia el
+	 * estado del proveedor a 'baja' (en vez de borrarlo) y da de baja el centro de costo que se
+	 * generó para él (ver darDeBajaCentroCostoDeEntidad en centroCostos.service.ts). No hay un
+	 * servicio dedicado para proveedor (el CRUD ya vivía inline en esta página) — se sigue el mismo
+	 * criterio acá. */
+	async function handleDarDeBaja(id: number) {
+		const proveedor = proveedores.find((p: any) => p.id_proveedor === id);
+		const nombre = proveedor?.razon_social || `Proveedor #${id}`;
+		if (!confirm(`¿Dar de baja al proveedor "${nombre}"? Quedará marcado como inactivo.`)) return;
+
+		try {
+			const { error } = await supabase.from('proveedor').update({ estado: 'baja' }).eq('id_proveedor', id);
+			if (error) throw error;
+
+			const centroResult = await darDeBajaCentroCostoDeEntidad(supabase, 'proveedor', id);
+			if (!centroResult.success) {
+				console.warn(`[proveedores] El proveedor #${id} se dio de baja, pero no se pudo dar de baja su centro de costo: ${centroResult.message}`);
 			}
+
+			await fetchProveedores(); // Refresh
+		} catch (err) {
+			console.error('Error dando de baja al proveedor:', err);
+			alert('Ocurrió un error al dar de baja al proveedor.');
 		}
 	}
 </script>
@@ -99,10 +109,10 @@
 					</div>
 				</div>
 			{:else}
-				<ProveedoresTable 
-					{proveedores} 
-					onEdit={openModal} 
-					onDelete={handleDelete} 
+				<ProveedoresTable
+					{proveedores}
+					onEdit={openModal}
+					onDarDeBaja={handleDarDeBaja}
 				/>
 			{/if}
 		</div>

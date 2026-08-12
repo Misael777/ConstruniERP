@@ -39,6 +39,9 @@ export interface CentroCosto {
 	monto_actual: number; // nombre real de la columna en BD (los .sql locales tienen un typo, ver centroCostos.config.ts)
 	descripcion: string | null;
 	created_at: string;
+	/** 'activo' | 'baja' — ver centro_costo_estado_migration.sql y darDeBajaCentroCostoDeEntidad
+	 * más abajo. Nunca se edita a mano (showInForm:false en centroCostos.config.ts). */
+	estado: string;
 	/** Vinculación a la entidad dueña de este centro de costo — como mucho UNA de las cuatro no-nula
 	 * (ver chk_centro_costo_una_entidad, centro_costo_vinculacion_migration.sql +
 	 * centro_costo_empleado_migration.sql). Se completan solas vía getOrCrearCentroCostoParaEntidad
@@ -284,7 +287,7 @@ export async function createCentroCosto(
 	const codigo = await generarCodigoCentroCostoManual(client, String(payload.tipo ?? ''));
 	const { data, error } = await client
 		.from(TABLE_NAME)
-		.insert({ ...buildWritablePayload(payload), codigo })
+		.insert({ ...buildWritablePayload(payload), codigo, estado: 'activo' })
 		.select('*')
 		.single();
 
@@ -392,9 +395,13 @@ export async function getOrCrearCentroCostoParaEntidad(
 	if (existente) return existente.id_centro_costo;
 
 	const codigo = `${PREFIJO_CODIGO_POR_TIPO[tipo]}-${idEntidad}`;
+	// A pedido explícito del usuario: `nombre` guarda el ID de la entidad relacionada (no un nombre
+	// descriptivo) — el parámetro `nombre` recibido ya no se usa para esta columna, se deja sin tocar
+	// la firma para no romper a los llamadores existentes (NuevaVentaModal.svelte, ClienteModal.svelte,
+	// ProveedorModal.svelte, transacciones.service.ts, user-admin/index.ts).
 	const { data: creado, error } = await client
 		.from(TABLE_NAME)
-		.insert({ codigo, nombre: nombre.slice(0, 200), tipo, [columna]: idEntidad, monto_actual: 0 })
+		.insert({ codigo, nombre: String(idEntidad), tipo, [columna]: idEntidad, monto_actual: 0, estado: 'activo' })
 		.select('id_centro_costo')
 		.single();
 
@@ -409,6 +416,25 @@ export async function getOrCrearCentroCostoParaEntidad(
 	}
 
 	return creado?.id_centro_costo ?? null;
+}
+
+/**
+ * Marca como 'baja' el centro de costo vinculado a una entidad (hoy solo se llama para proyecto, ver
+ * darDeBajaVenta en aprobaciones.service.ts) — genérico por `tipo` para poder reusarse el día que
+ * cliente/proveedor/empleado tengan su propio "dar de baja". Si la entidad no tiene un centro de
+ * costo propio (ej. una venta de Consultoría, que comparte uno solo entre varias ventas — ver
+ * getOrCrearCentroCostoCompartido — y por lo tanto no tiene `id_proyecto` propio), el UPDATE
+ * simplemente no afecta ninguna fila; no es un error.
+ */
+export async function darDeBajaCentroCostoDeEntidad(
+	client: SupabaseClient,
+	tipo: EntidadCentroCosto,
+	idEntidad: number
+): Promise<ServiceResult> {
+	const columna = COLUMNA_POR_TIPO[tipo];
+	const { error } = await client.from(TABLE_NAME).update({ estado: 'baja' }).eq(columna, idEntidad);
+	if (error) return { success: false, message: `No se pudo dar de baja el centro de costo: ${error.message}` };
+	return { success: true, message: 'Centro de costo dado de baja correctamente' };
 }
 
 /**
@@ -431,7 +457,7 @@ export async function getOrCrearCentroCostoCompartido(
 	const codigo = await generarCodigoCentroCostoManual(client, tipo);
 	const { data: creado, error } = await client
 		.from(TABLE_NAME)
-		.insert({ codigo, nombre, tipo, monto_actual: 0 })
+		.insert({ codigo, nombre, tipo, monto_actual: 0, estado: 'activo' })
 		.select('id_centro_costo')
 		.single();
 
@@ -556,6 +582,40 @@ export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: 
 	}
 
 	return saldos;
+}
+
+/**
+ * Monto recibido por cada centro de costo de PROYECTO en `ids` — a pedido del usuario: "Monto Actual"
+ * debe mostrar "la suma de los montos de todas las transacciones con tipo ingreso a ese centro de
+ * costo". El adelanto YA es una transacción tipo='ingreso' con destino ese centro (ver
+ * cerrarVentaAprobada), así que no hace falta sumarlo aparte: queda incluido en la suma. A diferencia
+ * de getSaldosVentaPorCentroCosto (que resta el adelanto al total de la venta para dar el saldo
+ * PENDIENTE) o getSaldosPorCentroCosto (ingresos-egresos de CUALQUIER tipo, con signo). Aplica igual
+ * para Obra (un centro por proyecto) y el compartido de Consultoría (recibe de todas sus ventas).
+ * Nunca lanza — mismo criterio que el resto de este archivo.
+ */
+export async function getMontoRecibidoPorCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, number>> {
+	const montos: Record<number, number> = {};
+	for (const id of ids) montos[id] = 0;
+	if (ids.length === 0) return montos;
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('id_centro_costo_destino, monto_total')
+		.in('id_centro_costo_destino', ids)
+		.eq('tipo', 'ingreso')
+		.eq('estado', 'activo');
+
+	if (error) {
+		console.error('[centroCostos.service] No se pudo calcular el monto recibido de los centros de costo:', error);
+		return montos;
+	}
+
+	for (const row of (data ?? []) as any[]) {
+		montos[row.id_centro_costo_destino] = (montos[row.id_centro_costo_destino] ?? 0) + (Number(row.monto_total) || 0);
+	}
+
+	return montos;
 }
 
 /**

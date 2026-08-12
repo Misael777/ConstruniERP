@@ -27,6 +27,8 @@
  *     usuario_registro            VARCHAR(100),
  *     created_at                  TIMESTAMPTZ DEFAULT NOW(),
  *     comprobante_url             TEXT,  -- agregada por migración, ver transaccion_comprobante_migration.sql
+ *     factura_url                 TEXT,  -- agregada por migración, ver transaccion_factura_migration.sql
+ *       -- factura/boleta de venta, adjunto SEPARADO y OPCIONAL del comprobante de pago
  *     aprobado                    BOOLEAN NOT NULL DEFAULT FALSE, -- agregada por migración, ver transaccion_aprobacion_migration.sql
  *     aprobado_por                VARCHAR(100),
  *     aprobado_en                 TIMESTAMPTZ,
@@ -86,7 +88,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'id_centro_costo_origen',
-		label: 'Origen de Transacción',
+		label: 'Centro de costo origen',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
@@ -96,7 +98,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'id_centro_costo_destino',
-		label: 'Destino de Transacción',
+		label: 'Centro de costo destino',
 		tipo: 'select',
 		required: true,
 		optionsSource: 'centro_costo',
@@ -132,7 +134,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		// Posición intercambiada con 'tipo' — ver arriba.
 		key: 'fecha',
-		label: 'Fecha',
+		label: 'Fecha (reconocida)',
 		tipo: 'date',
 		required: true,
 		showInTable: true,
@@ -195,7 +197,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'monto_total',
-		label: 'Monto Total',
+		label: 'Monto (reconocido)',
 		tipo: 'currency',
 		required: true,
 		min: 0.01,
@@ -249,7 +251,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'num_documento',
-		label: 'N° Documento',
+		label: 'N° de Documento',
 		tipo: 'text',
 		maxLength: 20,
 		placeholder: 'F001-00123',
@@ -287,7 +289,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'cuente_origen',
-		label: 'Cuenta Origen',
+		label: 'Cuenta origen',
 		tipo: 'text',
 		maxLength: 20,
 		placeholder: 'N° de cuenta o CCI',
@@ -297,7 +299,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'cuente_destino',
-		label: 'Cuenta Destino',
+		label: 'Cuenta destino',
 		tipo: 'text',
 		maxLength: 20,
 		placeholder: 'N° de cuenta o CCI',
@@ -349,6 +351,18 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		// updateTransaccion lo exigen (no-nulo) antes de guardar, ver transacciones.service.ts.
 		key: 'comprobante_url',
 		label: 'Comprobante',
+		tipo: 'readonly',
+		showInTable: false,
+		showInForm: false,
+		sortable: false
+	},
+	{
+		// Mismo criterio que comprobante_url: no editable por el motor genérico, se sube a Google
+		// Drive y se completa desde TransaccionModal.svelte — a diferencia del comprobante, esta es
+		// OPCIONAL (factura o boleta de venta del proveedor/cliente, distinta del boucher de pago).
+		// Ver transaccion_factura_migration.sql.
+		key: 'factura_url',
+		label: 'Factura o boleta de venta',
 		tipo: 'readonly',
 		showInTable: false,
 		showInForm: false,

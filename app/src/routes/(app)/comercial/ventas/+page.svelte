@@ -69,6 +69,20 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		}
 	}
 
+	/** Orden de la tabla, a pedido del usuario: primero "En negociación", luego "Venta Cerrada", y
+	 * "Dado de baja" siempre al final — dentro de cada grupo, por fecha de creación (más reciente
+	 * primero, mismo criterio que el orden por defecto que ya tenía la tabla). */
+	function prioridadEstado(estado: string): number {
+		if (estado === 'baja') return 2;
+		if (estado === 'venta_cerrada') return 1;
+		return 0; // 'activo' u otro valor -> "En negociación"
+	}
+	function compararVentasParaTabla(a: any, b: any): number {
+		const diffPrioridad = prioridadEstado(a.estado_proyecto) - prioridadEstado(b.estado_proyecto);
+		if (diffPrioridad !== 0) return diffPrioridad;
+		return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+	}
+
 	let ventas = $state<any[]>([]);
 	let isLoading = $state(true);
 	let errorMessage = $state<string | null>(null);
@@ -315,9 +329,10 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					descripcion: project.descripcion || '',
 					contrato: project.contrato || '',
 					estado_proyecto: project.estado_proyecto || 'activo',
-					tipoVenta: project.tipo_venta || 'obra'
+					tipoVenta: project.tipo_venta || 'obra',
+					createdAt: project.created_at
 				};
-			});
+			}).sort(compararVentasParaTabla);
 
 			// Los KPIs de arriba ("Ventas cerradas", "Valor total", etc.) reflejan solo las ventas ya
 			// CERRADAS (estado_proyecto='venta_cerrada' — ver ProformasVentaModal.svelte). La tabla y

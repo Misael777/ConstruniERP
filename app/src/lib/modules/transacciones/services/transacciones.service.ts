@@ -52,6 +52,9 @@ export interface Transaccion {
 	/** Comprobante (imagen o PDF) de respaldo, subido a Google Drive — ver TransaccionModal.svelte.
 	 * Toda transacción debe tener uno; nullable solo por transacciones creadas antes de esta migración. */
 	comprobante_url: string | null;
+	/** Factura o boleta de venta — adjunto SEPARADO y OPCIONAL del comprobante de pago, ver
+	 * transaccion_factura_migration.sql. A diferencia de comprobante_url, nunca es obligatorio. */
+	factura_url: string | null;
 	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, ni esta
 	 * transacción ni la cuenta por pagar/cobrar ni el cobro/pago vinculados se pueden editar/eliminar
 	 * salvo por un administrador — ver updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION
@@ -187,7 +190,10 @@ export async function createTransaccion(
 		usuario_registro: usuarioRegistro,
 		// id_nombre no es editable (showInForm:false): siempre es el nombre de quien inició sesión.
 		id_nombre: usuarioNombre ? usuarioNombre.slice(0, 20) : null,
-		comprobante_url: payload.comprobante_url as string
+		comprobante_url: payload.comprobante_url as string,
+		// factura_url tampoco vive en FIELDS_CONFIG (mismo criterio que comprobante_url) — a diferencia
+		// de ese, es opcional, así que null es un valor válido, no solo string.
+		factura_url: (payload.factura_url as string | null) ?? null
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
@@ -217,6 +223,7 @@ export async function updateTransaccion(
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	updateData.comprobante_url = payload.comprobante_url as string;
+	updateData.factura_url = (payload.factura_url as string | null) ?? null;
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };

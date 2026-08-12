@@ -54,9 +54,13 @@ async function getOrCrearCentroCostoEmpleado(idEmpleado: number, nombre: string)
   if (existente) return existente.id_centro_costo;
 
   const codigo = `EMP-${idEmpleado}`;
+  // A pedido explícito del usuario: `nombre` guarda el ID de la entidad relacionada (no un nombre
+  // descriptivo), igual que getOrCrearCentroCostoParaEntidad en centroCostos.service.ts — el
+  // parámetro `nombre` recibido ya no se usa para esta columna, se deja sin tocar la firma para no
+  // romper al llamador.
   const { data: creado, error } = await supabase
     .from('centro_costo')
-    .insert({ codigo, nombre: (nombre ?? '').slice(0, 200), tipo: 'empleado', id_empleado: idEmpleado, monto_actual: 0 })
+    .insert({ codigo, nombre: String(idEmpleado), tipo: 'empleado', id_empleado: idEmpleado, monto_actual: 0, estado: 'activo' })
     .select('id_centro_costo')
     .single();
 
@@ -293,6 +297,44 @@ async function confirmActivation(body: any) {
   return buildJsonResponse({ success: true });
 }
 
+// Da de baja a un empleado — reemplaza al borrado real (deleteUser) que existía antes, ver
+// eliminarEmpleado/darDeBajaEmpleado en iam/empleados/+page.svelte. A diferencia de un cliente/
+// proveedor/venta, un empleado además tiene acceso al ERP vía su cuenta de Auth: acá se marca
+// `empleados.estado = 'baja'`, se bloquea esa cuenta (ban de larga duración, no se borra — reversible
+// a mano desde el dashboard de Supabase si hiciera falta) y se da de baja su centro de costo (mismo
+// patrón que darDeBajaCentroCostoDeEntidad en centroCostos.service.ts, duplicado acá porque esta
+// función no puede importar ese archivo — ver getOrCrearCentroCostoEmpleado arriba). Cada paso es
+// independiente: si el ban o el centro de costo fallan, se loguea pero no revierte el cambio de
+// estado que ya se aplicó.
+async function darDeBajaEmpleado(body: any) {
+  const authUserId = String(body.auth_user_id ?? '').trim();
+  if (!authUserId || !isUuid(authUserId)) {
+    return buildJsonResponse({ success: false, error: 'auth_user_id válido es requerido.' }, 400);
+  }
+
+  const { data: empleado, error: empleadoError } = await supabase
+    .from('empleados')
+    .update({ estado: 'baja' })
+    .eq('auth_user_id', authUserId)
+    .select('id')
+    .single();
+  if (empleadoError) return buildJsonResponse({ success: false, error: empleadoError.message }, 500);
+
+  const { error: banError } = await supabase.auth.admin.updateUserById(authUserId, { ban_duration: '876000h' });
+  if (banError) {
+    console.error(`[user-admin] El empleado #${empleado?.id} se dio de baja, pero no se pudo bloquear su acceso:`, banError);
+  }
+
+  if (empleado?.id) {
+    const { error: centroError } = await supabase.from('centro_costo').update({ estado: 'baja' }).eq('id_empleado', empleado.id);
+    if (centroError) {
+      console.error(`[user-admin] El empleado #${empleado.id} se dio de baja, pero no se pudo dar de baja su centro de costo:`, centroError);
+    }
+  }
+
+  return buildJsonResponse({ success: true, auth_user_id: authUserId });
+}
+
 async function resetPassword(body: any) {
   const authUserId = String(body.auth_user_id ?? '').trim();
   const password = String(body.password ?? '').trim();
@@ -333,6 +375,7 @@ Deno.serve(async (req) => {
       if (action === 'reset-password') return await resetPassword(body);
       if (action === 'confirm-activation') return await confirmActivation(body);
       if (action === 'verify-admin-password') return await verifyAdminPassword(body);
+      if (action === 'dar-de-baja') return await darDeBajaEmpleado(body);
       return await createUser(body);
     }
 

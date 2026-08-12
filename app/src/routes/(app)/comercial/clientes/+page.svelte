@@ -3,7 +3,7 @@
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { crearSolicitud, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+	import { crearSolicitud, darDeBajaCliente } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { exportarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 	import ClientesTable from '$lib/components/comercial/clientes/ClientesTable.svelte';
 	import ClienteModal from '$lib/components/comercial/clientes/ClienteModal.svelte';
@@ -97,35 +97,22 @@
 		fetchClientes(); // Refresh list after saving
 	}
 
-	async function handleDelete(id: number) {
+	/** A pedido del usuario: "Eliminar" (borrado real) se reemplaza por "Dar de baja" — no pasa por el
+	 * sistema de solicitudes de aprobación (es un cambio de estado reversible, no un borrado), y
+	 * también da de baja el centro de costo que se generó para este cliente (ver darDeBajaCliente en
+	 * aprobaciones.service.ts). */
+	async function handleDarDeBaja(id: number) {
 		const cliente = clientes.find((c) => c.id_cliente === id);
 		const nombre = cliente?.nombre || `Cliente #${id}`;
 
-		// A pedido del usuario: un no-administrador ya no puede eliminar un cliente directo — se
-		// envía una solicitud de aprobación, visible para todos los admins en la campanita.
-		if (!isAdmin()) {
-			const result = await crearSolicitud(supabase, {
-				tipoEntidad: 'cliente',
-				idEntidad: id,
-				tipoAccion: 'eliminar',
-				descripcionEntidad: nombre
-			});
-			if (result.success) {
-				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
-			} else {
-				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
-			}
-			return;
-		}
+		if (!confirm(`¿Dar de baja al cliente "${nombre}"? Quedará marcado como inactivo.`)) return;
 
-		if (confirm('¿Estás seguro de eliminar este cliente? Esta acción no se puede deshacer.')) {
-			const result = await deleteClienteCascade(supabase, id);
-			if (result.success) {
-				await fetchClientes(); // Refresh
-			} else {
-				console.error('Error deleting cliente:', result.message);
-				alert(`Ocurrió un error al eliminar el cliente. ${result.message ?? ''}`);
-			}
+		const result = await darDeBajaCliente(supabase, id);
+		if (result.success) {
+			await fetchClientes(); // Refresh
+		} else {
+			console.error('Error dando de baja al cliente:', result.message);
+			alert(`Ocurrió un error al dar de baja al cliente. ${result.message ?? ''}`);
 		}
 	}
 </script>
@@ -171,10 +158,10 @@
 					</div>
 				</div>
 			{:else}
-				<ClientesTable 
-					{clientes} 
-					onEdit={openModal} 
-					onDelete={handleDelete} 
+				<ClientesTable
+					{clientes}
+					onEdit={openModal}
+					onDarDeBaja={handleDarDeBaja}
 				/>
 			{/if}
 		</div>

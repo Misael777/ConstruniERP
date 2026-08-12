@@ -11,7 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
-import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
@@ -255,13 +255,26 @@ export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: n
 /** Da de baja una venta ya cerrada (estado_proyecto: 'venta_cerrada' -> 'baja') — a diferencia de
  * eliminarVentaCascade, no borra ningún dato: solo marca el proyecto como inactivo, reemplazando al
  * botón de Eliminar en la tabla/modal una vez que la venta está cerrada. `estado_proyecto` es VARCHAR
- * libre (sin CHECK en BD), así que no hace falta migración para agregar este valor. */
+ * libre (sin CHECK en BD), así que no hace falta migración para agregar este valor.
+ *
+ * A pedido del usuario: el centro de costo que se generó para este proyecto (getOrCrearCentroCostoParaEntidad,
+ * tipo 'proyecto' — solo existe para ventas de Obra, no las de Consultoría, que comparten uno entre
+ * varias) se da de baja junto con el proyecto (ver darDeBajaCentroCostoDeEntidad en
+ * centroCostos.service.ts). Es secundario al cambio de estado del proyecto: si falla, se loguea pero
+ * no tumba una baja que ya se aplicó correctamente — mismo criterio que actualizarSaldoCentroCostoProyecto
+ * en cerrarVentaAprobada. */
 export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number): Promise<ServiceResult> {
 	const { error } = await client
 		.from('proyecto')
 		.update({ estado_proyecto: 'baja' })
 		.eq('id_proyecto', idProyecto);
 	if (error) return { success: false, message: error.message };
+
+	const centroResult = await darDeBajaCentroCostoDeEntidad(client, 'proyecto', idProyecto);
+	if (!centroResult.success) {
+		console.warn(`[aprobaciones.service] La venta #${idProyecto} se dio de baja, pero no se pudo dar de baja su centro de costo: ${centroResult.message}`);
+	}
+
 	return { success: true };
 }
 
@@ -332,6 +345,23 @@ export async function deleteClienteCascade(client: SupabaseClient, idCliente: nu
 	const { error } = await client.from('cliente').delete().eq('id_cliente', idCliente);
 	if (error) return { success: false, message: `Es posible que esté referenciado en otras tablas. ${error.message}` };
 	return { success: true };
+}
+
+/** Da de baja un cliente (reemplaza al borrado real, ver ClientesTable.svelte/comercial/clientes/
+ * +page.svelte) — mismo patrón que darDeBajaVenta: marca `cliente.estado = 'baja'` y da de baja el
+ * centro de costo que se generó para él (ver darDeBajaCentroCostoDeEntidad en centroCostos.service.ts).
+ * Es secundario al cambio de estado del cliente: si falla, se loguea pero no tumba una baja que ya se
+ * aplicó correctamente. */
+export async function darDeBajaCliente(client: SupabaseClient, idCliente: number): Promise<ServiceResult> {
+	const { error } = await client.from('cliente').update({ estado: 'baja' }).eq('id_cliente', idCliente);
+	if (error) return { success: false, message: error.message };
+
+	const centroResult = await darDeBajaCentroCostoDeEntidad(client, 'cliente', idCliente);
+	if (!centroResult.success) {
+		console.warn(`[aprobaciones.service] El cliente #${idCliente} se dio de baja, pero no se pudo dar de baja su centro de costo: ${centroResult.message}`);
+	}
+
+	return { success: true, message: 'Cliente dado de baja correctamente' };
 }
 
 export interface CerrarVentaParams {

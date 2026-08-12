@@ -130,6 +130,21 @@ export async function deleteUser(authUserId: string) {
 }
 
 /**
+ * Da de baja a un empleado — reemplaza al borrado real (deleteUser): marca su registro en
+ * `empleados` como 'baja', bloquea su acceso a la cuenta de Auth (ban de larga duración) y da de
+ * baja el centro de costo que se generó para él. Ver darDeBajaEmpleado en la Edge Function.
+ */
+export async function darDeBajaEmpleado(authUserId: string) {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'dar-de-baja');
+	const response = await fetchWithApiKey(url.toString(), {
+		method: 'POST',
+		body: JSON.stringify({ auth_user_id: authUserId })
+	});
+	return handleResponse(response);
+}
+
+/**
  * Resetea la contraseña de un usuario
  */
 export async function resetPassword(authUserId: string, newPassword: string) {
@@ -156,4 +171,44 @@ export async function confirmActivation(authUserId: string) {
 		body: JSON.stringify({ auth_user_id: authUserId })
 	});
 	return handleResponse(response);
+}
+
+function getOcrComprobanteUrl(): string {
+	return `${SUPABASE_URL}/functions/v1/ocr-comprobante`;
+}
+
+/** Convierte un File a base64 puro (sin el prefijo "data:...;base64,") — lo que espera la
+ * Edge Function ocr-comprobante. */
+async function fileToBase64(file: File): Promise<string> {
+	const buffer = await file.arrayBuffer();
+	const bytes = new Uint8Array(buffer);
+	let binary = '';
+	for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+	return btoa(binary);
+}
+
+export interface ReconocerComprobanteResult {
+	success: boolean;
+	fecha?: string | null;
+	monto?: number | null;
+	confianza?: 'alta' | 'media' | 'baja';
+	error?: string;
+}
+
+/** Lee fecha y monto de una foto/PDF de comprobante de pago vía Claude (visión) — ver
+ * "Fecha (reconocida)"/"Monto (reconocido)" en NuevaTransacción. `file` debe ser una imagen
+ * (image/*); PDFs no se envían acá (la Edge Function solo soporta bloques `image`). Nunca lanza
+ * — un fallo de reconocimiento no debe bloquear el registro manual de la transacción. */
+export async function reconocerComprobante(file: File): Promise<ReconocerComprobanteResult> {
+	try {
+		const imageBase64 = await fileToBase64(file);
+		const response = await fetchWithApiKey(getOcrComprobanteUrl(), {
+			method: 'POST',
+			body: JSON.stringify({ imageBase64, mediaType: file.type || 'image/jpeg' })
+		});
+		return await handleResponse(response);
+	} catch (err) {
+		console.error('[edgeFunctionClient] Error reconociendo comprobante:', err);
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	}
 }

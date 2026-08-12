@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
-	let { proveedores = [], onEdit = (proveedor: any) => {}, onDelete = (id: number) => {} } = $props<{
+	let { proveedores = [], onEdit = (proveedor: any) => {}, onDarDeBaja = (id: number) => {} } = $props<{
 		proveedores?: any[];
 		onEdit?: (proveedor: any) => void;
-		onDelete?: (id: number) => void;
+		onDarDeBaja?: (id: number) => void;
 	}>();
 
 	let searchTerm = $state('');
@@ -122,7 +122,7 @@
 							<button onclick={() => onEdit(proveedor)} class="w-8 h-8 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Editar">
 								<i class="fas fa-pen text-xs"></i>
 							</button>
-							<button onclick={() => onDelete(proveedor.id_proveedor)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Eliminar">
+							<button onclick={() => onDarDeBaja(proveedor.id_proveedor)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Dar de baja">
 								<i class="fas fa-trash text-xs"></i>
 							</button>
 						</div>
@@ -164,8 +164,8 @@
 						<button onclick={() => onEdit(proveedor)} class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100" aria-label="Editar">
 							<i class="fas fa-pen text-xs"></i> Editar
 						</button>
-						<button onclick={() => onDelete(proveedor.id_proveedor)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Eliminar">
-							<i class="fas fa-trash text-xs"></i> Eliminar
+						<button onclick={() => onDarDeBaja(proveedor.id_proveedor)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Dar de baja">
+							<i class="fas fa-trash text-xs"></i> Dar de baja
 						</button>
 					</div>
 				{/snippet}

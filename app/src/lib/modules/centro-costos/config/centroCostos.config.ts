@@ -24,8 +24,14 @@
  *     id_proyecto      BIGINT REFERENCES proyecto(id_proyecto)   ON DELETE CASCADE,
  *     id_cliente       BIGINT REFERENCES cliente(id_cliente)     ON DELETE CASCADE,
  *     id_proveedor     BIGINT REFERENCES proveedor(id_proveedor) ON DELETE CASCADE,
- *     id_empleado      BIGINT REFERENCES empleados(id)           ON DELETE CASCADE
+ *     id_empleado      BIGINT REFERENCES empleados(id)           ON DELETE CASCADE,
+ *     estado           VARCHAR(10) NOT NULL DEFAULT 'activo'  -- 'activo' | 'baja'
  *   );
+ * `estado` se agregó vía centro_costo_estado_migration.sql — a pedido del usuario, cuando la entidad
+ * dueña (hoy solo proyecto/venta, ver darDeBajaVenta en aprobaciones.service.ts) se da de baja, su
+ * centro de costo pasa a estado='baja' también (ver darDeBajaCentroCostoDeEntidad en
+ * centroCostos.service.ts, genérico por tipo para poder reusarse con cliente/proveedor/empleado más
+ * adelante). Nunca se edita a mano desde el formulario (ver showInForm:false más abajo).
  * Las columnas id_proyecto/id_cliente/id_proveedor se agregaron vía centro_costo_vinculacion_migration.sql
  * — reemplazan un intento anterior (columna "id_referencia") que NuevaVentaModal.svelte usaba pero que
  * NUNCA existió realmente en la BD; ese upsert fallaba en silencio (no revisaba el resultado).
@@ -136,14 +142,16 @@ export const DEFAULT_SORT_DIR: 'asc' | 'desc' = 'desc';
  *  - 'hard' -> DELETE real (lo que aplica hoy, no hay columna de estado)
  *  - 'soft' -> UPDATE de SOFT_DELETE_COLUMN a SOFT_DELETE_INACTIVE_VALUE
  *
- * AJUSTAR: cuando agregues una columna de estado a centro_costo,
- * cambia esto a 'soft' y completa los 3 valores de abajo. El botón
- * de la UI cambiará automáticamente su texto de "Eliminar" a "Anular".
+ * Desde centro_costo_estado_migration.sql ya existe esa columna de estado, así que queda en 'soft':
+ * el botón de la UI para un centro de costo creado a mano (sin vínculo) muestra "Anular" en vez de
+ * "Eliminar". Los vinculados a una entidad (proyecto/cliente/proveedor/empleado) siguen sin poder
+ * anularse/eliminarse a mano desde acá (ver el chequeo `entidadVinculada` en deleteCentroCosto de
+ * centroCostos.service.ts) — su estado lo cambia solo la entidad dueña al darse de baja.
  */
-export const DELETE_STRATEGY: 'hard' | 'soft' = 'hard';
-export const SOFT_DELETE_COLUMN: string | null = null; // ej: 'estado'
-export const SOFT_DELETE_ACTIVE_VALUE: string | null = null; // ej: 'activo'
-export const SOFT_DELETE_INACTIVE_VALUE: string | null = null; // ej: 'inactivo'
+export const DELETE_STRATEGY: 'hard' | 'soft' = 'soft';
+export const SOFT_DELETE_COLUMN: string | null = 'estado';
+export const SOFT_DELETE_ACTIVE_VALUE: string | null = 'activo';
+export const SOFT_DELETE_INACTIVE_VALUE: string | null = 'baja';
 
 // ---------------------------------------------------------------
 // FIELDS_CONFIG — definición de cada columna del centro de costo
@@ -264,6 +272,21 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		showInForm: false, // se genera con DEFAULT NOW(), no se edita
 		sortable: true,
 		defaultSort: 'desc' // debe coincidir con DEFAULT_SORT_FIELD/DEFAULT_SORT_DIR de arriba
+	},
+	{
+		key: 'estado',
+		label: 'Estado',
+		tipo: 'select',
+		options: [
+			{ value: 'activo', label: 'Activo' },
+			{ value: 'baja', label: 'Baja' }
+		],
+		// Nunca se elige a mano — lo cambia la entidad dueña al darse de baja (ver
+		// darDeBajaCentroCostoDeEntidad en centroCostos.service.ts) o, para los creados manualmente sin
+		// vínculo, el botón "Anular" (DELETE_STRATEGY:'soft' de arriba).
+		showInTable: true,
+		showInForm: false,
+		sortable: true
 	}
 ];
 

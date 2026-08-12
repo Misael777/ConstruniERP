@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import { createUser, updateUser, deleteUser } from '$lib/edgeFunctionClient';
+	import { createUser, updateUser, darDeBajaEmpleado } from '$lib/edgeFunctionClient';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	type Rol = { id: number; nombre: string; descripcion: string };

@@ -12,12 +12,11 @@
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { getCentroCostos, getSaldosPorCentroCosto, getSaldosVentaPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { getCentroCostos, getSaldosPorCentroCosto, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import CentroCostoDetalleModal from '$lib/modules/centro-costos/components/CentroCostoDetalleModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
-	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	// Módulo 100% client-side (habla directo con Supabase vía la anon key) para funcionar en
 	// cualquier plataforma empaquetada con Tauri (Windows, Android) sin necesitar un servidor
@@ -47,12 +46,10 @@
 	// fetchList, solo para esa pestaña (no se pidió para Cuentas Internas). Usado para centros SIN
 	// venta vinculada (bolsa general, manuales) — para los que sí la tienen, ver saldosVenta abajo.
 	let saldos = $state<Record<number, number>>({});
-	// Saldo de venta (monto total de la venta cerrada MENOS el adelanto ya cobrado, ver
-	// getSaldosVentaPorCentroCosto) — a pedido del usuario, esto es lo que se muestra en "Monto Actual"
-	// para los centros vinculados a un proyecto (Obra) o el compartido de Consultoría, en vez de la
-	// ficha de caja genérica (saldos). Mismo valor que actualizarSaldoCentroCostoProyecto persiste en
-	// `monto_actual` al cerrar una venta — acá se recalcula en vivo para que la pantalla no dependa de
-	// que ese paso se haya ejecutado (ventas cerradas antes de este cambio, por ejemplo).
+	// Monto recibido (adelanto + cualquier otra transacción con destino ese centro, ver
+	// getMontoRecibidoPorCentroCosto) — a pedido del usuario, esto es lo que se muestra en "Monto
+	// Actual" para los centros vinculados a un proyecto (Obra) o el compartido de Consultoría, en vez
+	// de la ficha de caja genérica (saldos).
 	let saldosVenta = $state<Record<number, number>>({});
 	let total = $state(0);
 	let pageNum = $state(1);
@@ -100,7 +97,7 @@
 				? await getSaldosPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
 				: {};
 			saldosVenta = activeTab === 'centros'
-				? await getSaldosVentaPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
+				? await getMontoRecibidoPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
 				: {};
 		} catch (err: any) {
 			loadError = err.message || 'No se pudo cargar el listado de centros de costo';
@@ -210,8 +207,8 @@
 	function cellValue(field: (typeof tableFields)[number], item: CentroCosto) {
 		if (field.key === 'nombre') return nombreDisplay(item);
 		// "Tipo" muestra el tipo de OBRA del proyecto vinculado (en vez del genérico "Proyecto
-		// (automático)") cuando ese proyecto es de Obra, y "Monto Actual" muestra el saldo de venta
-		// (monto total de la venta cerrada MENOS el adelanto ya cobrado, ver getSaldosVentaPorCentroCosto)
+		// (automático)") cuando ese proyecto es de Obra, y "Monto Actual" muestra el monto recibido
+		// (adelanto + cualquier otra transacción con destino ese centro, ver getMontoRecibidoPorCentroCosto)
 		// para centros de proyecto/consultoría, o la ficha de caja genérica (ingresos-egresos) para el
 		// resto — en ambos casos reemplaza a la columna `monto_actual` cruda, que nunca se mantiene al
 		// día por sí sola.
@@ -230,10 +227,13 @@
 		return raw ?? '—';
 	}
 
-	/** Código real del proyecto vinculado (ver generarCodigoProyecto en codigoProyecto.ts) — '—' si la
-	 * fila no tiene proyecto vinculado (centro manual, o vinculado a cliente/proveedor/empleado). */
+	/** A pedido explícito del usuario: la columna "Código de proyecto" muestra tal cual el valor
+	 * guardado en `centro_costo.nombre` — para los centros de proyecto (Obra) auto-generados, esa
+	 * columna ya guarda el código del proyecto (ver getOrCrearCentroCostoParaEntidad), así que no hace
+	 * falta recalcularlo con generarCodigoProyecto(). Ya NO se usa `item.proyecto`/generarCodigoProyecto
+	 * acá — ver nombreDisplay más abajo para la columna "Nombre", que sigue mostrando el cliente. */
 	function codigoProyectoDisplay(item: CentroCosto): string {
-		return item.proyecto ? generarCodigoProyecto(item.proyecto) : '—';
+		return item.nombre;
 	}
 
 	function openCreate() {

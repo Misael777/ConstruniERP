@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, Paperclip, ShieldCheck, ShieldOff, Lock } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -10,6 +10,7 @@
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
+	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/edgeFunctionClient';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	let {
@@ -49,8 +50,26 @@
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
 	// "Alcance de la Transacción" (Interna/Externa) tiene su propio widget (dos botones grandes al
-	// inicio del formulario, ver template) en vez del <select> genérico — se excluye del {#each} normal.
+	// inicio del formulario, ver template) en vez del <select> genérico — se excluye del render normal.
 	const otherFields = formFields.filter((f) => f.key !== 'tipo_alcance');
+
+	// A pedido del usuario (nuevo diseño "Nueva Transacción"): el formulario ya no se recorre con un
+	// solo {#each} en el orden de FIELDS_CONFIG — se agrupa en secciones fijas (núcleo siempre visible +
+	// "Otros campos" colapsable). Estas constantes solo ubican cada FieldConfig ya existente; no
+	// duplican su definición (validación/máscara/opciones siguen viniendo de transaccion.config.ts).
+	const origenField = otherFields.find((f) => f.key === 'id_centro_costo_origen')!;
+	const destinoField = otherFields.find((f) => f.key === 'id_centro_costo_destino')!;
+	const tipoField = otherFields.find((f) => f.key === 'tipo')!;
+	const cuentaOrigenField = otherFields.find((f) => f.key === 'cuente_origen')!;
+	const cuentaDestinoField = otherFields.find((f) => f.key === 'cuente_destino')!;
+	const categoriaField = otherFields.find((f) => f.key === 'categoria')!;
+	const tipoDocumentoField = otherFields.find((f) => f.key === 'tipo_documento')!;
+	const numDocumentoField = otherFields.find((f) => f.key === 'num_documento')!;
+	const formaPagoField = otherFields.find((f) => f.key === 'forma_pago')!;
+	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
+	const numeroCuotaField = otherFields.find((f) => f.key === 'tipo_transaccion')!;
+	const estadoField = otherFields.find((f) => f.key === 'estado')!;
+	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
@@ -77,17 +96,46 @@
 	// desaprobarTransaccion y BLOQUEADO_POR_APROBACION en transacciones.service.ts.
 	const bloqueadaPorAprobacion = $derived(mode === 'edit' && !!transaccion?.aprobado && !isAdmin());
 
-	// Comprobante (imagen/PDF) — obligatorio en toda transacción, ver createTransaccion/updateTransaccion.
-	// comprobanteUrl arranca con la de la transacción si se está editando una que ya tenía una subida;
-	// si el usuario elige un archivo nuevo, ese reemplaza a la anterior recién al confirmar el envío.
+	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, a pedido del usuario (ver texto de ayuda del dropzone)
+
+	// Comprobante (boucher de pago) — obligatorio en toda transacción, ver createTransaccion/
+	// updateTransaccion. comprobanteUrl arranca con la de la transacción si se está editando una que ya
+	// tenía una subida; si el usuario elige un archivo nuevo, ese reemplaza a la anterior recién al
+	// confirmar el envío.
 	let comprobanteFile = $state<File | null>(null);
 	let comprobanteUrl = $state<string | null>(null);
 	let comprobanteError = $state('');
 	let uploadingComprobante = $state(false);
 	let localPreviewUrl = $state<string | null>(null);
-	// Popup de previsualización del comprobante ya subido — mismo componente compartido que usa
-	// Ventas para contrato/proforma, en vez del <a target="_blank"> que abría el archivo crudo.
 	let showComprobantePreview = $state(false);
+
+	// Factura o boleta de venta — adjunto SEPARADO y OPCIONAL del comprobante (ver
+	// transaccion_factura_migration.sql), a pedido del usuario en el nuevo diseño.
+	let facturaFile = $state<File | null>(null);
+	let facturaUrl = $state<string | null>(null);
+	let uploadingFactura = $state(false);
+	let localPreviewUrlFactura = $state<string | null>(null);
+	let showFacturaPreview = $state(false);
+
+	// Reconocimiento automático (OCR vía Claude, ver ocr-comprobante Edge Function) de Fecha/Monto al
+	// subir el boucher — a pedido del usuario. fechaLocked/montoLocked = true mientras el valor viene
+	// del reconocimiento automático (input deshabilitado); el lápiz de al lado lo habilita a mano.
+	let ocrLoading = $state(false);
+	let ocrConfianza = $state<'alta' | 'media' | 'baja' | null>(null);
+	let fechaLocked = $state(false);
+	let montoLocked = $state(false);
+
+	// Cola de comprobantes cuando se eligen VARIOS archivos a la vez en modo 'create' (sin onConfirm) —
+	// a pedido del usuario, cada uno se revisa/edita con las flechas de "Otros campos (opcionales)" y
+	// se guarda como una transacción independiente (ver handleSubmit). colaDrafts guarda el formulario
+	// a medio llenar de cada índice todavía no guardado; colaOcrCache evita repetir la llamada de OCR
+	// al volver a un índice ya visitado.
+	let colaArchivos = $state<File[]>([]);
+	let colaIndex = $state(0);
+	let colaDrafts = $state<Record<number, Record<string, string>>>({});
+	let colaOcrCache = $state<Record<number, ReconocerComprobanteResult>>({});
+
+	let otrosCamposAbierto = $state(true);
 
 	$effect(() => {
 		if (open) {
@@ -96,6 +144,16 @@
 			comprobanteFile = null;
 			comprobanteUrl = transaccion?.comprobante_url ?? null;
 			comprobanteError = '';
+			facturaFile = null;
+			facturaUrl = transaccion?.factura_url ?? null;
+			colaArchivos = [];
+			colaDrafts = {};
+			colaOcrCache = {};
+			colaIndex = 0;
+			fechaLocked = false;
+			montoLocked = false;
+			ocrConfianza = null;
+			otrosCamposAbierto = true;
 		}
 	});
 
@@ -109,23 +167,159 @@
 		localPreviewUrl = null;
 	});
 
+	$effect(() => {
+		if (facturaFile && facturaFile.type.startsWith('image/')) {
+			const url = URL.createObjectURL(facturaFile);
+			localPreviewUrlFactura = url;
+			return () => URL.revokeObjectURL(url);
+		}
+		localPreviewUrlFactura = null;
+	});
+
+	/** Lee fecha/monto del comprobante vía Claude (visión, ver edgeFunctionClient.ts). `cacheIndex` no
+	 * nulo cuando viene de la cola de varios comprobantes (se cachea el resultado por índice para no
+	 * repetir la llamada al volver a un archivo ya revisado con las flechas). Nunca bloquea el guardado
+	 * manual: si falla o la imagen no es reconocible, el usuario completa Fecha/Monto a mano. */
+	async function runOcr(file: File, cacheIndex: number | null) {
+		fechaLocked = false;
+		montoLocked = false;
+		ocrConfianza = null;
+		if (!file.type.startsWith('image/')) return; // la Edge Function solo procesa bloques `image`, no PDF
+		ocrLoading = true;
+		try {
+			const result = await reconocerComprobante(file);
+			if (cacheIndex !== null) colaOcrCache = { ...colaOcrCache, [cacheIndex]: result };
+			if (result.success) {
+				const updates: Record<string, string> = {};
+				if (result.fecha) {
+					updates.fecha = result.fecha;
+					fechaLocked = true;
+				}
+				if (result.monto !== null && result.monto !== undefined) {
+					updates.monto_total = String(result.monto);
+					montoLocked = true;
+				}
+				if (Object.keys(updates).length > 0) formValues = { ...formValues, ...updates };
+				ocrConfianza = result.confianza ?? null;
+				revalidate();
+			} else {
+				toast.error('No se pudo reconocer fecha/monto automáticamente. Complétalos a mano.');
+			}
+		} finally {
+			ocrLoading = false;
+		}
+	}
+
+	function processComprobanteFiles(files: File[]) {
+		if (files.length === 0) return;
+		const tooBig = files.find((f) => f.size > MAX_FILE_SIZE);
+		if (tooBig) {
+			comprobanteError = `"${tooBig.name}" supera el máximo de 5MB.`;
+			return;
+		}
+
+		if (mode === 'create' && !onConfirm && files.length > 1) {
+			colaArchivos = files;
+			colaDrafts = {};
+			colaOcrCache = {};
+			colaIndex = 0;
+			formValues = buildInitialValues();
+			comprobanteUrl = null;
+			comprobanteError = '';
+			comprobanteFile = files[0];
+			runOcr(files[0], 0);
+			return;
+		}
+
+		colaArchivos = [];
+		comprobanteFile = files[0];
+		comprobanteError = '';
+		runOcr(files[0], null);
+	}
+
 	function onComprobanteChange(e: Event) {
-		comprobanteFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null;
-		if (comprobanteFile) comprobanteError = '';
+		const input = e.currentTarget as HTMLInputElement;
+		const files = input.files ? Array.from(input.files) : [];
+		input.value = '';
+		processComprobanteFiles(files);
+	}
+
+	function onComprobanteDrop(e: DragEvent) {
+		e.preventDefault();
+		if (bloqueadaPorAprobacion) return;
+		processComprobanteFiles(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
+	}
+
+	function processFacturaFile(files: File[]) {
+		const file = files[0];
+		if (!file) return;
+		if (file.size > MAX_FILE_SIZE) {
+			toast.error(`"${file.name}" supera el máximo de 5MB.`);
+			return;
+		}
+		facturaFile = file;
+	}
+
+	function onFacturaChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const files = input.files ? Array.from(input.files) : [];
+		input.value = '';
+		processFacturaFile(files);
+	}
+
+	function onFacturaDrop(e: DragEvent) {
+		e.preventDefault();
+		if (bloqueadaPorAprobacion) return;
+		processFacturaFile(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
+	}
+
+	/** Guarda el formulario a medio llenar del índice actual de la cola antes de navegar a otro. */
+	function guardarDraftActual() {
+		colaDrafts = { ...colaDrafts, [colaIndex]: { ...formValues } };
+	}
+
+	/** Carga el comprobante/formulario del índice `idx` de la cola — reusa el resultado de OCR ya
+	 * cacheado si el usuario ya había pasado por ese archivo antes. */
+	function cargarDraft(idx: number) {
+		comprobanteFile = colaArchivos[idx] ?? null;
+		comprobanteUrl = null;
+		comprobanteError = '';
+		const cached = colaOcrCache[idx];
+		const draft = colaDrafts[idx];
+		formValues = draft ?? buildInitialValues();
+		fechaLocked = !!cached?.success && !!cached.fecha;
+		montoLocked = !!cached?.success && cached.monto !== null && cached.monto !== undefined;
+		ocrConfianza = cached?.confianza ?? null;
+		if (!cached && comprobanteFile) runOcr(comprobanteFile, idx);
+		revalidate();
+	}
+
+	function irAAnterior() {
+		if (colaIndex <= 0) return;
+		guardarDraftActual();
+		colaIndex -= 1;
+		cargarDraft(colaIndex);
+	}
+
+	function irASiguiente() {
+		if (colaIndex >= colaArchivos.length - 1) return;
+		guardarDraftActual();
+		colaIndex += 1;
+		cargarDraft(colaIndex);
 	}
 
 	function fileExt(name: string): string {
 		return name.includes('.') ? `.${name.split('.').pop()}` : '';
 	}
 
-
 	/**
-	 * Sube el comprobante a Google Drive con el nombre `baseName` (código de la transacción cuando ya
-	 * se conoce — edición; un nombre temporal si es una transacción nueva, ver handleSubmit) — misma
-	 * rama Tauri/web que usan proforma/contrato en NuevaVentaModal.svelte y documentos de proyecto en
-	 * DocumentosTab.svelte.
+	 * Sube un archivo (comprobante o factura) a Google Drive con el nombre `baseName` — misma rama
+	 * Tauri/web que usan proforma/contrato en NuevaVentaModal.svelte y documentos de proyecto en
+	 * DocumentosTab.svelte. Ambos tipos de adjunto de este modal reusan el mismo folder de Drive
+	 * ('comprobante' en el backend) — no hay un folder dedicado para facturas todavía, y crear uno
+	 * nuevo es un cambio de configuración de servidor fuera del alcance de este formulario.
 	 */
-	async function uploadComprobante(file: File, baseName: string): Promise<{ url: string; fileId: string }> {
+	async function subirArchivo(file: File, baseName: string): Promise<{ url: string; fileId: string }> {
 		const fileName = `${baseName}${fileExt(file.name)}`;
 		if (isRunningInTauri()) {
 			return await uploadToDriveClient(file, fileName, 'comprobante');
@@ -139,17 +333,14 @@
 		const response = await fetch(resolveApiUrl('/api/upload-document'), { method: 'POST', body: formData });
 		const result = await parseJsonResponse(response);
 		if (!response.ok || !result.success) {
-			// safeEndpoint (servidor) devuelve `error` genérico ("Internal server error") + `details` con
-			// la causa real (ej. falta configurar GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES) — se prioriza
-			// `details` para que el mensaje sea accionable en vez de mostrar siempre el mismo texto vacío.
-			throw new Error(result.details || result.error || 'Error al subir el comprobante.');
+			throw new Error(result.details || result.error || 'Error al subir el archivo.');
 		}
 		return { url: result.url as string, fileId: result.fileId as string };
 	}
 
-	/** Renombra el comprobante recién subido a su nombre definitivo (código = id_transaccion, solo se
+	/** Renombra un archivo recién subido a su nombre definitivo (código = id_transaccion, solo se
 	 * conoce después de crear la transacción) — mejor esfuerzo, no bloquea el guardado si falla. */
-	async function renameComprobante(fileId: string, newName: string): Promise<void> {
+	async function renombrarArchivo(fileId: string, newName: string): Promise<void> {
 		if (isRunningInTauri()) {
 			await renameDriveFileClient(fileId, newName);
 			return;
@@ -162,9 +353,9 @@
 		await parseJsonResponse(response);
 	}
 
-	/** Borra el comprobante anterior al reemplazarlo por uno nuevo, para no dejar duplicados en Drive —
+	/** Borra el archivo anterior al reemplazarlo por uno nuevo, para no dejar duplicados en Drive —
 	 * mejor esfuerzo, no bloquea el guardado si falla. */
-	async function deleteComprobante(fileId: string): Promise<void> {
+	async function borrarArchivo(fileId: string): Promise<void> {
 		if (isRunningInTauri()) {
 			await deleteDriveFileClient(fileId);
 			return;
@@ -298,9 +489,6 @@
 		}
 	});
 
-	const modalWidthClass = $derived(otherFields.length <= 4 ? 'max-w-md' : otherFields.length <= 8 ? 'max-w-2xl' : 'max-w-4xl');
-	const gridColsClass = $derived(otherFields.length <= 4 ? 'grid-cols-1' : otherFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
-
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		// Origen/Destino de Transacción muestran una lista distinta según el Alcance: en Interna, solo
 		// proyectos (dynamicOptions[key]); en Externa, proveedores/clientes/empleados (dynamicOptions[key
@@ -362,7 +550,7 @@
 					// temporal, se renombra a su código definitivo abajo una vez insertada la fila.
 					const baseName =
 						mode === 'edit' && transaccion ? `comprobante-${transaccion.id_transaccion}` : `comprobante-temp-${Date.now()}`;
-					const uploaded = await uploadComprobante(comprobanteFile, baseName);
+					const uploaded = await subirArchivo(comprobanteFile, baseName);
 					finalComprobanteUrl = uploaded.url;
 					uploadedFileId = uploaded.fileId;
 					if (mode === 'edit' && transaccion?.comprobante_url) {
@@ -372,7 +560,27 @@
 					uploadingComprobante = false;
 				}
 			}
-			const payload = { ...formValues, comprobante_url: finalComprobanteUrl };
+
+			let finalFacturaUrl = facturaUrl;
+			let uploadedFacturaFileId: string | null = null;
+			let oldFacturaFileIdToDelete: string | null = null;
+
+			if (facturaFile) {
+				uploadingFactura = true;
+				try {
+					const baseName = mode === 'edit' && transaccion ? `factura-${transaccion.id_transaccion}` : `factura-temp-${Date.now()}`;
+					const uploaded = await subirArchivo(facturaFile, baseName);
+					finalFacturaUrl = uploaded.url;
+					uploadedFacturaFileId = uploaded.fileId;
+					if (mode === 'edit' && transaccion?.factura_url) {
+						oldFacturaFileIdToDelete = extractDriveFileId(transaccion.factura_url);
+					}
+				} finally {
+					uploadingFactura = false;
+				}
+			}
+
+			const payload = { ...formValues, comprobante_url: finalComprobanteUrl, factura_url: finalFacturaUrl };
 
 			let result;
 			if (onConfirm) {
@@ -386,22 +594,41 @@
 
 			if (result.success) {
 				// Housekeeping en Drive — mejor esfuerzo: si algo de esto falla no se muestra como error,
-				// el guardado ya se completó correctamente (ver renameComprobante/deleteComprobante).
+				// el guardado ya se completó correctamente.
 				try {
 					const idNuevo = (result.data as any)?.id_transaccion;
 					if (uploadedFileId && mode !== 'edit' && idNuevo) {
-						await renameComprobante(uploadedFileId, `comprobante-${idNuevo}${fileExt(comprobanteFile!.name)}`);
+						await renombrarArchivo(uploadedFileId, `comprobante-${idNuevo}${fileExt(comprobanteFile!.name)}`);
 					}
 					if (oldFileIdToDelete && oldFileIdToDelete !== uploadedFileId) {
-						await deleteComprobante(oldFileIdToDelete);
+						await borrarArchivo(oldFileIdToDelete);
+					}
+					if (uploadedFacturaFileId && mode !== 'edit' && idNuevo) {
+						await renombrarArchivo(uploadedFacturaFileId, `factura-${idNuevo}${fileExt(facturaFile!.name)}`);
+					}
+					if (oldFacturaFileIdToDelete && oldFacturaFileIdToDelete !== uploadedFacturaFileId) {
+						await borrarArchivo(oldFacturaFileIdToDelete);
 					}
 				} catch (housekeepingErr) {
-					console.warn('[TransaccionModal] No se pudo renombrar/limpiar el comprobante en Drive:', housekeepingErr);
+					console.warn('[TransaccionModal] No se pudo renombrar/limpiar los archivos en Drive:', housekeepingErr);
 				}
 
-				toast.success(result.message ?? 'Operación realizada con éxito');
-				onSaved();
-				onClose();
+				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
+				// avanza al siguiente borrador en vez de cerrar el modal — a pedido del usuario.
+				const hayMasEnCola = colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1;
+				if (hayMasEnCola) {
+					toast.success(`Transacción ${colaIndex + 1} de ${colaArchivos.length} guardada.`);
+					const { [colaIndex]: _omitido, ...restoDrafts } = colaDrafts;
+					colaDrafts = restoDrafts;
+					colaIndex += 1;
+					facturaFile = null;
+					facturaUrl = null;
+					cargarDraft(colaIndex);
+				} else {
+					toast.success(result.message ?? 'Operación realizada con éxito');
+					onSaved();
+					onClose();
+				}
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
 				if (result.errors) fieldErrors = { ...fieldErrors, ...result.errors };
@@ -414,9 +641,75 @@
 	}
 </script>
 
+{#snippet fieldBlock(field: (typeof formFields)[number])}
+	{@const isLocked = lockedFields.includes(field.key)}
+	{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
+	{@const isBloqueadoPorMedioPago = cuentasBloqueadasPorMedioPago && (field.key === 'cuente_origen' || field.key === 'cuente_destino')}
+	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
+	<div>
+		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+			{field.label}
+			{#if field.required}<span class="text-red-500">*</span>{/if}
+			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
+		</label>
+
+		{#if field.tipo === 'select' || field.options || (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
+			<select
+				id={`tr-${field.key}`}
+				name={field.key}
+				value={formValues[field.key]}
+				disabled={isDisabled}
+				onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
+				class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+			>
+				<option value="" disabled>Selecciona una opción</option>
+				{#each optionsFor(field) as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
+		{:else}
+			<input
+				id={`tr-${field.key}`}
+				name={field.key}
+				type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
+				inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
+				step={field.tipo === 'number' ? 'any' : undefined}
+				value={formValues[field.key]}
+				maxlength={field.maxLength}
+				placeholder={field.placeholder}
+				disabled={isDisabled}
+				oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
+				class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+			/>
+		{/if}
+
+		{#if field.tipo === 'currency' && formValues[field.key] && !fieldErrors[field.key]}
+			<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues[field.key])}</p>
+		{/if}
+
+		{#if fieldErrors[field.key]}
+			<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
+		{:else if isLocked}
+			<p class="mt-1 text-xs text-slate-400">Ya lo determina la cuenta — no se puede cambiar aquí.</p>
+		{:else if field.key === 'tipo' && isBloqueadoInterna}
+			<p class="mt-1 text-xs text-slate-400">Se fija en "Transferencia" porque el alcance es Transacción Interna.</p>
+		{:else if field.key === 'estado' && isBloqueadoInterna}
+			<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
+		{:else if isBloqueadoInterna}
+			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
+		{:else if isBloqueadoPorMedioPago}
+			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
+		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
+			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
+		{:else if field.helpText}
+			<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
+		{/if}
+	</div>
+{/snippet}
+
 {#if open}
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-		<div class={`bg-white rounded-2xl shadow-2xl w-full ${modalWidthClass} max-h-[90vh] overflow-y-auto`}>
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
 				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
@@ -425,37 +718,89 @@
 			</div>
 
 			<form onsubmit={handleSubmit}>
-				<div class={`p-6 grid ${gridColsClass} gap-4`}>
+				<div class="p-6 flex flex-col gap-5">
 					{#if mode === 'edit' && transaccion}
-						<div class="col-span-full">
-							{#if transaccion.aprobado}
-								<div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex items-center justify-between gap-3 flex-wrap">
-									<span class="flex items-center gap-1.5">
-										<ShieldCheck size={16} class="shrink-0" />
-										Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
-										{#if !isAdmin()}Solo un administrador puede modificar o eliminar esta transacción ahora.{/if}
-									</span>
-									{#if isAdmin()}
-										<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
-											<ShieldOff size={14} /> Quitar aprobación
-										</button>
-									{/if}
-								</div>
-							{:else if isAdmin()}
-								<button
-									type="button"
-									onclick={handleAprobar}
-									disabled={aprobando}
-									class="w-full py-2 rounded-lg border border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-								>
-									<ShieldCheck size={16} />
-									{aprobando ? 'Aprobando…' : 'Aprobar comprobante'}
-								</button>
-							{/if}
-						</div>
+						{#if transaccion.aprobado}
+							<div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex items-center justify-between gap-3 flex-wrap">
+								<span class="flex items-center gap-1.5">
+									<ShieldCheck size={16} class="shrink-0" />
+									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
+									{#if !isAdmin()}Solo un administrador puede modificar o eliminar esta transacción ahora.{/if}
+								</span>
+								{#if isAdmin()}
+									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
+										<ShieldOff size={14} /> Quitar aprobación
+									</button>
+								{/if}
+							</div>
+						{:else if isAdmin()}
+							<button
+								type="button"
+								onclick={handleAprobar}
+								disabled={aprobando}
+								class="w-full py-2 rounded-lg border border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+							>
+								<ShieldCheck size={16} />
+								{aprobando ? 'Aprobando…' : 'Aprobar comprobante'}
+							</button>
+						{/if}
 					{/if}
 
-					<div class="col-span-full">
+					<!-- Adjuntar boucher de pago -->
+					<div>
+						<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
+							Adjuntar boucher de pago <span class="text-red-500">*</span>
+						</label>
+						<div class="flex items-start gap-3">
+							<label
+								for="tr-comprobante"
+								ondragover={(e) => e.preventDefault()}
+								ondrop={onComprobanteDrop}
+								class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
+							>
+								{#if localPreviewUrl}
+									<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
+								{:else if comprobanteUrl && !comprobanteFile}
+									<img
+										src={comprobanteUrl}
+										alt="Comprobante"
+										class="absolute inset-0 w-full h-full object-cover"
+										onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+									/>
+								{:else if comprobanteFile}
+									<CloudUpload size={16} class="text-blue-400" />
+									<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
+								{:else}
+									<CloudUpload size={18} class="text-blue-400" />
+									<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
+								{/if}
+							</label>
+							<div class="flex flex-col gap-1 min-w-0 pt-0.5">
+								{#if comprobanteUrl && !comprobanteFile}
+									<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+										Ver comprobante actual
+									</button>
+								{/if}
+								{#if comprobanteError}
+									<p class="text-xs text-red-600">{comprobanteError}</p>
+								{:else}
+									<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB). Toda transacción debe tener un comprobante de respaldo.</p>
+								{/if}
+							</div>
+						</div>
+						<input
+							id="tr-comprobante"
+							type="file"
+							accept="image/*,application/pdf"
+							multiple={mode === 'create' && !onConfirm}
+							class="hidden"
+							disabled={bloqueadaPorAprobacion}
+							onchange={onComprobanteChange}
+						/>
+					</div>
+
+					<!-- Alcance de la Transacción -->
+					<div>
 						<span class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 							Alcance de la Transacción <span class="text-red-500">*</span>
 						</span>
@@ -498,117 +843,201 @@
 						{#if fieldErrors.tipo_alcance}<p class="mt-1 text-xs text-red-600">{fieldErrors.tipo_alcance}</p>{/if}
 					</div>
 
-					{#each otherFields as field (field.key)}
-						{@const isLocked = lockedFields.includes(field.key)}
-						{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
-						{@const isBloqueadoPorMedioPago = cuentasBloqueadasPorMedioPago && (field.key === 'cuente_origen' || field.key === 'cuente_destino')}
-						{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
+					<!-- Centro de costo origen / destino / Tipo -->
+					<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+						{@render fieldBlock(origenField)}
+						{@render fieldBlock(destinoField)}
+						{@render fieldBlock(tipoField)}
+					</div>
+
+					<!-- Cuenta origen / destino -->
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+						{@render fieldBlock(cuentaOrigenField)}
+						{@render fieldBlock(cuentaDestinoField)}
+					</div>
+
+					<!-- Fecha (reconocida) / Monto (reconocido) -->
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-								{field.label}
-								{#if field.required}<span class="text-red-500">*</span>{/if}
-								{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
+							<label for="tr-fecha" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+								Fecha (reconocida) <span class="text-red-500">*</span>
+								{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
 							</label>
-
-							{#if field.tipo === 'select' || field.options || (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
-								<select
-									id={`tr-${field.key}`}
-									name={field.key}
-									value={formValues[field.key]}
-									disabled={isDisabled}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each optionsFor(field) as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
-							{:else}
+							<div class="flex items-center gap-2">
 								<input
-									id={`tr-${field.key}`}
-									name={field.key}
-									type={field.tipo === 'number' ? 'number' : field.tipo === 'date' ? 'date' : 'text'}
-									inputmode={field.tipo === 'currency' ? 'decimal' : undefined}
-									step={field.tipo === 'number' ? 'any' : undefined}
-									value={formValues[field.key]}
-									maxlength={field.maxLength}
-									placeholder={field.placeholder}
-									disabled={isDisabled}
-									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								/>
-							{/if}
-
-							{#if field.tipo === 'currency' && formValues[field.key] && !fieldErrors[field.key]}
-								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues[field.key])}</p>
-							{/if}
-
-							{#if fieldErrors[field.key]}
-								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
-							{:else if isLocked}
-								<p class="mt-1 text-xs text-slate-400">Ya lo determina la cuenta — no se puede cambiar aquí.</p>
-							{:else if field.key === 'tipo' && isBloqueadoInterna}
-								<p class="mt-1 text-xs text-slate-400">Se fija en "Transferencia" porque el alcance es Transacción Interna.</p>
-							{:else if field.key === 'estado' && isBloqueadoInterna}
-								<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
-							{:else if isBloqueadoInterna}
-								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
-							{:else if isBloqueadoPorMedioPago}
-								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
-							{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
-								<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
-							{:else if field.helpText}
-								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
-							{/if}
-						</div>
-					{/each}
-
-					<div class="col-span-full">
-						<label for="tr-comprobante" class="block text-sm font-bold text-[#0f3b5e] mb-1">
-							Comprobante <span class="text-red-500">*</span>
-						</label>
-						<label
-							for="tr-comprobante"
-							class={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
-						>
-							<Paperclip size={16} class="text-slate-400 shrink-0" />
-							{#if comprobanteFile}
-								<span class="truncate">{comprobanteFile.name}</span>
-							{:else if comprobanteUrl}
-								<span class="truncate text-emerald-700">Comprobante ya adjuntado — elige un archivo para reemplazarlo</span>
-							{:else}
-								<span class="text-slate-400">Adjuntar imagen o PDF del comprobante…</span>
-							{/if}
-						</label>
-						<input id="tr-comprobante" type="file" accept="image/*,application/pdf" class="hidden" disabled={bloqueadaPorAprobacion} onchange={onComprobanteChange} />
-
-						<!-- Vista previa: local (recién elegido) o la ya guardada en Drive. Para PDFs (o si
-						     falla la carga de la imagen) se muestra el enlace "Ver comprobante" nomás. -->
-						{#if localPreviewUrl}
-							<img src={localPreviewUrl} alt="Vista previa del comprobante" class="mt-2 w-24 h-24 object-cover rounded-lg border border-slate-200" />
-						{:else if comprobanteUrl && !comprobanteFile}
-							<div class="mt-2 flex items-center gap-3">
-								<img
-									src={comprobanteUrl}
-									alt="Comprobante"
-									class="w-24 h-24 object-cover rounded-lg border border-slate-200"
-									onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+									id="tr-fecha"
+									type="date"
+									value={formValues.fecha}
+									disabled={fechaLocked || bloqueadaPorAprobacion}
+									oninput={(e) => handleInput('fecha', (e.target as HTMLInputElement).value)}
+									class={`flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.fecha ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 								<button
 									type="button"
-									onclick={() => (showComprobantePreview = true)}
-									class="text-xs text-blue-600 hover:underline"
+									onclick={() => (fechaLocked = false)}
+									disabled={bloqueadaPorAprobacion || !fechaLocked}
+									title="Editar fecha"
+									aria-label="Editar fecha"
+									class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
 								>
-									Ver comprobante actual
+									<Pencil size={14} />
 								</button>
 							</div>
-						{/if}
+							{#if fieldErrors.fecha}
+								<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha}</p>
+							{:else if fechaLocked}
+								<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+							{/if}
+						</div>
+						<div>
+							<label for="tr-monto" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+								Monto (reconocido) <span class="text-red-500">*</span>
+								{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
+							</label>
+							<div class="flex items-center gap-2">
+								<input
+									id="tr-monto"
+									type="text"
+									inputmode="decimal"
+									value={formValues.monto_total}
+									disabled={montoLocked || bloqueadaPorAprobacion}
+									oninput={(e) => handleInput('monto_total', (e.target as HTMLInputElement).value)}
+									placeholder="0.00"
+									class={`flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.monto_total ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+								/>
+								<button
+									type="button"
+									onclick={() => (montoLocked = false)}
+									disabled={bloqueadaPorAprobacion || !montoLocked}
+									title="Editar monto"
+									aria-label="Editar monto"
+									class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+								>
+									<Pencil size={14} />
+								</button>
+							</div>
+							{#if formValues.monto_total && !fieldErrors.monto_total}
+								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues.monto_total)}</p>
+							{/if}
+							{#if fieldErrors.monto_total}
+								<p class="mt-1 text-xs text-red-600">{fieldErrors.monto_total}</p>
+							{:else if montoLocked}
+								<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+							{/if}
+						</div>
+					</div>
 
-						{#if comprobanteError}
-							<p class="mt-1 text-xs text-red-600">{comprobanteError}</p>
-						{:else}
-							<p class="mt-1 text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo — se sube a Google Drive, igual que el resto de documentos del ERP.</p>
+					<!-- Otros campos (opcionales) -->
+					<div class="border-t border-slate-200 pt-4">
+						<div class="flex items-center justify-between flex-wrap gap-2">
+							<button
+								type="button"
+								onclick={() => (otrosCamposAbierto = !otrosCamposAbierto)}
+								class="flex items-center gap-1.5 text-sm font-bold text-blue-600"
+							>
+								Otros campos (opcionales)
+								{#if otrosCamposAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+							</button>
+
+							{#if colaArchivos.length > 1}
+								<div class="flex items-center gap-2">
+									<button
+										type="button"
+										onclick={irAAnterior}
+										disabled={colaIndex === 0}
+										title="Comprobante anterior"
+										aria-label="Comprobante anterior"
+										class="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+									>
+										<ChevronLeft size={16} />
+									</button>
+									<span class="text-xs text-slate-500 font-medium">{colaIndex + 1} de {colaArchivos.length}</span>
+									<button
+										type="button"
+										onclick={irASiguiente}
+										disabled={colaIndex === colaArchivos.length - 1}
+										title="Comprobante siguiente"
+										aria-label="Comprobante siguiente"
+										class="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-40"
+									>
+										<ChevronRight size={16} />
+									</button>
+								</div>
+							{/if}
+						</div>
+
+						{#if otrosCamposAbierto}
+							<div class="mt-4 flex flex-col gap-4">
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									{@render fieldBlock(categoriaField)}
+									{@render fieldBlock(tipoDocumentoField)}
+									{@render fieldBlock(numDocumentoField)}
+								</div>
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									{@render fieldBlock(formaPagoField)}
+									{@render fieldBlock(medioPagoField)}
+									{@render fieldBlock(numeroCuotaField)}
+								</div>
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									<div class="sm:col-span-2">
+										<label for="tr-descripcion" class="block text-sm font-bold text-[#0f3b5e] mb-1">{descripcionField.label}</label>
+										<textarea
+											id="tr-descripcion"
+											rows="3"
+											value={formValues.descripcion}
+											disabled={bloqueadaPorAprobacion}
+											oninput={(e) => handleInput('descripcion', (e.target as HTMLTextAreaElement).value)}
+											placeholder={descripcionField.placeholder}
+											class="w-full h-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50 resize-none"
+										></textarea>
+										{#if fieldErrors.descripcion}<p class="mt-1 text-xs text-red-600">{fieldErrors.descripcion}</p>{/if}
+									</div>
+									{@render fieldBlock(estadoField)}
+								</div>
+
+								<div>
+									<label class="block text-sm font-bold text-[#0f3b5e] mb-1">Adjuntar factura o boleta de venta</label>
+									<div class="flex items-start gap-3">
+										<label
+											for="tr-factura"
+											ondragover={(e) => e.preventDefault()}
+											ondrop={onFacturaDrop}
+											class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed border-slate-300 text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}`}
+										>
+											{#if localPreviewUrlFactura}
+												<img src={localPreviewUrlFactura} alt="Vista previa de la factura" class="absolute inset-0 w-full h-full object-cover" />
+											{:else if facturaUrl && !facturaFile}
+												<img
+													src={facturaUrl}
+													alt="Factura"
+													class="absolute inset-0 w-full h-full object-cover"
+													onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+												/>
+											{:else if facturaFile}
+												<CloudUpload size={16} class="text-blue-400" />
+												<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{facturaFile.name}</span>
+											{:else}
+												<CloudUpload size={18} class="text-blue-400" />
+												<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
+											{/if}
+										</label>
+										<div class="flex flex-col gap-1 min-w-0 pt-0.5">
+											{#if facturaUrl && !facturaFile}
+												<button type="button" onclick={() => (showFacturaPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+													Ver factura actual
+												</button>
+											{/if}
+											<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB).</p>
+										</div>
+									</div>
+									<input id="tr-factura" type="file" accept="image/*,application/pdf" class="hidden" disabled={bloqueadaPorAprobacion} onchange={onFacturaChange} />
+								</div>
+
+								<p class="text-xs text-slate-400 flex items-center gap-1.5">
+									<Info size={12} class="shrink-0" />
+									Estos campos son opcionales. Otra área de la empresa se encargará de completarlos.
+								</p>
+							</div>
 						{/if}
 					</div>
 				</div>
@@ -620,7 +1049,13 @@
 					{#if !bloqueadaPorAprobacion}
 						<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 							{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
-							{uploadingComprobante ? 'Subiendo comprobante…' : (confirmButtonLabel ?? (mode === 'create' ? 'Crear' : 'Actualizar'))}
+							{#if submitting}
+								{uploadingComprobante || uploadingFactura ? 'Subiendo archivos…' : 'Guardando…'}
+							{:else if colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1}
+								Guardar y continuar
+							{:else}
+								{confirmButtonLabel ?? (mode === 'create' ? 'Crear' : 'Actualizar')}
+							{/if}
 						</button>
 					{/if}
 				</div>
@@ -634,4 +1069,11 @@
 	url={comprobanteUrl}
 	title="Comprobante"
 	onClose={() => (showComprobantePreview = false)}
+/>
+
+<DocumentPreviewModal
+	open={showFacturaPreview}
+	url={facturaUrl}
+	title="Factura o boleta de venta"
+	onClose={() => (showFacturaPreview = false)}
 />
