@@ -2,7 +2,14 @@
 	import { X, Link, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { getOptionLabel, formatCurrency, FIELDS_CONFIG } from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { resolveEntidadVinculada, getProyectosCentroCostoConsultoria } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import {
+		resolveEntidadVinculada,
+		getProyectosCentroCostoConsultoria,
+		esCentroDeVenta,
+		getMontoTotalProyecto,
+		getSaldosPorCentroCosto,
+		getMontoRecibidoPorCentroCosto
+	} from '$lib/modules/centro-costos/services/centroCostos.service';
 	import type { CentroCosto, EntidadVinculada, ProyectoVinculadoConsultoria } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
@@ -24,6 +31,15 @@
 	let proyectosConsultoria = $state<ProyectoVinculadoConsultoria[]>([]);
 	const esConsultoriaCompartido = $derived(centro?.tipo === 'consultoria' && !centro?.id_proyecto);
 	const tipoField = FIELDS_CONFIG.find((f) => f.key === 'tipo')!;
+
+	// "Monto Actual" acá debe ser EXACTAMENTE el mismo número que la columna "Monto Actual" del listado
+	// (centros-de-costos/+page.svelte) — no el `centro.monto_actual` crudo, que nunca se mantiene al
+	// día por sí solo (ver nota en getSaldosPorCentroCosto). "Monto Total" es el precio_venta de la
+	// venta vinculada (ver getMontoTotalProyecto) y "Saldo" se deriva de ambos — a pedido del usuario.
+	let montoActual = $state(0);
+	let montoTotal = $state<number | null>(null);
+	let loadingMontos = $state(false);
+	const saldo = $derived(montoTotal != null ? montoTotal - montoActual : null);
 
 	function fmtDate(value: string | null | undefined) {
 		if (!value) return '—';
@@ -56,6 +72,27 @@
 			proyectosConsultoria = [];
 		}
 	});
+
+	// Monto Actual/Monto Total/Saldo — carga aparte del bloque de arriba porque aplican SIEMPRE (a
+	// diferencia de "Entidad vinculada", que se resuelve distinto para el compartido de Consultoría).
+	$effect(() => {
+		if (open && centro) {
+			const id = centro.id_centro_costo;
+			loadingMontos = true;
+			Promise.all([
+				esCentroDeVenta(centro) ? getMontoRecibidoPorCentroCosto(supabase, [id]) : getSaldosPorCentroCosto(supabase, [id]),
+				getMontoTotalProyecto(supabase, centro)
+			])
+				.then(([montos, total]) => {
+					montoActual = montos[id] ?? centro.monto_actual ?? 0;
+					montoTotal = total;
+				})
+				.finally(() => (loadingMontos = false));
+		} else {
+			montoActual = 0;
+			montoTotal = null;
+		}
+	});
 </script>
 
 {#if open && centro}
@@ -86,7 +123,15 @@
 					</div>
 					<div>
 						<dt class="text-slate-400 text-xs uppercase tracking-wide">Monto Actual</dt>
-						<dd class="text-slate-700 font-medium">{formatCurrency(centro.monto_actual)}</dd>
+						<dd class="text-slate-700 font-medium">{loadingMontos ? '…' : formatCurrency(montoActual)}</dd>
+					</div>
+					<div>
+						<dt class="text-slate-400 text-xs uppercase tracking-wide">Monto Total</dt>
+						<dd class="text-slate-700 font-medium">{loadingMontos ? '…' : montoTotal != null ? formatCurrency(montoTotal) : '—'}</dd>
+					</div>
+					<div>
+						<dt class="text-slate-400 text-xs uppercase tracking-wide">Saldo</dt>
+						<dd class="text-slate-700 font-medium">{loadingMontos ? '…' : saldo != null ? formatCurrency(saldo) : '—'}</dd>
 					</div>
 					<div class="col-span-2">
 						<dt class="text-slate-400 text-xs uppercase tracking-wide">Creado</dt>

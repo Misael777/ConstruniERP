@@ -12,7 +12,8 @@
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { getCentroCostos, getSaldosPorCentroCosto, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { getCentroCostos, getSaldosPorCentroCosto, getMontoRecibidoPorCentroCosto, esCentroDeVenta } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import CentroCostoDetalleModal from '$lib/modules/centro-costos/components/CentroCostoDetalleModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
@@ -184,21 +185,17 @@
 		return getOptionLabel(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, 'proyecto');
 	}
 
-	/** true si el centro está vinculado a una venta (Obra: id_proyecto propio; Consultoría: el
-	 * compartido) — para esos, "Monto Actual" muestra el saldo de venta (monto total menos adelanto,
-	 * ver saldosVenta) en vez de la ficha de caja genérica (saldos). */
-	function esCentroDeVenta(item: CentroCosto): boolean {
-		return item.tipo === 'consultoria' || (item.tipo === 'proyecto' && item.id_proyecto != null);
-	}
-
 	/** A pedido del usuario, en la pestaña Centros de Costos: "Nombre" muestra el nombre del CLIENTE del
 	 * proyecto vinculado (en vez de `centro.nombre`, que para estos centros guarda el código del
 	 * proyecto — ver codigoProyecto.ts — ya visible aparte en la columna "Código de proyecto"; sin
-	 * esto, "Nombre" y "Código de proyecto" mostraban lo mismo dos veces). Solo aplica a Obra (proyecto
-	 * propio) — el centro compartido de Consultoría no tiene un único cliente, así que conserva su
-	 * `nombre` ("Consultoría General"). Usado tanto por la tabla (cellValue) como por la tarjeta móvil. */
+	 * esto, "Nombre" y "Código de proyecto" mostraban lo mismo dos veces). Aplica a cualquier centro con
+	 * proyecto propio — Obra (tipo='proyecto') y, desde que cada venta de Consultoría cerrada tiene su
+	 * propia fila (ver getOrCrearCentroCostoCompartido en centroCostos.service.ts), también
+	 * tipo='consultoria' con id_proyecto. Solo el centro histórico compartido de Consultoría
+	 * (id_proyecto NULL, sin un único cliente) conserva su `nombre` ("Consultoría General"). Usado
+	 * tanto por la tabla (cellValue) como por la tarjeta móvil. */
 	function nombreDisplay(item: CentroCosto): string {
-		if (activeTab === 'centros' && item.tipo === 'proyecto' && item.proyecto) {
+		if (activeTab === 'centros' && item.proyecto) {
 			return item.proyecto.clienteNombre || item.proyecto.cliente?.nombre || item.nombre;
 		}
 		return item.nombre;
@@ -227,13 +224,16 @@
 		return raw ?? '—';
 	}
 
-	/** A pedido explícito del usuario: la columna "Código de proyecto" muestra tal cual el valor
-	 * guardado en `centro_costo.nombre` — para los centros de proyecto (Obra) auto-generados, esa
-	 * columna ya guarda el código del proyecto (ver getOrCrearCentroCostoParaEntidad), así que no hace
-	 * falta recalcularlo con generarCodigoProyecto(). Ya NO se usa `item.proyecto`/generarCodigoProyecto
-	 * acá — ver nombreDisplay más abajo para la columna "Nombre", que sigue mostrando el cliente. */
+	/** La columna "Código de proyecto" muestra el nombre/código de la ENTIDAD VINCULADA (mismo criterio
+	 * que resolveEntidadVinculada en centroCostos.service.ts: para un centro de proyecto, ese nombre es
+	 * su código real, ver generarCodigoProyecto en codigoProyecto.ts) — ya NO el valor crudo guardado en
+	 * `centro_costo.nombre`, que desde que ese campo pasó a guardar el id_proyecto (a pedido del
+	 * usuario, ver getOrCrearCentroCostoParaEntidad) dejó de ser legible acá. Se recalcula a partir del
+	 * embed `item.proyecto` ya traído por getCentroCostos, sin queries extra por fila. Sin proyecto
+	 * vinculado (centro manual, o el compartido de Consultoría) no hay una única entidad — ver
+	 * nombreDisplay más arriba para la columna "Nombre", que sigue mostrando el cliente. */
 	function codigoProyectoDisplay(item: CentroCosto): string {
-		return item.nombre;
+		return item.proyecto ? generarCodigoProyecto(item.proyecto) : '—';
 	}
 
 	function openCreate() {

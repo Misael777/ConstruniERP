@@ -17,7 +17,8 @@
 	let telefono = $state('');
 	let email = $state('');
 	let vendedor = $state('');
-	
+	let cuentaBanco = $state('');
+
 	let isSaving = $state(false);
 	let errorMsg = $state('');
 
@@ -31,6 +32,7 @@
 				telefono = proveedorEdit.telefono || '';
 				email = proveedorEdit.email || '';
 				vendedor = proveedorEdit.vendedor || '';
+				cuentaBanco = proveedorEdit.cuenta_banco || '';
 			} else {
 				// Reset form
 				razonSocial = '';
@@ -39,6 +41,7 @@
 				telefono = '';
 				email = '';
 				vendedor = '';
+				cuentaBanco = '';
 			}
 			errorMsg = '';
 		}
@@ -61,6 +64,7 @@
 				telefono,
 				email,
 				vendedor,
+				cuenta_banco: cuentaBanco,
 				updated_at: new Date().toISOString()
 			};
 
@@ -141,6 +145,11 @@
 						<div class="flex flex-col gap-1 md:col-span-1">
 							<label class="text-xs font-semibold text-[#0f3b5e]">Producto y Servicio</label>
 							<input type="text" bind:value={vendedor} disabled={isSaving} placeholder="Ej. Cemento" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+						</div>
+
+						<div class="flex flex-col gap-1 md:col-span-1">
+							<label class="text-xs font-semibold text-[#0f3b5e]">Número de cuenta bancaria</label>
+							<input type="text" bind:value={cuentaBanco} disabled={isSaving} placeholder="Ej. 191-1234567-0-12" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="col-span-2 pt-4 border-t border-slate-100 mt-2">

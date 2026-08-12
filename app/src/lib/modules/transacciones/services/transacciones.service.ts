@@ -305,6 +305,26 @@ export async function desaprobarTransaccion(client: SupabaseClient, id: number, 
 	return { success: true, message: 'Aprobación retirada', data: data as Transaccion };
 }
 
+/** Da de baja (estado='baja') TODAS las transacciones (como origen o destino) de los centros de costo
+ * en `idsCentroCosto` — usado por darDeBajaVenta (aprobaciones.service.ts) cuando se da de baja una
+ * venta: sus transacciones ya no deben tomarse en los cálculos de saldo/monto (que solo cuentan las de
+ * estado='activo', ver getSaldosPorCentroCosto/getMontoRecibidoPorCentroCosto/etc. en
+ * centroCostos.service.ts) ni aparecer como vigentes en el listado de Transacciones. A diferencia de
+ * 'anulado' (que un usuario elige a mano para una transacción puntual, ver estadoField en
+ * transaccion.config.ts), 'baja' es exclusivo de este flujo — no está entre las opciones del select de
+ * Estado del formulario, para que no se pueda asignar/quitar a mano. Nunca lanza: es secundario a dar
+ * de baja la venta en sí. */
+export async function darDeBajaTransaccionesDeCentro(client: SupabaseClient, idsCentroCosto: number[]): Promise<void> {
+	if (idsCentroCosto.length === 0) return;
+	const { error } = await client
+		.from(TABLE_NAME)
+		.update({ estado: 'baja' })
+		.or(`id_centro_costo_origen.in.(${idsCentroCosto.join(',')}),id_centro_costo_destino.in.(${idsCentroCosto.join(',')})`);
+	if (error) {
+		console.error('[transacciones.service] No se pudieron dar de baja las transacciones de los centros de costo:', error);
+	}
+}
+
 export async function getTransDetalles(client: SupabaseClient, idTransaccion: number): Promise<TransDetalle[]> {
 	const { data, error } = await client
 		.from(DETALLE_TABLE)
@@ -423,17 +443,18 @@ export async function getCentroCostoOptionsPagos(client: SupabaseClient): Promis
  * 'venta_cerrada'); excluye bolsa general/consultoría y proyectos aún en negociación. Etiqueta
  * "código - nombre del proyecto" (mismo formato que getCentroCostoOptions). */
 export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient): Promise<FieldOption[]> {
-	// Obra: cada venta cerrada tiene su propio centro de costo (id_proyecto). Consultoría: TODAS
-	// comparten un único centro de costo (id_proyecto IS NULL, tipo='consultoria' — ver
-	// getOrCrearCentroCostoCompartido en centroCostos.service.ts), así que no puede buscarse por
-	// id_proyecto — se incluye ese centro compartido si hay al menos una consultoría ya cerrada.
+	// Cada venta cerrada (Obra o Consultoría) tiene su propio centro de costo por id_proyecto (ver
+	// getOrCrearCentroCostoParaEntidad/getOrCrearCentroCostoCompartido en centroCostos.service.ts). La
+	// fila histórica compartida de Consultoría (tipo='consultoria', id_proyecto IS NULL, de antes de
+	// que cada venta tuviera la suya propia) se incluye aparte por compatibilidad con datos ya
+	// existentes que pudieran seguir apuntando a ella.
 	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto, tipo_venta').eq('estado_proyecto', 'venta_cerrada');
 	if (errorCerrados) throw errorCerrados;
-	const idsObraCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta !== 'consultoria').map((p: any) => p.id_proyecto);
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
 	const hayConsultoriaCerrada = (cerrados ?? []).some((p: any) => p.tipo_venta === 'consultoria');
 
 	const filtros: string[] = [];
-	if (idsObraCerrados.length > 0) filtros.push(`id_proyecto.in.(${idsObraCerrados.join(',')})`);
+	if (idsCerrados.length > 0) filtros.push(`id_proyecto.in.(${idsCerrados.join(',')})`);
 	if (hayConsultoriaCerrada) filtros.push('and(tipo.eq.consultoria,id_proyecto.is.null)');
 	if (filtros.length === 0) return [];
 
@@ -448,23 +469,24 @@ export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient
 
 /** id_centro_costo (como texto) -> precio_venta de la venta cerrada vinculada — para
  * CuentaCobrarModal.svelte: autocompletar "Monto" al elegir el Centro de Costo (ver
- * getCentroCostoOptionsVentasCerradas, misma fuente de centros de costo). Para el centro
- * compartido de Consultoría, el monto sugerido es la SUMA de precio_venta de todas las
- * consultorías cerradas (varias ventas caen en el mismo centro de costo — ver nota arriba). */
+ * getCentroCostoOptionsVentasCerradas, misma fuente de centros de costo). Cada venta cerrada (Obra o
+ * Consultoría) tiene su propio centro de costo por id_proyecto. Para la fila histórica compartida de
+ * Consultoría (id_proyecto IS NULL, de antes de que cada venta tuviera la suya propia), el monto
+ * sugerido sigue siendo la SUMA de precio_venta de todas las consultorías cerradas — se mantiene por
+ * compatibilidad con datos ya existentes. */
 export async function getCentroCostoMontoVentaCerrada(client: SupabaseClient): Promise<Record<string, number>> {
 	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto, precio_venta, tipo_venta').eq('estado_proyecto', 'venta_cerrada');
 	if (errorCerrados) throw errorCerrados;
-	const obraCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta !== 'consultoria');
 	const consultoriaCerrados = (cerrados ?? []).filter((p: any) => p.tipo_venta === 'consultoria');
 
 	const mapa: Record<string, number> = {};
 
-	const idsObra = obraCerrados.map((p: any) => p.id_proyecto);
-	if (idsObra.length > 0) {
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	if (idsCerrados.length > 0) {
 		const { data, error } = await client
 			.from('centro_costo')
 			.select('id_centro_costo, proyecto:id_proyecto(precio_venta)')
-			.in('id_proyecto', idsObra);
+			.in('id_proyecto', idsCerrados);
 		if (error) throw error;
 		for (const row of (data ?? []) as any[]) {
 			mapa[String(row.id_centro_costo)] = Number(row.proyecto?.precio_venta) || 0;

@@ -247,6 +247,7 @@
 				.from('transaccion')
 				.select('id_transaccion,fecha,monto_total,comprobante_url')
 				.eq('tipo', 'ingreso')
+				.eq('estado', 'activo')
 				.ilike('descripcion', `%(proyecto #${proyecto.id_proyecto})%`)
 				.order('fecha', { ascending: false });
 			if (error) throw error;

@@ -438,36 +438,57 @@ export async function darDeBajaCentroCostoDeEntidad(
 }
 
 /**
- * Centro de costo COMPARTIDO por TODOS los proyectos de un mismo tipo de venta — a diferencia de
- * getOrCrearCentroCostoParaEntidad (uno POR proyecto, usado para Obra), esto busca/crea UNA sola
- * fila `tipo=X AND id_proyecto IS NULL` y la reutiliza para cada venta de ese tipo (hoy solo
- * 'consultoria', a pedido explícito del usuario: todas las ventas de Consultoría comparten una
- * misma bolsa de centro de costo, en vez de una por proyecto). Idempotente vía el índice único
- * parcial `uq_centro_costo_consultoria_compartido` (ver proyecto_tipo_venta_migration.sql).
+ * `codigo` COMPARTIDO por todos los centros de costo de un mismo tipo de venta (hoy solo
+ * 'consultoria') — reutiliza el de la fila más antigua de ese `tipo` que ya exista (típicamente la
+ * histórica "Consultoría General", `id_proyecto IS NULL`, de antes de que cada venta tuviera su
+ * propia fila) o genera uno nuevo si todavía no existe ninguna.
+ */
+async function getCodigoCentroCostoCompartido(client: SupabaseClient, tipo: string): Promise<string> {
+	const { data } = await client
+		.from(TABLE_NAME)
+		.select('codigo')
+		.eq('tipo', tipo)
+		.order('id_centro_costo', { ascending: true })
+		.limit(1)
+		.maybeSingle();
+	if (data?.codigo) return data.codigo;
+	return generarCodigoCentroCostoManual(client, tipo);
+}
+
+/**
+ * Centro de costo de un proyecto de Consultoría — mismo criterio que getOrCrearCentroCostoParaEntidad
+ * (Obra: una fila POR proyecto, idempotente vía `uq_centro_costo_proyecto`), pero con el `codigo`
+ * FIJO y compartido de Consultoría (ver getCodigoCentroCostoCompartido) en vez de uno propio por
+ * proyecto — a pedido explícito del usuario: todas las ventas de Consultoría deben quedar
+ * registradas bajo el MISMO código de centro de costo, distinguibles entre sí solo por `nombre` (el
+ * código autogenerado de cada venta, ver generarCodigoProyecto) y por su propio id_proyecto.
+ * Ya NO comparten una única fila entre todas (comportamiento anterior, ver historial de este
+ * archivo) — cada venta de Consultoría cerrada tiene su propia fila, igual que Obra.
  * Nunca lanza — mismo criterio que getOrCrearCentroCostoParaEntidad.
  */
 export async function getOrCrearCentroCostoCompartido(
 	client: SupabaseClient,
 	tipo: 'consultoria',
-	nombre = 'Consultoría General'
+	idProyecto: number,
+	nombreProyecto: string
 ): Promise<number | null> {
-	const { data: existente } = await client.from(TABLE_NAME).select('id_centro_costo').eq('tipo', tipo).is('id_proyecto', null).maybeSingle();
+	const { data: existente } = await client.from(TABLE_NAME).select('id_centro_costo').eq('id_proyecto', idProyecto).maybeSingle();
 	if (existente) return existente.id_centro_costo;
 
-	const codigo = await generarCodigoCentroCostoManual(client, tipo);
+	const codigo = await getCodigoCentroCostoCompartido(client, tipo);
 	const { data: creado, error } = await client
 		.from(TABLE_NAME)
-		.insert({ codigo, nombre, tipo, monto_actual: 0, estado: 'activo' })
+		.insert({ codigo, nombre: nombreProyecto, tipo, id_proyecto: idProyecto, monto_actual: 0, estado: 'activo' })
 		.select('id_centro_costo')
 		.single();
 
 	if (error) {
 		if (error.code === '23505') {
-			// Carrera: otra llamada ya creó el centro de costo compartido justo antes — se usa ese.
-			const { data: reintento } = await client.from(TABLE_NAME).select('id_centro_costo').eq('tipo', tipo).is('id_proyecto', null).maybeSingle();
+			// Carrera: otra llamada ya insertó el centro de costo de este proyecto justo antes — se usa ese.
+			const { data: reintento } = await client.from(TABLE_NAME).select('id_centro_costo').eq('id_proyecto', idProyecto).maybeSingle();
 			if (reintento) return reintento.id_centro_costo;
 		}
-		console.error(`[centroCostos.service] No se pudo crear el centro de costo compartido de ${tipo}:`, error);
+		console.error(`[centroCostos.service] No se pudo crear el centro de costo de ${tipo} para el proyecto #${idProyecto}:`, error);
 		return null;
 	}
 
@@ -561,19 +582,23 @@ export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: 
 			adelantoPorCentro[t.id_centro_costo_destino] = (adelantoPorCentro[t.id_centro_costo_destino] ?? 0) + (Number(t.monto_total) || 0);
 		}
 
+		// Suma de TODAS las ventas de consultoría cerradas — solo para la fila histórica compartida
+		// (id_proyecto IS NULL, de antes de que cada venta de Consultoría tuviera su propia fila, ver
+		// getOrCrearCentroCostoCompartido). Las filas nuevas, una por proyecto, usan montoPorProyecto
+		// como cualquier centro de Obra.
 		const montoConsultoria = (ventas ?? [])
 			.filter((v: any) => v.tipo_venta === 'consultoria')
 			.reduce((sum: number, v: any) => sum + (Number(v.precio_venta) || 0), 0);
 		const montoPorProyecto: Record<number, number> = {};
 		for (const v of (ventas ?? []) as any[]) {
-			if (v.tipo_venta !== 'consultoria') montoPorProyecto[v.id_proyecto] = Number(v.precio_venta) || 0;
+			montoPorProyecto[v.id_proyecto] = Number(v.precio_venta) || 0;
 		}
 
 		for (const centro of (centros ?? []) as any[]) {
-			const montoTotal = centro.tipo === 'consultoria'
-				? montoConsultoria
-				: centro.id_proyecto != null
-					? montoPorProyecto[centro.id_proyecto] ?? 0
+			const montoTotal = centro.id_proyecto != null
+				? montoPorProyecto[centro.id_proyecto] ?? 0
+				: centro.tipo === 'consultoria'
+					? montoConsultoria
 					: 0;
 			saldos[centro.id_centro_costo] = montoTotal - (adelantoPorCentro[centro.id_centro_costo] ?? 0);
 		}
@@ -616,6 +641,44 @@ export async function getMontoRecibidoPorCentroCosto(client: SupabaseClient, ids
 	}
 
 	return montos;
+}
+
+/** true si el centro está vinculado a una venta (Obra: id_proyecto propio; Consultoría: id_proyecto
+ * propio desde que cada venta cerrada tiene su propia fila, o el histórico compartido) — para esos,
+ * "Monto Actual" muestra el monto recibido (ver getMontoRecibidoPorCentroCosto) en vez de la ficha de
+ * caja genérica (ingresos-egresos, ver getSaldosPorCentroCosto). Compartido entre el listado
+ * (centros-de-costos/+page.svelte) y el popup de detalle (CentroCostoDetalleModal.svelte) para que
+ * ambos muestren exactamente el mismo número. */
+export function esCentroDeVenta(centro: Pick<CentroCosto, 'tipo' | 'id_proyecto'>): boolean {
+	return centro.tipo === 'consultoria' || (centro.tipo === 'proyecto' && centro.id_proyecto != null);
+}
+
+/**
+ * Monto total (precio_venta) de la venta vinculada a un centro de costo — para el campo "Monto
+ * Total" del popup de detalle (CentroCostoDetalleModal.svelte). Si el centro tiene id_proyecto propio
+ * (Obra, o Consultoría desde que cada venta cerrada tiene su propia fila), es el precio_venta de ESE
+ * proyecto. Para el centro histórico compartido de Consultoría (id_proyecto NULL, de antes de esa
+ * migración), es la SUMA de precio_venta de TODAS las ventas de consultoría cerradas — mismo criterio
+ * que getSaldosVentaPorCentroCosto. null si el centro no está vinculado a ninguna venta (centro
+ * manual, cliente, proveedor, empleado). Nunca lanza — mismo criterio que el resto de este archivo.
+ */
+export async function getMontoTotalProyecto(client: SupabaseClient, centro: Pick<CentroCosto, 'tipo' | 'id_proyecto'>): Promise<number | null> {
+	try {
+		if (centro.id_proyecto != null) {
+			const { data, error } = await client.from('proyecto').select('precio_venta').eq('id_proyecto', centro.id_proyecto).maybeSingle();
+			if (error) throw error;
+			return data ? Number(data.precio_venta) || 0 : null;
+		}
+		if (centro.tipo === 'consultoria') {
+			const { data, error } = await client.from('proyecto').select('precio_venta').eq('estado_proyecto', 'venta_cerrada').eq('tipo_venta', 'consultoria');
+			if (error) throw error;
+			return (data ?? []).reduce((sum: number, p: any) => sum + (Number(p.precio_venta) || 0), 0);
+		}
+		return null;
+	} catch (err) {
+		console.error('[centroCostos.service] No se pudo calcular el monto total del proyecto:', err);
+		return null;
+	}
 }
 
 /**

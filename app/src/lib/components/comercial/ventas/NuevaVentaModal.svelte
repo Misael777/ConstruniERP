@@ -8,7 +8,7 @@
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
-	import { crearSolicitud, cerrarVentaAprobada, darDeBajaVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
@@ -203,7 +203,6 @@
 	let isUploadingProformaGestion = $state(false);
 	let isUploadingContratoGestion = $state(false);
 	let isClosing = $state(false);
-	let isDandoDeBaja = $state(false);
 	let montoFinalVenta = $state('');
 	let adelantoYaRegistrado = $state(false);
 	let isCheckingAdelanto = $state(false);
@@ -791,8 +790,10 @@ async function copiarCodigoGenerado() {
 	);
 
 	// Una venta dada de baja ('baja') quedó cerrada primero (solo se puede dar de baja una venta ya
-	// cerrada, ver handleDarDeBaja) y es un estado igual de definitivo — todos los bloqueos de "venta ya
-	// cerrada" (tabs, edición de proformas/cierre, botón "Cerrar venta") aplican igual para ambos.
+	// cerrada, ver darDeBajaVenta en aprobaciones.service.ts — se dispara desde la tabla de ventas, ver
+	// handleDarDeBajaEvent en comercial/ventas/+page.svelte) y es un estado igual de definitivo — todos
+	// los bloqueos de "venta ya cerrada" (tabs, edición de proformas/cierre, botón "Cerrar venta")
+	// aplican igual para ambos.
 	let ventaFinalizada = $derived(localEstado === 'venta_cerrada' || localEstado === 'baja');
 
 	// A pedido del usuario: una vez cerrada la venta, ya no se puede cambiar de Consultoría a Obra (ni
@@ -956,28 +957,6 @@ async function copiarCodigoGenerado() {
 		}
 	}
 
-	/** Reemplaza al recuadro informativo "Venta cerrada" una vez que la venta ya está cerrada — a
-	 * diferencia de "Cerrar venta", no borra ningún dato: solo marca el proyecto como 'baja' (ver
-	 * darDeBajaVenta en aprobaciones.service.ts). */
-	async function handleDarDeBaja() {
-		if (!ventaId || localEstado !== 'venta_cerrada') return;
-		if (!confirm(`¿Dar de baja la venta "${proyectoNombre}"? Quedará marcada como inactiva.`)) return;
-
-		isDandoDeBaja = true;
-		try {
-			const result = await darDeBajaVenta(supabase, Number(ventaId));
-			if (!result.success) throw new Error(result.message || 'No se pudo dar de baja la venta.');
-			localEstado = 'baja';
-			onSaved();
-			onClose();
-		} catch (err) {
-			console.error('[NuevaVentaModal] Error dando de baja la venta:', err);
-			alert(`No se pudo dar de baja la venta.\n${describeError(err)}`);
-		} finally {
-			isDandoDeBaja = false;
-		}
-	}
-
 	interface DatosBasicosVenta {
 		clienteId: number;
 		asesorFinal: string;
@@ -1100,15 +1079,11 @@ async function copiarCodigoGenerado() {
 
 		const nuevoProyectoId = data.id_proyecto;
 
-		// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
-		// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito del
-		// usuario (ver getOrCrearCentroCostoCompartido).
-		const idCentroCosto = caracteristicasTab === 'consultoria'
-			? await getOrCrearCentroCostoCompartido(supabase, 'consultoria')
-			: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
-		if (!idCentroCosto) {
-			console.warn('[NuevaVentaModal] No se pudo crear el centro de costo del proyecto — la venta se guardó, pero las transacciones de sus cobros/pagos no van a poder generarse hasta que exista.');
-		}
+		// A pedido explícito del usuario: el centro de costo del proyecto ya NO se genera al crear la
+		// venta — solo cuando se cierra (ver cerrarVentaAprobada), salvo la excepción de abajo. Se deja
+		// en null acá; solo se crea dentro del bloque de adelanto si hace falta como destino de esa
+		// transacción (una venta puede recibir un adelanto antes de cerrarse).
+		let idCentroCosto: number | string | null = null;
 
 		const proformaDocIds: (number | null)[] = [];
 		let transaccionAdelanto: Transaccion | null = null;
@@ -1145,10 +1120,20 @@ async function copiarCodigoGenerado() {
 			}
 
 			// Adelanto inicial — mismo mecanismo que "Cerrar venta": asegura el centro de costo del
-			// cliente, sube el comprobante y crea la transacción (ingreso) de una vez. Requiere ambos
-			// (archivo Y monto) — el campo de monto ya viene deshabilitado en el formulario mientras no
-			// haya comprobante adjunto.
+			// proyecto y del cliente, sube el comprobante y crea la transacción (ingreso) de una vez.
+			// Requiere ambos (archivo Y monto) — el campo de monto ya viene deshabilitado en el formulario
+			// mientras no haya comprobante adjunto. Único caso en que el centro de costo del proyecto se
+			// crea ANTES de cerrar la venta (a pedido explícito del usuario, ver arriba): hace falta como
+			// destino de esta transacción.
 			if (adelantoFile && Number(adelantoMonto) > 0) {
+				// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
+				// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito del
+				// usuario (ver getOrCrearCentroCostoCompartido).
+				idCentroCosto = caracteristicasTab === 'consultoria'
+					? await getOrCrearCentroCostoCompartido(supabase, 'consultoria', nuevoProyectoId, proyectoNombre)
+					: await getOrCrearCentroCostoParaEntidad(supabase, 'proyecto', nuevoProyectoId, proyectoNombre);
+				if (!idCentroCosto) throw new Error('No se pudo obtener el centro de costo del proyecto para registrar el adelanto.');
+
 				const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', clienteId, clienteNombreFinal || `Cliente #${clienteId}`);
 				if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente para registrar el adelanto.');
 
@@ -1605,22 +1590,7 @@ async function copiarCodigoGenerado() {
 							Proformas, contrato y cierre de venta
 						</h3>
 
-						{#if localEstado === 'venta_cerrada'}
-							<!-- A pedido del usuario: una vez cerrada la venta, el recuadro de "Venta cerrada" se
-							     reemplaza por este tachito — al presionarlo, la venta pasa a estado 'baja'. -->
-							<button
-								onclick={handleDarDeBaja}
-								disabled={isDandoDeBaja}
-								title="Dar de baja esta venta"
-								class="mt-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm font-semibold hover:bg-red-100 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								{#if isDandoDeBaja}
-									<i class="fas fa-spinner fa-spin"></i> Dando de baja...
-								{:else}
-									<i class="fas fa-trash"></i> Dar de baja
-								{/if}
-							</button>
-						{:else if localEstado === 'baja'}
+						{#if localEstado === 'baja'}
 							<div class="mt-3 p-3 bg-red-50 border border-red-300 rounded-lg text-red-700 text-sm flex items-center gap-2">
 								<i class="fas fa-ban"></i>
 								<span class="font-semibold">Venta dada de baja</span>
