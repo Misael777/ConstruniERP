@@ -135,7 +135,8 @@
 	let colaDrafts = $state<Record<number, Record<string, string>>>({});
 	let colaOcrCache = $state<Record<number, ReconocerComprobanteResult>>({});
 
-	let otrosCamposAbierto = $state(true);
+	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
+	let otrosCamposAbierto = $state(false);
 
 	$effect(() => {
 		if (open) {
@@ -153,7 +154,7 @@
 			fechaLocked = false;
 			montoLocked = false;
 			ocrConfianza = null;
-			otrosCamposAbierto = true;
+			otrosCamposAbierto = false;
 		}
 	});
 
@@ -746,59 +747,6 @@
 						{/if}
 					{/if}
 
-					<!-- Adjuntar boucher de pago -->
-					<div>
-						<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
-							Adjuntar boucher de pago <span class="text-red-500">*</span>
-						</label>
-						<div class="flex items-start gap-3">
-							<label
-								for="tr-comprobante"
-								ondragover={(e) => e.preventDefault()}
-								ondrop={onComprobanteDrop}
-								class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
-							>
-								{#if localPreviewUrl}
-									<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
-								{:else if comprobanteUrl && !comprobanteFile}
-									<img
-										src={comprobanteUrl}
-										alt="Comprobante"
-										class="absolute inset-0 w-full h-full object-cover"
-										onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-									/>
-								{:else if comprobanteFile}
-									<CloudUpload size={16} class="text-blue-400" />
-									<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
-								{:else}
-									<CloudUpload size={18} class="text-blue-400" />
-									<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
-								{/if}
-							</label>
-							<div class="flex flex-col gap-1 min-w-0 pt-0.5">
-								{#if comprobanteUrl && !comprobanteFile}
-									<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-										Ver comprobante actual
-									</button>
-								{/if}
-								{#if comprobanteError}
-									<p class="text-xs text-red-600">{comprobanteError}</p>
-								{:else}
-									<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB). Toda transacción debe tener un comprobante de respaldo.</p>
-								{/if}
-							</div>
-						</div>
-						<input
-							id="tr-comprobante"
-							type="file"
-							accept="image/*,application/pdf"
-							multiple={mode === 'create' && !onConfirm}
-							class="hidden"
-							disabled={bloqueadaPorAprobacion}
-							onchange={onComprobanteChange}
-						/>
-					</div>
-
 					<!-- Alcance de la Transacción -->
 					<div>
 						<span class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
@@ -843,92 +791,155 @@
 						{#if fieldErrors.tipo_alcance}<p class="mt-1 text-xs text-red-600">{fieldErrors.tipo_alcance}</p>{/if}
 					</div>
 
-					<!-- Centro de costo origen / destino / Tipo -->
-					<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-						{@render fieldBlock(origenField)}
-						{@render fieldBlock(destinoField)}
-						{@render fieldBlock(tipoField)}
-					</div>
-
-					<!-- Cuenta origen / destino -->
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						{@render fieldBlock(cuentaOrigenField)}
-						{@render fieldBlock(cuentaDestinoField)}
-					</div>
-
-					<!-- Fecha (reconocida) / Monto (reconocido) -->
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-						<div>
-							<label for="tr-fecha" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-								Fecha (reconocida) <span class="text-red-500">*</span>
-								{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
-							</label>
-							<div class="flex items-center gap-2">
-								<input
-									id="tr-fecha"
-									type="date"
-									value={formValues.fecha}
-									disabled={fechaLocked || bloqueadaPorAprobacion}
-									oninput={(e) => handleInput('fecha', (e.target as HTMLInputElement).value)}
-									class={`flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.fecha ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								/>
-								<button
-									type="button"
-									onclick={() => (fechaLocked = false)}
-									disabled={bloqueadaPorAprobacion || !fechaLocked}
-									title="Editar fecha"
-									aria-label="Editar fecha"
-									class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+					<!-- A pedido del usuario: nuevo diseño con el comprobante a la izquierda (arriba en celular)
+					     y los campos núcleo agrupados en una tarjeta con borde a la derecha — antes todo iba
+					     apilado a lo ancho completo. Responsive: flex-col en mobile (dropzone arriba, campos
+					     abajo, cada fila de campos ya colapsa a 1 columna con sm:grid-cols-3), flex-row desde
+					     md: con el dropzone a la izquierda con ancho fijo y alto estirado a la misma altura
+					     que la columna de campos (items-stretch, default de flexbox). -->
+					<div class="rounded-2xl border border-slate-200 p-5">
+						<div class="flex flex-col md:flex-row gap-5">
+							<!-- Adjuntar boucher de pago -->
+							<div class="md:w-56 shrink-0">
+								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
+									Adjuntar boucher de pago <span class="text-red-500">*</span>
+								</label>
+								<label
+									for="tr-comprobante"
+									ondragover={(e) => e.preventDefault()}
+									ondrop={onComprobanteDrop}
+									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-[calc(100%-1.75rem)] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
 								>
-									<Pencil size={14} />
-								</button>
-							</div>
-							{#if fieldErrors.fecha}
-								<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha}</p>
-							{:else if fechaLocked}
-								<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
-							{/if}
-						</div>
-						<div>
-							<label for="tr-monto" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-								Monto (reconocido) <span class="text-red-500">*</span>
-								{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
-							</label>
-							<div class="flex items-center gap-2">
+									{#if localPreviewUrl}
+										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
+									{:else if comprobanteUrl && !comprobanteFile}
+										<img
+											src={comprobanteUrl}
+											alt="Comprobante"
+											class="absolute inset-0 w-full h-full object-cover"
+											onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+										/>
+									{:else if comprobanteFile}
+										<CloudUpload size={28} class="text-blue-400" />
+										<span class="text-xs font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
+									{:else}
+										<CloudUpload size={32} class="text-blue-400" />
+										<span class="text-sm font-medium text-slate-600 leading-tight">Arrastra o selecciona un archivo</span>
+										<span class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB)</span>
+									{/if}
+								</label>
+								<div class="flex flex-col gap-1 mt-1.5">
+									{#if comprobanteUrl && !comprobanteFile}
+										<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Ver comprobante actual
+										</button>
+									{/if}
+									{#if comprobanteError}
+										<p class="text-xs text-red-600">{comprobanteError}</p>
+									{:else if comprobanteFile || comprobanteUrl}
+										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
+									{/if}
+								</div>
 								<input
-									id="tr-monto"
-									type="text"
-									inputmode="decimal"
-									value={formValues.monto_total}
-									disabled={montoLocked || bloqueadaPorAprobacion}
-									oninput={(e) => handleInput('monto_total', (e.target as HTMLInputElement).value)}
-									placeholder="0.00"
-									class={`flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.monto_total ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									id="tr-comprobante"
+									type="file"
+									accept="image/*,application/pdf"
+									multiple={mode === 'create' && !onConfirm}
+									class="hidden"
+									disabled={bloqueadaPorAprobacion}
+									onchange={onComprobanteChange}
 								/>
-								<button
-									type="button"
-									onclick={() => (montoLocked = false)}
-									disabled={bloqueadaPorAprobacion || !montoLocked}
-									title="Editar monto"
-									aria-label="Editar monto"
-									class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
-								>
-									<Pencil size={14} />
-								</button>
 							</div>
-							{#if formValues.monto_total && !fieldErrors.monto_total}
-								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues.monto_total)}</p>
-							{/if}
-							{#if fieldErrors.monto_total}
-								<p class="mt-1 text-xs text-red-600">{fieldErrors.monto_total}</p>
-							{:else if montoLocked}
-								<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
-							{/if}
+
+							<!-- Campos núcleo: Centro de costo origen/destino/Tipo, Cuenta origen/destino,
+							     Fecha/Monto (reconocidos) -->
+							<div class="flex-1 flex flex-col gap-4 min-w-0">
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									{@render fieldBlock(origenField)}
+									{@render fieldBlock(destinoField)}
+									{@render fieldBlock(tipoField)}
+								</div>
+
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									{@render fieldBlock(cuentaOrigenField)}
+									{@render fieldBlock(cuentaDestinoField)}
+								</div>
+
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+									<div>
+										<label for="tr-fecha" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+											Fecha (reconocida) <span class="text-red-500">*</span>
+											{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
+										</label>
+										<div class="flex items-center gap-2">
+											<input
+												id="tr-fecha"
+												type="date"
+												value={formValues.fecha}
+												disabled={fechaLocked || bloqueadaPorAprobacion}
+												oninput={(e) => handleInput('fecha', (e.target as HTMLInputElement).value)}
+												class={`flex-1 min-w-0 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.fecha ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+											/>
+											<button
+												type="button"
+												onclick={() => (fechaLocked = false)}
+												disabled={bloqueadaPorAprobacion || !fechaLocked}
+												title="Editar fecha"
+												aria-label="Editar fecha"
+												class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+											>
+												<Pencil size={14} />
+											</button>
+										</div>
+										{#if fieldErrors.fecha}
+											<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha}</p>
+										{:else if fechaLocked}
+											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+										{/if}
+									</div>
+									<div>
+										<label for="tr-monto" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+											Monto (reconocido) <span class="text-red-500">*</span>
+											{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
+										</label>
+										<div class="flex items-center gap-2">
+											<input
+												id="tr-monto"
+												type="text"
+												inputmode="decimal"
+												value={formValues.monto_total}
+												disabled={montoLocked || bloqueadaPorAprobacion}
+												oninput={(e) => handleInput('monto_total', (e.target as HTMLInputElement).value)}
+												placeholder="0.00"
+												class={`flex-1 min-w-0 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.monto_total ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+											/>
+											<button
+												type="button"
+												onclick={() => (montoLocked = false)}
+												disabled={bloqueadaPorAprobacion || !montoLocked}
+												title="Editar monto"
+												aria-label="Editar monto"
+												class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+											>
+												<Pencil size={14} />
+											</button>
+										</div>
+										{#if formValues.monto_total && !fieldErrors.monto_total}
+											<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues.monto_total)}</p>
+										{/if}
+										{#if fieldErrors.monto_total}
+											<p class="mt-1 text-xs text-red-600">{fieldErrors.monto_total}</p>
+										{:else if montoLocked}
+											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+										{/if}
+									</div>
+								</div>
+							</div>
 						</div>
 					</div>
 
 					<!-- Otros campos (opcionales) -->
-					<div class="border-t border-slate-200 pt-4">
+					<div class="rounded-2xl border border-slate-200 p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
 								type="button"
