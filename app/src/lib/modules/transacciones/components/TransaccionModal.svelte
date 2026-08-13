@@ -12,6 +12,7 @@
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/edgeFunctionClient';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	let {
 		open = false,
@@ -176,6 +177,12 @@
 		}
 		localPreviewUrlFactura = null;
 	});
+
+	// Miniatura del archivo ya subido a Drive (para mostrarla de fondo en el recuadro de arrastrar y
+	// soltar) — la URL cruda guardada en BD es de descarga directa, no sirve como `<img src>` (ver
+	// toDriveThumbnailUrl).
+	const comprobanteThumbUrl = $derived(toDriveThumbnailUrl(comprobanteUrl));
+	const facturaThumbUrl = $derived(toDriveThumbnailUrl(facturaUrl));
 
 	/** Lee fecha/monto del comprobante vía Claude (visión, ver edgeFunctionClient.ts). `cacheIndex` no
 	 * nulo cuando viene de la cola de varios comprobantes (se cachea el resultado por índice para no
@@ -812,13 +819,19 @@
 								>
 									{#if localPreviewUrl}
 										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
+										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1">
+											<CloudUpload size={12} class="shrink-0" /> Nuevo archivo seleccionado
+										</div>
 									{:else if comprobanteUrl && !comprobanteFile}
 										<img
-											src={comprobanteUrl}
-											alt="Comprobante"
+											src={comprobanteThumbUrl}
+											alt="Comprobante actual"
 											class="absolute inset-0 w-full h-full object-cover"
 											onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
 										/>
+										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
+											<CloudUpload size={12} class="shrink-0" /> Haz clic o arrastra para reemplazar
+										</div>
 									{:else if comprobanteFile}
 										<CloudUpload size={28} class="text-blue-400" />
 										<span class="text-xs font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
@@ -1019,11 +1032,14 @@
 												<img src={localPreviewUrlFactura} alt="Vista previa de la factura" class="absolute inset-0 w-full h-full object-cover" />
 											{:else if facturaUrl && !facturaFile}
 												<img
-													src={facturaUrl}
-													alt="Factura"
+													src={facturaThumbUrl}
+													alt="Factura actual"
 													class="absolute inset-0 w-full h-full object-cover"
 													onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
 												/>
+												<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[9px] font-medium py-0.5 flex items-center justify-center" title="Haz clic o arrastra para reemplazar">
+													<CloudUpload size={9} class="shrink-0" />
+												</div>
 											{:else if facturaFile}
 												<CloudUpload size={16} class="text-blue-400" />
 												<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{facturaFile.name}</span>
