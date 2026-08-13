@@ -94,6 +94,25 @@ export interface ListParams {
 	 * pendiente/vencido/pagado) dejan de listarse por defecto. true trae solo las dadas de baja, para
 	 * la sección "Eliminados" (solo-admin). */
 	soloEliminados?: boolean;
+	/** Filtro de los botones "Consultoria"/"Obra"/"Corporativo"/"Otros" del listado, resuelto client-side
+	 * (ver centroCostoTipoMap en +page.svelte) a partir del tipo real del centro de costo elegido.
+	 * undefined = sin filtrar. */
+	idsCentroCosto?: number[];
+	/** Solo junto a idsCentroCosto (boton "Otros"): ademas de esos ids, incluye las cuentas sin centro
+	 * de costo asignado (id_centro_costo NULL). */
+	incluirSinCentroCosto?: boolean;
+}
+
+function aplicarFiltroCentroCosto<T extends { in: (col: string, vals: any[]) => T; is: (col: string, val: null) => T; or: (f: string) => T }>(
+	query: T,
+	idsCentroCosto: number[] | undefined,
+	incluirSinCentroCosto: boolean | undefined
+): T {
+	if (idsCentroCosto === undefined) return query;
+	if (incluirSinCentroCosto) {
+		return idsCentroCosto.length > 0 ? query.or(`id_centro_costo.in.(${idsCentroCosto.join(',')}),id_centro_costo.is.null`) : query.is('id_centro_costo', null);
+	}
+	return query.in('id_centro_costo', idsCentroCosto.length > 0 ? idsCentroCosto : [-1]);
 }
 
 export interface ListResult<T> {
@@ -190,6 +209,7 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 	}
 	query = params.soloEliminados ? query.eq('activo', false) : query.eq('activo', true);
 	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
+	query = aplicarFiltroCentroCosto(query, params.idsCentroCosto, params.incluirSinCentroCosto);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
@@ -217,7 +237,13 @@ const CAMPO_MONTO = FIELDS_CONFIG.find((f) => f.tipo === 'currency' && f.showInT
  * exactamente los mismos filtros que arma la tabla (search + columnFilters), así que el número
  * siempre refleja lo que el usuario está viendo filtrado en ese momento.
  */
-export async function getMontoFiltrado(client: SupabaseClient, search: string, columnFilters: ColumnFilters): Promise<number> {
+export async function getMontoFiltrado(
+	client: SupabaseClient,
+	search: string,
+	columnFilters: ColumnFilters,
+	idsCentroCosto?: number[],
+	incluirSinCentroCosto?: boolean
+): Promise<number> {
 	let query = client.from(TABLE_NAME).select(CAMPO_MONTO);
 
 	const trimmed = search.trim();
@@ -227,6 +253,7 @@ export async function getMontoFiltrado(client: SupabaseClient, search: string, c
 		query = query.or(orFilter);
 	}
 	query = applyColumnFilters(query, FIELDS_CONFIG, columnFilters);
+	query = aplicarFiltroCentroCosto(query, idsCentroCosto, incluirSinCentroCosto);
 
 	const { data, error } = await query;
 	if (error) throw error;

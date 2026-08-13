@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -115,10 +115,51 @@
 		fetchList();
 	}
 
+	// Botones "Consultoria"/"Obra"/"Corporativo"/"Otros" (a pedido del usuario, mismo diseño que ya
+	// existe en Cuentas por Cobrar) — filtran por el TIPO real del centro de costo de cada cuenta.
+	// getCentroCostoOptionsPagos solo permite elegir centros tipo 'proyecto' (Obra), 'consultoria' o
+	// 'bolsa general' (Corporativo) como centro de costo de una cuenta por pagar, así que esos tres
+	// botones mapean directo a esos tipos; "Otros" es el catch-all (cualquier otro tipo que pudiera
+	// haber quedado de datos viejos, MÁS las cuentas sin centro de costo asignado).
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
+	let tipoFilter = $state<TipoFiltroCC | null>(null);
+	const TIPOS_CONOCIDOS = ['proyecto', 'consultoria', 'bolsa general'];
+
+	function idsParaTipoFiltro(tipo: TipoFiltroCC): { ids: number[]; incluirSinCentroCosto: boolean } {
+		if (tipo === 'otros') {
+			const ids = Object.entries(centroCostoTipoMap)
+				.filter(([, t]) => !TIPOS_CONOCIDOS.includes(t))
+				.map(([id]) => Number(id));
+			return { ids, incluirSinCentroCosto: true };
+		}
+		const ids = Object.entries(centroCostoTipoMap)
+			.filter(([, t]) => t === tipo)
+			.map(([id]) => Number(id));
+		return { ids, incluirSinCentroCosto: false };
+	}
+
+	function toggleTipoFilter(tipo: TipoFiltroCC) {
+		tipoFilter = tipoFilter === tipo ? null : tipo;
+		pageNum = 1;
+		fetchList();
+		fetchMontoFiltrado();
+	}
+
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getCuentasPagar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados });
+			const filtroTipo = tipoFilter ? idsParaTipoFiltro(tipoFilter) : null;
+			const result = await getCuentasPagar(supabase, {
+				page: pageNum,
+				pageSize: DEFAULT_PAGE_SIZE,
+				search,
+				sortBy,
+				sortDir,
+				columnFilters,
+				soloEliminados: verEliminados,
+				idsCentroCosto: filtroTipo?.ids,
+				incluirSinCentroCosto: filtroTipo?.incluirSinCentroCosto
+			});
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -132,7 +173,8 @@
 
 	async function fetchMontoFiltrado() {
 		try {
-			montoFiltrado = await getMontoFiltrado(supabase, search, columnFilters);
+			const filtroTipo = tipoFilter ? idsParaTipoFiltro(tipoFilter) : null;
+			montoFiltrado = await getMontoFiltrado(supabase, search, columnFilters, filtroTipo?.ids, filtroTipo?.incluirSinCentroCosto);
 		} catch (err: any) {
 			console.error('[CuentasPagar] No se pudo calcular el total filtrado:', err);
 		}
@@ -519,6 +561,51 @@
 </script>
 
 <div class="max-w-6xl mx-auto">
+	{#if !verEliminados}
+		<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('consultoria')}
+				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+					<Briefcase size={18} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('proyecto')}
+				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-10 h-10 rounded-lg bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+					<HardHat size={18} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Obra</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('bolsa general')}
+				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+					<Building2 size={18} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('otros')}
+				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-10 h-10 rounded-full bg-slate-600 text-white flex items-center justify-center shrink-0">
+					<Ellipsis size={18} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Otros</span>
+			</button>
+		</div>
+	{/if}
+
 	<div class="flex items-center justify-between mb-6">
 		<div class="flex items-center gap-3">
 			<Wallet class="text-[#0f3b5e]" size={28} />
