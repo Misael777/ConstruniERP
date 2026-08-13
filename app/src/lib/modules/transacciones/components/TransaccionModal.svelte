@@ -807,7 +807,7 @@
 					<div class="rounded-2xl border border-slate-200 p-5">
 						<div class="flex flex-col md:flex-row gap-5">
 							<!-- Adjuntar boucher de pago -->
-							<div class="md:w-56 shrink-0">
+							<div class="md:w-56 shrink-0 flex flex-col">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
 									Adjuntar boucher de pago <span class="text-red-500">*</span>
 								</label>
@@ -815,7 +815,7 @@
 									for="tr-comprobante"
 									ondragover={(e) => e.preventDefault()}
 									ondrop={onComprobanteDrop}
-									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-[calc(100%-1.75rem)] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
+									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
 								>
 									{#if localPreviewUrl}
 										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
