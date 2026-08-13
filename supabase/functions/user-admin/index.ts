@@ -335,6 +335,39 @@ async function darDeBajaEmpleado(body: any) {
   return buildJsonResponse({ success: true, auth_user_id: authUserId });
 }
 
+// Restaura a un empleado dado de baja (contraparte de darDeBajaEmpleado) — se usa desde la sección
+// "Eliminados" de Empleados (solo-admin), sin contraseña: marca `empleados.estado = 'activo'`,
+// levanta el ban de su cuenta de Auth (ban_duration:'none' es la convención de Supabase para
+// desbanear de inmediato) y restaura su centro de costo.
+async function restaurarEmpleado(body: any) {
+  const authUserId = String(body.auth_user_id ?? '').trim();
+  if (!authUserId || !isUuid(authUserId)) {
+    return buildJsonResponse({ success: false, error: 'auth_user_id válido es requerido.' }, 400);
+  }
+
+  const { data: empleado, error: empleadoError } = await supabase
+    .from('empleados')
+    .update({ estado: 'activo' })
+    .eq('auth_user_id', authUserId)
+    .select('id')
+    .single();
+  if (empleadoError) return buildJsonResponse({ success: false, error: empleadoError.message }, 500);
+
+  const { error: banError } = await supabase.auth.admin.updateUserById(authUserId, { ban_duration: 'none' });
+  if (banError) {
+    console.error(`[user-admin] El empleado #${empleado?.id} se restauró, pero no se pudo levantar el bloqueo de su acceso:`, banError);
+  }
+
+  if (empleado?.id) {
+    const { error: centroError } = await supabase.from('centro_costo').update({ estado: 'activo' }).eq('id_empleado', empleado.id);
+    if (centroError) {
+      console.error(`[user-admin] El empleado #${empleado.id} se restauró, pero no se pudo restaurar su centro de costo:`, centroError);
+    }
+  }
+
+  return buildJsonResponse({ success: true, auth_user_id: authUserId });
+}
+
 async function resetPassword(body: any) {
   const authUserId = String(body.auth_user_id ?? '').trim();
   const password = String(body.password ?? '').trim();
@@ -376,6 +409,7 @@ Deno.serve(async (req) => {
       if (action === 'confirm-activation') return await confirmActivation(body);
       if (action === 'verify-admin-password') return await verifyAdminPassword(body);
       if (action === 'dar-de-baja') return await darDeBajaEmpleado(body);
+      if (action === 'restaurar') return await restaurarEmpleado(body);
       return await createUser(body);
     }
 

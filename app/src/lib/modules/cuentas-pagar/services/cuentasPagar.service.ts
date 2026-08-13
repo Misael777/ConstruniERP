@@ -89,6 +89,11 @@ export interface ListParams {
 	 * distintas y con el `search` de arriba (independientes: search es la caja libre, columnFilters
 	 * son los filtros por columna). */
 	columnFilters?: ColumnFilters;
+	/** A pedido del usuario: las cuentas dadas de baja (columna `activo`, ver
+	 * entidades_activo_migration.sql — independiente de `estado`, que ya es workflow
+	 * pendiente/vencido/pagado) dejan de listarse por defecto. true trae solo las dadas de baja, para
+	 * la sección "Eliminados" (solo-admin). */
+	soloEliminados?: boolean;
 }
 
 export interface ListResult<T> {
@@ -183,6 +188,7 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 	if (!isColumnFilterActive(params.columnFilters?.estado)) {
 		query = query.neq('estado', 'pagado');
 	}
+	query = params.soloEliminados ? query.eq('activo', false) : query.eq('activo', true);
 	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
 
 	const { data, error, count } = await query;
@@ -403,6 +409,23 @@ export async function deleteCuentaPagar(client: SupabaseClient, id: number, esAd
 	}
 
 	return { success: true, message: 'Cuenta por pagar eliminada correctamente' };
+}
+
+/** Da de baja una cuenta por pagar (oculta de la lista, reversible, sin contraseña) — a diferencia de
+ * deleteCuentaPagar, NO toca sus pagos ni las transacciones ya registradas, solo marca `activo=false`
+ * (ver entidades_activo_migration.sql). */
+export async function darDeBajaCuentaPagar(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { error } = await client.from(TABLE_NAME).update({ activo: false }).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo dar de baja la cuenta por pagar: ${error.message}` };
+	return { success: true, message: 'Cuenta por pagar dada de baja correctamente' };
+}
+
+/** Restaura una cuenta por pagar dada de baja — se usa desde "Eliminados" (solo-admin), sin
+ * contraseña. */
+export async function restaurarCuentaPagar(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { error } = await client.from(TABLE_NAME).update({ activo: true }).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo restaurar la cuenta por pagar: ${error.message}` };
+	return { success: true, message: 'Cuenta por pagar restaurada correctamente' };
 }
 
 export async function getPagos(client: SupabaseClient, idCuentaPagar: number): Promise<Pago[]> {

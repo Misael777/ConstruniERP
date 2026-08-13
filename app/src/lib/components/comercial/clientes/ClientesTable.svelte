@@ -1,10 +1,22 @@
 <script lang="ts">
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
-	let { clientes = [], onEdit = (cliente: any) => {}, onDarDeBaja = (id: number) => {} } = $props<{
+	let {
+		clientes = [],
+		modoEliminados = false,
+		onEdit = (cliente: any) => {},
+		onDarDeBaja = (id: number) => {},
+		onRestaurar = (id: number) => {},
+		onEliminarPermanente = (id: number) => {}
+	} = $props<{
 		clientes?: any[];
+		/** true = viendo la sección "Eliminados" (solo-admin) — cambia las acciones de fila de
+		 * Editar/Dar de baja a Restaurar/Eliminar permanentemente. */
+		modoEliminados?: boolean;
 		onEdit?: (cliente: any) => void;
 		onDarDeBaja?: (id: number) => void;
+		onRestaurar?: (id: number) => void;
+		onEliminarPermanente?: (id: number) => void;
 	}>();
 
 	let searchTerm         = $state('');
@@ -164,8 +176,8 @@
 				<div class="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
 					<i class="fas fa-users text-2xl text-slate-300"></i>
 				</div>
-				<p class="font-medium">No hay clientes registrados.</p>
-				<p class="text-sm text-slate-400 mt-1">Haz clic en "Nuevo Cliente" para empezar.</p>
+				<p class="font-medium">{modoEliminados ? 'No hay clientes eliminados.' : 'No hay clientes registrados.'}</p>
+				<p class="text-sm text-slate-400 mt-1">{modoEliminados ? 'Los clientes dados de baja aparecerán acá.' : 'Haz clic en "Nuevo Cliente" para empezar.'}</p>
 			</div>
 		{:else}
 			<ResponsiveDataView items={filteredClientes} keyField="id_cliente" colspan={visibleColumnsCount} emptyMessage="Ningún cliente coincide con esos filtros.">
@@ -312,12 +324,21 @@
 					{/if}
 					<td class="px-5 py-4 text-center">
 						<div class="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-							<button onclick={() => onEdit(cliente)} class="w-8 h-8 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Editar">
-								<i class="fas fa-pen text-xs"></i>
-							</button>
-							<button onclick={() => onDarDeBaja(cliente.id_cliente)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Dar de baja">
-								<i class="fas fa-trash text-xs"></i>
-							</button>
+							{#if modoEliminados}
+								<button onclick={() => onRestaurar(cliente.id_cliente)} class="w-8 h-8 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Restaurar">
+									<i class="fas fa-rotate-left text-xs"></i>
+								</button>
+								<button onclick={() => onEliminarPermanente(cliente.id_cliente)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Eliminar permanentemente">
+									<i class="fas fa-trash-alt text-xs"></i>
+								</button>
+							{:else}
+								<button onclick={() => onEdit(cliente)} class="w-8 h-8 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Editar">
+									<i class="fas fa-pen text-xs"></i>
+								</button>
+								<button onclick={() => onDarDeBaja(cliente.id_cliente)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors tooltip-wrapper" title="Dar de baja">
+									<i class="fas fa-trash text-xs"></i>
+								</button>
+							{/if}
 						</div>
 					</td>
 				{/snippet}
@@ -352,12 +373,21 @@
 						{/if}
 					</div>
 					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-						<button onclick={() => onEdit(cliente)} class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100" aria-label="Editar">
-							<i class="fas fa-pen text-xs"></i> Editar
-						</button>
-						<button onclick={() => onDarDeBaja(cliente.id_cliente)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Dar de baja">
-							<i class="fas fa-trash text-xs"></i> Dar de baja
-						</button>
+						{#if modoEliminados}
+							<button onclick={() => onRestaurar(cliente.id_cliente)} class="flex-1 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-emerald-100" aria-label="Restaurar">
+								<i class="fas fa-rotate-left text-xs"></i> Restaurar
+							</button>
+							<button onclick={() => onEliminarPermanente(cliente.id_cliente)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Eliminar permanentemente">
+								<i class="fas fa-trash-alt text-xs"></i> Eliminar
+							</button>
+						{:else}
+							<button onclick={() => onEdit(cliente)} class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-blue-100" aria-label="Editar">
+								<i class="fas fa-pen text-xs"></i> Editar
+							</button>
+							<button onclick={() => onDarDeBaja(cliente.id_cliente)} class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Dar de baja">
+								<i class="fas fa-trash text-xs"></i> Dar de baja
+							</button>
+						{/if}
 					</div>
 				{/snippet}
 			</ResponsiveDataView>

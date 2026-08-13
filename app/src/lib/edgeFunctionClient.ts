@@ -144,6 +144,18 @@ export async function darDeBajaEmpleado(authUserId: string) {
 	return handleResponse(response);
 }
 
+/** Restaura a un empleado dado de baja (contraparte de darDeBajaEmpleado) — se usa desde la sección
+ * "Eliminados" de Empleados (solo-admin), sin contraseña. Ver restaurarEmpleado en la Edge Function. */
+export async function restaurarEmpleado(authUserId: string) {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'restaurar');
+	const response = await fetchWithApiKey(url.toString(), {
+		method: 'POST',
+		body: JSON.stringify({ auth_user_id: authUserId })
+	});
+	return handleResponse(response);
+}
+
 /**
  * Resetea la contraseña de un usuario
  */

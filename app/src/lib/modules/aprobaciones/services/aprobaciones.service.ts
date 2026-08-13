@@ -11,10 +11,11 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
-import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
+import { describeError } from '$lib/shared/describeError';
 
 // 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
 // una exportación no apunta a una fila puntual — id_entidad queda null para este caso (ver migración
@@ -332,6 +333,31 @@ export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number)
 	};
 }
 
+/** Restaura una venta dada de baja (contraparte de darDeBajaVenta) — se usa desde la sección
+ * "Eliminados" de Ventas (solo-admin). No requiere contraseña. Recupera el estado que tenía ANTES de
+ * la baja: 'venta_cerrada' si ya tiene una proforma marcada como final (es_proforma_final), 'activo'
+ * (en negociación) si no — darDeBajaVenta no guarda el estado previo en ningún lado, así que se infiere
+ * de la proforma, que sí persiste sin importar el estado del proyecto. */
+export async function restaurarVenta(client: SupabaseClient, idProyecto: number): Promise<ServiceResult> {
+	const { data: proformaFinal } = await client
+		.from('documento_proyecto')
+		.select('id_documento')
+		.eq('id_proyecto', idProyecto)
+		.eq('es_proforma_final', true)
+		.maybeSingle();
+	const estadoRestaurado = proformaFinal ? 'venta_cerrada' : 'activo';
+
+	const { error } = await client.from('proyecto').update({ estado_proyecto: estadoRestaurado }).eq('id_proyecto', idProyecto);
+	if (error) return { success: false, message: error.message };
+
+	const centroResult = await restaurarCentroCostoDeEntidad(client, 'proyecto', idProyecto);
+	if (!centroResult.success) {
+		console.warn(`[aprobaciones.service] La venta #${idProyecto} se restauró, pero no se pudo restaurar su centro de costo: ${centroResult.message}`);
+	}
+
+	return { success: true, message: 'Venta restaurada correctamente' };
+}
+
 export interface ClienteDependencias {
 	tieneConflictos: boolean;
 	proyectos: number;
@@ -408,7 +434,10 @@ export async function deleteClienteCascade(client: SupabaseClient, idCliente: nu
  * aplicó correctamente. */
 export async function darDeBajaCliente(client: SupabaseClient, idCliente: number): Promise<ServiceResult> {
 	const { error } = await client.from('cliente').update({ estado: 'baja' }).eq('id_cliente', idCliente);
-	if (error) return { success: false, message: error.message };
+	// describeError (no solo error.message) para que el toast.error del llamador muestre code/details/
+	// hint también — ej. "Could not find the 'estado' column..." trae code=PGRST204, útil para
+	// diagnosticar sin depender de la consola (no hay una accesible en el .exe empaquetado).
+	if (error) return { success: false, message: describeError(error) };
 
 	const centroResult = await darDeBajaCentroCostoDeEntidad(client, 'cliente', idCliente);
 	if (!centroResult.success) {
@@ -416,6 +445,21 @@ export async function darDeBajaCliente(client: SupabaseClient, idCliente: number
 	}
 
 	return { success: true, message: 'Cliente dado de baja correctamente' };
+}
+
+/** Restaura un cliente dado de baja (contraparte de darDeBajaCliente) — se usa desde la sección
+ * "Eliminados" de Clientes (solo-admin). No requiere contraseña, a diferencia del borrado permanente:
+ * no es una acción destructiva, se puede volver a dar de baja después sin pérdida de datos. */
+export async function restaurarCliente(client: SupabaseClient, idCliente: number): Promise<ServiceResult> {
+	const { error } = await client.from('cliente').update({ estado: 'activo' }).eq('id_cliente', idCliente);
+	if (error) return { success: false, message: describeError(error) };
+
+	const centroResult = await restaurarCentroCostoDeEntidad(client, 'cliente', idCliente);
+	if (!centroResult.success) {
+		console.warn(`[aprobaciones.service] El cliente #${idCliente} se restauró, pero no se pudo restaurar su centro de costo: ${centroResult.message}`);
+	}
+
+	return { success: true, message: 'Cliente restaurado correctamente' };
 }
 
 export interface CerrarVentaParams {

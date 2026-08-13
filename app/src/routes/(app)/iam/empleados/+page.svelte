@@ -1,17 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import { createUser, updateUser, darDeBajaEmpleado } from '$lib/edgeFunctionClient';
+	import { createUser, updateUser, darDeBajaEmpleado, restaurarEmpleado, deleteUser } from '$lib/edgeFunctionClient';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { toast } from '$lib/stores/toast';
+	import { describeError } from '$lib/shared/describeError';
+	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Area = { id: number; nombre: string };
-	type Empleado = { 
-		id: number; 
-		nombre: string; 
-		telefono: string; 
-		correo?: string; 
-		rol_id: number; 
+	type Empleado = {
+		id: number;
+		nombre: string;
+		telefono: string;
+		correo?: string;
+		rol_id: number;
 		area_id?: number | null;
 		auth_user_id: string;
 		/** true = ya completó el flujo de "Configura tu acceso" (código OTP + su propia contraseña),
@@ -22,7 +28,10 @@
 		horas?: number;
 		periodo?: string;
 		nivel?: string;
-		roles?: { nombre: string } 
+		/** 'activo' | 'baja' — a pedido del usuario, un empleado dado de baja deja de listarse por
+		 * defecto (ver verEliminados/fetchEmpleados más abajo). */
+		estado?: string;
+		roles?: { nombre: string }
 	};
 
 	let empleados = $state<Empleado[]>([]);
@@ -30,6 +39,11 @@
 	let areas = $state<Area[]>([]);
 	let isLoading = $state(true);
 	let statusMessage = $state({ type: '', text: '' });
+
+	// A pedido del usuario: los empleados dados de baja dejan de aparecer en el listado normal —
+	// solo un admin puede activar "Ver eliminados" (mismo patrón que el resto de los módulos, ver
+	// skill dar-de-baja-pattern).
+	let verEliminados = $state(false);
 
 	// Form states
 	let isModalOpen = $state(false);
@@ -72,12 +86,42 @@
 			horas: emp.horas ? Number(emp.horas) : 0,
 			periodo: emp.periodo || 'Mensual',
 			nivel: emp.nivel || '',
+			estado: emp.estado || 'activo',
 			roles: roleFromList ? { nombre: String(roleFromList.nombre) } : undefined
 		};
 	}
 
 	function formatEmpleados(data: any[]): Empleado[] {
 		return data.map(formatEmpleado);
+	}
+
+	/** Extraído del onMount original para poder re-consultar al togglear "Ver eliminados" (ver
+	 * toggleVerEliminados) sin recargar roles/áreas de nuevo. `estado` se agregó al select para poder
+	 * filtrar por dado-de-baja. */
+	async function fetchEmpleados() {
+		console.log("[IAM UI] Solicitando lista de empleados con roles a Supabase...");
+		let query = supabase
+			.from('empleados')
+			.select(`
+				id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
+				fecha_ingreso, salario, horas, periodo, nivel, area_id, estado,
+				roles ( nombre )
+			`)
+			.order('id');
+		query = verEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
+
+		const { data: empData, error: empError } = await query;
+		if (empError) {
+			console.error("[IAM UI Error] Error al obtener empleados de Supabase:", empError);
+			throw empError;
+		}
+		empleados = formatEmpleados(empData || []);
+		console.log("[IAM UI] Empleados cargados exitosamente:", empleados);
+	}
+
+	function toggleVerEliminados() {
+		verEliminados = !verEliminados;
+		fetchEmpleados();
 	}
 
 	onMount(async () => {
@@ -97,23 +141,7 @@
 			const { data: areasData } = await supabase.from('area').select('*').order('nombre');
 			if (areasData) areas = areasData;
 
-			// Cargar empleados con sus roles
-			console.log("[IAM UI] 3. Solicitando lista de empleados con roles a Supabase...");
-			const { data: empData, error: empError } = await supabase
-				.from('empleados')
-				.select(`
-					id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
-					fecha_ingreso, salario, horas, periodo, nivel, area_id,
-					roles ( nombre )
-				`)
-				.order('id');
-			
-			if (empError) {
-				console.error("[IAM UI Error] Error al obtener empleados de Supabase:", empError);
-				throw empError;
-			}
-			empleados = formatEmpleados(empData || []);
-			console.log("[IAM UI] Empleados cargados exitosamente:", empleados);
+			await fetchEmpleados();
 			console.log("[IAM UI] Carga de datos iniciales completada con éxito.");
 
 		} catch (error: any) {
@@ -340,31 +368,111 @@
 		}
 	}
 
-	async function eliminarEmpleado(id: number, nombre: string) {
-		const confirmacion = confirm(`¿Estás seguro de que deseas eliminar al empleado "${nombre}"?\nEsta accion eliminará su registro y el usuario de autenticacion.`);
-		if (!confirmacion) return;
+	// A pedido del usuario: "Eliminar" (que hoy llamaba a un `deleteUser` sin importar — ReferenceError
+	// en tiempo real) se reemplaza por "Dar de baja", reversible y sin contraseña — mismo patrón que
+	// el resto de los módulos (ver skill dar-de-baja-pattern). El borrado PERMANENTE de verdad
+	// (deleteUser, que sí borra la cuenta de Auth y el registro) se mueve a la sección "Eliminados"
+	// (solo-admin), siempre con contraseña.
+	let confirmDarDeBajaOpen = $state(false);
+	let empleadoParaDarDeBaja = $state<{ id: number; nombre: string; authUserId: string } | null>(null);
 
-		console.log(`[IAM UI] Solicitando eliminacion remota del empleado ID: ${id} ("${nombre}") via Supabase Edge Function...`);
+	function handleDarDeBaja(id: number, nombre: string) {
+		const emp = empleados.find((e) => e.id === id);
+		if (!emp?.auth_user_id) {
+			toast.error('No se encontró auth_user_id para este empleado.');
+			return;
+		}
+		empleadoParaDarDeBaja = { id, nombre, authUserId: emp.auth_user_id };
+		confirmDarDeBajaOpen = true;
+	}
+	function closeConfirmDarDeBaja() {
+		confirmDarDeBajaOpen = false;
+		empleadoParaDarDeBaja = null;
+	}
+	async function confirmarDarDeBaja() {
+		if (!empleadoParaDarDeBaja) return;
 		try {
-			const currentEmp = empleados.find(emp => emp.id === id);
-			if (!currentEmp?.auth_user_id) {
-				throw new Error('No se encontro auth_user_id para este empleado');
-			}
+			const data = await darDeBajaEmpleado(empleadoParaDarDeBaja.authUserId);
+			if (!data?.success) throw new Error(data?.error || 'No se pudo dar de baja al empleado.');
+			toast.success(`Empleado "${empleadoParaDarDeBaja.nombre}" dado de baja correctamente.`);
+			await fetchEmpleados();
+		} catch (err: any) {
+			toast.error(`No se pudo dar de baja al empleado. ${describeError(err)}`);
+		} finally {
+			closeConfirmDarDeBaja();
+		}
+	}
 
-			const data = await deleteUser(currentEmp.auth_user_id);
+	// ── Sección "Eliminados" (solo-admin): restaurar (sin contraseña) y borrado permanente (SIEMPRE
+	// con contraseña de admin, sin excepción). ──
 
-			if (!data?.success) {
-				console.error('[IAM UI Error] Error en Supabase Edge Function deleteUser:', data);
-				throw new Error(data?.error || 'Error al eliminar el empleado');
-			}
+	let confirmRestaurarOpen = $state(false);
+	let empleadoParaRestaurar = $state<{ id: number; nombre: string; authUserId: string } | null>(null);
 
-			// Actualizar UI localmente
-			empleados = empleados.filter(emp => emp.id !== id);
-			console.log(`[IAM UI] Empleado ID ${id} eliminado correctamente del estado local.`);
-			showStatus('success', `Empleado '${nombre}' eliminado correctamente.`);
-		} catch (error: any) {
-			console.error('[IAM UI Error] Excepcion en eliminarEmpleado():', error);
-			showStatus('error', 'Error al eliminar: ' + error.message);
+	function handleRestaurar(id: number, nombre: string) {
+		const emp = empleados.find((e) => e.id === id);
+		if (!emp?.auth_user_id) {
+			toast.error('No se encontró auth_user_id para este empleado.');
+			return;
+		}
+		empleadoParaRestaurar = { id, nombre, authUserId: emp.auth_user_id };
+		confirmRestaurarOpen = true;
+	}
+	function closeConfirmRestaurar() {
+		confirmRestaurarOpen = false;
+		empleadoParaRestaurar = null;
+	}
+	async function confirmarRestaurar() {
+		if (!empleadoParaRestaurar) return;
+		try {
+			const data = await restaurarEmpleado(empleadoParaRestaurar.authUserId);
+			if (!data?.success) throw new Error(data?.error || 'No se pudo restaurar al empleado.');
+			toast.success(`Empleado "${empleadoParaRestaurar.nombre}" restaurado correctamente.`);
+			await fetchEmpleados();
+		} catch (err: any) {
+			toast.error(`No se pudo restaurar al empleado. ${describeError(err)}`);
+		} finally {
+			closeConfirmRestaurar();
+		}
+	}
+
+	let confirmEliminarPermanenteOpen = $state(false);
+	let empleadoParaEliminarPermanente = $state<{ id: number; nombre: string; authUserId: string } | null>(null);
+	let eliminandoPermanente = $state(false);
+
+	function handleEliminarPermanente(id: number, nombre: string) {
+		const emp = empleados.find((e) => e.id === id);
+		if (!emp?.auth_user_id) {
+			toast.error('No se encontró auth_user_id para este empleado.');
+			return;
+		}
+		empleadoParaEliminarPermanente = { id, nombre, authUserId: emp.auth_user_id };
+		confirmEliminarPermanenteOpen = true;
+	}
+	function closeConfirmEliminarPermanente() {
+		if (eliminandoPermanente) return;
+		confirmEliminarPermanenteOpen = false;
+		empleadoParaEliminarPermanente = null;
+	}
+
+	/** Igual patrón que el borrado masivo de Transacciones: verifyAdminCredentials re-autentica de
+	 * verdad contra Supabase Auth antes de ejecutar deleteUser (borra la cuenta de Auth Y el registro
+	 * de `empleados`, vía la Edge Function). */
+	async function confirmarEliminarPermanente(email: string, password: string) {
+		if (!empleadoParaEliminarPermanente) return;
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		eliminandoPermanente = true;
+		try {
+			const data = await deleteUser(empleadoParaEliminarPermanente.authUserId);
+			if (!data?.success) throw new Error(data?.error || 'No se pudo eliminar el empleado.');
+			toast.success(`Empleado "${empleadoParaEliminarPermanente.nombre}" eliminado permanentemente.`);
+			confirmEliminarPermanenteOpen = false;
+			empleadoParaEliminarPermanente = null;
+			await fetchEmpleados();
+		} finally {
+			eliminandoPermanente = false;
 		}
 	}
 
@@ -392,15 +500,32 @@
 	<div class="text-xs text-slate-500 mb-2">Configuracion &nbsp;>&nbsp; Control de Accesos (IAM)</div>
 	<div class="flex justify-between items-center">
 		<div>
-			<h2 class="text-2xl font-semibold text-brand-marine">Gestion de Personal y Roles</h2>
-			<p class="text-sm text-slate-500 mt-1">Administra los accesos, roles y números de contacto del equipo de trabajo.</p>
+			<h2 class="text-2xl font-semibold text-brand-marine">{verEliminados ? 'Empleados eliminados' : 'Gestion de Personal y Roles'}</h2>
+			<p class="text-sm text-slate-500 mt-1">
+				{verEliminados
+					? 'Empleados dados de baja — restauralos o elimínalos de la base de datos permanentemente.'
+					: 'Administra los accesos, roles y números de contacto del equipo de trabajo.'}
+			</p>
 		</div>
-		<button 
-			onclick={() => isModalOpen = true}
-			class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2"
-		>
-			<i class="fas fa-user-plus"></i> Nuevo Empleado
-		</button>
+		<div class="flex items-center gap-3">
+			{#if isAdmin()}
+				<button
+					onclick={toggleVerEliminados}
+					class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+				>
+					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
+					{verEliminados ? 'Volver' : 'Ver eliminados'}
+				</button>
+			{/if}
+			{#if !verEliminados}
+				<button
+					onclick={() => isModalOpen = true}
+					class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2"
+				>
+					<i class="fas fa-user-plus"></i> Nuevo Empleado
+				</button>
+			{/if}
+		</div>
 	</div>
 </div>
 
@@ -481,22 +606,41 @@
 					</td>
 					<td class="p-4 text-center whitespace-nowrap">
 						<div class="flex items-center justify-center gap-2">
-							<button
-								onclick={() => prepararEdicion(emp)}
-								class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
-								title="Editar empleado"
-							>
-								<i class="fas fa-edit text-[10px]"></i>
-								<span>Editar</span>
-							</button>
-							<button
-								onclick={() => eliminarEmpleado(emp.id, emp.nombre)}
-								class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:bg-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
-								title="Eliminar empleado"
-							>
-								<i class="fas fa-trash-alt text-[10px]"></i>
-								<span>Eliminar</span>
-							</button>
+							{#if verEliminados}
+								<button
+									onclick={() => handleRestaurar(emp.id, emp.nombre)}
+									class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+									title="Restaurar empleado"
+								>
+									<i class="fas fa-rotate-left text-[10px]"></i>
+									<span>Restaurar</span>
+								</button>
+								<button
+									onclick={() => handleEliminarPermanente(emp.id, emp.nombre)}
+									class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+									title="Eliminar permanentemente"
+								>
+									<i class="fas fa-trash-alt text-[10px]"></i>
+									<span>Eliminar</span>
+								</button>
+							{:else}
+								<button
+									onclick={() => prepararEdicion(emp)}
+									class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 border border-blue-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+									title="Editar empleado"
+								>
+									<i class="fas fa-edit text-[10px]"></i>
+									<span>Editar</span>
+								</button>
+								<button
+									onclick={() => handleDarDeBaja(emp.id, emp.nombre)}
+									class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:bg-rose-800 border border-rose-200 rounded-xl text-xs font-semibold shadow-xs active:scale-[0.97] transition-all flex items-center gap-1.5 cursor-pointer"
+									title="Dar de baja"
+								>
+									<i class="fas fa-trash-alt text-[10px]"></i>
+									<span>Dar de baja</span>
+								</button>
+							{/if}
 						</div>
 					</td>
 				{/snippet}
@@ -541,18 +685,33 @@
 						{/if}
 					</div>
 					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-						<button
-							onclick={() => prepararEdicion(emp)}
-							class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-blue-100"
-						>
-							<i class="fas fa-edit text-[10px]"></i> Editar
-						</button>
-						<button
-							onclick={() => eliminarEmpleado(emp.id, emp.nombre)}
-							class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-rose-100"
-						>
-							<i class="fas fa-trash-alt text-[10px]"></i> Eliminar
-						</button>
+						{#if verEliminados}
+							<button
+								onclick={() => handleRestaurar(emp.id, emp.nombre)}
+								class="flex-1 h-10 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-emerald-100"
+							>
+								<i class="fas fa-rotate-left text-[10px]"></i> Restaurar
+							</button>
+							<button
+								onclick={() => handleEliminarPermanente(emp.id, emp.nombre)}
+								class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-rose-100"
+							>
+								<i class="fas fa-trash-alt text-[10px]"></i> Eliminar
+							</button>
+						{:else}
+							<button
+								onclick={() => prepararEdicion(emp)}
+								class="flex-1 h-10 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-blue-100"
+							>
+								<i class="fas fa-edit text-[10px]"></i> Editar
+							</button>
+							<button
+								onclick={() => handleDarDeBaja(emp.id, emp.nombre)}
+								class="flex-1 h-10 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center gap-2 text-xs font-semibold active:bg-rose-100"
+							>
+								<i class="fas fa-trash-alt text-[10px]"></i> Dar de baja
+							</button>
+						{/if}
 					</div>
 				{/snippet}
 			</ResponsiveDataView>
@@ -692,3 +851,31 @@
 		</div>
 	</div>
 {/if}
+
+<ConfirmModal
+	open={confirmDarDeBajaOpen}
+	title="Dar de baja al empleado"
+	message={empleadoParaDarDeBaja ? `¿Dar de baja al empleado "${empleadoParaDarDeBaja.nombre}"? Se bloqueará su acceso al ERP y quedará marcado como inactivo.` : ''}
+	confirmLabel="Dar de baja"
+	onConfirm={confirmarDarDeBaja}
+	onClose={closeConfirmDarDeBaja}
+/>
+
+<ConfirmModal
+	open={confirmRestaurarOpen}
+	title="Restaurar empleado"
+	danger={false}
+	message={empleadoParaRestaurar ? `¿Restaurar al empleado "${empleadoParaRestaurar.nombre}"? Recuperará su acceso al ERP.` : ''}
+	confirmLabel="Restaurar"
+	onConfirm={confirmarRestaurar}
+	onClose={closeConfirmRestaurar}
+/>
+
+<AdminConfirmModal
+	open={confirmEliminarPermanenteOpen}
+	title="Eliminar empleado permanentemente"
+	message={empleadoParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE al empleado "${empleadoParaEliminarPermanente.nombre}" — se borra su registro Y su cuenta de acceso (Supabase Auth). Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	confirmLabel="Eliminar permanentemente"
+	onConfirm={confirmarEliminarPermanente}
+	onClose={closeConfirmEliminarPermanente}
+/>

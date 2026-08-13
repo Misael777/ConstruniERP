@@ -25,6 +25,7 @@ import {
 	DEFAULT_SORT_DIR,
 	DELETE_STRATEGY,
 	SOFT_DELETE_COLUMN,
+	SOFT_DELETE_ACTIVE_VALUE,
 	SOFT_DELETE_INACTIVE_VALUE,
 	FIELDS_CONFIG,
 	validateCentroCostoPayload
@@ -187,6 +188,10 @@ export interface ListParams {
 	 *   - undefined -> sin filtrar (todas)
 	 */
 	vinculado?: boolean;
+	/** Solo aplica junto con vinculado:false (tab "Centros de Costos") — a pedido del usuario, los
+	 * centros manuales dados de baja dejan de listarse por defecto; true los trae a ellos en vez de
+	 * los activos, para la sección "Eliminados" (solo-admin). Sin efecto en vinculado:true/undefined. */
+	soloEliminados?: boolean;
 }
 
 export interface ListResult {
@@ -251,6 +256,7 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
 		const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
 		query = query.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`);
+		query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	}
 
 	const search = params.search?.trim();
@@ -371,6 +377,45 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 	return { success: true, message: 'Centro de costo eliminado correctamente' };
 }
 
+/** Restaura un centro de costo MANUAL (sin vínculo a ninguna entidad) dado de baja vía
+ * deleteCentroCosto (que hoy en 'soft' equivale a un "dar de baja") — se usa desde la sección
+ * "Eliminados" del propio submódulo, sin contraseña. Los vinculados a una entidad se restauran junto
+ * con ella (ver restaurarCentroCostoDeEntidad), no desde acá. */
+export async function restaurarCentroCosto(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	if (!SOFT_DELETE_COLUMN) return { success: false, message: 'SOFT_DELETE_COLUMN no está configurado.' };
+	const { error } = await client.from(TABLE_NAME).update({ [SOFT_DELETE_COLUMN]: SOFT_DELETE_ACTIVE_VALUE }).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo restaurar el centro de costo: ${error.message}` };
+	return { success: true, message: 'Centro de costo restaurado correctamente' };
+}
+
+/** Borra PERMANENTEMENTE un centro de costo manual — a diferencia de deleteCentroCosto (que en
+ * DELETE_STRATEGY='soft' solo anula), esto siempre hace un DELETE real, sin importar la estrategia
+ * configurada. Se usa SIEMPRE detrás de un AdminConfirmModal (contraseña), desde "Eliminados". Reusa
+ * el mismo guard de deleteCentroCosto: nunca borra uno vinculado a una entidad (esos se van en
+ * cascada junto con su dueño). */
+export async function eliminarCentroCostoPermanente(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { data: existente, error: fetchError } = await client
+		.from(TABLE_NAME)
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado')
+		.eq(PK_COLUMN, id)
+		.maybeSingle();
+	if (fetchError) return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
+
+	const entidadVinculada = existente
+		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
+		: undefined;
+	if (entidadVinculada) {
+		return {
+			success: false,
+			message: `Este centro de costo se creó automáticamente para un ${entidadVinculada} y no se puede eliminar directamente.`
+		};
+	}
+
+	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo eliminar el centro de costo: ${error.message}` };
+	return { success: true, message: 'Centro de costo eliminado permanentemente' };
+}
+
 /**
  * Busca el centro de costo ya vinculado a esta entidad (proyecto/cliente/proveedor) y, si no existe,
  * lo crea — idempotente (protegido además por el índice único parcial de la migración, ante una
@@ -435,6 +480,21 @@ export async function darDeBajaCentroCostoDeEntidad(
 	const { error } = await client.from(TABLE_NAME).update({ estado: 'baja' }).eq(columna, idEntidad);
 	if (error) return { success: false, message: `No se pudo dar de baja el centro de costo: ${error.message}` };
 	return { success: true, message: 'Centro de costo dado de baja correctamente' };
+}
+
+/** Contraparte de darDeBajaCentroCostoDeEntidad — usada al RESTAURAR una entidad (cliente/proyecto/
+ * proveedor/empleado) desde la sección "Eliminados" de su módulo, para que su centro de costo vuelva
+ * a quedar activo junto con ella. Secundario: si falla, se loguea pero no revierte la restauración de
+ * la entidad, mismo criterio que darDeBajaCentroCostoDeEntidad. */
+export async function restaurarCentroCostoDeEntidad(
+	client: SupabaseClient,
+	tipo: EntidadCentroCosto,
+	idEntidad: number
+): Promise<ServiceResult> {
+	const columna = COLUMNA_POR_TIPO[tipo];
+	const { error } = await client.from(TABLE_NAME).update({ estado: 'activo' }).eq(columna, idEntidad);
+	if (error) return { success: false, message: `No se pudo restaurar el centro de costo: ${error.message}` };
+	return { success: true, message: 'Centro de costo restaurado correctamente' };
 }
 
 /**

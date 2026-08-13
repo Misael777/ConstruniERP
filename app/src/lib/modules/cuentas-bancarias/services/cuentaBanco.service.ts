@@ -24,6 +24,10 @@ export interface CuentaBanco {
 	fecha_autorizacion: string | null;
 	observacion: string | null;
 	created_at: string;
+	/** true = visible en el listado normal. Independiente de `estado` (que ya es un workflow de
+	 * autorización propio) — ver entidades_activo_migration.sql. false = dada de baja, solo visible en
+	 * la sección "Eliminados" (solo-admin). */
+	activo: boolean;
 }
 
 export interface ListParams {
@@ -32,6 +36,9 @@ export interface ListParams {
 	search?: string;
 	sortBy?: string;
 	sortDir?: 'asc' | 'desc';
+	/** A pedido del usuario: las cuentas dadas de baja dejan de listarse por defecto. true trae solo
+	 * las dadas de baja, para la sección "Eliminados" (solo-admin). */
+	soloEliminados?: boolean;
 }
 
 export interface ListResult<T> {
@@ -72,6 +79,7 @@ export async function getCuentasBanco(client: SupabaseClient, params: ListParams
 		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
 		query = query.or(orFilter);
 	}
+	query = params.soloEliminados ? query.eq('activo', false) : query.eq('activo', true);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
@@ -124,6 +132,22 @@ export async function deleteCuentaBanco(client: SupabaseClient, id: number): Pro
 	return { success: true, message: 'Cuenta bancaria eliminada correctamente' };
 }
 
+/** Da de baja una cuenta bancaria (oculta de la lista, reversible, sin contraseña) — a diferencia de
+ * deleteCuentaBanco, no borra nada, solo marca `activo=false` (ver entidades_activo_migration.sql). */
+export async function darDeBajaCuentaBanco(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { error } = await client.from(TABLE_NAME).update({ activo: false }).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo dar de baja la cuenta bancaria: ${error.message}` };
+	return { success: true, message: 'Cuenta bancaria dada de baja correctamente' };
+}
+
+/** Restaura una cuenta bancaria dada de baja — se usa desde "Eliminados" (solo-admin), sin
+ * contraseña. */
+export async function restaurarCuentaBanco(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { error } = await client.from(TABLE_NAME).update({ activo: true }).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo restaurar la cuenta bancaria: ${error.message}` };
+	return { success: true, message: 'Cuenta bancaria restaurada correctamente' };
+}
+
 /** Para el dropdown de "Cuenta Destino" en TransaccionModal.svelte (Transacción Externa + Tipo
  * Ingreso): el valor guardado sigue siendo el número de cuenta en texto libre (mismo formato que
  * siempre tuvo `transaccion.cuente_destino`), no el id — solo se ofrece como lista en vez de
@@ -135,6 +159,7 @@ export async function getCuentaBancoOptions(client: SupabaseClient): Promise<Fie
 		.from(TABLE_NAME)
 		.select('numero_cuenta, titular_cuenta, nombre_banco')
 		.eq('estado', 'activa')
+		.eq('activo', true)
 		.order('titular_cuenta');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}` }));

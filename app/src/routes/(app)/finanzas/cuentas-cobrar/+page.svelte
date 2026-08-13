@@ -3,14 +3,18 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import { describeError } from '$lib/shared/describeError';
+	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { FIELDS_CONFIG as COBRO_FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
 	import {
 		getCuentasCobrar,
 		deleteCuentaCobrar,
+		darDeBajaCuentaCobrar,
+		restaurarCuentaCobrar,
 		getCobros,
 		deleteCobro,
 		getClienteOptions,
@@ -25,6 +29,8 @@
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import type { CuentaCobrar, Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
@@ -104,10 +110,19 @@
 	 * normal (crear una transacción suelta), no en el flujo de confirmación obligatoria. */
 	let confirmandoCobroId = $state<number | null>(null);
 
+	// A pedido del usuario: las cuentas por cobrar dadas de baja dejan de listarse por defecto — solo
+	// un admin puede activar "Ver eliminados" (mismo patrón que el resto de los módulos, ver skill
+	// dar-de-baja-pattern).
+	let verEliminados = $state(false);
+	function toggleVerEliminados() {
+		verEliminados = !verEliminados;
+		fetchList();
+	}
+
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getCuentasCobrar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters });
+			const result = await getCuentasCobrar(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -314,20 +329,106 @@
 		}
 	}
 
-	async function handleDelete(item: CuentaCobrar) {
-		if (!confirm('¿Eliminar esta cuenta por cobrar y todos sus cobros registrados? Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer.')) return;
+	// A pedido del usuario: "Eliminar" pasa a ser un dar-de-baja reversible (oculta la cuenta, no
+	// toca cobros ni transacciones) — mismo patrón que el resto de los módulos. El borrado PERMANENTE
+	// de verdad (deleteCuentaCobrar, que sí borra cobros y transacciones vinculadas) se mueve a la
+	// sección "Eliminados" (solo-admin), siempre con contraseña.
+	let confirmDarDeBajaOpen = $state(false);
+	let cuentaParaDarDeBaja = $state<CuentaCobrar | null>(null);
+
+	function handleDelete(item: CuentaCobrar) {
+		cuentaParaDarDeBaja = item;
+		confirmDarDeBajaOpen = true;
+	}
+	function closeConfirmDarDeBaja() {
+		confirmDarDeBajaOpen = false;
+		cuentaParaDarDeBaja = null;
+	}
+	async function confirmarDarDeBaja() {
+		if (!cuentaParaDarDeBaja) return;
 		try {
-			const result = await deleteCuentaCobrar(supabase, item.id_cuenta_cobrar, isAdmin());
+			const result = await darDeBajaCuentaCobrar(supabase, cuentaParaDarDeBaja.id_cuenta_cobrar);
 			if (result.success) {
-				toast.success(result.message);
-				if (selectedId === item.id_cuenta_cobrar) selectedId = null;
+				toast.success(result.message ?? 'Cuenta por cobrar dada de baja correctamente.');
+				if (selectedId === cuentaParaDarDeBaja.id_cuenta_cobrar) selectedId = null;
 			} else {
-				toast.error(result.message);
+				toast.error(result.message ?? 'No se pudo dar de baja la cuenta por cobrar.');
 			}
 		} catch (err: any) {
-			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+			toast.error(`No se pudo dar de baja la cuenta por cobrar. ${describeError(err)}`);
 		} finally {
+			closeConfirmDarDeBaja();
 			await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
+		}
+	}
+
+	// ── Sección "Eliminados" (solo-admin): restaurar (sin contraseña) y borrado permanente (SIEMPRE
+	// con contraseña de admin, sin excepción). ──
+
+	let confirmRestaurarOpen = $state(false);
+	let cuentaParaRestaurar = $state<CuentaCobrar | null>(null);
+
+	function handleRestaurar(item: CuentaCobrar) {
+		cuentaParaRestaurar = item;
+		confirmRestaurarOpen = true;
+	}
+	function closeConfirmRestaurar() {
+		confirmRestaurarOpen = false;
+		cuentaParaRestaurar = null;
+	}
+	async function confirmarRestaurar() {
+		if (!cuentaParaRestaurar) return;
+		try {
+			const result = await restaurarCuentaCobrar(supabase, cuentaParaRestaurar.id_cuenta_cobrar);
+			if (result.success) {
+				toast.success(result.message ?? 'Cuenta por cobrar restaurada correctamente.');
+				await fetchList();
+			} else {
+				toast.error(result.message ?? 'No se pudo restaurar la cuenta por cobrar.');
+			}
+		} catch (err: any) {
+			toast.error(`No se pudo restaurar la cuenta por cobrar. ${describeError(err)}`);
+		} finally {
+			closeConfirmRestaurar();
+		}
+	}
+
+	let confirmEliminarPermanenteOpen = $state(false);
+	let cuentaParaEliminarPermanente = $state<CuentaCobrar | null>(null);
+	let eliminandoPermanente = $state(false);
+
+	function handleEliminarPermanente(item: CuentaCobrar) {
+		cuentaParaEliminarPermanente = item;
+		confirmEliminarPermanenteOpen = true;
+	}
+	function closeConfirmEliminarPermanente() {
+		if (eliminandoPermanente) return;
+		confirmEliminarPermanenteOpen = false;
+		cuentaParaEliminarPermanente = null;
+	}
+
+	/** Igual patrón que el borrado masivo de Transacciones: verifyAdminCredentials re-autentica de
+	 * verdad contra Supabase Auth antes de ejecutar deleteCuentaCobrar (el mismo borrado real de
+	 * siempre — cascada de cobros y transacciones vinculadas). */
+	async function confirmarEliminarPermanente(email: string, password: string) {
+		if (!cuentaParaEliminarPermanente) return;
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		eliminandoPermanente = true;
+		try {
+			const result = await deleteCuentaCobrar(supabase, cuentaParaEliminarPermanente.id_cuenta_cobrar, true);
+			if (result.success) {
+				toast.success(result.message ?? 'Cuenta por cobrar eliminada permanentemente.');
+				if (selectedId === cuentaParaEliminarPermanente.id_cuenta_cobrar) selectedId = null;
+				confirmEliminarPermanenteOpen = false;
+				cuentaParaEliminarPermanente = null;
+				await fetchList();
+			} else {
+				throw new Error(result.message || 'No se pudo eliminar la cuenta por cobrar.');
+			}
+		} finally {
+			eliminandoPermanente = false;
 		}
 	}
 
@@ -395,17 +496,29 @@
 		<div class="flex items-center gap-3">
 			<Landmark class="text-[#0f3b5e]" size={28} />
 			<div>
-				<h1 class="text-xl font-bold text-[#0f3b5e]">Cuentas por Cobrar</h1>
-				<p class="text-sm text-slate-500">Cuentas pendientes de clientes y sus cobros registrados</p>
+				<h1 class="text-xl font-bold text-[#0f3b5e]">{verEliminados ? 'Cuentas por cobrar eliminadas' : 'Cuentas por Cobrar'}</h1>
+				<p class="text-sm text-slate-500">
+					{verEliminados
+						? 'Cuentas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.'
+						: 'Cuentas pendientes de clientes y sus cobros registrados'}
+				</p>
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
+			{#if isAdmin()}
+				<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
+					{verEliminados ? 'Volver' : 'Ver eliminados'}
+				</button>
+			{/if}
+			{#if !verEliminados}
 			<button type="button" onclick={() => goto('/finanzas/cuentas-cobrar/panoramas')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
 				<LayoutGrid size={16} /> Ver Panoramas de Cobro
 			</button>
 			<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 				<Plus size={16} /> Nueva Cuenta
 			</button>
+			{/if}
 		</div>
 	</div>
 
@@ -551,12 +664,21 @@
 							{/if}
 						</div>
 						<div class="flex items-center gap-1 justify-end">
-							<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-								<Pencil size={16} />
-							</button>
-							<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-								<Trash2 size={16} />
-							</button>
+							{#if verEliminados}
+								<button type="button" onclick={(e) => { e.stopPropagation(); handleRestaurar(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-emerald-50 hover:text-emerald-600" title="Restaurar" aria-label="Restaurar">
+									<RotateCcw size={16} />
+								</button>
+								<button type="button" onclick={(e) => { e.stopPropagation(); handleEliminarPermanente(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar permanentemente" aria-label="Eliminar permanentemente">
+									<Trash size={16} />
+								</button>
+							{:else}
+								<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+									<Pencil size={16} />
+								</button>
+								<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Dar de baja" aria-label="Dar de baja">
+									<Trash2 size={16} />
+								</button>
+							{/if}
 						</div>
 					</div>
 				{:else}
@@ -614,12 +736,21 @@
 						{/if}
 					</div>
 					<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
-							<Pencil size={14} /> Editar
-						</button>
-						<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar">
-							<Trash2 size={14} /> Eliminar
-						</button>
+						{#if verEliminados}
+							<button type="button" onclick={(e) => { e.stopPropagation(); handleRestaurar(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-emerald-50" aria-label="Restaurar">
+								<RotateCcw size={14} /> Restaurar
+							</button>
+							<button type="button" onclick={(e) => { e.stopPropagation(); handleEliminarPermanente(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar permanentemente">
+								<Trash size={14} /> Eliminar
+							</button>
+						{:else}
+							<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
+								<Pencil size={14} /> Editar
+							</button>
+							<button type="button" onclick={(e) => { e.stopPropagation(); handleDelete(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Dar de baja">
+								<Trash2 size={14} /> Dar de baja
+							</button>
+						{/if}
 					</div>
 				</div>
 			{:else}
@@ -786,4 +917,32 @@
 	confirmTitle={confirmandoCobroId ? 'Confirmar Cobro — Transacción de Respaldo' : null}
 	confirmButtonLabel={confirmandoCobroId ? 'Confirmar Cobro' : null}
 	lockedFields={confirmandoCobroId ? ['id_centro_costo_origen', 'id_centro_costo_destino'] : []}
+/>
+
+<ConfirmModal
+	open={confirmDarDeBajaOpen}
+	title="Dar de baja cuenta por cobrar"
+	message={cuentaParaDarDeBaja ? `¿Dar de baja esta cuenta por cobrar? Quedará marcada como inactiva. Sus cobros y transacciones ya registrados no se tocan.` : ''}
+	confirmLabel="Dar de baja"
+	onConfirm={confirmarDarDeBaja}
+	onClose={closeConfirmDarDeBaja}
+/>
+
+<ConfirmModal
+	open={confirmRestaurarOpen}
+	title="Restaurar cuenta por cobrar"
+	danger={false}
+	message={cuentaParaRestaurar ? `¿Restaurar esta cuenta por cobrar? Volverá a aparecer en el listado.` : ''}
+	confirmLabel="Restaurar"
+	onConfirm={confirmarRestaurar}
+	onClose={closeConfirmRestaurar}
+/>
+
+<AdminConfirmModal
+	open={confirmEliminarPermanenteOpen}
+	title="Eliminar cuenta por cobrar permanentemente"
+	message={cuentaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE esta cuenta por cobrar y todos sus cobros registrados. Si alguno tiene una transacción vinculada, también se eliminará. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	confirmLabel="Eliminar permanentemente"
+	onConfirm={confirmarEliminarPermanente}
+	onClose={closeConfirmEliminarPermanente}
 />

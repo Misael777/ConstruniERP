@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Search, ChevronUp, ChevronDown, X, Building2 } from '@lucide/svelte';
+	import { Plus, Search, ChevronUp, ChevronDown, ChevronLeft, X, Building2, Trash2, RotateCcw, Trash } from '@lucide/svelte';
 	import {
 		FIELDS_CONFIG,
 		DEFAULT_SORT_FIELD,
@@ -12,12 +12,25 @@
 		getOptionLabel,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { getCentroCostos, getSaldosPorCentroCosto, getMontoRecibidoPorCentroCosto, esCentroDeVenta } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import {
+		getCentroCostos,
+		getSaldosPorCentroCosto,
+		getMontoRecibidoPorCentroCosto,
+		esCentroDeVenta,
+		deleteCentroCosto,
+		restaurarCentroCosto,
+		eliminarCentroCostoPermanente
+	} from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+	import { toast } from '$lib/stores/toast';
+	import { describeError } from '$lib/shared/describeError';
+	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import CentroCostoModal from '$lib/modules/centro-costos/components/CentroCostoModal.svelte';
 	import CentroCostoDetalleModal from '$lib/modules/centro-costos/components/CentroCostoDetalleModal.svelte';
 	import type { CentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 
 	// Módulo 100% client-side (habla directo con Supabase vía la anon key) para funcionar en
 	// cualquier plataforma empaquetada con Tauri (Windows, Android) sin necesitar un servidor
@@ -66,6 +79,20 @@
 
 	let modalOpen = $state(false);
 
+	// A pedido del usuario: los centros de costo manuales dados de baja dejan de listarse por
+	// defecto en la pestaña "Centros de Costos" — este toggle (solo tiene sentido ahí, la página
+	// entera ya es admin-only vía el guard de onMount de abajo) los muestra para restaurarlos o
+	// borrarlos permanentemente. No aplica a "Cuentas Internas" (esas se dan de baja junto con su
+	// entidad dueña, desde el módulo de esa entidad).
+	let verEliminados = $state(false);
+
+	/** Un centro de costo "manual puro" (sin vínculo a proyecto/cliente/proveedor/empleado) es el
+	 * único tipo con acciones propias acá — los vinculados a un proyecto cerrado (que también aparecen
+	 * en esta pestaña) se dan de baja en cascada desde Ventas, nunca a mano. */
+	function esManualSinVincular(item: CentroCosto): boolean {
+		return !item.id_proyecto && !item.id_cliente && !item.id_proveedor && !item.id_empleado;
+	}
+
 	let detalleOpen = $state(false);
 	let detalleCentro = $state<CentroCosto | null>(null);
 
@@ -88,7 +115,8 @@
 				search,
 				sortBy,
 				sortDir,
-				vinculado: activeTab === 'cuentas'
+				vinculado: activeTab === 'cuentas',
+				soloEliminados: activeTab === 'centros' && verEliminados
 			});
 			items = result.items;
 			total = result.total;
@@ -111,6 +139,7 @@
 		if (activeTab === tab) return;
 		activeTab = tab;
 		pageNum = 1;
+		verEliminados = false; // "Eliminados" solo tiene sentido en "Centros de Costos"
 		// 'producto' solo tiene sentido en Cuentas Internas — al salir de esa pestaña se vuelve al
 		// orden por defecto para no dejar un ordenamiento que ya no aplica.
 		if (sortBy === 'producto') {
@@ -118,6 +147,107 @@
 			sortDir = DEFAULT_SORT_DIR;
 		}
 		fetchList();
+	}
+
+	function toggleVerEliminados() {
+		verEliminados = !verEliminados;
+		pageNum = 1;
+		fetchList();
+	}
+
+	// ── Dar de baja / restaurar / eliminar permanente (solo para centros manuales sin vincular,
+	// ver esManualSinVincular) — mismo patrón que Clientes/Proveedores, ver skill dar-de-baja-pattern.
+	let confirmDarDeBajaOpen = $state(false);
+	let centroParaDarDeBaja = $state<{ id: number; nombre: string } | null>(null);
+
+	function handleDarDeBaja(item: CentroCosto, event: MouseEvent) {
+		event.stopPropagation();
+		centroParaDarDeBaja = { id: item.id_centro_costo, nombre: item.nombre };
+		confirmDarDeBajaOpen = true;
+	}
+	function closeConfirmDarDeBaja() {
+		confirmDarDeBajaOpen = false;
+		centroParaDarDeBaja = null;
+	}
+	async function confirmarDarDeBaja() {
+		if (!centroParaDarDeBaja) return;
+		try {
+			const result = await deleteCentroCosto(supabase, centroParaDarDeBaja.id);
+			if (result.success) {
+				toast.success(`Centro de costo "${centroParaDarDeBaja.nombre}" dado de baja correctamente.`);
+				await fetchList();
+			} else {
+				toast.error(`No se pudo dar de baja el centro de costo. ${result.message ?? ''}`);
+			}
+		} catch (err) {
+			toast.error(`No se pudo dar de baja el centro de costo. ${describeError(err)}`);
+		} finally {
+			closeConfirmDarDeBaja();
+		}
+	}
+
+	let confirmRestaurarOpen = $state(false);
+	let centroParaRestaurar = $state<{ id: number; nombre: string } | null>(null);
+
+	function handleRestaurar(item: CentroCosto, event: MouseEvent) {
+		event.stopPropagation();
+		centroParaRestaurar = { id: item.id_centro_costo, nombre: item.nombre };
+		confirmRestaurarOpen = true;
+	}
+	function closeConfirmRestaurar() {
+		confirmRestaurarOpen = false;
+		centroParaRestaurar = null;
+	}
+	async function confirmarRestaurar() {
+		if (!centroParaRestaurar) return;
+		try {
+			const result = await restaurarCentroCosto(supabase, centroParaRestaurar.id);
+			if (result.success) {
+				toast.success(`Centro de costo "${centroParaRestaurar.nombre}" restaurado correctamente.`);
+				await fetchList();
+			} else {
+				toast.error(`No se pudo restaurar el centro de costo. ${result.message ?? ''}`);
+			}
+		} catch (err) {
+			toast.error(`No se pudo restaurar el centro de costo. ${describeError(err)}`);
+		} finally {
+			closeConfirmRestaurar();
+		}
+	}
+
+	let confirmEliminarPermanenteOpen = $state(false);
+	let centroParaEliminarPermanente = $state<{ id: number; nombre: string } | null>(null);
+	let eliminandoPermanente = $state(false);
+
+	function handleEliminarPermanente(item: CentroCosto, event: MouseEvent) {
+		event.stopPropagation();
+		centroParaEliminarPermanente = { id: item.id_centro_costo, nombre: item.nombre };
+		confirmEliminarPermanenteOpen = true;
+	}
+	function closeConfirmEliminarPermanente() {
+		if (eliminandoPermanente) return;
+		confirmEliminarPermanenteOpen = false;
+		centroParaEliminarPermanente = null;
+	}
+	async function confirmarEliminarPermanente(email: string, password: string) {
+		if (!centroParaEliminarPermanente) return;
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		eliminandoPermanente = true;
+		try {
+			const result = await eliminarCentroCostoPermanente(supabase, centroParaEliminarPermanente.id);
+			if (result.success) {
+				toast.success(`Centro de costo "${centroParaEliminarPermanente.nombre}" eliminado permanentemente.`);
+				confirmEliminarPermanenteOpen = false;
+				centroParaEliminarPermanente = null;
+				await fetchList();
+			} else {
+				throw new Error(result.message || 'No se pudo eliminar el centro de costo.');
+			}
+		} finally {
+			eliminandoPermanente = false;
+		}
 	}
 
 	onMount(() => {
@@ -268,13 +398,25 @@
 			</div>
 		</div>
 		{#if activeTab === 'centros'}
-			<button
-				type="button"
-				onclick={openCreate}
-				class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]"
-			>
-				<Plus size={16} /> Nuevo Centro de Costo
-			</button>
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					onclick={toggleVerEliminados}
+					class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+				>
+					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
+					{verEliminados ? 'Volver' : 'Ver eliminados'}
+				</button>
+				{#if !verEliminados}
+					<button
+						type="button"
+						onclick={openCreate}
+						class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]"
+					>
+						<Plus size={16} /> Nuevo Centro de Costo
+					</button>
+				{/if}
+			</div>
 		{/if}
 	</div>
 
@@ -355,7 +497,7 @@
 	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + 1} {emptyMessage} onRowClick={openDetalle}>
+			<ResponsiveDataView items={loading ? [] : items} keyField="id_centro_costo" colspan={tableFields.length + (activeTab === 'centros' ? 2 : 1)} {emptyMessage} onRowClick={openDetalle}>
 				{#snippet header()}
 					{#each tableFields as field}
 						<th class="text-left px-4 py-3 font-semibold text-slate-600">
@@ -388,6 +530,9 @@
 							</button>
 						</th>
 					{/if}
+					{#if activeTab === 'centros'}
+						<th class="text-center px-4 py-3 font-semibold text-slate-600">Acciones</th>
+					{/if}
 				{/snippet}
 				{#snippet row(item)}
 					{#each tableFields as field}
@@ -400,6 +545,28 @@
 						<td class="px-4 py-3 text-slate-700">
 							{#if item.producto}
 								<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{item.producto}</span>
+							{:else}
+								<span class="text-xs text-slate-400 italic">—</span>
+							{/if}
+						</td>
+					{/if}
+					{#if activeTab === 'centros'}
+						<td class="px-4 py-3 text-center">
+							{#if esManualSinVincular(item)}
+								<div class="flex items-center justify-center gap-2">
+									{#if verEliminados}
+										<button onclick={(e) => handleRestaurar(item, e)} class="w-8 h-8 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center transition-colors" title="Restaurar">
+											<RotateCcw size={14} />
+										</button>
+										<button onclick={(e) => handleEliminarPermanente(item, e)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors" title="Eliminar permanentemente">
+											<Trash size={14} />
+										</button>
+									{:else}
+										<button onclick={(e) => handleDarDeBaja(item, e)} class="w-8 h-8 rounded bg-rose-50 text-rose-600 hover:bg-rose-100 flex items-center justify-center transition-colors" title="Dar de baja">
+											<Trash2 size={14} />
+										</button>
+									{/if}
+								</div>
 							{:else}
 								<span class="text-xs text-slate-400 italic">—</span>
 							{/if}
@@ -429,6 +596,22 @@
 							<span class="text-right text-slate-700">{item.producto}</span>
 						{/if}
 					</div>
+					{#if activeTab === 'centros' && esManualSinVincular(item)}
+						<div class="flex items-center gap-2 pt-2 mt-2 border-t border-slate-100">
+							{#if verEliminados}
+								<button onclick={(e) => handleRestaurar(item, e)} class="flex-1 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-emerald-100" aria-label="Restaurar">
+									<RotateCcw size={14} /> Restaurar
+								</button>
+								<button onclick={(e) => handleEliminarPermanente(item, e)} class="flex-1 h-9 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Eliminar permanentemente">
+									<Trash size={14} /> Eliminar
+								</button>
+							{:else}
+								<button onclick={(e) => handleDarDeBaja(item, e)} class="flex-1 h-9 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-100" aria-label="Dar de baja">
+									<Trash2 size={14} /> Dar de baja
+								</button>
+							{/if}
+						</div>
+					{/if}
 				{/snippet}
 			</ResponsiveDataView>
 		</div>
@@ -462,3 +645,31 @@
 
 <CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={fetchList} />
 <CentroCostoDetalleModal open={detalleOpen} centro={detalleCentro} onClose={closeDetalle} />
+
+<ConfirmModal
+	open={confirmDarDeBajaOpen}
+	title="Dar de baja centro de costo"
+	message={centroParaDarDeBaja ? `¿Dar de baja el centro de costo "${centroParaDarDeBaja.nombre}"? Quedará marcado como inactivo.` : ''}
+	confirmLabel="Dar de baja"
+	onConfirm={confirmarDarDeBaja}
+	onClose={closeConfirmDarDeBaja}
+/>
+
+<ConfirmModal
+	open={confirmRestaurarOpen}
+	title="Restaurar centro de costo"
+	danger={false}
+	message={centroParaRestaurar ? `¿Restaurar el centro de costo "${centroParaRestaurar.nombre}"? Volverá a aparecer en el listado.` : ''}
+	confirmLabel="Restaurar"
+	onConfirm={confirmarRestaurar}
+	onClose={closeConfirmRestaurar}
+/>
+
+<AdminConfirmModal
+	open={confirmEliminarPermanenteOpen}
+	title="Eliminar centro de costo permanentemente"
+	message={centroParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE el centro de costo "${centroParaEliminarPermanente.nombre}" de la base de datos. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	confirmLabel="Eliminar permanentemente"
+	onConfirm={confirmarEliminarPermanente}
+	onClose={closeConfirmEliminarPermanente}
+/>

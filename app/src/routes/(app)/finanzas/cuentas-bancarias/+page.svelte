@@ -4,11 +4,21 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
-	import { Landmark, Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X } from '@lucide/svelte';
+	import { describeError } from '$lib/shared/describeError';
+	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
+	import { Landmark, Plus, Pencil, Trash2, Trash, RotateCcw, ChevronLeft, Search, ChevronUp, ChevronDown, X } from '@lucide/svelte';
 	import { getOptionLabel } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-bancarias/config/cuentaBanco.config';
-	import { getCuentasBanco, deleteCuentaBanco, type CuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import {
+		getCuentasBanco,
+		deleteCuentaBanco,
+		darDeBajaCuentaBanco,
+		restaurarCuentaBanco,
+		type CuentaBanco
+	} from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import CuentaBancoModal from '$lib/modules/cuentas-bancarias/components/CuentaBancoModal.svelte';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
 	// servidor embebido — ver nota de seguridad en centro-costos/+page.svelte: la BD todavía no
@@ -44,10 +54,21 @@
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingItem = $state<CuentaBanco | null>(null);
 
+	// A pedido del usuario: las cuentas bancarias dadas de baja dejan de listarse por defecto — solo
+	// un admin puede activar "Ver eliminados" (mismo patrón que el resto de los módulos, ver skill
+	// dar-de-baja-pattern). La página entera ya es admin-only (ver el guard en onMount), así que el
+	// toggle no necesita un chequeo isAdmin() adicional.
+	let verEliminados = $state(false);
+	function toggleVerEliminados() {
+		verEliminados = !verEliminados;
+		pageNum = 1;
+		fetchList();
+	}
+
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getCuentasBanco(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			const result = await getCuentasBanco(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, soloEliminados: verEliminados });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -114,16 +135,99 @@
 		editingItem = null;
 	}
 
-	async function handleDelete(item: CuentaBanco) {
-		if (!confirm(`¿Eliminar la cuenta bancaria "${item.numero_cuenta} — ${item.titular_cuenta}"? Esta acción no se puede deshacer.`)) return;
+	// A pedido del usuario: "Eliminar" pasa a ser un dar-de-baja reversible, sin contraseña — mismo
+	// patrón que el resto de los módulos. El borrado PERMANENTE de verdad (deleteCuentaBanco) se mueve
+	// a la sección "Eliminados" (solo-admin), siempre con contraseña.
+	let confirmDarDeBajaOpen = $state(false);
+	let cuentaParaDarDeBaja = $state<CuentaBanco | null>(null);
+
+	function handleDelete(item: CuentaBanco) {
+		cuentaParaDarDeBaja = item;
+		confirmDarDeBajaOpen = true;
+	}
+	function closeConfirmDarDeBaja() {
+		confirmDarDeBajaOpen = false;
+		cuentaParaDarDeBaja = null;
+	}
+	async function confirmarDarDeBaja() {
+		if (!cuentaParaDarDeBaja) return;
 		try {
-			const result = await deleteCuentaBanco(supabase, item.id_cuenta_banco);
-			if (result.success) toast.success(result.message);
-			else toast.error(result.message);
+			const result = await darDeBajaCuentaBanco(supabase, cuentaParaDarDeBaja.id_cuenta_banco);
+			if (result.success) toast.success(result.message ?? 'Cuenta bancaria dada de baja correctamente.');
+			else toast.error(result.message ?? 'No se pudo dar de baja la cuenta bancaria.');
 		} catch (err: any) {
-			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+			toast.error(`No se pudo dar de baja la cuenta bancaria. ${describeError(err)}`);
 		} finally {
+			closeConfirmDarDeBaja();
 			await fetchList();
+		}
+	}
+
+	// ── Sección "Eliminados": restaurar (sin contraseña) y borrado permanente (SIEMPRE con contraseña
+	// de admin, sin excepción). ──
+
+	let confirmRestaurarOpen = $state(false);
+	let cuentaParaRestaurar = $state<CuentaBanco | null>(null);
+
+	function handleRestaurar(item: CuentaBanco) {
+		cuentaParaRestaurar = item;
+		confirmRestaurarOpen = true;
+	}
+	function closeConfirmRestaurar() {
+		confirmRestaurarOpen = false;
+		cuentaParaRestaurar = null;
+	}
+	async function confirmarRestaurar() {
+		if (!cuentaParaRestaurar) return;
+		try {
+			const result = await restaurarCuentaBanco(supabase, cuentaParaRestaurar.id_cuenta_banco);
+			if (result.success) {
+				toast.success(result.message ?? 'Cuenta bancaria restaurada correctamente.');
+				await fetchList();
+			} else {
+				toast.error(result.message ?? 'No se pudo restaurar la cuenta bancaria.');
+			}
+		} catch (err: any) {
+			toast.error(`No se pudo restaurar la cuenta bancaria. ${describeError(err)}`);
+		} finally {
+			closeConfirmRestaurar();
+		}
+	}
+
+	let confirmEliminarPermanenteOpen = $state(false);
+	let cuentaParaEliminarPermanente = $state<CuentaBanco | null>(null);
+	let eliminandoPermanente = $state(false);
+
+	function handleEliminarPermanente(item: CuentaBanco) {
+		cuentaParaEliminarPermanente = item;
+		confirmEliminarPermanenteOpen = true;
+	}
+	function closeConfirmEliminarPermanente() {
+		if (eliminandoPermanente) return;
+		confirmEliminarPermanenteOpen = false;
+		cuentaParaEliminarPermanente = null;
+	}
+
+	/** Igual patrón que el borrado masivo de Transacciones: verifyAdminCredentials re-autentica de
+	 * verdad contra Supabase Auth antes de ejecutar deleteCuentaBanco (borrado real). */
+	async function confirmarEliminarPermanente(email: string, password: string) {
+		if (!cuentaParaEliminarPermanente) return;
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		eliminandoPermanente = true;
+		try {
+			const result = await deleteCuentaBanco(supabase, cuentaParaEliminarPermanente.id_cuenta_banco);
+			if (result.success) {
+				toast.success(result.message ?? 'Cuenta bancaria eliminada permanentemente.');
+				confirmEliminarPermanenteOpen = false;
+				cuentaParaEliminarPermanente = null;
+				await fetchList();
+			} else {
+				throw new Error(result.message || 'No se pudo eliminar la cuenta bancaria.');
+			}
+		} finally {
+			eliminandoPermanente = false;
 		}
 	}
 
@@ -137,13 +241,25 @@
 		<div class="flex items-center gap-3">
 			<Landmark class="text-[#0f3b5e]" size={28} />
 			<div>
-				<h1 class="text-xl font-bold text-[#0f3b5e]">Cuentas Bancarias</h1>
-				<p class="text-sm text-slate-500">Autorización de cuentas bancarias usadas en los movimientos.</p>
+				<h1 class="text-xl font-bold text-[#0f3b5e]">{verEliminados ? 'Cuentas bancarias eliminadas' : 'Cuentas Bancarias'}</h1>
+				<p class="text-sm text-slate-500">
+					{verEliminados
+						? 'Cuentas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.'
+						: 'Autorización de cuentas bancarias usadas en los movimientos.'}
+				</p>
 			</div>
 		</div>
-		<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
-			<Plus size={16} /> Nueva Cuenta Bancaria
-		</button>
+		<div class="flex items-center gap-2">
+			<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+				{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
+				{verEliminados ? 'Volver' : 'Ver eliminados'}
+			</button>
+			{#if !verEliminados}
+				<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+					<Plus size={16} /> Nueva Cuenta Bancaria
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if loadError}
@@ -205,16 +321,25 @@
 					<p class="text-[11px] text-slate-400 mt-1">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
-					<button type="button" onclick={() => openEdit(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-						<Pencil size={16} />
-					</button>
-					<button type="button" onclick={() => handleDelete(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar" aria-label="Eliminar">
-						<Trash2 size={16} />
-					</button>
+					{#if verEliminados}
+						<button type="button" onclick={() => handleRestaurar(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-emerald-50 hover:text-emerald-600" title="Restaurar" aria-label="Restaurar">
+							<RotateCcw size={16} />
+						</button>
+						<button type="button" onclick={() => handleEliminarPermanente(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar permanentemente" aria-label="Eliminar permanentemente">
+							<Trash size={16} />
+						</button>
+					{:else}
+						<button type="button" onclick={() => openEdit(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+							<Pencil size={16} />
+						</button>
+						<button type="button" onclick={() => handleDelete(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Dar de baja" aria-label="Dar de baja">
+							<Trash2 size={16} />
+						</button>
+					{/if}
 				</div>
 			</div>
 		{:else}
-			<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron cuentas bancarias.'}</p>
+			<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : verEliminados ? 'No hay cuentas bancarias eliminadas.' : 'No se encontraron cuentas bancarias.'}</p>
 		{/each}
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
@@ -228,3 +353,31 @@
 </div>
 
 <CuentaBancoModal open={modalOpen} mode={modalMode} cuenta={editingItem} onClose={closeModal} onSaved={handleSaved} />
+
+<ConfirmModal
+	open={confirmDarDeBajaOpen}
+	title="Dar de baja cuenta bancaria"
+	message={cuentaParaDarDeBaja ? `¿Dar de baja la cuenta bancaria "${cuentaParaDarDeBaja.numero_cuenta} — ${cuentaParaDarDeBaja.titular_cuenta}"? Quedará marcada como inactiva.` : ''}
+	confirmLabel="Dar de baja"
+	onConfirm={confirmarDarDeBaja}
+	onClose={closeConfirmDarDeBaja}
+/>
+
+<ConfirmModal
+	open={confirmRestaurarOpen}
+	title="Restaurar cuenta bancaria"
+	danger={false}
+	message={cuentaParaRestaurar ? `¿Restaurar la cuenta bancaria "${cuentaParaRestaurar.numero_cuenta} — ${cuentaParaRestaurar.titular_cuenta}"? Volverá a aparecer en el listado.` : ''}
+	confirmLabel="Restaurar"
+	onConfirm={confirmarRestaurar}
+	onClose={closeConfirmRestaurar}
+/>
+
+<AdminConfirmModal
+	open={confirmEliminarPermanenteOpen}
+	title="Eliminar cuenta bancaria permanentemente"
+	message={cuentaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE la cuenta bancaria "${cuentaParaEliminarPermanente.numero_cuenta} — ${cuentaParaEliminarPermanente.titular_cuenta}" de la base de datos. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	confirmLabel="Eliminar permanentemente"
+	onConfirm={confirmarEliminarPermanente}
+	onClose={closeConfirmEliminarPermanente}
+/>

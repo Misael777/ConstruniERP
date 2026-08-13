@@ -15,8 +15,12 @@ import { getCentroCostoOptions } from '$lib/modules/transacciones/services/trans
 import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
-import { crearSolicitud, eliminarVentaCascade, darDeBajaVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+import { crearSolicitud, eliminarVentaCascade, darDeBajaVenta, restaurarVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 import { exportarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
+import { toast } from '$lib/stores/toast';
+import { verifyAdminCredentials } from '$lib/shared/adminAuth';
+import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
@@ -86,6 +90,15 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let ventas = $state<any[]>([]);
 	let isLoading = $state(true);
 	let errorMessage = $state<string | null>(null);
+
+	// A pedido del usuario: las ventas dadas de baja dejan de aparecer en el listado normal — solo un
+	// admin puede activar "Ver eliminados" (mismo patrón que Clientes/Proveedores/Centro de Costos,
+	// ver skill dar-de-baja-pattern).
+	let verEliminados = $state(false);
+	function toggleVerEliminados() {
+		verEliminados = !verEliminados;
+		fetchVentas();
+	}
 
 	let kpis = $state({
 		ventasCerradas: 0,
@@ -351,6 +364,10 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 				query = currentUserId ? query.eq('asesor_comercial_id', currentUserId) : query.eq('asesor_comercial_id', '00000000-0000-0000-0000-000000000000');
 			}
 
+			// A pedido del usuario: las ventas dadas de baja dejan de listarse por defecto — solo un
+			// admin puede activar "Ver eliminados" para verlas (ver toggleVerEliminados más abajo).
+			query = verEliminados ? query.eq('estado_proyecto', 'baja') : query.neq('estado_proyecto', 'baja');
+
 			const { data, error } = await query
 				.order('fecha_inicio_plan', { ascending: false })
 				.limit(100);
@@ -531,7 +548,6 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		isModalOpen = true;
 	}
 
-	let isDeleting = $state(false);
 	let isExporting = $state(false);
 
 	/** A pedido del usuario: el botón "Exportar" (antes 100% decorativo) ahora genera un .xlsx real
@@ -575,69 +591,121 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		openEditModal(e.detail.row);
 	}
 
-	/** A pedido del usuario: un no-administrador ya no puede eliminar una venta directo — se envía
-	 * una solicitud de aprobación (reemplaza al viejo ConfirmDeleteVentaModal de contraseña de
-	 * admin). Un admin sigue eliminando directo, con el mismo cascade de siempre
-	 * (eliminarVentaCascade en aprobaciones.service.ts). */
-	async function handleDeleteEvent(e: CustomEvent) {
-		const row = e.detail.row;
-		if (!row?.id) return;
-
-		if (!isAdmin()) {
-			const result = await crearSolicitud(supabase, {
-				tipoEntidad: 'proyecto',
-				idEntidad: row.id,
-				tipoAccion: 'eliminar',
-				descripcionEntidad: etiquetaVenta(row)
-			});
-			if (result.success) {
-				alert('No tienes permisos de administrador. Se envió una solicitud de eliminación para que un administrador la apruebe.');
-			} else {
-				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
-			}
-			return;
-		}
-
-		if (!confirm(`¿Eliminar la venta "${etiquetaVenta(row)}"? Esto borra en cascada su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.). Esta acción no se puede deshacer.`)) return;
-
-		isDeleting = true;
-		try {
-			const result = await eliminarVentaCascade(supabase, row.id);
-			if (!result.success) throw new Error(result.message);
-			fetchVentas();
-		} catch (err) {
-			console.error('[Ventas] Error eliminando venta:', err);
-			alert(`No se pudo eliminar el proyecto.\n${describeError(err)}`);
-		} finally {
-			isDeleting = false;
-		}
-	}
-
 	let isDandoDeBaja = $state(false);
 
-	/** Reemplaza a "Eliminar" en la tabla/modal una vez que la venta está cerrada — a diferencia de
-	 * eliminarVentaCascade, no borra nada: solo marca el proyecto como 'baja' (ver darDeBajaVenta en
-	 * aprobaciones.service.ts). No pasa por el flujo de solicitud de aprobación (no es un borrado). Si
-	 * el proyecto llegó a recibir algún ingreso, darDeBajaVenta devuelve en `data` la sugerencia de un
-	 * egreso de devolución (proyecto -> cliente) — se abre el popup de Transacciones para completarla
-	 * (ver handleTransaccionBajaSugerida), igual que el adelanto inicial al cerrar una venta. */
-	async function handleDarDeBajaEvent(e: CustomEvent) {
+	/** A pedido del usuario: "Eliminar" (una venta abierta) y "Dar de baja" (una venta cerrada) se
+	 * unifican en UNA sola acción reversible, sin importar el estado previo — darDeBajaVenta ya
+	 * soporta cualquier estado_proyecto de entrada. Ya no pasa por el flujo de solicitud de aprobación
+	 * (no es un borrado, mismo criterio que Clientes/Proveedores — cualquiera puede dar de baja SU
+	 * propia venta directo). ConfirmModal en vez de window.confirm nativo (puede fallar por ACL en
+	 * Tauri). Si el proyecto llegó a recibir algún ingreso, darDeBajaVenta devuelve en `data` la
+	 * sugerencia de un egreso de devolución (proyecto -> cliente) — se abre el popup de Transacciones
+	 * para completarla (ver handleTransaccionBajaSugerida), igual que el adelanto inicial al cerrar
+	 * una venta. El borrado PERMANENTE (eliminarVentaCascade) se movió a la sección "Eliminados"
+	 * (solo-admin, ver handleEliminarPermanente más abajo), siempre con contraseña. */
+	let confirmDarDeBajaOpen = $state(false);
+	let ventaParaDarDeBaja = $state<{ id: number; nombre: string } | null>(null);
+
+	function handleDarDeBajaEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
+		ventaParaDarDeBaja = { id: row.id, nombre: etiquetaVenta(row) };
+		confirmDarDeBajaOpen = true;
+	}
 
-		if (!confirm(`¿Dar de baja la venta "${etiquetaVenta(row)}"? Quedará marcada como inactiva.`)) return;
+	function closeConfirmDarDeBaja() {
+		confirmDarDeBajaOpen = false;
+		ventaParaDarDeBaja = null;
+	}
 
+	async function confirmarDarDeBaja() {
+		if (!ventaParaDarDeBaja) return;
 		isDandoDeBaja = true;
 		try {
-			const result = await darDeBajaVenta(supabase, row.id);
+			const result = await darDeBajaVenta(supabase, ventaParaDarDeBaja.id);
 			if (!result.success) throw new Error(result.message);
-			fetchVentas();
+			toast.success(`Venta "${ventaParaDarDeBaja.nombre}" dada de baja correctamente.`);
+			await fetchVentas();
 			if (result.data) await handleTransaccionBajaSugerida(result.data);
 		} catch (err) {
 			console.error('[Ventas] Error dando de baja la venta:', err);
-			alert(`No se pudo dar de baja la venta.\n${describeError(err)}`);
+			toast.error(`No se pudo dar de baja la venta. ${describeError(err)}`);
 		} finally {
 			isDandoDeBaja = false;
+			closeConfirmDarDeBaja();
+		}
+	}
+
+	// ── Sección "Eliminados" (solo-admin): restaurar (sin contraseña) y borrado permanente (SIEMPRE
+	// con contraseña de admin, sin excepción). ──
+
+	let confirmRestaurarOpen = $state(false);
+	let ventaParaRestaurar = $state<{ id: number; nombre: string } | null>(null);
+
+	function handleRestaurarEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
+		ventaParaRestaurar = { id: row.id, nombre: etiquetaVenta(row) };
+		confirmRestaurarOpen = true;
+	}
+	function closeConfirmRestaurar() {
+		confirmRestaurarOpen = false;
+		ventaParaRestaurar = null;
+	}
+	async function confirmarRestaurar() {
+		if (!ventaParaRestaurar) return;
+		try {
+			const result = await restaurarVenta(supabase, ventaParaRestaurar.id);
+			if (result.success) {
+				toast.success(`Venta "${ventaParaRestaurar.nombre}" restaurada correctamente.`);
+				await fetchVentas();
+			} else {
+				toast.error(`No se pudo restaurar la venta. ${result.message ?? ''}`);
+			}
+		} catch (err) {
+			toast.error(`No se pudo restaurar la venta. ${describeError(err)}`);
+		} finally {
+			closeConfirmRestaurar();
+		}
+	}
+
+	let confirmEliminarPermanenteOpen = $state(false);
+	let ventaParaEliminarPermanente = $state<{ id: number; nombre: string } | null>(null);
+	let eliminandoPermanente = $state(false);
+
+	function handleEliminarPermanenteEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
+		ventaParaEliminarPermanente = { id: row.id, nombre: etiquetaVenta(row) };
+		confirmEliminarPermanenteOpen = true;
+	}
+	function closeConfirmEliminarPermanente() {
+		if (eliminandoPermanente) return;
+		confirmEliminarPermanenteOpen = false;
+		ventaParaEliminarPermanente = null;
+	}
+
+	/** Igual patrón que el borrado masivo de Transacciones: verifyAdminCredentials re-autentica de
+	 * verdad contra Supabase Auth antes de ejecutar eliminarVentaCascade (el mismo borrado real de
+	 * siempre — presupuesto, cronograma, documentos, adelantos, etc.). */
+	async function confirmarEliminarPermanente(email: string, password: string) {
+		if (!ventaParaEliminarPermanente) return;
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+
+		eliminandoPermanente = true;
+		try {
+			const result = await eliminarVentaCascade(supabase, ventaParaEliminarPermanente.id);
+			if (result.success) {
+				toast.success(`Venta "${ventaParaEliminarPermanente.nombre}" eliminada permanentemente.`);
+				confirmEliminarPermanenteOpen = false;
+				ventaParaEliminarPermanente = null;
+				await fetchVentas();
+			} else {
+				throw new Error(result.message || 'No se pudo eliminar la venta.');
+			}
+		} finally {
+			eliminandoPermanente = false;
 		}
 	}
 
@@ -711,22 +779,37 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
 		<div class="flex flex-col">
 			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
-				<span class="font-bold text-slate-800 text-2xl">Venta cerrada</span>
-			</div>
-			<p class="text-sm text-slate-500">Consulta y administra todas tus ventas cerradas.</p>
-		</div>
-		
-		<div class="flex items-center gap-3">
-			<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
-				{#if isExporting}
-					<i class="fas fa-spinner fa-spin"></i> Exportando...
-				{:else}
-					<i class="fas fa-download"></i> Exportar
+				<span class="font-bold text-slate-800 text-2xl">{verEliminados ? 'Ventas eliminadas' : 'Venta cerrada'}</span>
+				{#if verEliminados}
+					<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 uppercase tracking-wide">Solo administradores</span>
 				{/if}
-			</button>
-			<button onclick={openModal} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
-				<i class="fas fa-plus"></i> Nueva venta
-			</button>
+			</div>
+			<p class="text-sm text-slate-500">
+				{verEliminados
+					? 'Ventas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.'
+					: 'Consulta y administra todas tus ventas cerradas.'}
+			</p>
+		</div>
+
+		<div class="flex items-center gap-3">
+			{#if isAdmin()}
+				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
+					{verEliminados ? 'Volver a Ventas' : 'Ver eliminados'}
+				</button>
+			{/if}
+			{#if !verEliminados}
+				<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+					{#if isExporting}
+						<i class="fas fa-spinner fa-spin"></i> Exportando...
+					{:else}
+						<i class="fas fa-download"></i> Exportar
+					{/if}
+				</button>
+				<button onclick={openModal} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
+					<i class="fas fa-plus"></i> Nueva venta
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -751,7 +834,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} on:editRow={handleEditEvent} on:deleteRow={handleDeleteEvent} on:darDeBaja={handleDarDeBajaEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} modoEliminados={verEliminados} on:editRow={handleEditEvent} on:darDeBaja={handleDarDeBajaEvent} on:restaurar={handleRestaurarEvent} on:eliminarPermanente={handleEliminarPermanenteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -801,4 +884,32 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
+/>
+
+<ConfirmModal
+	open={confirmDarDeBajaOpen}
+	title="Dar de baja la venta"
+	message={ventaParaDarDeBaja ? `¿Dar de baja la venta "${ventaParaDarDeBaja.nombre}"? Quedará marcada como inactiva.` : ''}
+	confirmLabel="Dar de baja"
+	onConfirm={confirmarDarDeBaja}
+	onClose={closeConfirmDarDeBaja}
+/>
+
+<ConfirmModal
+	open={confirmRestaurarOpen}
+	title="Restaurar venta"
+	danger={false}
+	message={ventaParaRestaurar ? `¿Restaurar la venta "${ventaParaRestaurar.nombre}"? Volverá a aparecer en el listado.` : ''}
+	confirmLabel="Restaurar"
+	onConfirm={confirmarRestaurar}
+	onClose={closeConfirmRestaurar}
+/>
+
+<AdminConfirmModal
+	open={confirmEliminarPermanenteOpen}
+	title="Eliminar venta permanentemente"
+	message={ventaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE la venta "${ventaParaEliminarPermanente.nombre}" y todo su proyecto asociado (presupuesto, cronograma, documentos, adelantos, etc.) de la base de datos. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	confirmLabel="Eliminar permanentemente"
+	onConfirm={confirmarEliminarPermanente}
+	onClose={closeConfirmEliminarPermanente}
 />

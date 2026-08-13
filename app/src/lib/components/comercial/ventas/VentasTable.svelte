@@ -37,7 +37,7 @@
 		{ id: 5, codigo: 'OBRA-NAI2_0126_LURI_Textil_Peru', clienteNombre: 'Textil Perú', proyecto: 'Planta Industrial Lurín', valor: 950000, tipo: 'Industrial', fecha: '18/01/2026', asesor: 'Juan López', asesorInitials: 'JL', comision: 95000, comisionPct: 10 },
 		{ id: 6, codigo: 'ONU6_0126_SURC_Constructora_Vega', clienteNombre: 'Constructora Vega', proyecto: 'Edificio Multifamiliar Surco', valor: 300000, tipo: 'Residencial', fecha: '20/01/2026', asesor: 'Maria Condori', asesorInitials: 'MC', comision: 30000, comisionPct: 10 },
 		{ id: 7, codigo: 'ONC2_0126_MOLI_Retail_Andes', clienteNombre: 'Retail Andes', proyecto: 'Local Comercial La Molina', valor: 250000, tipo: 'Comercial', fecha: '22/01/2026', asesor: 'Andrea Martínez', asesorInitials: 'AM', comision: 25000, comisionPct: 10 }
-	] } = $props<{ data?: any[] }>();
+	], modoEliminados = false } = $props<{ data?: any[]; modoEliminados?: boolean }>();
 
 	/** La columna "Proyecto" muestra el CÓDIGO del proyecto (`codigo`, recalculado en la página — ver
 	 * codigoProyecto.ts). `proyecto` (nombre_proyecto) queda solo como respaldo para ventas antiguas
@@ -221,15 +221,18 @@
 				</td>
 				<td class="px-5 py-4 text-center">
 					<div class="inline-flex gap-2 items-center justify-center">
-						<button onclick={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
-							<i class="fas fa-pen"></i>
-						</button>
-						{#if row.estado_proyecto === 'venta_cerrada'}
-							<button onclick={() => dispatch('darDeBaja', { row })} class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Dar de baja" aria-label="Dar de baja">
-								<i class="fas fa-trash"></i>
+						{#if modoEliminados}
+							<button onclick={() => dispatch('restaurar', { row })} class="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Restaurar" aria-label="Restaurar">
+								<i class="fas fa-rotate-left"></i>
 							</button>
-						{:else if row.estado_proyecto !== 'baja'}
-							<button onclick={() => dispatch('deleteRow', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Eliminar">
+							<button onclick={() => dispatch('eliminarPermanente', { row })} class="text-rose-500 hover:bg-rose-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Eliminar permanentemente" aria-label="Eliminar permanentemente">
+								<i class="fas fa-trash-alt"></i>
+							</button>
+						{:else}
+							<button onclick={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
+								<i class="fas fa-pen"></i>
+							</button>
+							<button onclick={() => dispatch('darDeBaja', { row })} class="text-red-500 hover:bg-red-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Dar de baja" aria-label="Dar de baja">
 								<i class="fas fa-trash"></i>
 							</button>
 						{/if}
@@ -272,15 +275,18 @@
 					<button onclick={() => dispatch('viewContrato', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
 						<i class="far fa-file-pdf"></i> Contrato
 					</button>
-					<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
-						<i class="fas fa-pen"></i>
-					</button>
-					{#if row.estado_proyecto === 'venta_cerrada'}
-						<button onclick={() => dispatch('darDeBaja', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja">
-							<i class="fas fa-trash"></i>
+					{#if modoEliminados}
+						<button onclick={() => dispatch('restaurar', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar">
+							<i class="fas fa-rotate-left"></i>
 						</button>
-					{:else if row.estado_proyecto !== 'baja'}
-						<button onclick={() => dispatch('deleteRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar">
+						<button onclick={() => dispatch('eliminarPermanente', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar permanentemente">
+							<i class="fas fa-trash-alt"></i>
+						</button>
+					{:else}
+						<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
+							<i class="fas fa-pen"></i>
+						</button>
+						<button onclick={() => dispatch('darDeBaja', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja">
 							<i class="fas fa-trash"></i>
 						</button>
 					{/if}
