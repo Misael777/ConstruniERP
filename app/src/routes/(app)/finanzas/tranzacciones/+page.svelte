@@ -44,18 +44,8 @@
 	};
 	const estadoBadgeClass: Record<string, string> = {
 		activo: 'bg-blue-100 text-blue-700',
-		anulado: 'bg-slate-200 text-slate-600',
-		// 'baja' no es una opción elegible en el formulario (ver estadoField en transaccion.config.ts) —
-		// solo la asigna darDeBajaTransaccionesDeCentro cuando se da de baja la venta dueña de esta
-		// transacción (ver darDeBajaVenta en aprobaciones.service.ts).
-		baja: 'bg-red-100 text-red-700'
+		anulado: 'bg-slate-200 text-slate-600'
 	};
-	// getOptionLabel cae al valor crudo para 'baja' porque a propósito no está en estadoField.options
-	// (ver arriba) — se traduce acá aparte, sin agregarlo a las opciones editables del formulario.
-	function estadoLabel(estado: string | null | undefined): string {
-		if (estado === 'baja') return 'Dado de baja';
-		return getOptionLabel(estadoField, estado);
-	}
 
 	let items = $state<Transaccion[]>([]);
 	let total = $state(0);
@@ -544,7 +534,7 @@
 						{/if}
 						{#if item.estado}
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-								{estadoLabel(item.estado)}
+								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						{/if}
 						{#if item.aprobado}

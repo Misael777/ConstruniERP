@@ -123,6 +123,11 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	// quedó creada de verdad (no es un pago/cobro pendiente por confirmar), se abre en modo edición
 	// simple, sin onConfirm ni lockedFields.
 	let transaccionModalOpen = $state(false);
+	// 'edit': el adelanto ya existe de verdad en la BD (handleTransaccionSugerida), solo se completa.
+	// 'create': el egreso de devolución al dar de baja una venta (handleTransaccionBajaSugerida) todavía
+	// NO se guardó — createTransaccion exige comprobante_url, que acá todavía no existe — el usuario
+	// debe adjuntarlo y confirmar antes de que se inserte de verdad.
+	let transaccionModalMode = $state<'create' | 'edit'>('edit');
 	let transaccionParaCompletar = $state<Transaccion | null>(null);
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 
@@ -144,6 +149,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	 * quede bien sin importar cuál lea el formulario. */
 	async function handleTransaccionSugerida(transaccion: Transaccion, contexto: { clienteNombre: string; proyectoCodigo: string }) {
 		transaccionParaCompletar = transaccion;
+		transaccionModalMode = 'edit';
 		transaccionModalOpen = true;
 
 		const origenId = transaccion.id_centro_costo_origen;
@@ -174,9 +180,85 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		};
 	}
 
+	/** A pedido explícito del usuario: dar de baja una venta CERRADA no da de baja sus transacciones —
+	 * en vez de eso, si el proyecto llegó a recibir algo, se sugiere un EGRESO de devolución
+	 * (proyecto -> cliente, ver darDeBajaVenta en aprobaciones.service.ts) que TODAVÍA NO existe en la
+	 * BD — a diferencia de handleTransaccionSugerida (adelanto, ya guardado, se abre en modo 'edit'),
+	 * este abre el popup en modo 'create' para que el usuario adjunte el comprobante (obligatorio,
+	 * createTransaccion lo exige) y confirme antes de que se inserte de verdad.
+	 *
+	 * Claves de dynamicOptions distintas a las del adelanto: TransaccionModal.svelte (optionsFor) resuelve
+	 * Origen/Destino según Tipo+Alcance — para Egreso/Externa, Origen lee `..._externo` (igual que
+	 * cualquier otro campo) pero Destino tiene una excepción propia y lee `..._destino_solo_centros`
+	 * (la lista "Centro de Costos" en sentido estricto, ver esDestinoEgresoExterna en optionsFor) — por
+	 * eso se escribe en esas dos claves, no en las que usa el adelanto (ingreso). */
+	async function handleTransaccionBajaSugerida(sugerida: {
+		idCentroCostoOrigen: number;
+		idCentroCostoDestino: number;
+		montoTotal: number;
+		descripcion: string;
+		clienteNombre: string;
+		proyectoNombre: string;
+	}) {
+		const hoy = new Date().toISOString().slice(0, 10);
+		transaccionParaCompletar = {
+			id_transaccion: 0,
+			id_centro_costo_origen: sugerida.idCentroCostoOrigen,
+			id_centro_costo_destino: sugerida.idCentroCostoDestino,
+			fecha: hoy,
+			id_nombre: null,
+			tipo_documento: null,
+			num_documento: null,
+			tipo_transaccion: null,
+			forma_pago: null,
+			descripcion: sugerida.descripcion,
+			tipo: 'egreso',
+			monto_total: sugerida.montoTotal,
+			medio_pago: null,
+			cuente_origen: null,
+			cuente_destino: null,
+			estado: 'activo',
+			usuario_registro: null,
+			created_at: hoy,
+			comprobante_url: null,
+			factura_url: null,
+			aprobado: false,
+			aprobado_por: null,
+			aprobado_en: null,
+			tipo_alcance: 'externa'
+		};
+		transaccionModalMode = 'create';
+		transaccionModalOpen = true;
+
+		const { idCentroCostoOrigen: origenId, idCentroCostoDestino: destinoId } = sugerida;
+		const { data: centros, error } = await supabase
+			.from('centro_costo')
+			.select('id_centro_costo, codigo')
+			.in('id_centro_costo', [origenId, destinoId]);
+		if (error) {
+			console.error('[Ventas] Error resolviendo códigos de centro de costo para el popup de Transacciones:', error);
+			return;
+		}
+
+		const codigoOrigen = centros?.find((c) => c.id_centro_costo === origenId)?.codigo ?? '';
+		const codigoDestino = centros?.find((c) => c.id_centro_costo === destinoId)?.codigo ?? '';
+
+		function conEtiquetaFresca(opciones: FieldOption[], id: number, label: string): FieldOption[] {
+			const idStr = String(id);
+			return [...opciones.filter((o) => o.value !== idStr), { value: idStr, label }];
+		}
+
+		transaccionDynamicOptions = {
+			...transaccionDynamicOptions,
+			id_centro_costo_origen_externo: conEtiquetaFresca(transaccionDynamicOptions.id_centro_costo_origen_externo ?? [], origenId, `${codigoOrigen} - ${sugerida.proyectoNombre}`),
+			id_centro_costo_destino_solo_centros: conEtiquetaFresca(transaccionDynamicOptions.id_centro_costo_destino_solo_centros ?? [], destinoId, `${codigoDestino} - ${sugerida.clienteNombre}`)
+		};
+	}
+
 	function closeTransaccionModal() {
 		transaccionModalOpen = false;
 		transaccionParaCompletar = null;
+		transaccionModalMode = 'edit';
 	}
 
 	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
@@ -535,7 +617,10 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	/** Reemplaza a "Eliminar" en la tabla/modal una vez que la venta está cerrada — a diferencia de
 	 * eliminarVentaCascade, no borra nada: solo marca el proyecto como 'baja' (ver darDeBajaVenta en
-	 * aprobaciones.service.ts). No pasa por el flujo de solicitud de aprobación (no es un borrado). */
+	 * aprobaciones.service.ts). No pasa por el flujo de solicitud de aprobación (no es un borrado). Si
+	 * el proyecto llegó a recibir algún ingreso, darDeBajaVenta devuelve en `data` la sugerencia de un
+	 * egreso de devolución (proyecto -> cliente) — se abre el popup de Transacciones para completarla
+	 * (ver handleTransaccionBajaSugerida), igual que el adelanto inicial al cerrar una venta. */
 	async function handleDarDeBajaEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
@@ -547,6 +632,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			const result = await darDeBajaVenta(supabase, row.id);
 			if (!result.success) throw new Error(result.message);
 			fetchVentas();
+			if (result.data) await handleTransaccionBajaSugerida(result.data);
 		} catch (err) {
 			console.error('[Ventas] Error dando de baja la venta:', err);
 			alert(`No se pudo dar de baja la venta.\n${describeError(err)}`);
@@ -710,7 +796,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
      datos que el cierre de venta no pide) -->
 <TransaccionModal
 	open={transaccionModalOpen}
-	mode="edit"
+	mode={transaccionModalMode}
 	transaccion={transaccionParaCompletar}
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}

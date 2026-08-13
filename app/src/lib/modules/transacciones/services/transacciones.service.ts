@@ -305,26 +305,6 @@ export async function desaprobarTransaccion(client: SupabaseClient, id: number, 
 	return { success: true, message: 'Aprobación retirada', data: data as Transaccion };
 }
 
-/** Da de baja (estado='baja') TODAS las transacciones (como origen o destino) de los centros de costo
- * en `idsCentroCosto` — usado por darDeBajaVenta (aprobaciones.service.ts) cuando se da de baja una
- * venta: sus transacciones ya no deben tomarse en los cálculos de saldo/monto (que solo cuentan las de
- * estado='activo', ver getSaldosPorCentroCosto/getMontoRecibidoPorCentroCosto/etc. en
- * centroCostos.service.ts) ni aparecer como vigentes en el listado de Transacciones. A diferencia de
- * 'anulado' (que un usuario elige a mano para una transacción puntual, ver estadoField en
- * transaccion.config.ts), 'baja' es exclusivo de este flujo — no está entre las opciones del select de
- * Estado del formulario, para que no se pueda asignar/quitar a mano. Nunca lanza: es secundario a dar
- * de baja la venta en sí. */
-export async function darDeBajaTransaccionesDeCentro(client: SupabaseClient, idsCentroCosto: number[]): Promise<void> {
-	if (idsCentroCosto.length === 0) return;
-	const { error } = await client
-		.from(TABLE_NAME)
-		.update({ estado: 'baja' })
-		.or(`id_centro_costo_origen.in.(${idsCentroCosto.join(',')}),id_centro_costo_destino.in.(${idsCentroCosto.join(',')})`);
-	if (error) {
-		console.error('[transacciones.service] No se pudieron dar de baja las transacciones de los centros de costo:', error);
-	}
-}
-
 export async function getTransDetalles(client: SupabaseClient, idTransaccion: number): Promise<TransDetalle[]> {
 	const { data, error } = await client
 		.from(DETALLE_TABLE)

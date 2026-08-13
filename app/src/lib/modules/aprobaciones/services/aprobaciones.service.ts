@@ -11,8 +11,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
-import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
-import { createTransaccion, darDeBajaTransaccionesDeCentro, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 
@@ -252,6 +252,19 @@ export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: n
 	}
 }
 
+/** Datos sugeridos para el egreso de devolución que se le propone al usuario al dar de baja una venta
+ * cerrada (ver darDeBajaVenta) — NO es una transacción ya creada: el llamador (comercial/ventas/
+ * +page.svelte) los usa para abrir TransaccionModal en modo 'create' ya prellenado, así el usuario
+ * adjunta el comprobante correspondiente y completa el resto antes de guardar de verdad. */
+export interface TransaccionSugeridaBaja {
+	idCentroCostoOrigen: number;
+	idCentroCostoDestino: number;
+	montoTotal: number;
+	descripcion: string;
+	clienteNombre: string;
+	proyectoNombre: string;
+}
+
 /** Da de baja una venta ya cerrada (estado_proyecto: 'venta_cerrada' -> 'baja') — a diferencia de
  * eliminarVentaCascade, no borra ningún dato: solo marca el proyecto como inactivo, reemplazando al
  * botón de Eliminar en la tabla/modal una vez que la venta está cerrada. `estado_proyecto` es VARCHAR
@@ -262,8 +275,24 @@ export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: n
  * varias) se da de baja junto con el proyecto (ver darDeBajaCentroCostoDeEntidad en
  * centroCostos.service.ts). Es secundario al cambio de estado del proyecto: si falla, se loguea pero
  * no tumba una baja que ya se aplicó correctamente — mismo criterio que actualizarSaldoCentroCostoProyecto
- * en cerrarVentaAprobada. */
-export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number): Promise<ServiceResult> {
+ * en cerrarVentaAprobada.
+ *
+ * A pedido explícito del usuario: dar de baja una venta cerrada NO da de baja sus transacciones — las
+ * ya registradas quedan intactas, activas, contando igual en los cálculos. En vez de eso, si el
+ * proyecto llegó a recibir algún ingreso (ver getMontoRecibidoPorCentroCosto), se devuelve en `data`
+ * la sugerencia de un EGRESO de devolución — origen: el centro de costo del PROYECTO, destino: el
+ * centro de costo del CLIENTE, por el monto realmente recibido — para que el usuario la complete y
+ * confirme en el popup de Transacciones (mismo patrón que el adelanto inicial, ver
+ * onTransaccionSugerida en NuevaVentaModal.svelte). */
+export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number): Promise<ServiceResult & { data?: TransaccionSugeridaBaja }> {
+	const { data: proyecto, error: proyectoError } = await client
+		.from('proyecto')
+		.select('id_cliente, nombre_proyecto, cliente:id_cliente(nombre)')
+		.eq('id_proyecto', idProyecto)
+		.maybeSingle();
+	if (proyectoError) return { success: false, message: proyectoError.message };
+	if (!proyecto) return { success: false, message: 'No se encontró la venta.' };
+
 	const { error } = await client
 		.from('proyecto')
 		.update({ estado_proyecto: 'baja' })
@@ -275,17 +304,32 @@ export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number)
 		console.warn(`[aprobaciones.service] La venta #${idProyecto} se dio de baja, pero no se pudo dar de baja su centro de costo: ${centroResult.message}`);
 	}
 
-	// A pedido del usuario: dar de baja una venta también da de baja TODAS sus transacciones (para que
-	// dejen de tomarse en los cálculos de saldo/monto y se muestren como "Dado de baja" en el listado
-	// de Transacciones, ver darDeBajaTransaccionesDeCentro) — el centro de costo del proyecto ya quedó
-	// 'baja' arriba, pero eso solo afecta al CENTRO, no a sus transacciones ya registradas.
 	const { data: centros } = await client.from('centro_costo').select('id_centro_costo').eq('id_proyecto', idProyecto);
-	const idsCentro = (centros ?? []).map((c: any) => c.id_centro_costo);
-	if (idsCentro.length > 0) {
-		await darDeBajaTransaccionesDeCentro(client, idsCentro);
+	const idCentroProyecto = centros?.[0]?.id_centro_costo ?? null;
+	if (!idCentroProyecto) return { success: true };
+
+	const montos = await getMontoRecibidoPorCentroCosto(client, [idCentroProyecto]);
+	const montoRecibido = montos[idCentroProyecto] ?? 0;
+	if (montoRecibido <= 0) return { success: true };
+
+	const clienteNombre = (proyecto as any).cliente?.nombre || `Cliente #${proyecto.id_cliente}`;
+	const idCentroCliente = await getOrCrearCentroCostoParaEntidad(client, 'cliente', proyecto.id_cliente, clienteNombre);
+	if (!idCentroCliente) {
+		console.warn(`[aprobaciones.service] La venta #${idProyecto} se dio de baja, pero no se pudo obtener el centro de costo del cliente para sugerir el egreso de devolución.`);
+		return { success: true };
 	}
 
-	return { success: true };
+	return {
+		success: true,
+		data: {
+			idCentroCostoOrigen: idCentroProyecto,
+			idCentroCostoDestino: idCentroCliente,
+			montoTotal: montoRecibido,
+			descripcion: `Baja de venta - ${proyecto.nombre_proyecto} (proyecto #${idProyecto})`,
+			clienteNombre,
+			proyectoNombre: proyecto.nombre_proyecto
+		}
+	};
 }
 
 export interface ClienteDependencias {
