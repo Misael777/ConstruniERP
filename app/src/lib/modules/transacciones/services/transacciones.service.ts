@@ -110,6 +110,16 @@ const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) =>
 const BLOQUEADO_POR_APROBACION =
 	'No se puede modificar/eliminar: el comprobante ya fue aprobado por un administrador. Solo un administrador puede hacerlo.';
 
+/** `estado` ya no es un <select> manual en el formulario (a pedido del usuario, ver TransaccionModal.svelte)
+ * — se calcula solo acá: 'consulta' mientras el Alcance sea Interna (mismo comportamiento que antes
+ * forzaba el formulario), 'anulado' se preserva tal cual (solo anularTransaccion/reactivarTransaccion
+ * lo cambian), y 'activo' en cualquier otro caso. */
+function resolveEstadoTransaccion(tipoAlcance: string, estadoActual: string | null | undefined): string {
+	if (tipoAlcance === 'interna') return 'consulta';
+	if (estadoActual === 'anulado') return 'anulado';
+	return 'activo';
+}
+
 export async function getTransacciones(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<Transaccion>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -193,7 +203,9 @@ export async function createTransaccion(
 		comprobante_url: payload.comprobante_url as string,
 		// factura_url tampoco vive en FIELDS_CONFIG (mismo criterio que comprobante_url) — a diferencia
 		// de ese, es opcional, así que null es un valor válido, no solo string.
-		factura_url: (payload.factura_url as string | null) ?? null
+		factura_url: (payload.factura_url as string | null) ?? null,
+		// estado tampoco vive en FIELDS_CONFIG (showInForm:false) — ver resolveEstadoTransaccion.
+		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
@@ -216,7 +228,7 @@ export async function updateTransaccion(
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
-	const { data: actual } = await client.from(TABLE_NAME).select('aprobado').eq(PK_COLUMN, id).single();
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado && !esAdmin) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
@@ -224,6 +236,7 @@ export async function updateTransaccion(
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	updateData.comprobante_url = payload.comprobante_url as string;
 	updateData.factura_url = (payload.factura_url as string | null) ?? null;
+	updateData.estado = resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), actual?.estado);
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
@@ -303,6 +316,44 @@ export async function desaprobarTransaccion(client: SupabaseClient, id: number, 
 		.single();
 	if (error) return { success: false, message: `No se pudo quitar la aprobación: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 	return { success: true, message: 'Aprobación retirada', data: data as Transaccion };
+}
+
+/**
+ * Anula la transacción (estado='anulado') — a diferencia de deleteTransaccion, NO borra la fila,
+ * queda visible con el badge "Anulada". Si es el respaldo de un cobro/pago ya confirmado, ese
+ * cobro/pago ya no debe seguir contando como probado: se revierte a 'programado' (mismo criterio que
+ * deleteTransaccion) y su cuenta se recalcula. Solo un administrador puede llamar a esto (UI-gated,
+ * ver TransaccionModal.svelte).
+ */
+export async function anularTransaccion(client: SupabaseClient, id: number, esAdmin: boolean): Promise<ServiceResult<Transaccion>> {
+	if (!esAdmin) return { success: false, message: 'Solo un administrador puede anular una transacción.' };
+
+	const { data: cobros } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id);
+	for (const cobro of (cobros ?? []) as any[]) {
+		await client.from('cobros').update({ estado_cobro: 'programado', id_transaccion: null }).eq('id_cobro', cobro.id_cobro);
+		await recalcularCuentaCobrar(client, cobro.id_cuenta_cobrar);
+	}
+
+	const { data: pagos } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id);
+	for (const pago of (pagos ?? []) as any[]) {
+		await client.from('pagos').update({ estado_pago: 'programado', id_transaccion: null }).eq('id_pago', pago.id_pago);
+		await recalcularCuentaPagar(client, pago.id_cuenta_pagar);
+	}
+
+	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'anulado' }).eq(PK_COLUMN, id).select('*').single();
+	if (error) return { success: false, message: `No se pudo anular la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	return { success: true, message: 'Transacción anulada', data: data as Transaccion };
+}
+
+/** Reactiva una transacción anulada (por si se anuló por error) — vuelve a 'activo'. No restaura
+ * ningún pago/cobro que se haya revertido al anular (habría que confirmarlo de nuevo a mano). Solo un
+ * administrador puede llamar a esto. */
+export async function reactivarTransaccion(client: SupabaseClient, id: number, esAdmin: boolean): Promise<ServiceResult<Transaccion>> {
+	if (!esAdmin) return { success: false, message: 'Solo un administrador puede reactivar una transacción anulada.' };
+
+	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'activo' }).eq(PK_COLUMN, id).select('*').single();
+	if (error) return { success: false, message: `No se pudo reactivar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	return { success: true, message: 'Transacción reactivada', data: data as Transaccion };
 }
 
 export async function getTransDetalles(client: SupabaseClient, idTransaccion: number): Promise<TransDetalle[]> {
@@ -570,6 +621,14 @@ const MEDIO_PAGO_OPTIONS = FIELDS_CONFIG.find((f) => f.key === 'medio_pago')!.op
 function codigoPorLabel(label: string | null | undefined): string | null {
 	if (!label) return null;
 	return MEDIO_PAGO_OPTIONS.find((o) => o.label === label)?.value ?? null;
+}
+
+/** Inverso de codigoPorLabel: traduce el código VARCHAR(2) de transaccion.medio_pago a su label en
+ * texto libre. Usado por registrarPagoDesdeTransaccion (cuentasPagar.service.ts) al insertar el pago
+ * generado desde una transacción vinculada a mano a una Cuenta por Pagar existente. */
+export function labelPorCodigoMedioPago(codigo: string | null | undefined): string | null {
+	if (!codigo) return null;
+	return MEDIO_PAGO_OPTIONS.find((o) => o.value === codigo)?.label ?? null;
 }
 
 /**

@@ -4,7 +4,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
-	import { createTransaccion, updateTransaccion, aprobarTransaccion, desaprobarTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { createTransaccion, updateTransaccion, aprobarTransaccion, desaprobarTransaccion, anularTransaccion, reactivarTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
@@ -13,6 +13,8 @@
 	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/edgeFunctionClient';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 	let {
 		open = false,
@@ -68,8 +70,6 @@
 	const numDocumentoField = otherFields.find((f) => f.key === 'num_documento')!;
 	const formaPagoField = otherFields.find((f) => f.key === 'forma_pago')!;
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
-	const numeroCuotaField = otherFields.find((f) => f.key === 'tipo_transaccion')!;
-	const estadoField = otherFields.find((f) => f.key === 'estado')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
 	function buildInitialValues(): Record<string, string> {
@@ -126,6 +126,81 @@
 	let fechaLocked = $state(false);
 	let montoLocked = $state(false);
 
+	let anulando = $state(false);
+
+	// Buscador "Vincular con Cuenta por Pagar/Cobrar" (a pedido del usuario, reemplaza al viejo campo
+	// de texto "Número de Cuota", sin uso real fuera del flujo de confirmar un pago). Solo aplica al
+	// alta libre de una sola transacción (mode==='create' && !onConfirm && no está en la cola de
+	// varios comprobantes) — ver condición de render en el template. registrarPagoDesdeTransaccion/
+	// registrarCobroDesdeTransaccion (cuentasPagar/cuentasCobrar.service.ts) hacen el trabajo real:
+	// crean la transacción Y un pago/cobro 'pagado'/'cobrado' ya vinculado, en el mismo paso.
+	type CuentaVinculadaOpcion = { id: number; label: string; saldo: number };
+	let cuentaVinculadaBusqueda = $state('');
+	let cuentaVinculadaResultados = $state<CuentaVinculadaOpcion[]>([]);
+	let cuentaVinculadaSeleccionada = $state<CuentaVinculadaOpcion | null>(null);
+	let cuentaVinculadaBuscando = $state(false);
+	let cuentaVinculadaAbierta = $state(false);
+	let cuentaVinculadaBuscarTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	function limpiarCuentaVinculada() {
+		cuentaVinculadaSeleccionada = null;
+		cuentaVinculadaBusqueda = '';
+		cuentaVinculadaResultados = [];
+	}
+
+	function seleccionarCuentaVinculada(opcion: CuentaVinculadaOpcion) {
+		cuentaVinculadaSeleccionada = opcion;
+		cuentaVinculadaAbierta = false;
+		cuentaVinculadaBusqueda = '';
+		cuentaVinculadaResultados = [];
+	}
+
+	async function ejecutarBusquedaCuentaVinculada(query: string) {
+		cuentaVinculadaBuscando = true;
+		try {
+			if (formValues.tipo === 'egreso') {
+				const items = await buscarCuentasPagarVinculables(supabase, query);
+				cuentaVinculadaResultados = items.map((it) => ({
+					id: it.id_cuenta_pagar,
+					label: `${it.proveedorNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
+					saldo: it.saldo_pendiente
+				}));
+			} else if (formValues.tipo === 'ingreso') {
+				const items = await buscarCuentasCobrarVinculables(supabase, query);
+				cuentaVinculadaResultados = items.map((it) => ({
+					id: it.id_cuenta_cobrar,
+					label: `${it.clienteNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
+					saldo: it.saldo_pendiente
+				}));
+			} else {
+				cuentaVinculadaResultados = [];
+			}
+		} catch (err) {
+			console.warn('[TransaccionModal] No se pudo buscar cuentas para vincular:', err);
+			cuentaVinculadaResultados = [];
+		} finally {
+			cuentaVinculadaBuscando = false;
+		}
+	}
+
+	function onCuentaVinculadaFocus() {
+		cuentaVinculadaAbierta = true;
+		if (cuentaVinculadaResultados.length === 0 && !cuentaVinculadaBuscando) ejecutarBusquedaCuentaVinculada(cuentaVinculadaBusqueda);
+	}
+
+	function onCuentaVinculadaInput(e: Event) {
+		cuentaVinculadaBusqueda = (e.target as HTMLInputElement).value;
+		cuentaVinculadaAbierta = true;
+		if (cuentaVinculadaBuscarTimeout) clearTimeout(cuentaVinculadaBuscarTimeout);
+		cuentaVinculadaBuscarTimeout = setTimeout(() => ejecutarBusquedaCuentaVinculada(cuentaVinculadaBusqueda), 300);
+	}
+
+	// Delay antes de cerrar el dropdown al perder foco — sin esto, el blur cierra la lista ANTES de
+	// que el click en un resultado llegue a registrarse.
+	function onCuentaVinculadaBlur() {
+		setTimeout(() => (cuentaVinculadaAbierta = false), 150);
+	}
+
 	// Cola de comprobantes cuando se eligen VARIOS archivos a la vez en modo 'create' (sin onConfirm) —
 	// a pedido del usuario, cada uno se revisa/edita con las flechas de "Otros campos (opcionales)" y
 	// se guarda como una transacción independiente (ver handleSubmit). colaDrafts guarda el formulario
@@ -156,6 +231,7 @@
 			montoLocked = false;
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
+			limpiarCuentaVinculada();
 		}
 	});
 
@@ -235,6 +311,7 @@
 			comprobanteUrl = null;
 			comprobanteError = '';
 			comprobanteFile = files[0];
+			limpiarCuentaVinculada();
 			runOcr(files[0], 0);
 			return;
 		}
@@ -415,6 +492,50 @@
 		}
 	}
 
+	async function handleAnular() {
+		if (!transaccion) return;
+		if (
+			!confirm(
+				'¿Anular esta transacción? Si respalda un pago o cobro ya confirmado, ese pago/cobro volverá a quedar programado (sin transacción de respaldo) y la cuenta se recalculará.'
+			)
+		)
+			return;
+		anulando = true;
+		try {
+			const result = await anularTransaccion(supabase, transaccion.id_transaccion, isAdmin());
+			if (result.success) {
+				toast.success(result.message);
+				onSaved();
+				onClose();
+			} else {
+				toast.error(result.message);
+			}
+		} catch (err: any) {
+			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+		} finally {
+			anulando = false;
+		}
+	}
+
+	async function handleReactivar() {
+		if (!transaccion) return;
+		anulando = true;
+		try {
+			const result = await reactivarTransaccion(supabase, transaccion.id_transaccion, isAdmin());
+			if (result.success) {
+				toast.success(result.message);
+				onSaved();
+				onClose();
+			} else {
+				toast.error(result.message);
+			}
+		} catch (err: any) {
+			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+		} finally {
+			anulando = false;
+		}
+	}
+
 	function formatFecha(value: string | null | undefined): string {
 		if (!value) return '—';
 		const date = new Date(value);
@@ -452,13 +573,17 @@
 			// cambio para no dejar guardado un código que ya no es una opción válida.
 			formValues.tipo_documento = '';
 			// Interna = movimiento entre centros de costo propios -> Tipo se fuerza a 'transferencia' y
-			// Estado a 'consulta', ambos quedan bloqueados (ver camposBloqueadosPorInterna en el
-			// template); Número de Cuota y Forma de Pago también se bloquean, pero sin forzarles valor.
-			// Al volver a Externa se desbloquea todo, dejando los valores como estén.
+			// Estado a 'consulta' (ver estadoActual más abajo), ambos quedan bloqueados (ver
+			// camposBloqueadosPorInterna en el template); Forma de Pago también se bloquea, sin forzarle
+			// valor. Al volver a Externa se desbloquea todo, dejando los valores como estén.
 			if (rawValue === 'interna') {
 				formValues.tipo = 'transferencia';
-				formValues.estado = 'consulta';
 			}
+		}
+		if (key === 'tipo') {
+			cuentaVinculadaSeleccionada = null;
+			cuentaVinculadaBusqueda = '';
+			cuentaVinculadaResultados = [];
 		}
 		revalidate();
 	}
@@ -470,6 +595,12 @@
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(confirmTitle ?? (mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
 	const bloqueadoPorInterna = $derived(formValues.tipo_alcance === 'interna');
+	// Estado ya no es un <select> manual (ver transaccion.config.ts) — se calcula acá para el badge:
+	// 'consulta' mientras el Alcance sea Interna (preview inmediato, antes de guardar — el backend
+	// aplica exactamente la misma regla en resolveEstadoTransaccion), si no, el valor persistido
+	// (anulado se preserva hasta que un admin lo reactiva; una transacción nueva todavía sin guardar
+	// se asume 'activo').
+	const estadoActual = $derived(formValues.tipo_alcance === 'interna' ? 'consulta' : (transaccion?.estado ?? 'activo'));
 	// Cuenta Destino/Origen se vuelven un <select> de cuentas bancarias autorizadas (en vez de texto
 	// libre) en dos casos: (1) transacción Externa: en Ingreso, el dinero entrante debe ir a una
 	// cuenta bancaria propia ya registrada (Destino); en Egreso, el dinero saliente debe salir de una
@@ -595,6 +726,24 @@
 				result = await onConfirm(payload);
 			} else if (mode === 'edit' && transaccion) {
 				result = await updateTransaccion(supabase, transaccion.id_transaccion, payload, isAdmin());
+			} else if (cuentaVinculadaSeleccionada && colaArchivos.length <= 1 && formValues.tipo === 'egreso') {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await registrarPagoDesdeTransaccion(
+					supabase,
+					cuentaVinculadaSeleccionada.id,
+					payload,
+					userData?.user?.email ?? null,
+					permisosState.userName || null
+				);
+			} else if (cuentaVinculadaSeleccionada && colaArchivos.length <= 1 && formValues.tipo === 'ingreso') {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await registrarCobroDesdeTransaccion(
+					supabase,
+					cuentaVinculadaSeleccionada.id,
+					payload,
+					userData?.user?.email ?? null,
+					permisosState.userName || null
+				);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
 				result = await createTransaccion(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null);
@@ -1000,7 +1149,65 @@
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 									{@render fieldBlock(formaPagoField)}
 									{@render fieldBlock(medioPagoField)}
-									{@render fieldBlock(numeroCuotaField)}
+									{#if mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso')}
+										<div class="relative">
+											<label for="tr-cuenta-vinculada" class="block text-sm font-bold text-[#0f3b5e] mb-1">
+												Vincular con Cuenta por {formValues.tipo === 'egreso' ? 'Pagar' : 'Cobrar'}
+											</label>
+											{#if cuentaVinculadaSeleccionada}
+												<div class="flex items-center justify-between gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm">
+													<div class="min-w-0">
+														<p class="font-medium text-blue-800 truncate">{cuentaVinculadaSeleccionada.label}</p>
+														<p class="text-xs text-blue-600">Saldo: {formatCurrency(cuentaVinculadaSeleccionada.saldo)}</p>
+													</div>
+													<button
+														type="button"
+														onclick={limpiarCuentaVinculada}
+														class="shrink-0 p-1 rounded-full text-blue-600 hover:bg-blue-100"
+														aria-label="Quitar vínculo"
+														title="Quitar vínculo"
+													>
+														<X size={14} />
+													</button>
+												</div>
+											{:else}
+												<input
+													id="tr-cuenta-vinculada"
+													type="text"
+													value={cuentaVinculadaBusqueda}
+													oninput={onCuentaVinculadaInput}
+													onfocus={onCuentaVinculadaFocus}
+													onblur={onCuentaVinculadaBlur}
+													placeholder="Buscar proveedor/cliente, N° doc. o ID…"
+													autocomplete="off"
+													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+												/>
+												{#if cuentaVinculadaAbierta}
+													<div class="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+														{#if cuentaVinculadaBuscando}
+															<p class="px-3 py-2 text-xs text-slate-400 flex items-center gap-1.5">
+																<Loader2 size={12} class="animate-spin" /> Buscando…
+															</p>
+														{:else if cuentaVinculadaResultados.length === 0}
+															<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas con saldo pendiente que coincidan.</p>
+														{:else}
+															{#each cuentaVinculadaResultados as opcion (opcion.id)}
+																<button
+																	type="button"
+																	onclick={() => seleccionarCuentaVinculada(opcion)}
+																	class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0"
+																>
+																	<p class="font-medium text-slate-700 truncate">{opcion.label}</p>
+																	<p class="text-xs text-slate-400">Saldo: {formatCurrency(opcion.saldo)}</p>
+																</button>
+															{/each}
+														{/if}
+													</div>
+												{/if}
+												<p class="mt-1 text-xs text-slate-400">Opcional — registra un pago/cobro real contra esa cuenta.</p>
+											{/if}
+										</div>
+									{/if}
 								</div>
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 									<div class="sm:col-span-2">
@@ -1016,7 +1223,44 @@
 										></textarea>
 										{#if fieldErrors.descripcion}<p class="mt-1 text-xs text-red-600">{fieldErrors.descripcion}</p>{/if}
 									</div>
-									{@render fieldBlock(estadoField)}
+									<div>
+										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Estado</span>
+										{#if estadoActual === 'anulado'}
+											<span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+												<ShieldOff size={12} /> Anulada
+											</span>
+											{#if isAdmin() && mode === 'edit'}
+												<button
+													type="button"
+													onclick={handleReactivar}
+													disabled={anulando}
+													class="block mt-1 text-xs text-blue-600 hover:underline disabled:opacity-50"
+												>
+													{anulando ? 'Reactivando…' : 'Reactivar'}
+												</button>
+											{/if}
+										{:else if estadoActual === 'consulta'}
+											<span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+												Consulta (interna)
+											</span>
+										{:else}
+											<span
+												class={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${transaccion?.aprobado ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
+											>
+												{transaccion?.aprobado ? 'Aprobada' : 'Pendiente de aprobación'}
+											</span>
+											{#if isAdmin() && mode === 'edit'}
+												<button
+													type="button"
+													onclick={handleAnular}
+													disabled={anulando}
+													class="block mt-1 text-xs text-red-600 hover:underline disabled:opacity-50"
+												>
+													{anulando ? 'Anulando…' : 'Anular esta transacción'}
+												</button>
+											{/if}
+										{/if}
+									</div>
 								</div>
 
 								<div>

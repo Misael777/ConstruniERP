@@ -23,7 +23,8 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as PAGO_FIELDS
 } from '../config/pago.config';
-import { construirPayloadTransaccionPorPago, createTransaccion } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorPago, createTransaccion, labelPorCodigoMedioPago } from '../../transacciones/services/transacciones.service';
+import type { Transaccion } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaPagar {
 	id_cuenta_pagar: number;
@@ -683,6 +684,102 @@ export async function confirmarPagoPagado(
 	await recalcularCuentaPagar(client, data.id_cuenta_pagar);
 
 	return { success: true, message: 'Pago confirmado como Pagado', data: data as Pago };
+}
+
+export interface CuentaPagarVinculable {
+	id_cuenta_pagar: number;
+	num_documento: string | null;
+	saldo_pendiente: number;
+	proveedorNombre: string;
+}
+
+/**
+ * Busca cuentas por pagar con saldo pendiente para vincular una transacción manual (ver
+ * TransaccionModal.svelte, buscador "Vincular con Cuenta por Pagar" del alta libre de Transacciones —
+ * reemplaza al viejo campo de texto "Número de Cuota", que no tenía uso real fuera del flujo de
+ * confirmar un pago). Trae todas las cuentas activas con saldo pendiente (mismo criterio de volumen
+ * que getTransaccionesCalendario: instantáneo al tamaño actual del ERP) y filtra en el cliente por
+ * proveedor/N° de documento/id, porque el proveedor vive en una tabla unida y PostgREST no permite un
+ * OR de texto libre entre columnas de dos tablas distintas sin un RPC aparte.
+ */
+export async function buscarCuentasPagarVinculables(client: SupabaseClient, query: string): Promise<CuentaPagarVinculable[]> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_pagar, num_documento, saldo_pendiente, proveedor(razon_social)')
+		.eq('activo', true)
+		.gt('saldo_pendiente', 0)
+		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+	if (error) throw error;
+
+	const items: CuentaPagarVinculable[] = (data ?? []).map((row: any) => ({
+		id_cuenta_pagar: row.id_cuenta_pagar as number,
+		num_documento: row.num_documento as string | null,
+		saldo_pendiente: Number(row.saldo_pendiente),
+		proveedorNombre: row.proveedor?.razon_social ?? `Proveedor #${row.id_cuenta_pagar}`
+	}));
+
+	const q = query.trim().toLowerCase();
+	if (!q) return items.slice(0, 8);
+	return items
+		.filter(
+			(it) =>
+				it.proveedorNombre.toLowerCase().includes(q) ||
+				(it.num_documento ?? '').toLowerCase().includes(q) ||
+				String(it.id_cuenta_pagar).includes(q)
+		)
+		.slice(0, 8);
+}
+
+/**
+ * Crea la transacción Y, en el mismo paso, un pago ya 'pagado' vinculado a ella contra una cuenta por
+ * pagar existente — usado desde el buscador "Vincular con Cuenta por Pagar" del alta libre de
+ * Transacciones. A diferencia de createPago + confirmarPagoPagado (pensados para cuando el pago se
+ * registra ANTES de tener la transacción de respaldo, quedando 'programado' mientras tanto), acá el
+ * usuario ya completó todos los datos de la transacción en el mismo formulario, así que el pago se
+ * genera directo en 'pagado', sin pasar por ese estado intermedio. Mismo chequeo de monto disponible
+ * que createPago, para no dejar que la suma de pagos supere el Monto Comprometido de la cuenta.
+ */
+export async function registrarPagoDesdeTransaccion(
+	client: SupabaseClient,
+	idCuentaPagar: number,
+	transaccionPayload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	const monto = Number(transaccionPayload.monto_total);
+	const disponible = await montoDisponible(client, idCuentaPagar);
+	if (monto - disponible > 0.01) {
+		return {
+			success: false,
+			message: `No se puede vincular: el monto (${formatCurrency(monto)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}).`
+		};
+	}
+
+	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
+	if (!transResult.success || !transResult.data) {
+		return { success: false, message: transResult.message, errors: transResult.errors };
+	}
+
+	const { error: pagoError } = await client.from(PAGO_TABLE).insert({
+		[PARENT_FK_COLUMN]: idCuentaPagar,
+		monto,
+		fecha_pago: transaccionPayload.fecha,
+		medio_pago: labelPorCodigoMedioPago(transaccionPayload.medio_pago as string | null),
+		referencia: (transaccionPayload.descripcion as string | null) ?? null,
+		usuario_registro: usuarioRegistro,
+		estado_pago: 'pagado',
+		id_transaccion: transResult.data.id_transaccion
+	});
+	if (pagoError) {
+		return {
+			success: false,
+			message: `La transacción se creó (#${transResult.data.id_transaccion}), pero no se pudo registrar el pago contra la cuenta: ${translateSupabaseError(pagoError, PAGO_FIELDS)}. Revisa la cuenta manualmente.`
+		};
+	}
+
+	await recalcularCuentaPagar(client, idCuentaPagar);
+
+	return { success: true, message: 'Transacción creada y vinculada — el pago quedó registrado en la cuenta.', data: transResult.data };
 }
 
 /**

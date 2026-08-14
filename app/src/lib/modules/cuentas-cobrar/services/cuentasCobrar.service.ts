@@ -16,6 +16,7 @@ import {
 	FIELDS_CONFIG as COBRO_FIELDS
 } from '../config/cobro.config';
 import { construirPayloadTransaccionPorCobro, createTransaccion } from '../../transacciones/services/transacciones.service';
+import type { Transaccion } from '../../transacciones/services/transacciones.service';
 
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
@@ -550,6 +551,100 @@ export async function confirmarCobroCobrado(
 	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
 
 	return { success: true, message: 'Cobro confirmado como Cobrado', data: data as Cobro };
+}
+
+export interface CuentaCobrarVinculable {
+	id_cuenta_cobrar: number;
+	num_documento: string | null;
+	saldo_pendiente: number;
+	clienteNombre: string;
+}
+
+/**
+ * Busca cuentas por cobrar con saldo pendiente para vincular una transacción manual — mismo criterio
+ * que buscarCuentasPagarVinculables en cuentasPagar.service.ts (ver ahí el porqué del filtrado en el
+ * cliente en vez de un OR de PostgREST entre tablas).
+ */
+export async function buscarCuentasCobrarVinculables(client: SupabaseClient, query: string): Promise<CuentaCobrarVinculable[]> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_cobrar, num_documento, saldo_pendiente, cliente(nombre)')
+		.eq('activo', true)
+		.gt('saldo_pendiente', 0)
+		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+	if (error) throw error;
+
+	const items: CuentaCobrarVinculable[] = (data ?? []).map((row: any) => ({
+		id_cuenta_cobrar: row.id_cuenta_cobrar as number,
+		num_documento: row.num_documento as string | null,
+		saldo_pendiente: Number(row.saldo_pendiente),
+		clienteNombre: row.cliente?.nombre ?? `Cliente #${row.id_cuenta_cobrar}`
+	}));
+
+	const q = query.trim().toLowerCase();
+	if (!q) return items.slice(0, 8);
+	return items
+		.filter(
+			(it) =>
+				it.clienteNombre.toLowerCase().includes(q) ||
+				(it.num_documento ?? '').toLowerCase().includes(q) ||
+				String(it.id_cuenta_cobrar).includes(q)
+		)
+		.slice(0, 8);
+}
+
+/**
+ * Crea la transacción Y, en el mismo paso, un cobro ya 'cobrado' vinculado a ella contra una cuenta
+ * por cobrar existente — mismo criterio que registrarPagoDesdeTransaccion en cuentasPagar.service.ts.
+ * `medio_cobro` solo tiene 2 opciones en su catálogo (Efectivo/Transferencia bancaria, ver
+ * cobro.config.ts) mientras que transaccion.medio_pago tiene 4 — se copia el código tal cual (mismo
+ * criterio ya usado en construirPayloadTransaccionPorCobro, que hace el camino inverso): si el usuario
+ * eligió "Depósito bancario" o "Yape o Plin" en la transacción, el código queda fuera del catálogo
+ * mostrado en Cuentas por Cobrar, pero no hay CHECK en BD que lo bloquee.
+ */
+export async function registrarCobroDesdeTransaccion(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	transaccionPayload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	const monto = Number(transaccionPayload.monto_total);
+	const disponible = await montoDisponible(client, idCuentaCobrar);
+	if (monto - disponible > 0.01) {
+		return {
+			success: false,
+			message: `No se puede vincular: el monto (${formatCurrency(monto)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}).`
+		};
+	}
+
+	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
+	if (!transResult.success || !transResult.data) {
+		return { success: false, message: transResult.message, errors: transResult.errors };
+	}
+
+	const medioPagoCodigo = transaccionPayload.medio_pago as string | null;
+	const { error: cobroError } = await client.from(COBRO_TABLE).insert({
+		[PARENT_FK_COLUMN]: idCuentaCobrar,
+		monto,
+		fecha_cobro: transaccionPayload.fecha,
+		medio_cobro: medioPagoCodigo ? Number(medioPagoCodigo) : null,
+		cuenta_banco: (transaccionPayload.cuente_destino as string | null) ?? null,
+		referencia: (transaccionPayload.descripcion as string | null) ?? null,
+		usuario_registro: usuarioRegistro,
+		estado_cobro: 'cobrado',
+		id_transaccion: transResult.data.id_transaccion
+	});
+	if (cobroError) {
+		return {
+			success: false,
+			message: `La transacción se creó (#${transResult.data.id_transaccion}), pero no se pudo registrar el cobro contra la cuenta: ${translateSupabaseError(cobroError, COBRO_FIELDS)}. Revisa la cuenta manualmente.`
+		};
+	}
+
+	await recalcularCuentaCobrar(client, idCuentaCobrar);
+
+	return { success: true, message: 'Transacción creada y vinculada — el cobro quedó registrado en la cuenta.', data: transResult.data };
 }
 
 /**

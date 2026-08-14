@@ -379,18 +379,21 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: true
 	},
 	{
+		// Ya NO es un <select> manual (a pedido del usuario) — se calcula solo server-side
+		// (resolveEstadoTransaccion en transacciones.service.ts): 'consulta' mientras el Alcance sea
+		// Interna, 'anulado'/'activo' vía los botones Anular/Reactivar (solo admin, ver
+		// TransaccionModal.svelte). showInForm:false lo saca de validatePayload/buildWritablePayload —
+		// el motor genérico ya no lo toca, solo lo hacen esas dos vías explícitas.
 		key: 'estado',
 		label: 'Estado',
 		tipo: 'select',
 		options: [
 			{ value: 'activo', label: 'Activo' },
 			{ value: 'anulado', label: 'Anulado' },
-			// Se autoselecciona y se bloquea cuando "Alcance de la Transacción" = Interna — ver
-			// TransaccionModal.svelte. También queda disponible para elegir a mano en una Externa.
 			{ value: 'consulta', label: 'Consulta' }
 		],
 		showInTable: true,
-		showInForm: true,
+		showInForm: false,
 		sortable: true
 	},
 	{
