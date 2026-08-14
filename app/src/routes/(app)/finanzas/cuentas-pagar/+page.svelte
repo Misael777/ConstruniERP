@@ -22,7 +22,7 @@
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
 		getCentroCostoOptions,
-		getCentroCostoOptionsPagos,
+		getCentroCostoOptionsSoloCentros,
 		getCentroCostoOptionsExternos,
 		getCentroCostoOptionsExternosOrigen,
 		getCentroCostoTipoMap,
@@ -116,11 +116,10 @@
 	}
 
 	// Botones "Consultoria"/"Obra"/"Corporativo"/"Otros" (a pedido del usuario, mismo diseño que ya
-	// existe en Cuentas por Cobrar) — filtran por el TIPO real del centro de costo de cada cuenta.
-	// getCentroCostoOptionsPagos solo permite elegir centros tipo 'proyecto' (Obra), 'consultoria' o
-	// 'bolsa general' (Corporativo) como centro de costo de una cuenta por pagar, así que esos tres
-	// botones mapean directo a esos tipos; "Otros" es el catch-all (cualquier otro tipo que pudiera
-	// haber quedado de datos viejos, MÁS las cuentas sin centro de costo asignado).
+	// existe en Cuentas por Cobrar) — filtran por el TIPO real del centro de costo de cada cuenta
+	// (independiente de qué centros ofrezca el formulario para elegir, ver getCentroCostoOptionsSoloCentros
+	// más abajo); "Otros" es el catch-all (cualquier otro tipo, MÁS las cuentas sin centro de costo
+	// asignado).
 	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
 	let tipoFilter = $state<TipoFiltroCC | null>(null);
 	const TIPOS_CONOCIDOS = ['proyecto', 'consultoria', 'bolsa general'];
@@ -217,9 +216,9 @@
 			return;
 		}
 		try {
-			const [centroCostoOptions, centroCostoOptionsPagos, centroCostoOptionsExternos, centroCostoOptionsExternosOrigen, cuentaBancoOptions, tipoMap] = await Promise.all([
+			const [centroCostoOptions, centroCostoOptionsSoloCentros, centroCostoOptionsExternos, centroCostoOptionsExternosOrigen, cuentaBancoOptions, tipoMap] = await Promise.all([
 				getCentroCostoOptions(supabase),
-				getCentroCostoOptionsPagos(supabase),
+				getCentroCostoOptionsSoloCentros(supabase),
 				getCentroCostoOptionsExternos(supabase),
 				getCentroCostoOptionsExternosOrigen(supabase),
 				getCuentaBancoOptions(supabase),
@@ -227,7 +226,10 @@
 			]);
 			dynamicOptions = {
 				id_proveedor: await getProveedorOptions(supabase),
-				id_centro_costo: centroCostoOptionsPagos,
+				// A pedido explícito del usuario: el campo "Centro de Costo" de Cuentas por Pagar ofrece
+				// exactamente el mismo conjunto que la pestaña "Centro de Costos" del submódulo homónimo
+				// (ver getCentroCostoOptionsSoloCentros) — ya NO getCentroCostoOptionsPagos (removida).
+				id_centro_costo: centroCostoOptionsSoloCentros,
 				responsable: await getEmpleadoOptions(supabase)
 			};
 			// El pago de una cuenta por pagar siempre confirma como Transacción Externa (ver

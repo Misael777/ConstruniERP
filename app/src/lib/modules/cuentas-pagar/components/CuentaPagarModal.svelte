@@ -6,7 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import { createCuentaPagar, updateCuentaPagar, getPagos } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
 	let {
@@ -40,6 +40,12 @@
 			const raw = cuenta ? (cuenta as any)[field.key] : '';
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
+		// A pedido del usuario: "Responsable" arranca prellenado con el usuario que está creando la
+		// cuenta (mismo nombre que empleados.nombre, ver getEmpleadoOptions) — solo al crear, no pisa el
+		// valor guardado al editar. Sigue siendo editable por si corresponde asignarla a alguien más.
+		if (!cuenta && 'responsable' in values) values.responsable = permisosState.userName;
+		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear.
+		if (!cuenta && 'frecuencia_pago' in values) values.frecuencia_pago = 'sin_periodicidad';
 		return values;
 	}
 
@@ -122,9 +128,11 @@
 	// Crédito) habilita la ventana "Fraccionar este pago".
 	const esFraccionable = $derived(String(formValues.fotma_pago ?? '') !== '' && String(formValues.fotma_pago ?? '') !== '1');
 
-	// "ID Partida" se bloquea cuando el Centro de Costo elegido es de tipo 'bolsa general' — un gasto
-	// de bolsa general no se carga a una partida puntual de obra.
+	// "ID Partida" e "ID Presupuesto" se bloquean cuando el Centro de Costo elegido es de tipo
+	// 'bolsa general' (Corporativo) — un gasto corporativo no se carga a una partida ni a un
+	// presupuesto puntual de obra.
 	const idPartidaBloqueado = $derived(centroCostoTipoMap[String(formValues.id_centro_costo ?? '')] === 'bolsa general');
+	const idPresupuestoBloqueado = $derived(centroCostoTipoMap[String(formValues.id_centro_costo ?? '')] === 'bolsa general');
 
 	// 'condicion_pago' ya no se edita a mano: se mantiene igual a la cantidad de fracciones
 	// configuradas (o vacío si Forma de Pago es Contado / todavía no se configuró nada).
@@ -170,14 +178,17 @@
 				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
 			}
 		}
-		// "ID Partida" no usa disabledWhen/disabledValue (depende de un lookup externo, ver
-		// idPartidaBloqueado) — se limpia aparte al bloquearse, para no guardar un valor que ya no
-		// aplica (bolsa general no se carga a una partida puntual).
+		// "ID Partida" e "ID Presupuesto" no usan disabledWhen/disabledValue (dependen de un lookup
+		// externo, ver idPartidaBloqueado/idPresupuestoBloqueado) — se limpian aparte al bloquearse,
+		// para no guardar un valor que ya no aplica (bolsa general no se carga a una partida/presupuesto
+		// puntual).
 		if (idPartidaBloqueado && formValues.id_partida !== '') formValues.id_partida = '';
+		if (idPresupuestoBloqueado && formValues.id_presupuesto !== '') formValues.id_presupuesto = '';
 	});
 
 	function isDisabled(field: (typeof formFields)[number]): boolean {
 		if (field.key === 'id_partida' && idPartidaBloqueado) return true;
+		if (field.key === 'id_presupuesto' && idPresupuestoBloqueado) return true;
 		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
 	}
 
@@ -312,6 +323,8 @@
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
 							{:else if field.key === 'id_partida' && idPartidaBloqueado}
+								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Centro de Costo es "Corporativa".</p>
+							{:else if field.key === 'id_presupuesto' && idPresupuestoBloqueado}
 								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Centro de Costo es "Corporativa".</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>

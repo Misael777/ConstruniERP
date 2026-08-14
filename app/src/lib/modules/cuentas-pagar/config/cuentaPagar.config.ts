@@ -84,8 +84,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'id_centro_costo',
 		label: 'Centro de Costo',
 		tipo: 'select',
-		// Ya no es obligatorio (a pedido del usuario) — solo ofrece centros de costo de tipo
-		// proyecto/consultoría/bolsa general, ver getCentroCostoOptionsPagos en transacciones.service.ts.
+		// Ya no es obligatorio (a pedido del usuario) — a pedido explícito, ofrece exactamente el mismo
+		// conjunto que la pestaña "Centro de Costos" del submódulo homónimo (obra/consultoría/bolsa
+		// general manuales + proyectos con venta cerrada), ver getCentroCostoOptionsSoloCentros en
+		// transacciones.service.ts.
 		optionsSource: 'centro_costo', // cargado en runtime desde la tabla centro_costo, ver +page.svelte
 		helpText: 'Centro de costo al que se carga este gasto. Se usa como origen al generar automáticamente la transacción del pago.',
 		showInTable: false,
@@ -245,6 +247,34 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: '1', label: 'Contado' },
 			{ value: '2', label: 'Crédito' }
 		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'frecuencia_pago',
+		label: 'Frecuencia de Pago',
+		tipo: 'select',
+		// Default 'sin_periodicidad' al crear se aplica en CuentaPagarModal.svelte (buildInitialValues)
+		// — FieldConfig no tiene un mecanismo de valor por defecto propio, mismo criterio que
+		// "responsable" (prellenado con el usuario actual) en ese mismo archivo.
+		options: [
+			{ value: 'sin_periodicidad', label: 'Sin periodicidad' },
+			{ value: 'mensual', label: 'Mensual' },
+			{ value: 'quincenal', label: 'Quincenal' },
+			{ value: 'semanal', label: 'Semanal' }
+		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'fin_periodo_pago',
+		label: 'Fin de Periodo de Pago',
+		tipo: 'date',
+		// Solo tiene sentido si la cuenta es recurrente — se bloquea (deshabilitado, no se valida) y se
+		// limpia cuando Frecuencia de Pago = 'Sin periodicidad'.
+		disabledWhen: (values) => String(values.frecuencia_pago ?? '') === 'sin_periodicidad',
 		showInTable: false,
 		showInForm: true,
 		sortable: false

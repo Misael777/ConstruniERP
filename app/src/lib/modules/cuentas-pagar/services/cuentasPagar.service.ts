@@ -37,6 +37,10 @@ export interface CuentaPagar {
 	monto_pagado: number;
 	saldo_pendiente: number;
 	fotma_pago: number | null;
+	/** 'sin_periodicidad' | 'mensual' | 'quincenal' | 'semanal' — ver cuentas_pagar_frecuencia_pago_migration.sql. */
+	frecuencia_pago: string;
+	/** Solo aplica si frecuencia_pago != 'sin_periodicidad' — ver cuentas_pagar_fin_periodo_pago_migration.sql. */
+	fin_periodo_pago: string | null;
 	categoria_gasto: number | null;
 	condicion_pago: string | null;
 	responsable: string | null;
@@ -52,6 +56,11 @@ export interface CuentaPagar {
 	prioridad: string | null;
 	usuario_registro: string | null;
 	created_at: string;
+	/** No-nulo solo en las cuentas que generó solas el cron mensual (ver
+	 * generar_cuentas_pagar_recurrentes en cuentas_pagar_recurrencia_mensual_migration.sql) — apunta a
+	 * la cuenta del mes anterior de la que salió. null = creada a mano, o primera de una cadena
+	 * recurrente. */
+	id_cuenta_pagar_padre: number | null;
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
 	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. */
 	proveedor?: { razon_social: string; vendedor?: string | null } | null;
