@@ -4,8 +4,15 @@
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
-	import { createCuentaPagar, updateCuentaPagar, getPagos } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar, Pago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import {
+		createCuentaPagar,
+		createCuentasPagarRecurrentes,
+		updateCuentaPagar,
+		getPagos,
+		calcularFechasRecurrentes,
+		computeEstadoCuentaPagar
+	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { CuentaPagar, Pago, FechaCuentaRecurrente } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
@@ -128,6 +135,34 @@
 	// Crédito) habilita la ventana "Fraccionar este pago".
 	const esFraccionable = $derived(String(formValues.fotma_pago ?? '') !== '' && String(formValues.fotma_pago ?? '') !== '1');
 
+	// A pedido EXPLÍCITO del usuario: "Frecuencia de Pago" mensual/quincenal/semanal NO reparte el
+	// Monto Comprometido entre cuotas (eso es "Fraccionar este pago", un concepto distinto) — genera
+	// una cuenta por pagar POR CADA fecha del periodo, cada una con el monto íntegro. Solo aplica al
+	// CREAR (editar una cuenta ya existente no debe disparar una serie nueva). Ver
+	// calcularFechasRecurrentes en cuentasPagar.service.ts — misma función que usa el submit, así la
+	// vista previa siempre coincide exactamente con lo que se va a generar.
+	const esPeriodico = $derived(mode === 'create' && ['mensual', 'quincenal', 'semanal'].includes(String(formValues.frecuencia_pago ?? '')));
+	const previewCuentas = $derived<FechaCuentaRecurrente[]>(
+		esPeriodico
+			? calcularFechasRecurrentes(
+					String(formValues.frecuencia_pago ?? ''),
+					formValues.fecha_emision || null,
+					formValues.fecha_vencimiento || null,
+					formValues.fecha_pago_programada || null,
+					formValues.fin_periodo_pago || null
+				)
+			: []
+	);
+	function previewEstado(f: FechaCuentaRecurrente): string {
+		return computeEstadoCuentaPagar(Number(formValues.monto_comprometido || 0), f.fecha_vencimiento, f.fecha_pago_programada);
+	}
+	const previewEstadoLabel: Record<string, string> = { pendiente: 'Pendiente', vencido: 'Vencido', pagado: 'Pagado' };
+	const previewEstadoBadge: Record<string, string> = {
+		pendiente: 'bg-amber-100 text-amber-700',
+		vencido: 'bg-red-100 text-red-700',
+		pagado: 'bg-emerald-100 text-emerald-700'
+	};
+
 	// "ID Partida" e "ID Presupuesto" se bloquean cuando el Centro de Costo elegido es de tipo
 	// 'bolsa general' (Corporativo) — un gasto corporativo no se carga a una partida ni a un
 	// presupuesto puntual de obra.
@@ -227,8 +262,15 @@
 		event.preventDefault();
 		revalidate();
 		if (hasErrors) return;
-		if (esFraccionable && fracciones.length === 0) {
+		// El fraccionamiento en cuotas (Forma de Pago = Crédito) es un concepto distinto de la serie
+		// periódica de "Frecuencia de Pago" — cuando hay serie, no aplica (cada cuenta generada es un
+		// pago íntegro de su propio periodo).
+		if (!esPeriodico && esFraccionable && fracciones.length === 0) {
 			toast.error('Configura las cuotas en "Fraccionar este pago" antes de guardar.');
+			return;
+		}
+		if (esPeriodico && previewCuentas.length === 0) {
+			toast.error('Completa Fecha Emisión y Fin de Periodo de Pago para generar la serie.');
 			return;
 		}
 
@@ -238,6 +280,9 @@
 			let result;
 			if (mode === 'edit' && cuenta) {
 				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin(), fraccionesAEnviar);
+			} else if (esPeriodico) {
+				const { data: userData } = await supabase.auth.getUser();
+				result = await createCuentasPagarRecurrentes(supabase, formValues, userData?.user?.email ?? null, previewCuentas);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
 				result = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null, fraccionesAEnviar);
@@ -390,13 +435,55 @@
 					{/each}
 				</div>
 
+				{#if esPeriodico}
+					<div class="px-6 pb-6">
+						<h3 class="text-sm font-semibold text-[#0f3b5e] mb-1">Vista previa de la serie</h3>
+						{#if previewCuentas.length === 0}
+							<p class="text-xs text-slate-400 rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center">
+								Completa Fecha Emisión y Fin de Periodo de Pago para ver las cuentas que se van a generar.
+							</p>
+						{:else}
+							<p class="text-xs text-slate-400 mb-2">
+								Se van a crear <strong>{previewCuentas.length}</strong> cuentas por pagar, cada una por el monto íntegro — la Frecuencia de Pago no lo reparte entre ellas.
+								{#if previewCuentas.length >= 500}
+									Se llegó al máximo de 500 registros por serie — ajusta Fin de Periodo de Pago si necesitas menos.
+								{/if}
+							</p>
+							<div class="rounded-lg border border-slate-200 max-h-56 overflow-y-auto">
+								<table class="w-full text-xs">
+									<thead class="sticky top-0 bg-slate-50 text-slate-500">
+										<tr>
+											<th class="text-left px-3 py-1.5 font-medium">N°</th>
+											<th class="text-left px-3 py-1.5 font-medium">Fecha</th>
+											<th class="text-right px-3 py-1.5 font-medium">Monto</th>
+											<th class="text-left px-3 py-1.5 font-medium">Estado</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-slate-100">
+										{#each previewCuentas as f (f.numero)}
+											<tr>
+												<td class="px-3 py-1.5 text-slate-500">{f.numero}</td>
+												<td class="px-3 py-1.5 text-slate-700">{formatDate(f.fecha_emision)}</td>
+												<td class="px-3 py-1.5 text-right font-semibold text-slate-700">{formatCurrency(formValues.monto_comprometido)}</td>
+												<td class="px-3 py-1.5">
+													<span class={`px-2 py-0.5 rounded-full font-medium ${previewEstadoBadge[previewEstado(f)]}`}>{previewEstadoLabel[previewEstado(f)]}</span>
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{/if}
+					</div>
+				{/if}
+
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
 						Cancelar
 					</button>
 					<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 						{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
-						{mode === 'create' ? 'Crear' : 'Actualizar'}
+						{mode === 'edit' ? 'Actualizar' : esPeriodico && previewCuentas.length > 0 ? `Generar ${previewCuentas.length} cuentas` : 'Crear'}
 					</button>
 				</div>
 			</form>
