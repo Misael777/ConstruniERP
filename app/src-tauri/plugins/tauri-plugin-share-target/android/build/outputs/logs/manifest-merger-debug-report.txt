@@ -1,0 +1,36 @@
+-- Merging decision tree log ---
+manifest
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:9:1-19:12
+INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:9:1-19:12
+	package
+		INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml
+	xmlns:android
+		ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:9:11-69
+application
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:10:5-18:19
+activity#com.construnierp.app.MainActivity
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:11:9-17:20
+	android:name
+		ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:11:19-67
+intent-filter#action:name:android.intent.action.SEND+category:name:android.intent.category.DEFAULT+data:mimeType:image/*
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:12:13-16:29
+action#android.intent.action.SEND
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:13:17-69
+	android:name
+		ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:13:25-66
+category#android.intent.category.DEFAULT
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:14:17-76
+	android:name
+		ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:14:27-73
+data
+ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:15:17-52
+	android:mimeType
+		ADDED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:15:23-49
+uses-sdk
+INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml
+INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml

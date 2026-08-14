@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-get-pending-share"
+description = "Permite leer, si existe, la imagen que otra app acaba de compartir con Construni ERP (Share Sheet de Android)."
+commands.allow = ["get_pending_share"]
+
+[default]
+description = "Permisos por defecto del plugin share-target."
+permissions = ["allow-get-pending-share"]

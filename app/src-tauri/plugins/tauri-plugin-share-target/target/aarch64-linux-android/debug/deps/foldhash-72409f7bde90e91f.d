@@ -1,0 +1,9 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\foldhash-72409f7bde90e91f.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\fast.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\quality.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\seed.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\convenience.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libfoldhash-72409f7bde90e91f.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\fast.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\quality.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\seed.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\convenience.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\fast.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\quality.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\seed.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\foldhash-0.2.0\src\convenience.rs:

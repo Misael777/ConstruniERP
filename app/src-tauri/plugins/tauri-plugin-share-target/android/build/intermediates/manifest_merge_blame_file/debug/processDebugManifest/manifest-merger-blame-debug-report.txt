@@ -1,0 +1,36 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!--
+3  Fragmento que el manifest merger de Gradle combina con el AndroidManifest.xml generado de la app
+4  (gen/android/app/.../AndroidManifest.xml, NO se toca a mano — se regenera). Al declarar la MISMA
+5  Activity por su nombre completo, el merger AGREGA este intent-filter al de MainActivity en vez de
+6  reemplazarlo — así ConstruniERP aparece en el Share Sheet de Android para imágenes (Galería,
+7  capturas de pantalla) sin tocar el manifest generado directamente.
+8-->
+9<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+10    package="com.construnierp.app.sharetarget" >
+11
+12    <uses-sdk android:minSdkVersion="24" />
+13
+14    <application>
+14-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:10:5-18:19
+15        <activity android:name="com.construnierp.app.MainActivity" >
+15-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:11:9-17:20
+15-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:11:19-67
+16            <intent-filter>
+16-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:12:13-16:29
+17                <action android:name="android.intent.action.SEND" />
+17-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:13:17-69
+17-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:13:25-66
+18
+19                <category android:name="android.intent.category.DEFAULT" />
+19-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:14:17-76
+19-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:14:27-73
+20
+21                <data android:mimeType="image/*" />
+21-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:15:17-52
+21-->C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\android\src\main\AndroidManifest.xml:15:23-49
+22            </intent-filter>
+23        </activity>
+24    </application>
+25
+26</manifest>

@@ -1,0 +1,11 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\sha2-4aa3570bc41215f2.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\core_api.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\consts.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256\soft.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512\soft.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libsha2-4aa3570bc41215f2.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\core_api.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\consts.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256\soft.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512\soft.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\core_api.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\consts.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha256\soft.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\sha2-0.10.9\src\sha512\soft.rs:

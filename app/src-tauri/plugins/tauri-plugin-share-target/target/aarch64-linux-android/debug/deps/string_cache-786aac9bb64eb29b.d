@@ -1,0 +1,9 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\string_cache-786aac9bb64eb29b.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\atom.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\dynamic_set.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\static_sets.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\trivial_impls.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libstring_cache-786aac9bb64eb29b.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\atom.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\dynamic_set.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\static_sets.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\trivial_impls.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\atom.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\dynamic_set.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\static_sets.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\string_cache-0.9.0\src\trivial_impls.rs:

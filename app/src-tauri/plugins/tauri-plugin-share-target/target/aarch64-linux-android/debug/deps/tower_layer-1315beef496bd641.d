@@ -1,0 +1,9 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\tower_layer-1315beef496bd641.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\identity.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\layer_fn.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\stack.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\tuple.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libtower_layer-1315beef496bd641.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\identity.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\layer_fn.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\stack.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\tuple.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\identity.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\layer_fn.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\stack.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tower-layer-0.3.3\src\tuple.rs:

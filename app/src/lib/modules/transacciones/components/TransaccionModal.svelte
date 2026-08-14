@@ -26,7 +26,8 @@
 		onConfirm = null,
 		confirmTitle = null,
 		confirmButtonLabel = null,
-		lockedFields = []
+		lockedFields = [],
+		initialComprobanteFile = null
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
@@ -49,6 +50,11 @@
 		 * al que la cuenta dice, descuadrando el reporte de esa cuenta. Se siguen viendo (no se ocultan),
 		 * solo quedan deshabilitados con una explicación. */
 		lockedFields?: string[];
+		/** Ingreso rápido desde el Share Sheet de Android (ver shareTarget.ts) — si llega, se adjunta
+		 * solo como si el usuario lo hubiera elegido a mano (misma ruta que processComprobanteFiles,
+		 * dispara el reconocimiento automático de Fecha/Monto igual). Solo aplica al abrir el modal en
+		 * mode='create'; se ignora en cualquier otro caso. */
+		initialComprobanteFile?: File | null;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -232,6 +238,9 @@
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
 			limpiarCuentaVinculada();
+			if (mode === 'create' && initialComprobanteFile) {
+				processComprobanteFiles([initialComprobanteFile]);
+			}
 		}
 	});
 

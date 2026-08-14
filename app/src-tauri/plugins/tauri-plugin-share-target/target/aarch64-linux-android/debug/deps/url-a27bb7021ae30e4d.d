@@ -1,0 +1,11 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\url-a27bb7021ae30e4d.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\host.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\origin.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\parser.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\path_segments.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\slicing.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\quirks.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\liburl-a27bb7021ae30e4d.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\host.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\origin.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\parser.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\path_segments.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\slicing.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\quirks.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\host.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\origin.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\parser.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\path_segments.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\slicing.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\url-2.5.8\src\quirks.rs:

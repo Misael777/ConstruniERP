@@ -75,6 +75,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-log",
  "tauri-plugin-notification",
+ "tauri-plugin-share-target",
 ]
 
 [[package]]
@@ -4189,6 +4190,16 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-share-target"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

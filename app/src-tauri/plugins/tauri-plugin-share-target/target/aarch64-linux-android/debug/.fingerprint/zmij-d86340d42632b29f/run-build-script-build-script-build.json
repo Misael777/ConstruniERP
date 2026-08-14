@@ -1,0 +1,1 @@
+{"rustc":8891013984288978370,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[16226529040278277557,"build_script_build",false,15124871432549829662]],"local":[{"RerunIfChanged":{"output":"aarch64-linux-android\\debug\\build\\zmij-d86340d42632b29f\\output","paths":["build.rs"]}}],"rustflags":[],"config":0,"compile_kind":0}

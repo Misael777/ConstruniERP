@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye } from '@lucide/svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
@@ -111,6 +112,9 @@
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingTransaccion = $state<Transaccion | null>(null);
+	/** Ingreso rápido desde el Share Sheet de Android — ver pendingShareState/shareTarget.ts y el
+	 * onMount de abajo. */
+	let sharedComprobanteFile = $state<File | null>(null);
 	let detalleModalOpen = $state(false);
 	let editingDetalle = $state<TransDetalle | null>(null);
 
@@ -232,6 +236,15 @@
 			toast.error(err?.message ?? 'No se pudieron cargar los catálogos');
 		}
 		await fetchList();
+
+		// Ingreso rápido desde el Share Sheet de Android (ver +layout.svelte, que llega hasta acá
+		// navegando después de detectar la imagen compartida) — abre "Nueva Transacción" directo con
+		// el comprobante ya adjunto.
+		if (pendingShareState.file) {
+			sharedComprobanteFile = pendingShareState.file;
+			pendingShareState.file = null;
+			openCreate();
+		}
 	});
 
 	function onSearchInput(value: string) {
@@ -284,6 +297,7 @@
 	function closeModal() {
 		modalOpen = false;
 		editingTransaccion = null;
+		sharedComprobanteFile = null;
 	}
 
 	async function selectRow(item: Transaccion) {
@@ -631,7 +645,15 @@
 	{/if}
 </div>
 
-<TransaccionModal open={modalOpen} mode={modalMode} transaccion={editingTransaccion} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
+<TransaccionModal
+	open={modalOpen}
+	mode={modalMode}
+	transaccion={editingTransaccion}
+	dynamicOptions={dynamicOptions}
+	initialComprobanteFile={sharedComprobanteFile}
+	onClose={closeModal}
+	onSaved={handleSaved}
+/>
 <TransDetalleModal open={detalleModalOpen} idTransaccion={selectedId} detalle={editingDetalle} dynamicOptions={detalleDynamicOptions} onClose={closeDetalleModal} onSaved={handleDetalleSaved} />
 <DocumentPreviewModal open={previewOpen} documents={previewDocuments} title={previewTitle} onClose={() => (previewOpen = false)} />
 <AdminConfirmModal

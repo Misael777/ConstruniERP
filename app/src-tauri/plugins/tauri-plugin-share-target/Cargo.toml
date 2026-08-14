@@ -1,0 +1,18 @@
+[package]
+name = "tauri-plugin-share-target"
+version = "0.1.0"
+edition = "2021"
+license = ""
+links = "tauri-plugin-share-target"
+description = "Recibe imágenes compartidas desde otras apps de Android (Galería, capturas de pantalla) vía el Share Sheet nativo, para adjuntarlas como comprobante en Construni ERP."
+
+[lib]
+name = "tauri_plugin_share_target"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
+
+[dependencies]
+tauri = { version = "2.0.0-rc.17", default-features = false, features = ["wry"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

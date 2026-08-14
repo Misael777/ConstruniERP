@@ -1,0 +1,10 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\httparse-59d04795bbe4fd40.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\iter.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\macros.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\mod.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\swar.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\neon.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libhttparse-59d04795bbe4fd40.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\iter.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\macros.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\mod.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\swar.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\neon.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\iter.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\macros.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\mod.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\swar.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\httparse-1.10.1\src\simd\neon.rs:

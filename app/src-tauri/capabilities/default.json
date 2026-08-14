@@ -13,6 +13,7 @@
     "dialog:allow-ask",
     "fs:default",
     "fs:allow-write-text-file",
-    "fs:allow-write-file"
+    "fs:allow-write-file",
+    "share-target:default"
   ]
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Fragmento que el manifest merger de Gradle combina con el AndroidManifest.xml generado de la app
+  (gen/android/app/.../AndroidManifest.xml, NO se toca a mano — se regenera). Al declarar la MISMA
+  Activity por su nombre completo, el merger AGREGA este intent-filter al de MainActivity en vez de
+  reemplazarlo — así ConstruniERP aparece en el Share Sheet de Android para imágenes (Galería,
+  capturas de pantalla) sin tocar el manifest generado directamente.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="com.construnierp.app.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

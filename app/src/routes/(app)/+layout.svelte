@@ -8,6 +8,10 @@
 	import Toast from '$lib/components/Toast.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { getRequiredPermiso, getFirstAccessiblePath } from '$lib/config/modules';
+	import { consumePendingSharedFile } from '$lib/shareTarget';
+	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
+	import { isRunningInTauri } from '$lib/driveUploadClient';
+	import { getCurrentWindow } from '@tauri-apps/api/window';
 
 	let { children } = $props();
 
@@ -23,7 +27,29 @@
 	// (ver mobileOpen en Sidebar.svelte) que se abre con el botón flotante de abajo.
 	let mobileMenuOpen = $state(false);
 
+	// Ingreso rápido desde el Share Sheet de Android (compartir una foto/captura del comprobante
+	// directo a Construni ERP) — si hay una imagen pendiente (ver tauri-plugin-share-target), manda a
+	// Transacciones con el archivo ya listo para que TransaccionModal lo adjunte solo. Se llama tanto
+	// al montar este layout (arranque en frío, o justo después de iniciar sesión) COMO cada vez que la
+	// ventana recupera el foco (ver onFocusChanged más abajo) — sin eso, compartir con la app YA
+	// abierta en segundo plano (Android reutiliza la misma Activity vía onNewIntent, singleTask) nunca
+	// se detectaba porque este layout no se vuelve a montar en una navegación normal de SvelteKit.
+	// No-op en Windows/desktop y en un arranque normal sin compartir nada.
+	async function checkPendingShare() {
+		const sharedFile = await consumePendingSharedFile();
+		if (sharedFile) {
+			pendingShareState.file = sharedFile;
+			goto('/finanzas/tranzacciones');
+		}
+	}
+
 	onMount(async () => {
+		if (isRunningInTauri()) {
+			getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+				if (focused) checkPendingShare();
+			});
+		}
+
 		console.log('[Layout] onMount initiated for (app) layout. Path:', page.url.pathname);
 		try {
 			// 1. Verificar Sesión
@@ -104,6 +130,8 @@
 
 			console.log('[Layout] Layout loaded successfully. Disabling loading spinner.');
 			isLoading = false;
+
+			await checkPendingShare();
 
 		} catch (e) {
 			console.error("[Layout] Fatal error in session verification / loading:", e);

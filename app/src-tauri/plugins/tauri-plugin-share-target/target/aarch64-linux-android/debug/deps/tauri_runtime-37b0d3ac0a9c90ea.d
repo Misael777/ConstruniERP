@@ -1,0 +1,9 @@
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\tauri_runtime-37b0d3ac0a9c90ea.d: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\dpi.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\monitor.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\webview.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\window.rs
+
+C:\Users\linar\Desktop\PROYECTOS_2026\ERPConstruni\ConstruniERP\app\src-tauri\plugins\tauri-plugin-share-target\target\aarch64-linux-android\debug\deps\libtauri_runtime-37b0d3ac0a9c90ea.rmeta: C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\lib.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\dpi.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\monitor.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\webview.rs C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\window.rs
+
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\lib.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\dpi.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\monitor.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\webview.rs:
+C:\Users\linar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-runtime-2.11.3\src\window.rs:
