@@ -258,11 +258,17 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		// Default 'sin_periodicidad' al crear se aplica en CuentaPagarModal.svelte (buildInitialValues)
 		// — FieldConfig no tiene un mecanismo de valor por defecto propio, mismo criterio que
 		// "responsable" (prellenado con el usuario actual) en ese mismo archivo.
+		// A pedido explícito del usuario: NO divide el Monto Comprometido entre las cuotas — solo indica
+		// cada cuánto se genera una cuenta por pagar NUEVA con el MISMO monto. 'contado' y
+		// 'sin_periodicidad' generan una sola cuenta (sin serie); 'mensual'/'quincenal'/'semanal' generan
+		// una cuenta por cada fecha entre Fecha Emisión y Fin de Periodo de Pago, ver
+		// calcularFechasRecurrentes en cuentasPagar.service.ts.
 		options: [
-			{ value: 'sin_periodicidad', label: 'Sin periodicidad' },
-			{ value: 'mensual', label: 'Mensual' },
+			{ value: 'contado', label: 'Contado' },
+			{ value: 'semanal', label: 'Semanal' },
 			{ value: 'quincenal', label: 'Quincenal' },
-			{ value: 'semanal', label: 'Semanal' }
+			{ value: 'mensual', label: 'Mensual' },
+			{ value: 'sin_periodicidad', label: 'Sin periodicidad' }
 		],
 		showInTable: false,
 		showInForm: true,
@@ -272,9 +278,13 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'fin_periodo_pago',
 		label: 'Fin de Periodo de Pago',
 		tipo: 'date',
-		// Solo tiene sentido si la cuenta es recurrente — se bloquea (deshabilitado, no se valida) y se
-		// limpia cuando Frecuencia de Pago = 'Sin periodicidad'.
-		disabledWhen: (values) => String(values.frecuencia_pago ?? '') === 'sin_periodicidad',
+		// Solo tiene sentido si la cuenta es recurrente (mensual/quincenal/semanal) — se bloquea
+		// (deshabilitado, no se valida) y se limpia para 'contado'/'sin_periodicidad' (esas generan una
+		// sola cuenta, no una serie). Es OBLIGATORIO para las 3 frecuencias periódicas: delimita el
+		// rango completo de la serie que se genera de una sola vez al guardar (ver
+		// calcularFechasRecurrentes/createCuentasPagarRecurrentes), no hay generación "abierta" sin fin.
+		disabledWhen: (values) => ['contado', 'sin_periodicidad'].includes(String(values.frecuencia_pago ?? '')),
+		requiredWhen: (values) => ['mensual', 'quincenal', 'semanal'].includes(String(values.frecuencia_pago ?? '')),
 		showInTable: false,
 		showInForm: true,
 		sortable: false

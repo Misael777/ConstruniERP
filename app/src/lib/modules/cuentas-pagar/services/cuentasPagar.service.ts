@@ -57,10 +57,11 @@ export interface CuentaPagar {
 	prioridad: string | null;
 	usuario_registro: string | null;
 	created_at: string;
-	/** No-nulo solo en las cuentas que generó solas el cron mensual (ver
-	 * generar_cuentas_pagar_recurrentes en cuentas_pagar_recurrencia_mensual_migration.sql) — apunta a
-	 * la cuenta del mes anterior de la que salió. null = creada a mano, o primera de una cadena
-	 * recurrente. */
+	/** No-nulo solo en las cuentas que generó solo el cron recurrente (ver
+	 * generar_cuentas_pagar_recurrentes en cuentas_pagar_recurrencia_mensual_migration.sql +
+	 * cuentas_pagar_recurrencia_todas_frecuencias_migration.sql — corre para mensual/quincenal/semanal,
+	 * se detiene solo cuando la siguiente generación pasaría de fin_periodo_pago) — apunta a la cuenta
+	 * anterior de la que salió. null = creada a mano, o primera de una cadena recurrente. */
 	id_cuenta_pagar_padre: number | null;
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
 	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. */
@@ -175,7 +176,7 @@ async function pagoTieneTransaccionAprobada(client: SupabaseClient, idPago: numb
  * respaldo. Ya no es una marca manual — se recalcula en cada create/update de la cuenta y en cada
  * alta/baja de un pago.
  */
-function computeEstadoCuentaPagar(saldoPendiente: number, fechaVencimiento: string | null, fechaPagoProgramada: string | null): string {
+export function computeEstadoCuentaPagar(saldoPendiente: number, fechaVencimiento: string | null, fechaPagoProgramada: string | null): string {
 	if (saldoPendiente <= 0) return 'pagado';
 
 	const hoy = new Date();
@@ -345,6 +346,137 @@ export async function createCuentaPagar(
 	await sincronizarCuotasProgramadas(client, data.id_cuenta_pagar, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por pagar creada correctamente', data: data as CuentaPagar };
+}
+
+/** Tope de seguridad ante un rango mal puesto (ej. Fin de Periodo de Pago varios años después de Fecha
+ * Emisión con frecuencia Semanal) — evita generar miles de filas por un error de tipeo. Ver
+ * PREVIEW_TRUNCADO en calcularFechasRecurrentes. */
+const MAX_CUENTAS_RECURRENTES = 500;
+
+/** 'YYYY-MM-DD' + n meses, con el mismo ajuste que usa Postgres (`fecha + interval 'n months'`): si el
+ * día no existe en el mes destino, se recorta al último día de ese mes (ej. 31-ene + 1 mes -> 28/29-feb)
+ * — y el año avanza solo cuando el mes cruza a enero. Sin esto, `Date.setMonth` de JS "desborda" al mes
+ * siguiente en vez de recortar (31-ene + 1 mes daría 3-mar, no 28-feb). */
+function addMonthsClamped(fechaISO: string, n: number): string {
+	const [y, m, d] = fechaISO.split('-').map(Number);
+	const totalMeses = m - 1 + n;
+	const anioDestino = y + Math.floor(totalMeses / 12);
+	const mesDestino = ((totalMeses % 12) + 12) % 12; // 0-indexado
+	const ultimoDiaMesDestino = new Date(anioDestino, mesDestino + 1, 0).getDate();
+	const diaDestino = Math.min(d, ultimoDiaMesDestino);
+	return `${anioDestino}-${String(mesDestino + 1).padStart(2, '0')}-${String(diaDestino).padStart(2, '0')}`;
+}
+
+/** 'YYYY-MM-DD' + n días (aritmética simple, sin ambigüedad de mes — usado para Semanal/Quincenal). */
+function addDias(fechaISO: string, n: number): string {
+	const d = new Date(fechaISO + 'T00:00:00');
+	d.setDate(d.getDate() + n);
+	return d.toISOString().slice(0, 10);
+}
+
+export interface FechaCuentaRecurrente {
+	numero: number;
+	fecha_emision: string;
+	fecha_vencimiento: string | null;
+	fecha_pago_programada: string | null;
+}
+
+/**
+ * Calcula las fechas de TODAS las cuentas por pagar que hay que generar para una frecuencia periódica
+ * — a pedido EXPLÍCITO del usuario: "frecuencia de pago" indica únicamente cada cuánto se genera una
+ * cuenta NUEVA con el MISMO Monto Comprometido, nunca divide el monto entre las cuotas. 'contado' y
+ * 'sin_periodicidad' generan una sola cuenta (fila única con las fechas tal cual se ingresaron);
+ * 'mensual'/'quincenal'/'semanal' generan una por cada fecha desde `fechaEmisionBase` hasta
+ * `finPeriodo` (inclusive), corriendo fecha_vencimiento/fecha_pago_programada por el mismo intervalo
+ * para conservar la MISMA distancia a fecha_emision que ya tenía la cuenta original (esa es "la lógica
+ * que ya usa el ERP" para la fecha de vencimiento — no hay una fórmula nueva, se preserva el gap
+ * original). Usada tanto por la vista previa del formulario (CuentaPagarModal.svelte) como por
+ * createCuentasPagarRecurrentes, para que ambas muestren/generen exactamente lo mismo.
+ *
+ * Sin `finPeriodo` (o frecuencia no periódica), devuelve un array de 1 elemento — el caso normal de
+ * "una sola cuenta", para que el llamador no necesite dos caminos distintos.
+ */
+export function calcularFechasRecurrentes(
+	frecuencia: string,
+	fechaEmisionBase: string | null | undefined,
+	fechaVencimientoBase: string | null | undefined,
+	fechaPagoProgramadaBase: string | null | undefined,
+	finPeriodo: string | null | undefined
+): FechaCuentaRecurrente[] {
+	if (!fechaEmisionBase) return [];
+
+	const esPeriodico = frecuencia === 'mensual' || frecuencia === 'quincenal' || frecuencia === 'semanal';
+	if (!esPeriodico || !finPeriodo) {
+		return [{ numero: 1, fecha_emision: fechaEmisionBase, fecha_vencimiento: fechaVencimientoBase || null, fecha_pago_programada: fechaPagoProgramadaBase || null }];
+	}
+
+	const desplazar = (fecha: string, n: number): string =>
+		frecuencia === 'mensual' ? addMonthsClamped(fecha, n) : addDias(fecha, n * (frecuencia === 'quincenal' ? 15 : 7));
+
+	const resultado: FechaCuentaRecurrente[] = [];
+	for (let n = 0; n < MAX_CUENTAS_RECURRENTES; n++) {
+		const emision = desplazar(fechaEmisionBase, n);
+		if (emision > finPeriodo) break; // comparación de strings 'YYYY-MM-DD' ordena igual que por fecha
+		resultado.push({
+			numero: n + 1,
+			fecha_emision: emision,
+			fecha_vencimiento: fechaVencimientoBase ? desplazar(fechaVencimientoBase, n) : null,
+			fecha_pago_programada: fechaPagoProgramadaBase ? desplazar(fechaPagoProgramadaBase, n) : null
+		});
+	}
+	return resultado;
+}
+
+/**
+ * Genera VARIAS cuentas por pagar de una sola vez, una por cada fecha en `fechas` (ver
+ * calcularFechasRecurrentes) — TODAS con el mismo resto de campos que `payload` (mismo Monto
+ * Comprometido íntegro en cada una, a pedido explícito del usuario), solo cambian las 3 fechas por
+ * fila. Encadena cada cuenta con la anterior de su serie vía `id_cuenta_pagar_padre` (ordenado por
+ * id_cuenta_pagar tras el insert — BIGSERIAL asigna en el mismo orden en que se mandaron las filas de
+ * un único INSERT; la primera de la serie queda con null) — solo para trazabilidad, nada más depende
+ * de esta cadena (a diferencia del cron que se retiró, ver cuentas_pagar_generacion_inmediata_migration.sql).
+ * No duplica el fraccionamiento en cuotas (`pagos`) de la cuenta original si estuviera fraccionada —
+ * fuera del alcance pedido, se configuraría a mano en cada cuenta generada si hiciera falta.
+ */
+export async function createCuentasPagarRecurrentes(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	fechas: FechaCuentaRecurrente[]
+): Promise<ServiceResult<CuentaPagar[]>> {
+	const errors = validatePayload(FIELDS_CONFIG, payload);
+	if (Object.keys(errors).length > 0) {
+		return { success: false, message: 'Revisa los campos marcados', errors };
+	}
+	if (fechas.length === 0) {
+		return { success: false, message: 'No hay ninguna fecha que generar — revisa Fecha Emisión y Fin de Periodo de Pago.' };
+	}
+
+	const base = buildWritablePayload(FIELDS_CONFIG, payload);
+	const saldoInicial = Number(payload.monto_comprometido);
+
+	const filas = fechas.map((f) => ({
+		...base,
+		fecha_emision: f.fecha_emision,
+		fecha_vencimiento: f.fecha_vencimiento,
+		fecha_pago_programada: f.fecha_pago_programada,
+		monto_pagado: 0,
+		saldo_pendiente: saldoInicial,
+		estado: computeEstadoCuentaPagar(saldoInicial, f.fecha_vencimiento, f.fecha_pago_programada),
+		usuario_registro: usuarioRegistro
+	}));
+
+	const { data, error } = await client.from(TABLE_NAME).insert(filas).select('*, proveedor(razon_social)');
+	if (error) return { success: false, message: `No se pudo generar la serie de cuentas por pagar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	const generadas = (data as CuentaPagar[]).slice().sort((a, b) => a.id_cuenta_pagar - b.id_cuenta_pagar);
+	if (generadas.length > 1) {
+		await Promise.all(
+			generadas.slice(1).map((fila, i) => client.from(TABLE_NAME).update({ id_cuenta_pagar_padre: generadas[i].id_cuenta_pagar }).eq(PK_COLUMN, fila.id_cuenta_pagar))
+		);
+	}
+
+	return { success: true, message: `Se generaron ${generadas.length} cuentas por pagar`, data: generadas };
 }
 
 /**
