@@ -2,3 +2,9 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Cada plugin en plugins/ es su propio crate — al compilarlo suelto (ej. `cargo check` corrido
+# directo en su carpeta) genera su PROPIO target/, que /target/ de arriba no cubre por ser relativo
+# a src-tauri/. Sin esto, esos artefactos de build (con rutas larguísimas de incremental compilation)
+# terminan trackeados y rompen `git add` en Windows con "Filename too long".
+/plugins/*/target/
