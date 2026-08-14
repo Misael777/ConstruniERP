@@ -715,11 +715,15 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let isPdfPreviewOpen = $state(false);
 	let pdfPreviewUrl = $state('');
 	let pdfPreviewTitle = $state('');
+	let pdfPreviewDocuments = $state<{ url: string; label: string }[]>([]);
+	let pdfPreviewInitialIndex = $state(0);
 
 	function closePreview() {
 		isPdfPreviewOpen = false;
 		pdfPreviewUrl = '';
 		pdfPreviewTitle = '';
+		pdfPreviewDocuments = [];
+		pdfPreviewInitialIndex = 0;
 	}
 
 	function handleViewContrato(e: CustomEvent) {
@@ -728,6 +732,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			alert('No se encontró el contrato para este proyecto.');
 			return;
 		}
+		pdfPreviewDocuments = [];
 		pdfPreviewUrl = String(row.contrato);
 		pdfPreviewTitle = `Contrato - ${etiquetaVenta(row)}`;
 		isPdfPreviewOpen = true;
@@ -735,31 +740,36 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	// El botón "Proforma" (pdf) de VentasTable es solo una vista rápida — a pedido del usuario, NO
 	// abre el popup completo de edición; para gestionar todas las proformas (agregar, elegir la
-	// final, cerrar la venta) hay que usar "Editar" (lápiz). Si la venta YA está cerrada, muestra la
-	// proforma marcada como FINAL (la que realmente aplica); si sigue en negociación, no hay una
-	// final elegida todavía, así que muestra la ÚLTIMA subida.
+	// final, cerrar la venta) hay que usar "Editar" (lápiz). Trae TODAS las proformas del proyecto
+	// (antes solo la final/última) para que, si hay más de una, el popup muestre el selector de
+	// DocumentPreviewModal y se pueda elegir cuál ver — la selección inicial sigue el mismo criterio
+	// de antes: si la venta YA está cerrada, la marcada como FINAL; si sigue en negociación (todavía
+	// no hay ninguna final elegida), la ÚLTIMA subida.
 	async function handleViewProforma(e: CustomEvent) {
 		const row = e.detail.row;
 		const id = row?.id ?? row?.id_proyecto;
 		if (!id) return;
 		try {
-			let query = supabase
+			const { data, error } = await supabase
 				.from('documento_proyecto')
-				.select('storage_url, nombre')
+				.select('storage_url, nombre, created_at, es_proforma_final')
 				.eq('id_proyecto', id)
-				.eq('tipo_documento', 'Proforma');
-
-			query = row?.estado_proyecto === 'venta_cerrada'
-				? query.eq('es_proforma_final', true)
-				: query.order('created_at', { ascending: false });
-
-			const { data, error } = await query.limit(1).maybeSingle();
+				.eq('tipo_documento', 'Proforma')
+				.order('created_at', { ascending: true });
 			if (error) throw error;
-			if (!data?.storage_url) {
+
+			const proformas = (data ?? []).filter((p) => p.storage_url);
+			if (proformas.length === 0) {
 				alert('No se encontró ninguna proforma para este proyecto.');
 				return;
 			}
-			pdfPreviewUrl = data.storage_url;
+
+			pdfPreviewDocuments = proformas.map((p, i) => ({
+				url: p.storage_url as string,
+				label: `${p.nombre || `Proforma ${i + 1}`}${p.es_proforma_final ? ' · Final' : ''}`
+			}));
+			const indiceFinal = proformas.findIndex((p) => p.es_proforma_final);
+			pdfPreviewInitialIndex = row?.estado_proyecto === 'venta_cerrada' && indiceFinal !== -1 ? indiceFinal : proformas.length - 1;
 			pdfPreviewTitle = `Proforma - ${etiquetaVenta(row)}`;
 			isPdfPreviewOpen = true;
 		} catch (err) {
@@ -873,7 +883,14 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 />
 
 <!-- Preview de contrato/proforma -->
-<DocumentPreviewModal open={isPdfPreviewOpen} url={pdfPreviewUrl} title={pdfPreviewTitle} onClose={closePreview} />
+<DocumentPreviewModal
+	open={isPdfPreviewOpen}
+	url={pdfPreviewUrl}
+	documents={pdfPreviewDocuments}
+	initialIndex={pdfPreviewInitialIndex}
+	title={pdfPreviewTitle}
+	onClose={closePreview}
+/>
 
 <!-- Transacción del adelanto (a pedido del usuario: al cerrar una venta, se abre para completar los
      datos que el cierre de venta no pide) -->

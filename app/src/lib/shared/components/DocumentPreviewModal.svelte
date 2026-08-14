@@ -12,15 +12,33 @@
 		open = false,
 		url = '',
 		title = '',
+		documents = [],
+		initialIndex = 0,
 		onClose = () => {}
 	}: {
 		open?: boolean;
 		url?: string | null;
 		title?: string;
+		/** Cuando el documento tiene más de una versión asociada (ej. varias proformas de un proyecto,
+		 * o comprobante + factura de una transacción) — a pedido del usuario, se muestra un selector de
+		 * pastillas en la cabecera para cambiar entre ellas sin cerrar el popup. Con 0 o 1 elementos se
+		 * ignora por completo y el modal se comporta igual que antes, mostrando `url` directo. */
+		documents?: { url: string; label: string }[];
+		/** Cuál de `documents` mostrar al abrir (ej. la proforma marcada como final, en vez de siempre
+		 * la primera de la lista). Se ignora si no hay `documents`. */
+		initialIndex?: number;
 		onClose?: () => void;
 	} = $props();
 
-	let previewUrl = $derived(toDrivePreviewUrl(url));
+	let selectedIndex = $state(0);
+	$effect(() => {
+		if (open) selectedIndex = initialIndex;
+	});
+
+	const activeDoc = $derived(documents.length > 0 ? documents[Math.min(selectedIndex, documents.length - 1)] : null);
+	const effectiveUrl = $derived(activeDoc ? activeDoc.url : url);
+	const downloadTitle = $derived(documents.length > 1 && activeDoc ? `${title} - ${activeDoc.label}` : title);
+	let previewUrl = $derived(toDrivePreviewUrl(effectiveUrl));
 
 	function sanitizeFilename(name: string) {
 		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
@@ -100,7 +118,7 @@
 		showDownloadConfirm = false;
 		if (!previewUrl) return;
 
-		const filename = sanitizeFilename(title) + '.pdf';
+		const filename = sanitizeFilename(downloadTitle) + '.pdf';
 		isDownloading = true;
 		downloadProgress = null;
 		downloadError = '';
@@ -128,7 +146,7 @@
 
 			const blob = new Blob(chunks);
 			await guardarBinario(blob, filename);
-			toast.success(`"${title}" se descargó correctamente.`);
+			toast.success(`"${downloadTitle}" se descargó correctamente.`);
 		} catch (err) {
 			console.warn('[DocumentPreviewModal] descarga por fetch falló, abriendo en nueva pestaña', err);
 			toast.info('No se pudo descargar directamente — se abrió en una nueva pestaña.');
@@ -144,9 +162,24 @@
 	<div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[90vh] flex flex-col overflow-hidden">
 			<!-- Modal Header -->
-			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
-				<h2 class="text-lg font-semibold text-slate-800">{title}</h2>
-				<div class="flex items-center gap-2">
+			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0 gap-3 flex-wrap">
+				<div class="min-w-0">
+					<h2 class="text-lg font-semibold text-slate-800 truncate">{title}</h2>
+					{#if documents.length > 1}
+						<div class="flex items-center gap-1.5 mt-1.5 flex-wrap">
+							{#each documents as doc, i (i)}
+								<button
+									type="button"
+									onclick={() => (selectedIndex = i)}
+									class={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${i === selectedIndex ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+								>
+									{doc.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+				<div class="flex items-center gap-2 shrink-0">
 					<button
 						onclick={requestDownload}
 						disabled={isDownloading}
@@ -212,7 +245,7 @@
 			>
 				<h3 id="download-confirm-title" class="text-base font-semibold text-slate-800 mb-1">Descargar documento</h3>
 				<p class="text-sm text-slate-600 mb-4">
-					¿Deseas descargar <strong>{sanitizeFilename(title)}.pdf</strong>?
+					¿Deseas descargar <strong>{sanitizeFilename(downloadTitle)}.pdf</strong>?
 					{#if isRunningInTauri()}
 						Se abrirá un diálogo para que elijas dónde guardarlo.
 					{:else}

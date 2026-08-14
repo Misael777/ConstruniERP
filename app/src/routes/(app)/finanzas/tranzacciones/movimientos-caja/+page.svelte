@@ -13,11 +13,14 @@
 		Search,
 		Download,
 		Eye,
-		Paperclip,
-		X
+		X,
+		Banknote,
+		Building2,
+		Smartphone
 	} from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
+	import { formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
+	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
 		getCentroCostoOptions,
 		getCentroCostoOptionsProyectos,
@@ -70,6 +73,31 @@
 		'G. Administrativos': '#1baf7a',
 		Servicios: '#eda100',
 		Materiales: '#008300'
+	};
+	// A pedido del usuario (diseño de referencia): semáforo de colores en vez del azul/gris neutro que
+	// usa el badge de Estado en finanzas/tranzacciones/+page.svelte — acá vale más distinguir de un
+	// vistazo lo normal (activo) de lo anulado/en consulta.
+	const ESTADO_BADGE_CLASS: Record<string, string> = {
+		activo: 'bg-emerald-100 text-emerald-700',
+		anulado: 'bg-red-100 text-red-700',
+		consulta: 'bg-amber-100 text-amber-700'
+	};
+	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
+	const medioPagoField = FIELDS_CONFIG.find((f) => f.key === 'medio_pago')!;
+	// Ícono + color por Medio de Pago (diseño de referencia: cada método trae su propio ícono, no solo
+	// texto) — códigos ver transaccion.config.ts (1=Efectivo, 2=Transferencia bancaria, 3=Depósito
+	// bancario, 4=Yape o Plin).
+	const MEDIO_PAGO_ICON: Record<string, typeof Banknote> = {
+		'1': Banknote,
+		'2': Landmark,
+		'3': Building2,
+		'4': Smartphone
+	};
+	const MEDIO_PAGO_COLOR: Record<string, string> = {
+		'1': 'text-emerald-600',
+		'2': 'text-blue-600',
+		'3': 'text-violet-600',
+		'4': 'text-rose-600'
 	};
 
 	let mes = $state(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
@@ -125,13 +153,18 @@
 		cuenta_banco: cuentaBancoOptions
 	});
 
-	// Previsualización rápida del comprobante desde la fila, sin abrir el formulario completo.
+	// Previsualización rápida de los documentos (comprobante + factura, si tiene) desde la fila, sin
+	// abrir el formulario completo — a pedido del usuario, un solo ícono (ojo) que deja elegir entre
+	// ambos con el selector de pastillas de DocumentPreviewModal en vez de un ícono de clip aparte.
 	let previewOpen = $state(false);
-	let previewUrl = $state('');
 	let previewTitle = $state('');
-	function openComprobantePreview(transaccion: Transaccion) {
-		previewUrl = transaccion.comprobante_url ?? '';
-		previewTitle = `Comprobante - ${transaccion.num_documento || 'Transacción'}`;
+	let previewDocuments = $state<{ url: string; label: string }[]>([]);
+	function openDocumentosPreview(transaccion: Transaccion) {
+		previewDocuments = [
+			...(transaccion.comprobante_url ? [{ url: transaccion.comprobante_url, label: 'Comprobante' }] : []),
+			...(transaccion.factura_url ? [{ url: transaccion.factura_url, label: 'Factura o boleta' }] : [])
+		];
+		previewTitle = `Documentos - ${transaccion.num_documento || 'Transacción'}`;
 		previewOpen = true;
 	}
 
@@ -318,7 +351,7 @@
 	}
 </script>
 
-<div class="max-w-7xl mx-auto">
+<div class="w-full max-w-none">
 	<div class="flex items-center justify-between mb-6 flex-wrap gap-3">
 		<div class="flex items-center gap-3">
 			<button type="button" onclick={() => goto('/finanzas/tranzacciones')} class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50" aria-label="Volver a Transacciones">
@@ -343,97 +376,112 @@
 
 	<!-- KPIs -->
 	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><Wallet size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Saldo Inicial del Mes</span>
+		<div class="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><Wallet size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Saldo Inicial del Mes</p>
+				<p class="text-xl font-bold text-slate-800 truncate">{formatCurrency(resultado?.saldoInicial ?? 0)}</p>
+				<p class="text-[11px] text-slate-400 truncate">Saldo al {formatDate(desde)}</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(resultado?.saldoInicial ?? 0)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">Saldo al {formatDate(desde)}</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><TrendingUp size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Ingresos del Mes</span>
+		<div class="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><TrendingUp size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Ingresos del Mes</p>
+				<p class="text-xl font-bold text-slate-800 truncate">{formatCurrency(resultado?.ingresosTotal ?? 0)}</p>
+				<p class="text-[11px] text-slate-400 truncate">{resultado?.ingresosCount ?? 0} movimientos</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(resultado?.ingresosTotal ?? 0)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">{resultado?.ingresosCount ?? 0} movimientos</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center"><TrendingDown size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Egresos del Mes</span>
+		<div class="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0"><TrendingDown size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Egresos del Mes</p>
+				<p class="text-xl font-bold text-slate-800 truncate">{formatCurrency(resultado?.egresosTotal ?? 0)}</p>
+				<p class="text-[11px] text-slate-400 truncate">{resultado?.egresosCount ?? 0} movimientos</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(resultado?.egresosTotal ?? 0)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">{resultado?.egresosCount ?? 0} movimientos</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center"><Landmark size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Financiamientos del Mes</span>
+		<div class="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0"><Landmark size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Financiamientos del Mes</p>
+				<p class="text-xl font-bold text-slate-800 truncate">{formatCurrency(resultado?.financiamientosTotal ?? 0)}</p>
+				<p class="text-[11px] text-slate-400 truncate">{resultado?.financiamientosCount ?? 0} movimientos</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(resultado?.financiamientosTotal ?? 0)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">{resultado?.financiamientosCount ?? 0} movimientos</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center"><Coins size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Saldo Actual</span>
+		<div class="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0"><Coins size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Saldo Actual</p>
+				<p class="text-xl font-bold text-slate-800 truncate">{formatCurrency(resultado?.saldoActual ?? 0)}</p>
+				<p class="text-[11px] text-slate-400 truncate">Saldo al {formatDate(hasta)}</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(resultado?.saldoActual ?? 0)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">Saldo al {formatDate(hasta)}</p>
 		</div>
 	</div>
 
 	<!-- Filtros -->
-	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4 flex flex-wrap items-center gap-3">
-		<select bind:value={idCentroCosto} class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-			<option value="">Centro de Costo: Todos</option>
-			{#each centroCostoOptions as opt}
-				<option value={opt.value}>{opt.label}</option>
-			{/each}
-		</select>
-		<select bind:value={categoriaFiltro} class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-			<option value="">Categoría: Todas</option>
-			{#each ['Consultoría', 'Ingresos por Servicios', ...CATEGORIAS_EGRESO, 'Préstamos'] as cat}
-				<option value={cat}>{cat}</option>
-			{/each}
-		</select>
-		<div class="flex items-center gap-1.5">
-			<input
-				type="date"
-				bind:value={desde}
-				max={hasta}
-				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-				aria-label="Desde"
-			/>
-			<span class="text-slate-400 text-sm">—</span>
-			<input
-				type="date"
-				bind:value={hasta}
-				min={desde}
-				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-				aria-label="Hasta"
-			/>
+	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+			<div>
+				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Centro de Costo</label>
+				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					{#each centroCostoOptions as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="mc-categoria" class="block text-xs font-medium text-slate-500 mb-1">Categoría</label>
+				<select id="mc-categoria" bind:value={categoriaFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todas</option>
+					{#each ['Consultoría', 'Ingresos por Servicios', ...CATEGORIAS_EGRESO, 'Préstamos'] as cat}
+						<option value={cat}>{cat}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="mc-desde" class="block text-xs font-medium text-slate-500 mb-1">Fecha inicio</label>
+				<input
+					id="mc-desde"
+					type="date"
+					bind:value={desde}
+					max={hasta}
+					class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+				/>
+			</div>
+			<div>
+				<label for="mc-hasta" class="block text-xs font-medium text-slate-500 mb-1">Fecha fin</label>
+				<input
+					id="mc-hasta"
+					type="date"
+					bind:value={hasta}
+					min={desde}
+					class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+				/>
+			</div>
 		</div>
-		<div class="relative flex-1 min-w-[220px]">
-			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-			<input
-				type="text"
-				value={searchInput}
-				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
-				placeholder="Buscar movimiento..."
-				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-			/>
-			{#if searchInput}
-				<button type="button" onclick={() => onSearchInput('')} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
-					<X size={14} />
-				</button>
-			{/if}
+		<div class="flex flex-wrap items-end gap-3 mt-3">
+			<div class="relative flex-1 min-w-[220px]">
+				<label for="mc-buscar" class="block text-xs font-medium text-slate-500 mb-1">Buscar</label>
+				<Search size={16} class="absolute left-3 top-[calc(50%+0.5rem)] -translate-y-1/2 text-slate-400" />
+				<input
+					id="mc-buscar"
+					type="text"
+					value={searchInput}
+					oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
+					placeholder="Buscar movimiento..."
+					class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+				/>
+				{#if searchInput}
+					<button type="button" onclick={() => onSearchInput('')} class="absolute right-2 top-[calc(50%+0.5rem)] -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
+						<X size={14} />
+					</button>
+				{/if}
+			</div>
+			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
+				<Download size={16} /> Exportar
+			</button>
 		</div>
-		<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
-			<Download size={16} /> Exportar
-		</button>
 	</div>
 
 	<!-- Tabs (tipo de movimiento) -->
@@ -455,8 +503,9 @@
 			<ResponsiveDataView
 				items={filasPagina}
 				keyField="codigo"
-				colspan={12}
+				colspan={14}
 				emptyMessage={loading ? 'Cargando...' : 'Sin movimientos en este período.'}
+				onRowClick={(fila) => { if (!fila.esSaldoInicial && fila.raw) openView(fila.raw as Transaccion); }}
 			>
 				{#snippet header()}
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
@@ -466,6 +515,8 @@
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Cuenta Interna Origen</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Cuenta Interna Destino</th>
 					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Categoría</th>
+					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Estado</th>
+					<th class="text-left px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Método de Pago</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Ingresos (S/)</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Egresos (S/)</th>
 					<th class="text-right px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">Financiamientos (S/)</th>
@@ -484,29 +535,38 @@
 					<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoOrigenLabel}</td>
 					<td class="px-3 py-2 whitespace-nowrap">{fila.centroCostoDestinoLabel}</td>
 					<td class="px-3 py-2 whitespace-nowrap">{fila.categoria ?? '—'}</td>
+					<td class="px-3 py-2 whitespace-nowrap">
+						{#if fila.raw?.estado}
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_BADGE_CLASS[fila.raw.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, fila.raw.estado)}
+							</span>
+						{:else}
+							—
+						{/if}
+					</td>
+					<td class="px-3 py-2 whitespace-nowrap">
+						{#if fila.raw?.medio_pago}
+							{@const MedioPagoIcon = MEDIO_PAGO_ICON[fila.raw.medio_pago] ?? Wallet}
+							<span class={`inline-flex items-center gap-1.5 ${MEDIO_PAGO_COLOR[fila.raw.medio_pago] ?? 'text-slate-500'}`}>
+								<MedioPagoIcon size={14} />
+								<span class="text-slate-700">{getOptionLabel(medioPagoField, fila.raw.medio_pago)}</span>
+							</span>
+						{:else}
+							—
+						{/if}
+					</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap text-emerald-700">{fila.ingreso ? formatCurrency(fila.ingreso) : '—'}</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap text-red-700">{fila.egreso ? formatCurrency(fila.egreso) : '—'}</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap text-violet-700">{fila.financiamiento ? formatCurrency(fila.financiamiento) : '—'}</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</td>
 					<td class="px-3 py-2 text-right whitespace-nowrap">
-						{#if !fila.esSaldoInicial && fila.raw}
-							{#if (fila.raw as Transaccion).comprobante_url}
-								<button
-									type="button"
-									onclick={() => openComprobantePreview(fila.raw as Transaccion)}
-									class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-									title="Ver comprobante"
-									aria-label="Ver comprobante"
-								>
-									<Paperclip size={16} />
-								</button>
-							{/if}
+						{#if !fila.esSaldoInicial && fila.raw && (fila.raw as Transaccion).comprobante_url}
 							<button
 								type="button"
-								onclick={() => openView(fila.raw as Transaccion)}
+								onclick={(e) => { e.stopPropagation(); openDocumentosPreview(fila.raw as Transaccion); }}
 								class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600"
-								title="Ver / editar transacción"
-								aria-label="Ver / editar transacción"
+								title="Ver documentos"
+								aria-label="Ver documentos"
 							>
 								<Eye size={16} />
 							</button>
@@ -533,6 +593,28 @@
 						<span class="text-right font-mono text-slate-600">{fila.codigo}</span>
 						<span class="text-slate-400">Categoría</span>
 						<span class="text-right text-slate-700">{fila.categoria ?? '—'}</span>
+						<span class="text-slate-400">Estado</span>
+						<span class="text-right">
+							{#if fila.raw?.estado}
+								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_BADGE_CLASS[fila.raw.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(estadoField, fila.raw.estado)}
+								</span>
+							{:else}
+								<span class="text-slate-700">—</span>
+							{/if}
+						</span>
+						<span class="text-slate-400">Método de Pago</span>
+						<span class="text-right">
+							{#if fila.raw?.medio_pago}
+								{@const MedioPagoIcon = MEDIO_PAGO_ICON[fila.raw.medio_pago] ?? Wallet}
+								<span class={`inline-flex items-center gap-1.5 justify-end ${MEDIO_PAGO_COLOR[fila.raw.medio_pago] ?? 'text-slate-500'}`}>
+									<MedioPagoIcon size={13} />
+									<span class="text-slate-700">{getOptionLabel(medioPagoField, fila.raw.medio_pago)}</span>
+								</span>
+							{:else}
+								<span class="text-slate-700">—</span>
+							{/if}
+						</span>
 						<span class="text-slate-400">Cuenta Origen</span>
 						<span class="text-right text-slate-700 truncate">{fila.centroCostoOrigenLabel}</span>
 						<span class="text-slate-400">Cuenta Destino</span>
@@ -540,23 +622,14 @@
 						<span class="text-slate-400">Saldo Acumulado</span>
 						<span class="text-right font-semibold text-slate-800">{formatCurrency(fila.saldoAcumulado)}</span>
 					</div>
-					{#if !fila.esSaldoInicial && fila.raw}
+					{#if !fila.esSaldoInicial && fila.raw && (fila.raw as Transaccion).comprobante_url}
 						<div class="pt-2 border-t border-slate-100 flex gap-2">
-							{#if (fila.raw as Transaccion).comprobante_url}
-								<button
-									type="button"
-									onclick={() => openComprobantePreview(fila.raw as Transaccion)}
-									class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
-								>
-									<Paperclip size={14} /> Comprobante
-								</button>
-							{/if}
 							<button
 								type="button"
-								onclick={() => openView(fila.raw as Transaccion)}
+								onclick={(e) => { e.stopPropagation(); openDocumentosPreview(fila.raw as Transaccion); }}
 								class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50"
 							>
-								<Eye size={14} /> Ver / editar
+								<Eye size={14} /> Ver documentos
 							</button>
 						</div>
 					{/if}
@@ -691,4 +764,4 @@
 	onClose={closeModal}
 	onSaved={handleTransaccionSaved}
 />
-<DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />
+<DocumentPreviewModal open={previewOpen} documents={previewDocuments} title={previewTitle} onClose={() => (previewOpen = false)} />

@@ -114,14 +114,19 @@
 	let detalleModalOpen = $state(false);
 	let editingDetalle = $state<TransDetalle | null>(null);
 
-	// Previsualización rápida del comprobante desde la lista, sin tener que abrir el formulario de
-	// edición completo — mismo componente compartido que usa Ventas para contrato/proforma.
+	// Previsualización rápida de los documentos (comprobante + factura, si tiene) desde la lista, sin
+	// tener que abrir el formulario de edición completo — mismo componente compartido que usa Ventas
+	// para contrato/proforma. Si hay más de uno, DocumentPreviewModal muestra un selector en la
+	// cabecera para elegir cuál ver (a pedido del usuario).
 	let previewOpen = $state(false);
-	let previewUrl = $state('');
 	let previewTitle = $state('');
+	let previewDocuments = $state<{ url: string; label: string }[]>([]);
 	function openComprobantePreview(item: Transaccion) {
-		previewUrl = item.comprobante_url ?? '';
-		previewTitle = `Comprobante - ${item.num_documento || 'Transacción'}`;
+		previewDocuments = [
+			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Comprobante' }] : []),
+			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta' }] : [])
+		];
+		previewTitle = `Documentos - ${item.num_documento || 'Transacción'}`;
 		previewOpen = true;
 	}
 
@@ -546,7 +551,7 @@
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
 					{#if item.comprobante_url}
-						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver comprobante" aria-label="Ver comprobante">
+						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
 						</button>
 					{/if}
@@ -628,7 +633,7 @@
 
 <TransaccionModal open={modalOpen} mode={modalMode} transaccion={editingTransaccion} dynamicOptions={dynamicOptions} onClose={closeModal} onSaved={handleSaved} />
 <TransDetalleModal open={detalleModalOpen} idTransaccion={selectedId} detalle={editingDetalle} dynamicOptions={detalleDynamicOptions} onClose={closeDetalleModal} onSaved={handleDetalleSaved} />
-<DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />
+<DocumentPreviewModal open={previewOpen} documents={previewDocuments} title={previewTitle} onClose={() => (previewOpen = false)} />
 <AdminConfirmModal
 	open={bulkDeleteModalOpen}
 	title="Confirmar eliminación"

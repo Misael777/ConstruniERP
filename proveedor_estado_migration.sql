@@ -1,32 +1,16 @@
--- Agrega la columna proveedor.estado ('activo' | 'baja') — a pedido del usuario: al dar de baja un
--- proveedor también se debe dar de baja el centro de costo que se generó para él (ver
--- darDeBajaCentroCostoDeEntidad en centroCostos.service.ts, ya genérico por tipo). Reemplaza al
--- botón "Eliminar" (borrado real) en ProveedoresTable.svelte.
+-- ============================================================
+-- MIGRACIÓN: agrega la columna `estado` a `proveedor` — "Dar de baja" (finanzas/proveedores/+page.svelte
+-- / darDeBajaProveedor en proveedores.service.ts) intenta marcar `proveedor.estado = 'baja'`, pero esa
+-- columna nunca existió en la tabla (mismo caso que ya pasó con `cliente.estado`, ver
+-- cliente_estado_migration.sql) — por eso getProveedores fallaba con:
+-- "column proveedor.estado does not exist" (Postgres 42703).
+--
+-- VARCHAR libre, sin CHECK (mismo criterio que cliente.estado/estado_proyecto) — default 'activo'
+-- para que los proveedores ya existentes queden como activos sin necesitar backfill manual.
 --
 -- Idempotente: se puede correr más de una vez sin error.
+-- ============================================================
 
-ALTER TABLE proveedor
-    ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'activo';
+ALTER TABLE proveedor ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL DEFAULT 'activo';
 
-UPDATE proveedor SET estado = 'activo' WHERE estado IS NULL;
-
-DO $$
-DECLARE
-    r RECORD;
-BEGIN
-    FOR r IN
-        SELECT conname FROM pg_constraint
-        WHERE conrelid = 'proveedor'::regclass
-          AND contype = 'c'
-          AND pg_get_constraintdef(oid) ILIKE '%estado%'
-    LOOP
-        EXECUTE format('ALTER TABLE proveedor DROP CONSTRAINT %I', r.conname);
-    END LOOP;
-END $$;
-
-ALTER TABLE proveedor
-    ADD CONSTRAINT proveedor_estado_check
-    CHECK (estado IN ('activo', 'baja'));
-
--- Fuerza a PostgREST a recargar el schema cache de inmediato.
 NOTIFY pgrst, 'reload schema';

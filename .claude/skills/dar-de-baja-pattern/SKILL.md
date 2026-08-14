@@ -27,8 +27,15 @@ Antes de agregar una columna nueva, revisa si la tabla ya tiene una columna de e
 puedas reusar con el valor `'baja'`:
 
 - **Reusar `estado`/`estado_x` con valor `'baja'`** si esa columna hoy es libre/sin otro significado
-  fijo — así están `cliente.estado`, `proyecto.estado_proyecto`, `proveedor.estado`,
-  `empleados.estado`, `centro_costo.estado`.
+  fijo — así están `proyecto.estado_proyecto`, `empleados.estado`, `centro_costo.estado`.
+- **OJO — verifica que la columna exista de verdad antes de asumirlo**: `cliente.estado` y
+  `proveedor.estado` NO existían en la BD real (a pesar de que "sonaba" a que ya estaban, por el mismo
+  nombre que usan otras tablas) — el primer intento de usarlas rompió con
+  `column cliente.estado does not exist` / `column proveedor.estado does not exist` (Postgres 42703).
+  Se resolvió con una migración `ALTER TABLE x ADD COLUMN IF NOT EXISTS estado VARCHAR(10) NOT NULL
+  DEFAULT 'activo';` (ver `cliente_estado_migration.sql`/`proveedor_estado_migration.sql`) — si vas a
+  reusar `estado` en una tabla nueva, confírmalo contra el schema real (una query de prueba o el
+  mensaje de error de PostgREST), no contra este documento ni por analogía con otra tabla.
 - **Agregar una columna booleana `activo`** (nueva, `BOOLEAN NOT NULL DEFAULT true`) si `estado` en
   esa tabla YA significa otra cosa (un workflow, no activo/inactivo) — así están
   `cuentas_pagar.activo`, `cuentas_cobrar.activo`, `cuenta_banco.activo`, porque su `estado` ya es
