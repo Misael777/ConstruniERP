@@ -181,7 +181,11 @@
 	let observaciones = $state('');
 	let isSaving = $state(false);
 	let saveError = $state('');
-	let caracteristicasTab = $state<'consultoria' | 'obra'>('consultoria');
+	// A pedido explícito del usuario: ya NO arranca con 'consultoria' por defecto — el nuevo dropdown
+	// "Tipo de Proyecto" (junto a "Código de proyecto", ver más abajo) obliga a elegir explícitamente
+	// antes de generar el código y de habilitar "Características del proyecto nuevo". null = todavía
+	// sin elegir (solo posible en modo creación; loadVentaParaEditar siempre lo fija a un valor real).
+	let caracteristicasTab = $state<'consultoria' | 'obra' | null>(null);
 	// A pedido del usuario: "Información general" arranca colapsada cada vez que se abre el popup
 	// (en edición) o desplegada (en creación) — ver el $effect de reseteo más abajo, que fija el
 	// valor inicial correcto según `mode` cada vez que se abre.
@@ -268,7 +272,9 @@
 				adelantoMonto = '';
 				adelantoFecha = getFechaLocalHoy();
 				observaciones = '';
-				caracteristicasTab = 'consultoria';
+				// A pedido explícito del usuario: arranca sin elegir, obliga a elegir en el nuevo dropdown
+				// "Tipo de Proyecto" (ver su declaración más arriba).
+				caracteristicasTab = null;
 				proformas = [];
 				selectedFinalId = null;
 				localContratoUrl = null;
@@ -442,11 +448,15 @@
 // esa pestaña (mesObra/anioObra), no los derivados de la fecha de venta como en Consultoría. Los 4
 // primeros campos son de selección ÚNICA (no checkboxes, ver PERMISO_MUNICIPAL_OPTIONS/
 // ALCANCE_OBRA_OPTIONS/TIPO_CONTRATACION_OPTIONS más arriba).
+// A pedido explícito del usuario: sin elegir Tipo de Proyecto todavía (caracteristicasTab null), no
+// hay código que mostrar — el dropdown nuevo junto a "Código de proyecto" es lo que decide el prefijo.
 let codigoGenerado = $derived(
-	caracteristicasTab === 'obra'
-		? `${tipoObra}_${tipoTramite}${tipoIntervencion}${tipoEdificacionObra}${numeroPisos}_${sanitizeFileSegment(distritoParaGuardar)}_${mesObra}${String(anioObra).slice(-2)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
-		// A pedido del usuario: en Consultoría el código va prefijado con "EXP_" (de "Expediente").
-		: `EXP_${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+	caracteristicasTab === null
+		? ''
+		: caracteristicasTab === 'obra'
+			? `${tipoObra}_${tipoTramite}${tipoIntervencion}${tipoEdificacionObra}${numeroPisos}_${sanitizeFileSegment(distritoParaGuardar)}_${mesObra}${String(anioObra).slice(-2)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
+			// A pedido del usuario: en Consultoría el código va prefijado con "EXP_" (de "Expediente").
+			: `EXP_${tipoProyecto}${estadoPredio}${tipoEdificacion}${numeroPisos}_${mes}${anio.substring(2)}_${sanitizeFileSegment(distrito)}_${sanitizeFileSegment(getClienteNombreActual() || 'Cliente')}`
 );
 
 // A pedido del usuario: `nombre_proyecto` debe almacenar el CÓDIGO del proyecto, no el nombre del
@@ -785,6 +795,7 @@ async function copiarCodigoGenerado() {
 		!!distrito &&
 		Number(valorVenta) > 0 &&
 		comisionPorcentaje !== '' && !Number.isNaN(Number(comisionPorcentaje)) &&
+		caracteristicasTab !== null &&
 		(caracteristicasTab !== 'consultoria' ||
 			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && Number(numeroPisos) > 0))
 	);
@@ -883,7 +894,8 @@ async function copiarCodigoGenerado() {
 			const cierreParams = {
 				idProyecto: Number(ventaId),
 				proyectoNombre,
-				tipoVenta: caracteristicasTab,
+				// No-null: canClose ya exige infoGeneralCompleta, que exige caracteristicasTab elegido.
+				tipoVenta: caracteristicasTab!,
 				idCliente: basicos.clienteId,
 				clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`,
 				selectedFinalId,
@@ -976,7 +988,11 @@ async function copiarCodigoGenerado() {
 		saveError = '';
 
 		if (!proyectoNombre.trim()) {
-			saveError = 'Debes ingresar un nombre de proyecto.';
+			// A pedido explícito del usuario: proyectoNombre (= codigoGenerado, ver su declaración) solo
+			// queda vacío cuando todavía no se eligió "Tipo de Proyecto" — con Consultoría/Obra elegido
+			// siempre arma algo (aunque sea con campos vacíos), así que este chequeo es en la práctica
+			// exactamente "falta elegir Tipo de Proyecto".
+			saveError = 'Debes elegir el Tipo de Proyecto (Consultoría/Obra) antes de guardar.';
 			return null;
 		}
 		if (!fechaVenta) {
@@ -1281,7 +1297,8 @@ async function copiarCodigoGenerado() {
 			const cierreParams = {
 				idProyecto: resultado.proyectoId,
 				proyectoNombre,
-				tipoVenta: caracteristicasTab,
+				// No-null: canCloseCreate ya exige infoGeneralCompleta, que exige caracteristicasTab elegido.
+				tipoVenta: caracteristicasTab!,
 				idCliente: basicos.clienteId,
 				clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`,
 				selectedFinalId: idDocumentoFinal,
@@ -1445,9 +1462,36 @@ async function copiarCodigoGenerado() {
 								</select>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Proyecto *</label>
+								<!-- A pedido explícito del usuario: define el prefijo del "Código de proyecto" de al
+								     lado (Consultoría -> "EXP_", Obra -> el propio tipo_obra elegido, ver
+								     codigoGenerado) y, mientras no se elija, bloquea la generación del código y
+								     "Características del proyecto nuevo" (ver infoGeneralCompleta/documentosCierreListos,
+								     que exigen proyectoNombre no vacío). Sincronizado en ambos sentidos con las pestañas
+								     de esa sección — cambiar cualquiera de los dos actualiza el otro. -->
+								<select
+									value={caracteristicasTab ?? ''}
+									disabled={tabsBloqueadosPorCierre}
+									title={tabsBloqueadosPorCierre ? 'La venta ya está cerrada — el tipo de proyecto ya no se puede cambiar.' : ''}
+									onchange={(e) => {
+										const value = (e.currentTarget as HTMLSelectElement).value;
+										caracteristicasTab = value === 'obra' || value === 'consultoria' ? value : null;
+										if (caracteristicasTab === 'obra' && !tipoObra) tipoObra = 'OBRA';
+										if (caracteristicasTab === 'obra' && distrito && distritoNumero === null) actualizarNumeroDistrito();
+									}}
+									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+								>
+									<option value="" disabled>-- Selecciona --</option>
+									<option value="consultoria">Consultoria (EXP)</option>
+									<option value="obra">Obra (Obra)</option>
+								</select>
+							</div>
+							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Código de proyecto</label>
 								<input type="text" readonly value={codigoGenerado} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
-								<span class="text-[10px] text-slate-400 mt-0.5">Se generará automáticamente</span>
+								<span class="text-[10px] text-slate-400 mt-0.5">
+									{caracteristicasTab === null ? 'Elige el Tipo de Proyecto para generarlo' : 'Se generará automáticamente'}
+								</span>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Fecha de venta *</label>
@@ -1797,7 +1841,15 @@ async function copiarCodigoGenerado() {
 							<div class="mb-3"></div>
 						{/if}
 
-						{#if caracteristicasTab === 'consultoria'}
+						{#if caracteristicasTab === null}
+							<!-- A pedido explícito del usuario: sin Tipo de Proyecto elegido (dropdown junto a
+							     "Código de proyecto"), no hay campos de Consultoría/Obra que mostrar todavía —
+							     antes de este cambio, `caracteristicasTab` nunca era null (arrancaba en
+							     'consultoria'), así que este caso no existía. -->
+							<p class="text-sm text-slate-400 text-center py-6 border border-dashed border-slate-200 rounded-lg mb-6">
+								Elige el Tipo de Proyecto (Consultoría/Obra) en "Información general" para completar esta sección.
+							</p>
+						{:else if caracteristicasTab === 'consultoria'}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
