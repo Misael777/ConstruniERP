@@ -136,7 +136,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'monto',
-		label: 'Monto',
+		label: 'Valor de venta',
 		tipo: 'currency',
 		required: true,
 		min: 0.01,

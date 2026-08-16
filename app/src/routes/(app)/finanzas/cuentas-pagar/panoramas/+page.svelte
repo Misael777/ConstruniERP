@@ -52,13 +52,16 @@
 		{ id: 2 as const, nombre: 'Panorama 2', subtitulo: 'Escenario optimizado' }
 	];
 
+	// A pedido del usuario: un poco más de intensidad que antes (bg-*-100/text-*-700 y bg-*-50/60 con
+	// borde -100 quedaban muy desteñidos) — mismo criterio de color por panorama (1 = azul/rojo,
+	// 2 = verde), solo un escalón más saturado.
 	const panoramaBadgeClass: Record<1 | 2, string> = {
-		1: 'bg-blue-100 text-blue-700',
-		2: 'bg-emerald-100 text-emerald-700'
+		1: 'bg-blue-200 text-blue-800',
+		2: 'bg-emerald-200 text-emerald-800'
 	};
 	const panoramaCardClass: Record<1 | 2, string> = {
-		1: 'bg-red-50/60 border-red-100',
-		2: 'bg-green-50/60 border-green-100'
+		1: 'bg-red-50 border-red-200',
+		2: 'bg-green-50 border-green-200'
 	};
 
 	const prioridadBadgeClass: Record<Prioridad, string> = {
@@ -447,6 +450,20 @@
 		toast.success(`Copiado a ${PANORAMAS[destino - 1].nombre}`);
 	}
 
+	/** Misma copia de sesión que copiarItemAOtroPanorama (arriba), pero para el calendario: ahí el
+	 * botón de copiar de cada tarjeta pasa el destino EXPLÍCITO en vez de "el otro", porque desde
+	 * Panorama Actual (id 0) se puede copiar a cualquiera de los dos, no hay un único "otro". */
+	function copiarItemCalendarioAPanorama(item: PagoPendienteItem, destino: 1 | 2) {
+		if (panoramaItems(destino).some((i) => i.id === item.id)) {
+			toast.error(`Ya está en ${PANORAMAS[destino - 1].nombre}`);
+			return;
+		}
+		setPanoramaItems(destino, [...panoramaItems(destino), { ...item }]);
+		if (destino === 1) panorama1Version++;
+		else panorama2Version++;
+		toast.success(`Copiado a ${PANORAMAS[destino - 1].nombre}`);
+	}
+
 	function exportarCSV() {
 		const filas: string[] = ['Ubicación,Título,Proveedor,Monto,Vencimiento,Prioridad'];
 		const agregar = (ubicacion: string, items: PagoPendienteItem[]) => {
@@ -607,16 +624,28 @@
 			</div>
 		{/if}
 		{#key panorama0Version + panorama1Version + panorama2Version}
+			<!-- A pedido del usuario: el calendario debe mostrar TODAS las cuentas por pagar en su fecha
+			     correspondiente — antes, una cuenta sin fecha_pago_programada explícita (ej. recién
+			     creada al Contado, que arranca en blanco hasta que alguien la completa a mano, ver
+			     actualizarFechaPagoProgramada en CuentaPagarModal.svelte) quedaba con fechaVencimiento
+			     null en el grid del calendario, y como computeGrid() solo ubica un ítem si su fecha
+			     coincide EXACTO con el día de la celda, esa cuenta no aparecía en NINGÚN día — invisible
+			     por completo, sin ni siquiera un aviso. El fallback a fechaVencimiento (fecha_vencimiento,
+			     la fecha contractual) es el mismo criterio que ya usa computeEstadoCuentaPagar en
+			     cuentasPagar.service.ts para "la fecha a evaluar" cuando no hay una programada — así la
+			     cuenta aparece igual, ubicada en su fecha de vencimiento hasta que se arrastre a otra. -->
 			<PanoramaCalendarView
 				panoramas={[
-					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: panorama0Items.map((i) => ({ ...i, fechaVencimiento: i.fechaProgramada })) },
-					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: panoramaItems(p.id).map((i) => ({ ...i, fechaVencimiento: i.fechaProgramada })) }))
+					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: panorama0Items.map((i) => ({ ...i, fechaVencimiento: i.fechaProgramada ?? i.fechaVencimiento })) },
+					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: panoramaItems(p.id).map((i) => ({ ...i, fechaVencimiento: i.fechaProgramada ?? i.fechaVencimiento })) }))
 				]}
 				tipo="egreso"
 				subtituloDe={(i: PagoPendienteItem) => `Proveedor: ${i.proveedorNombre}`}
 				onAbrirCuotas={abrirCuotasDe}
 				{cuotasCargandoId}
 				onGuardarFechas={handleGuardarFechasCalendario}
+				onItemBloqueado={() => toast.error('Este pago ya se realizó')}
+				onCopiarAPanorama={copiarItemCalendarioAPanorama}
 			/>
 		{/key}
 	{:else}
@@ -807,29 +836,46 @@
 					</div>
 				</div>
 
-				<div class="grid grid-cols-3 gap-2 mb-4 text-center">
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Proyección de ingresos</p>
-						<p class="text-sm font-bold text-emerald-600">{formatCurrency(proyeccionIngresos)}</p>
+				<!-- A pedido del usuario: en columnas angostas (poco ancho de pantalla) este grid de 3
+				     estadísticas se traslapaba: la etiqueta partía a 2 líneas y chocaba con el monto de
+				     abajo, porque el contenedor de cada columna no tenía min-w-0 (el texto sin cortar
+				     forzaba la columna más ancha que su espacio real, empujando/superponiendo a las
+				     vecinas). Se mantiene el mismo formato de 3 columnas (no se apilan), solo con letra
+				     más chica, min-w-0 para que el truncate/wrap funcione de verdad, y el monto en una
+				     sola línea con "..." + title (tooltip) si no entra completo, en vez de partirse y
+				     solaparse. -->
+				<div class="grid grid-cols-3 gap-1.5 mb-4 text-center">
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Proyección de ingresos</p>
+						<p class="text-xs font-bold text-emerald-600 truncate" title={formatCurrency(proyeccionIngresos)}>{formatCurrency(proyeccionIngresos)}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Proyección de pagos</p>
-						<p class="text-sm font-bold text-red-600">{formatCurrency(proyeccionPagos(panorama.id))}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Proyección de pagos</p>
+						<p class="text-xs font-bold text-red-600 truncate" title={formatCurrency(proyeccionPagos(panorama.id))}>{formatCurrency(proyeccionPagos(panorama.id))}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Flujo proyectado</p>
-						<p class={`text-sm font-bold ${flujoProyectado(panorama.id) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(flujoProyectado(panorama.id))}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Flujo proyectado</p>
+						<p class={`text-xs font-bold truncate ${flujoProyectado(panorama.id) >= 0 ? 'text-emerald-600' : 'text-red-600'}`} title={formatCurrency(flujoProyectado(panorama.id))}>{formatCurrency(flujoProyectado(panorama.id))}</p>
 					</div>
 				</div>
 
 				<p class="text-xs text-slate-400 mb-2">Orden de prioridad (arrastra para reordenar)</p>
 
+				<!-- A pedido del usuario: Panorama 1 y Panorama 2 deben verse siempre del mismo tamaño
+				     (antes cada uno crecía sin límite según su propia cantidad de ítems, así que uno con
+				     más pagos asignados quedaba visiblemente más alto que el otro). Se acota esta lista
+				     — la única sección de altura variable de la tarjeta, el resto (encabezado,
+				     estadísticas, totales) mide igual en ambos — a una altura relativa a la ventana
+				     (max-h en vh, no un valor fijo en px) para que crezca/achique junto con el tamaño de
+				     la ventana; si hay más ítems de los que entran, se desplazan con scroll interno en
+				     vez de seguir agrandando la tarjeta. Como Panorama 1 y 2 usan el mismo tope, siempre
+				     terminan con la misma altura total. -->
 				{#key panorama.id === 1 ? panorama1Version : panorama2Version}
 					<div
 						use:dndzone={{ items: panoramaItems(panorama.id), flipDurationMs: FLIP_MS }}
 						onconsider={(e) => handlePanoramaConsider(panorama.id, e)}
 						onfinalize={(e) => handlePanoramaFinalize(panorama.id, e)}
-						class="flex flex-col gap-2 min-h-[100px] mb-4"
+						class="flex flex-col gap-2 min-h-[100px] max-h-[42vh] overflow-y-auto pr-1 mb-4"
 					>
 						{#each panoramaItems(panorama.id) as item, index (item.id)}
 							{@const estado = computeEstadoVencimiento(item.fechaVencimiento)}
@@ -896,20 +942,21 @@
 
 				<div class="grid grid-cols-1 gap-2 text-center border-t border-slate-100 pt-3">
 					<p class="text-[10px] text-slate-400 uppercase">Total proyección de pagos</p>
-					<p class="text-sm font-bold text-slate-800">{formatCurrency(proyeccionPagos(panorama.id))}</p>
+					<p class="text-sm font-bold text-slate-800 truncate" title={formatCurrency(proyeccionPagos(panorama.id))}>{formatCurrency(proyeccionPagos(panorama.id))}</p>
 				</div>
-				<div class="grid grid-cols-3 gap-2 text-center border-t border-slate-100 mt-3 pt-3">
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Caja proyectada</p>
-						<p class="text-sm font-bold text-slate-800">{formatCurrency(disponibleEnCaja(panorama.id))}</p>
+				<!-- Mismo arreglo de traslape que el grid de arriba (Proyección de ingresos/pagos/Flujo). -->
+				<div class="grid grid-cols-3 gap-1.5 text-center border-t border-slate-100 mt-3 pt-3">
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Caja proyectada</p>
+						<p class="text-xs font-bold text-slate-800 truncate" title={formatCurrency(disponibleEnCaja(panorama.id))}>{formatCurrency(disponibleEnCaja(panorama.id))}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Estado de flujo</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Estado de flujo</p>
 						<span class={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${estadoFlujoBadge[estadoFlujo(panorama.id)]}`}>{estadoFlujoLabel[estadoFlujo(panorama.id)]}</span>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Cobertura</p>
-						<p class="text-sm font-bold text-slate-800">{cobertura(panorama.id) !== null ? `${cobertura(panorama.id)!.toFixed(1)}x` : '—'}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Cobertura</p>
+						<p class="text-xs font-bold text-slate-800 truncate">{cobertura(panorama.id) !== null ? `${cobertura(panorama.id)!.toFixed(1)}x` : '—'}</p>
 					</div>
 				</div>
 			</div>

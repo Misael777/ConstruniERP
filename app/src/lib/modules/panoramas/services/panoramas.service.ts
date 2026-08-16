@@ -83,6 +83,11 @@ export interface PagoPendienteItem {
 	/** 2+ elementos = esta cuenta está fraccionada, la tarjeta se dibuja como cluster con una
 	 * sub-tarjeta arrastrable por cuota (ver nota de arriba). 0 elementos = tarjeta simple normal. */
 	fracciones: FraccionPanorama[];
+	/** true = la cuenta ya tiene estado='pagado' (ya se ejecutó, con su transacción de egreso real) —
+	 * a pedido explícito del usuario: el calendario de "Panorama Actual" las muestra igual que
+	 * cualquier otra (ver getCuentasPagarPagadas/getTodasLasCuentasPendientes), pero PanoramaCalendarView
+	 * bloquea arrastrarlas a otra fecha (ya no se puede reprogramar un pago que ya se hizo). */
+	pagado: boolean;
 }
 
 /** Entrada del orden final de una columna (Bandeja/Panorama) tras arrastrar-soltar en la zona
@@ -189,9 +194,11 @@ function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 	return {
 		id: row.id_cuenta_pagar,
 		id_cuenta_pagar: row.id_cuenta_pagar,
-		// A pedido del usuario: si no hay observación/N° documento, el encabezado de la tarjeta muestra
-		// el proveedor en vez del responsable (nombre de contacto) — antes caía en `row.responsable`.
-		titulo: row.observacion || row.num_documento || row.proveedor?.razon_social || 'Pago sin descripción',
+		// A pedido explícito del usuario: el encabezado de la tarjeta (Bandeja/Panoramas/Calendario)
+		// prioriza el nombre del PROVEEDOR sobre el N° de documento — antes mostraba el N° de factura
+		// cuando no había observación, que identifica menos a simple vista que el proveedor. Solo cae al
+		// N° de documento si ni la observación ni el proveedor están disponibles.
+		titulo: row.observacion || row.proveedor?.razon_social || row.num_documento || 'Pago sin descripción',
 		proveedorNombre: row.proveedor?.razon_social ?? 'Sin proveedor',
 		producto: row.proveedor?.vendedor ?? null,
 		// Si está fraccionada, `monto` es la suma de SOLO las cuotas 'programado' (no pagadas) visibles
@@ -212,7 +219,8 @@ function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento),
 		montoTotal: Number(row.monto_comprometido),
 		fechaEmision: row.fecha_emision,
-		fracciones
+		fracciones,
+		pagado: row.estado === 'pagado'
 	};
 }
 
@@ -322,14 +330,36 @@ export async function getPanoramaItems(client: SupabaseClient, panoramaId: Panor
 	return items;
 }
 
-/** TODAS las cuentas pendientes/vencidas de la cartera, sin filtrar por panorama_id — a diferencia
- * de getPagosPendientes (solo bandeja) y getPanoramaItems (solo un panorama), esta es la fuente del
- * calendario "Panorama Actual" (id 0): el espejo del estado real de fecha_pago_programada para toda
- * la cartera, sin importar en qué panorama/bandeja esté cada cuenta hoy. Cada cuenta se devuelve
- * completa (todas sus cuotas), no partida por columna, ya que aquí no hay noción de columna. */
+/** Cuentas por pagar YA EJECUTADAS (estado='pagado', con su transacción de egreso real) — a pedido
+ * explícito del usuario: el calendario de "Panorama Actual" debe mostrar TAMBIÉN estas (no solo
+ * pendientes/vencidas), para ver la cartera completa de un vistazo. Se excluyen de la Bandeja/
+ * Panorama 1/Panorama 2 (Kanban) a propósito — esos son de planeación de lo que falta pagar, no
+ * tendría sentido "asignarle un panorama" a algo que ya se pagó. Sin fracciones: una cuenta pagada no
+ * tiene cuotas 'programado' pendientes por definición. `activo` filtrado para no mostrar una dada de
+ * baja como si siguiera vigente. */
+export async function getCuentasPagarPagadas(client: SupabaseClient): Promise<PagoPendienteItem[]> {
+	const { data, error } = await client
+		.from('cuentas_pagar')
+		.select(SELECT_CON_JOINS)
+		.eq('estado', 'pagado')
+		.eq('activo', true)
+		.order('fecha_pago_programada', { ascending: false, nullsFirst: false });
+	if (error) throw error;
+	return ((data ?? []) as any[]).map((row) => mapRow(row, []));
+}
+
+/** TODAS las cuentas de la cartera (pendientes/vencidas + ya pagadas), sin filtrar por panorama_id —
+ * a diferencia de getPagosPendientes (solo bandeja) y getPanoramaItems (solo un panorama), esta es la
+ * fuente del calendario "Panorama Actual" (id 0): el espejo del estado real de fecha_pago_programada
+ * para toda la cartera, sin importar en qué panorama/bandeja esté cada cuenta hoy. Cada cuenta se
+ * devuelve completa (todas sus cuotas), no partida por columna, ya que aquí no hay noción de columna.
+ * Incluye las ya pagadas (ver getCuentasPagarPagadas) a pedido explícito del usuario — el calendario
+ * las bloquea para arrastrar (ver PanoramaCalendarView.svelte), pero deben verse igual. */
 export async function getTodasLasCuentasPendientes(client: SupabaseClient): Promise<PagoPendienteItem[]> {
 	const { cuentas, fracciones } = await cuentasPagarConFracciones(client);
-	return cuentas.map((row) => mapRow(row, fracciones.get(row.id_cuenta_pagar) ?? []));
+	const pendientes = cuentas.map((row) => mapRow(row, fracciones.get(row.id_cuenta_pagar) ?? []));
+	const pagadas = await getCuentasPagarPagadas(client);
+	return [...pendientes, ...pagadas];
 }
 
 /** Asigna una cuenta SIMPLE (no fraccionada) a un panorama (o la regresa a la bandeja si

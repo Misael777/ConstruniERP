@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { createCuentaCobrar, updateCuentaCobrar, getCobros } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { CuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
@@ -67,6 +68,30 @@
 			})();
 		}
 	});
+
+	// A pedido explícito del usuario: "Saldo Pendiente" = Valor de venta - la suma de los montos YA
+	// registrados en `transaccion` como ingreso hacia el centro de costo de ese proyecto (no
+	// `cuenta.monto_cobrado`, que es un total aparte llevado por los "cobros" de ESTA cuenta puntual —
+	// acá se pidió específicamente la plata real ya recibida por el proyecto, vía transacciones). Se
+	// recalcula cada vez que cambia el Centro de Costo elegido (distinto proyecto = distinto total
+	// recibido) o se abre el modal.
+	let montoRecibidoCentro = $state(0);
+	$effect(() => {
+		if (!open || !formValues.id_centro_costo) {
+			montoRecibidoCentro = 0;
+			return;
+		}
+		const idCentro = Number(formValues.id_centro_costo);
+		if (!idCentro) {
+			montoRecibidoCentro = 0;
+			return;
+		}
+		(async () => {
+			const montos = await getMontoRecibidoPorCentroCosto(supabase, [idCentro]);
+			montoRecibidoCentro = montos[idCentro] ?? 0;
+		})();
+	});
+	const saldoPendienteReal = $derived(Math.max(Number(formValues.monto || 0) - montoRecibidoCentro, 0));
 
 	// forma_pago '1' = Contado (una sola cuota, sin fraccionar). Cualquier otro valor elegido
 	// (Fraccionado / Por Porcentaje) habilita la ventana "Fraccionar este pago".
@@ -142,6 +167,23 @@
 	// hay S/350 cobrados) — eso forzaba a inflar el calendario con cuotas de más solo para cuadrar. Ver
 	// mismo fix en CuentaPagarModal.svelte.
 	const montoPendienteFraccionar = $derived(Math.max(Number(formValues.monto || 0) - Number(cuenta?.monto_cobrado ?? 0), 0));
+
+	/** A pedido explícito del usuario: junto a "Valor de venta" también se muestra el Saldo Pendiente
+	 * (= montoPendienteFraccionar, ya calculado arriba: valor de venta menos lo ya cobrado) y el "Monto
+	 * próximo a cobrar" — el monto de la cuota más cercana a hoy. Si está fraccionada (Forma de Pago
+	 * distinta de Contado, con cuotas ya configuradas en "Fraccionar este pago"), es la fracción con
+	 * fecha más próxima (mismo criterio que fechaMasCercanaAHoy en CuentaPagarModal.svelte); si no hay
+	 * fraccionamiento (Contado, o cuotas sin configurar todavía), es el saldo pendiente completo — una
+	 * sola cuota por cobrar. */
+	const montoProximoACobrar = $derived.by(() => {
+		if (esFraccionable && fracciones.length > 0) {
+			const hoy = new Date();
+			hoy.setHours(0, 0, 0, 0);
+			const diff = (fecha: string) => Math.abs(new Date(fecha + 'T00:00:00').getTime() - hoy.getTime());
+			return fracciones.reduce((min, f) => (diff(f.fecha) < diff(min.fecha) ? f : min), fracciones[0]).monto;
+		}
+		return montoPendienteFraccionar;
+	});
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(mode === 'create' ? 'Nueva Cuenta por Cobrar' : 'Editar Cuenta por Cobrar');
@@ -248,6 +290,13 @@
 
 							{#if field.tipo === 'currency' && formValues[field.key] && !fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues[field.key])}</p>
+							{/if}
+
+							{#if field.key === 'monto' && formValues.monto && !fieldErrors.monto}
+								<div class="mt-1.5 flex items-center gap-3 text-xs">
+									<span class="text-slate-500">Saldo Pendiente: <span class="font-semibold text-slate-700">{formatCurrency(saldoPendienteReal)}</span></span>
+									<span class="text-slate-500">Próximo a cobrar: <span class="font-semibold text-slate-700">{formatCurrency(montoProximoACobrar)}</span></span>
+								</div>
 							{/if}
 
 							{#if fieldErrors[field.key]}

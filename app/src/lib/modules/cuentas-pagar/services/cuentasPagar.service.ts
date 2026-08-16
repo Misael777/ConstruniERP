@@ -25,6 +25,7 @@ import {
 } from '../config/pago.config';
 import { construirPayloadTransaccionPorPago, createTransaccion, labelPorCodigoMedioPago } from '../../transacciones/services/transacciones.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
+import type { ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
 
 export interface CuentaPagar {
 	id_cuenta_pagar: number;
@@ -66,6 +67,13 @@ export interface CuentaPagar {
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
 	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. */
 	proveedor?: { razon_social: string; vendedor?: string | null } | null;
+	/** Centro de costo vinculado (embed) — para la columna "Centro de Costo" del listado (ver
+	 * centroCostoLabel en +page.svelte, mismo criterio que resolveEntidadVinculada en
+	 * centroCostos.service.ts: si está vinculado a un proyecto, `nombre` guarda el id_proyecto crudo —
+	 * ilegible — así que hay que recalcular el código real vía generarCodigoProyecto(proyecto) en vez de
+	 * confiar en `nombre` tal cual). Solo viene poblado en las consultas que lo piden explícitamente en
+	 * el embed. null si la cuenta no tiene centro de costo asignado. */
+	centro_costo?: { codigo: string; nombre: string; tipo: string; id_proyecto: number | null; proyecto: ProyectoCodigoFields | null } | null;
 }
 
 export interface Pago {
@@ -191,6 +199,13 @@ export function computeEstadoCuentaPagar(saldoPendiente: number, fechaVencimient
 	return yaVencio(fechaAEvaluar) ? 'vencido' : 'pendiente';
 }
 
+// Embed de centro_costo con los campos que generarCodigoProyecto (codigoProyecto.ts) necesita para
+// recalcular el código real cuando está vinculado a un proyecto — mismo criterio y mismos campos que
+// el embed equivalente en centroCostos.service.ts (getCentroCostos), para que "Código de proyecto" y
+// esta columna "Centro de Costo" siempre muestren lo mismo para el mismo centro.
+const CENTRO_COSTO_EMBED =
+	'centro_costo:id_centro_costo(codigo, nombre, tipo, id_proyecto, proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre)))';
+
 export async function getCuentasPagar(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<CuentaPagar>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -202,7 +217,7 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 
 	let query = client
 		.from(TABLE_NAME)
-		.select('*, proveedor(razon_social, vendedor)', { count: 'exact' })
+		.select(`*, proveedor(razon_social, vendedor), ${CENTRO_COSTO_EMBED}`, { count: 'exact' })
 		.order(sortField, { ascending: sortDir === 'asc' })
 		.range(from, to);
 

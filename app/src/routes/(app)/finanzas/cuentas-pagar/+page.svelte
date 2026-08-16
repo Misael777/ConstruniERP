@@ -30,6 +30,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
+	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -58,6 +59,25 @@
 	const estadoCardClass: Record<string, string> = {
 		vencido: 'bg-red-50/60'
 	};
+
+	// A pedido del usuario: mismo formato que Cuentas por Cobrar — Prioridad ya existía como columna en
+	// la BD (cuentas_pagar_prioridad_migration.sql) y en el formulario, solo faltaba pintarla en esta
+	// tabla. OJO: los valores acá son 'alto'/'media'/'bajo' (con "media", no "medio" como en Cobrar).
+	const prioridadField = FIELDS_CONFIG.find((f) => f.key === 'prioridad')!;
+	const prioridadBadgeClass: Record<string, string> = {
+		alto: 'bg-red-100 text-red-700',
+		media: 'bg-amber-100 text-amber-700',
+		bajo: 'bg-green-100 text-green-700'
+	};
+
+	/** Columna "Centro de Costo" — mismo criterio que resolveEntidadVinculada en centroCostos.service.ts:
+	 * si está vinculado a un proyecto, `centro_costo.nombre` guarda el id_proyecto crudo (ilegible), así
+	 * que se recalcula el código real vía generarCodigoProyecto en vez de mostrarlo tal cual. */
+	function centroCostoLabel(item: CuentaPagar): string {
+		const cc = item.centro_costo;
+		if (!cc) return 'Sin centro de costo';
+		return cc.proyecto ? generarCodigoProyecto(cc.proyecto) : cc.nombre;
+	}
 
 	let items = $state<CuentaPagar[]>([]);
 	let total = $state(0);
@@ -717,12 +737,16 @@
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
-			<div class="min-w-[880px]">
-				<div class="grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+			<div class="min-w-[1080px]">
+				<div class="grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_1.1fr_0.8fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
 					<span>Proveedor</span>
+					<span>Centro de Costo</span>
 					<span>N° Documento</span>
 					<span class="text-right">Monto</span>
-					<span>Estado</span>
+					<div class="flex gap-2 pl-4">
+						<span class="flex-1">Prioridad</span>
+						<span class="flex-1">Estado</span>
+					</div>
 					<span class="text-right">Días de Retraso</span>
 					<span class="text-right">Acciones</span>
 				</div>
@@ -730,7 +754,7 @@
 				{#each items as item (item.id_cuenta_pagar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 					<div
-						class={`grid grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_1.1fr_0.8fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_pagar ? 'bg-blue-100 hover:bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -747,12 +771,22 @@
 								</p>
 							</div>
 						</div>
+						<div class="text-sm text-slate-600 truncate">{centroCostoLabel(item)}</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
 						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
-						<div>
-							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-								{getOptionLabel(estadoField, item.estado)}
-							</span>
+						<div class="flex items-center gap-2 pl-4">
+							<div class="flex-1">
+								{#if item.prioridad}
+									<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+										{getOptionLabel(prioridadField, item.prioridad)}
+									</span>
+								{/if}
+							</div>
+							<div class="flex-1">
+								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(estadoField, item.estado)}
+								</span>
+							</div>
 						</div>
 						<div class="text-right text-sm">
 							{#if retraso !== null}
@@ -805,12 +839,21 @@
 							</div>
 							<div class="min-w-0">
 								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-								<p class="text-[11px] text-slate-400 mt-0.5">{item.num_documento || '—'}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5 truncate">{centroCostoLabel(item)} · {item.num_documento || '—'}</p>
 							</div>
 						</div>
 						<div class="text-right shrink-0">
 							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
-							<span class={`inline-block mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+						</div>
+					</div>
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-1.5 flex-wrap">
+							{#if item.prioridad}
+								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(prioridadField, item.prioridad)}
+								</span>
+							{/if}
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						</div>

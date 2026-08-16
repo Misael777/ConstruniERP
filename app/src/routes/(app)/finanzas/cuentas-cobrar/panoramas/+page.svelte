@@ -46,13 +46,16 @@
 		{ id: 2 as const, nombre: 'Panorama 2', subtitulo: 'Escenario optimista' }
 	];
 
+	// A pedido del usuario: un poco más de intensidad que antes (bg-*-100/text-*-700 y bg-*-50/60 con
+	// borde -100 quedaban muy desteñidos) — mismo criterio de color por panorama (1 = azul/rojo,
+	// 2 = verde), solo un escalón más saturado.
 	const panoramaBadgeClass: Record<1 | 2, string> = {
-		1: 'bg-blue-100 text-blue-700',
-		2: 'bg-emerald-100 text-emerald-700'
+		1: 'bg-blue-200 text-blue-800',
+		2: 'bg-emerald-200 text-emerald-800'
 	};
 	const panoramaCardClass: Record<1 | 2, string> = {
-		1: 'bg-red-50/60 border-red-100',
-		2: 'bg-green-50/60 border-green-100'
+		1: 'bg-red-50 border-red-200',
+		2: 'bg-green-50 border-green-200'
 	};
 
 	const prioridadBadgeClass: Record<PrioridadCobro, string> = {
@@ -769,12 +772,17 @@
 
 				<p class="text-xs text-slate-400 mb-2">Orden de cobros (arrastra para reordenar)</p>
 
+				<!-- A pedido del usuario (mismo arreglo en cuentas-pagar/panoramas): Panorama 1 y 2 deben
+				     verse siempre del mismo tamaño — se acota la única sección de altura variable de la
+				     tarjeta a una altura relativa a la ventana (vh) en vez de crecer sin límite, con
+				     scroll interno si hay más ítems de los que entran. Mismo tope en ambos = misma altura
+				     total siempre. -->
 				{#key panorama.id === 1 ? panorama1Version : panorama2Version}
 					<div
 						use:dndzone={{ items: panoramaItems(panorama.id), flipDurationMs: FLIP_MS }}
 						onconsider={(e) => handlePanoramaConsider(panorama.id, e)}
 						onfinalize={(e) => handlePanoramaFinalize(panorama.id, e)}
-						class="flex flex-col gap-2 min-h-[100px] mb-4"
+						class="flex flex-col gap-2 min-h-[100px] max-h-[42vh] overflow-y-auto pr-1 mb-4"
 					>
 						{#each panoramaItems(panorama.id) as item, index (item.id)}
 							{@const venc = estadoVencimiento(item.fechaVencimiento)}
@@ -840,32 +848,38 @@
 					</div>
 				{/key}
 
-				<div class="grid grid-cols-3 gap-2 text-center border-t border-slate-100 pt-3">
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Total proyección</p>
-						<p class="text-sm font-bold text-slate-800">{formatCurrency(totalProyeccion(panorama.id))}</p>
+				<!-- A pedido del usuario (mismo arreglo aplicado en cuentas-pagar/panoramas): en columnas
+				     angostas este grid de 3 estadísticas se traslapaba porque el contenedor de cada
+				     columna no tenía min-w-0 (el texto sin cortar forzaba la columna más ancha que su
+				     espacio real, empujando/superponiendo a las vecinas). Se mantiene el mismo formato de
+				     3 columnas, solo con letra más chica, min-w-0 para que el truncate/wrap funcione de
+				     verdad, y el monto en una sola línea con "..." + title (tooltip) si no entra completo. -->
+				<div class="grid grid-cols-3 gap-1.5 text-center border-t border-slate-100 pt-3">
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Total proyección</p>
+						<p class="text-xs font-bold text-slate-800 truncate" title={formatCurrency(totalProyeccion(panorama.id))}>{formatCurrency(totalProyeccion(panorama.id))}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Cobrado estimado</p>
-						<p class="text-sm font-bold text-emerald-600">{formatCurrency(cobradoEstimado(panorama.id))}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Cobrado estimado</p>
+						<p class="text-xs font-bold text-emerald-600 truncate" title={formatCurrency(cobradoEstimado(panorama.id))}>{formatCurrency(cobradoEstimado(panorama.id))}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Por cobrar</p>
-						<p class="text-sm font-bold text-amber-600">{formatCurrency(porCobrar(panorama.id))}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Por cobrar</p>
+						<p class="text-xs font-bold text-amber-600 truncate" title={formatCurrency(porCobrar(panorama.id))}>{formatCurrency(porCobrar(panorama.id))}</p>
 					</div>
 				</div>
-				<div class="grid grid-cols-3 gap-2 text-center border-t border-slate-100 mt-3 pt-3">
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Caja proyectada</p>
-						<p class="text-sm font-bold text-slate-800">{formatCurrency(disponibleEnCaja(panorama.id))}</p>
+				<div class="grid grid-cols-3 gap-1.5 text-center border-t border-slate-100 mt-3 pt-3">
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Caja proyectada</p>
+						<p class="text-xs font-bold text-slate-800 truncate" title={formatCurrency(disponibleEnCaja(panorama.id))}>{formatCurrency(disponibleEnCaja(panorama.id))}</p>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Estado de flujo</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Estado de flujo</p>
 						<span class={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-medium ${estadoFlujoBadge[estadoFlujo(panorama.id)]}`}>{estadoFlujoLabel[estadoFlujo(panorama.id)]}</span>
 					</div>
-					<div>
-						<p class="text-[10px] text-slate-400 uppercase">Cobertura</p>
-						<p class="text-sm font-bold text-slate-800">{cobertura(panorama.id) !== null ? `${cobertura(panorama.id)!.toFixed(1)}x` : '—'}</p>
+					<div class="min-w-0">
+						<p class="text-[9px] leading-snug text-slate-400 uppercase break-words">Cobertura</p>
+						<p class="text-xs font-bold text-slate-800 truncate">{cobertura(panorama.id) !== null ? `${cobertura(panorama.id)!.toFixed(1)}x` : '—'}</p>
 					</div>
 				</div>
 			</div>

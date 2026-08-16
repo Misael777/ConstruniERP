@@ -11,7 +11,7 @@
 	}
 </script>
 
-<script lang="ts" generics="T extends { id: number; titulo: string; monto: number; fechaVencimiento: string | null }">
+<script lang="ts" generics="T extends { id: number; titulo: string; monto: number; fechaVencimiento: string | null; pagado?: boolean }">
 	// Vista "Calendario" (tab alterno al tablero Kanban) para los tableros de Panoramas de
 	// Pago/Cobro. Muestra Panorama Actual (0), Panorama 1 y Panorama 2 como calendarios semanales
 	// de "todo el día" (sin franja horaria: este ERP no registra hora de vencimiento, solo fecha) y
@@ -26,7 +26,7 @@
 	// llevan POR PANORAMA (cambiosPorPanorama, indexado como `grid` por pIdx) — nunca en un solo
 	// Map compartido, para que confirmar/descartar en un panorama no toque a los otros dos.
 	import { dndzone } from 'svelte-dnd-action';
-	import { ChevronLeft, ChevronRight, GripVertical, Loader2 } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, GripVertical, Loader2, Lock, Copy } from '@lucide/svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 
 	const {
@@ -36,7 +36,9 @@
 		detalleDe,
 		onAbrirCuotas,
 		cuotasCargandoId = null,
-		onGuardarFechas
+		onGuardarFechas,
+		onItemBloqueado,
+		onCopiarAPanorama
 	}: {
 		panoramas: CalendarPanorama<T>[];
 		tipo: 'ingreso' | 'egreso';
@@ -45,23 +47,33 @@
 		onAbrirCuotas: (item: T) => void;
 		cuotasCargandoId?: number | null;
 		onGuardarFechas: (panoramaId: 0 | 1 | 2, cambios: { id: number; fechaNueva: string }[]) => Promise<void>;
+		/** Se llama cuando el usuario intenta arrastrar un ítem con `pagado=true` a otra fecha — a
+		 * pedido explícito del usuario, esas cuentas ya se ejecutaron (transacción de egreso real) y no
+		 * se pueden reprogramar. El padre decide cómo avisar (ver toast.error en +page.svelte). */
+		onItemBloqueado?: () => void;
+		/** A pedido explícito del usuario: cada tarjeta del calendario ofrece "copiar" (no mover) a
+		 * Panorama 1 o 2 — mismo mecanismo 100% de sesión que ya usa el Tablero Kanban
+		 * (copiarItemAOtroPanorama en +page.svelte, nunca escribe en BD por sí solo). Se pasa el
+		 * panorama DESTINO explícito (no "el otro") porque Panorama Actual (id 0) no tiene un único
+		 * "otro" — puede copiarse a cualquiera de los dos. Si no se pasa, no se muestra el botón. */
+		onCopiarAPanorama?: (item: T, destino: 1 | 2) => void;
 	} = $props();
 
 	const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 	const FLIP_MS = 150;
 
-	// Este ERP no registra una hora real de vencimiento (solo fecha) — para que cada tarjeta se vea
-	// como en el mockup (con una hora tipo agenda arriba) se le asigna una hora "pseudo", determinística
-	// por id (mismo ítem siempre cae en la misma hora, no cambia en cada render). Es 100% cosmético:
-	// no se persiste ni se usa para nada funcional, solo para ordenar y mostrar las tarjetas del día.
-	const HORAS_PSEUDO = [8.5, 9, 9.5, 10, 11, 14, 15, 16.5];
-	function horaPseudo(id: number): number {
-		return HORAS_PSEUDO[Math.abs(id) % HORAS_PSEUDO.length];
-	}
-	function fmtHora(h: number): string {
-		const hh = Math.floor(h);
-		const mm = h % 1 === 0 ? '00' : '30';
-		return `${String(hh).padStart(2, '0')}:${mm}`;
+	// A pedido explícito del usuario: cada tarjeta debe mostrar nombre, fecha y monto — antes, en vez
+	// de la fecha real, se mostraba (solo en vista semana) una hora "pseudo" inventada por id, puramente
+	// cosmética (este ERP no registra hora de vencimiento, solo fecha) y sin ninguna relación con el
+	// orden real de las cuentas, lo que hacía parecer que las tarjetas estaban "desordenadas". Se
+	// reemplaza por la fecha real (fmtFechaCorta) en ambas vistas, y el orden pasa a ser alfabético por
+	// nombre (ver el .sort() de computeGrid/handleFinalize) — estable y predecible, a diferencia de la
+	// hora pseudo.
+	function fmtFechaCorta(iso: string | null): string {
+		if (!iso) return '—';
+		const d = new Date(iso + 'T00:00:00');
+		if (Number.isNaN(d.getTime())) return '—';
+		return d.toLocaleDateString('es-PE', { day: '2-digit', month: 'short' });
 	}
 
 	function startOfWeek(d: Date): Date {
@@ -138,7 +150,7 @@
 				p.items
 					.filter((i) => i.fechaVencimiento === day)
 					.map((i) => ({ ...i }))
-					.sort((a, b) => horaPseudo(a.id) - horaPseudo(b.id))
+					.sort((a, b) => a.titulo.localeCompare(b.titulo))
 			)
 		);
 		nuevoGrid.forEach((diasDelPanorama, pIdx) => {
@@ -186,16 +198,31 @@
 		const dayISO = visibleDays[dIdx];
 		const items = e.detail.items;
 		const cambios = cambiosPorPanorama[pIdx];
+		const permitidos: T[] = [];
+		let huboBloqueo = false;
 		for (const it of items) {
-			if (it.fechaVencimiento !== dayISO) {
-				const previo = cambios.get(it.id);
-				cambios.set(it.id, { item: it, fechaAnterior: previo ? previo.fechaAnterior : it.fechaVencimiento, fechaNueva: dayISO });
-				it.fechaVencimiento = dayISO;
+			if (it.fechaVencimiento === dayISO) {
+				permitidos.push(it);
+				continue;
 			}
+			// A pedido explícito del usuario: un pago ya ejecutado (con su transacción de egreso real)
+			// no se puede reprogramar — se rechaza el drop y la tarjeta vuelve a su día original en vez
+			// de aplicar el cambio de fecha.
+			if (it.pagado) {
+				huboBloqueo = true;
+				const dOriginal = visibleDays.indexOf(it.fechaVencimiento ?? '');
+				if (dOriginal !== -1) grid[pIdx][dOriginal] = [...(grid[pIdx][dOriginal] ?? []), it];
+				continue;
+			}
+			const previo = cambios.get(it.id);
+			cambios.set(it.id, { item: it, fechaAnterior: previo ? previo.fechaAnterior : it.fechaVencimiento, fechaNueva: dayISO });
+			it.fechaVencimiento = dayISO;
+			permitidos.push(it);
 		}
-		// Reordena por hora pseudo (ver nota arriba) para que la columna del día se vea como una
-		// agenda cronológica, sin importar en qué orden exacto soltó el usuario la tarjeta.
-		grid[pIdx][dIdx] = [...items].sort((a, b) => horaPseudo(a.id) - horaPseudo(b.id));
+		if (huboBloqueo) onItemBloqueado?.();
+		// Reordena alfabéticamente por nombre (ver nota arriba) para que la columna del día quede en un
+		// orden estable y predecible, sin importar en qué orden exacto soltó el usuario la tarjeta.
+		grid[pIdx][dIdx] = [...permitidos].sort((a, b) => a.titulo.localeCompare(b.titulo));
 	}
 
 	async function confirmarCambios(pIdx: number) {
@@ -308,10 +335,14 @@
 								class={vista === 'semana' ? 'flex-1 flex flex-col gap-1.5 p-1.5 min-h-[130px]' : 'flex-1 flex flex-col gap-1 p-1 min-h-[64px] max-h-[130px] overflow-y-auto'}
 							>
 								{#each grid[pIdx]?.[dIdx] ?? [] as item (item.id)}
-									<div class={`rounded-lg border cursor-grab active:cursor-grabbing shadow-sm ${colorCard} ${vista === 'semana' ? 'px-2 py-1.5 text-[11px] leading-tight' : 'px-1.5 py-1 text-[9.5px] leading-tight'}`}>
-										{#if vista === 'semana'}
-											<p class={`font-bold ${colorTexto}`}>{fmtHora(horaPseudo(item.id))}</p>
-										{/if}
+									<div
+										class={`rounded-lg border shadow-sm ${item.pagado ? 'bg-slate-100 border-slate-200 opacity-70 cursor-not-allowed' : `cursor-grab active:cursor-grabbing ${colorCard}`} ${vista === 'semana' ? 'px-2 py-1.5 text-[11px] leading-tight' : 'px-1.5 py-1 text-[9.5px] leading-tight'}`}
+										title={item.pagado ? 'Este pago ya se realizó — no se puede reprogramar.' : ''}
+									>
+										<p class={`font-bold flex items-center gap-1 ${item.pagado ? 'text-slate-400' : colorTexto}`}>
+											{#if item.pagado}<Lock size={10} />{/if}
+											{fmtFechaCorta(item.fechaVencimiento)}
+										</p>
 										<div class="flex items-start gap-1">
 											<button
 												type="button"
@@ -327,6 +358,24 @@
 												{/if}
 											</button>
 											<p class="font-semibold text-slate-700 truncate flex-1">{item.titulo}</p>
+											{#if onCopiarAPanorama && !item.pagado}
+												{#if panorama.id === 0}
+													<div class="flex gap-0.5 shrink-0">
+														<button type="button" onclick={(e) => { e.stopPropagation(); onCopiarAPanorama(item, 1); }} title="Copiar a Panorama 1" aria-label="Copiar a Panorama 1" class="px-1 rounded text-[8px] font-bold bg-blue-50 text-blue-600 hover:bg-blue-100">P1</button>
+														<button type="button" onclick={(e) => { e.stopPropagation(); onCopiarAPanorama(item, 2); }} title="Copiar a Panorama 2" aria-label="Copiar a Panorama 2" class="px-1 rounded text-[8px] font-bold bg-emerald-50 text-emerald-600 hover:bg-emerald-100">P2</button>
+													</div>
+												{:else}
+													<button
+														type="button"
+														onclick={(e) => { e.stopPropagation(); onCopiarAPanorama(item, panorama.id === 1 ? 2 : 1); }}
+														class="shrink-0 p-0.5 -m-0.5 text-slate-400 hover:text-slate-700"
+														title={`Copiar a Panorama ${panorama.id === 1 ? 2 : 1}`}
+														aria-label={`Copiar a Panorama ${panorama.id === 1 ? 2 : 1}`}
+													>
+														<Copy size={vista === 'semana' ? 11 : 9} />
+													</button>
+												{/if}
+											{/if}
 										</div>
 										{#if vista === 'semana'}
 											<p class="text-slate-400 truncate">{subtituloDe(item)}</p>
