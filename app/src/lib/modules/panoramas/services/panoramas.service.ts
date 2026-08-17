@@ -734,11 +734,34 @@ export async function getProyeccionPagos(client: SupabaseClient, desde?: string,
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_pendiente), 0);
 }
 
-/** Suma de cobros reales (estado_cobro='cobrado') con fecha_cobro dentro del rango [desde, hasta]. */
+/**
+ * Suma de transacciones REALES tipo 'ingreso' registradas hacia el centro de costo de CUALQUIER
+ * proyecto (excluye cliente/proveedor/empleado/manual), con `fecha` dentro del rango [desde, hasta] —
+ * a pedido explícito del usuario: "Cobrado del mes" debe reflejar la plata efectivamente recibida vía
+ * transacciones por cada proyecto, no `cobros.monto` (un total aparte llevado por los cobros puntuales
+ * registrados a mano en cada cuenta, que puede desalinearse — mismo criterio ya aplicado en "Saldo
+ * Pendiente" de CuentaCobrarModal.svelte, que usa getMontoRecibidoPorCentroCosto).
+ *
+ * En dos pasos porque `transaccion.id_centro_costo_destino` no tiene FK real hacia `centro_costo` (ver
+ * nota en aprobaciones.service.ts) — no se puede pedir el embed directo vía PostgREST, hay que resolver
+ * primero los ids de los centros de proyecto y luego filtrar transacciones por esos ids.
+ */
 export async function getCobradoEnRango(client: SupabaseClient, desde: string, hasta: string): Promise<number> {
-	const { data, error } = await client.from('cobros').select('monto').eq('estado_cobro', 'cobrado').gte('fecha_cobro', desde).lte('fecha_cobro', hasta);
+	const { data: centros, error: errorCentros } = await client.from('centro_costo').select('id_centro_costo').not('id_proyecto', 'is', null);
+	if (errorCentros) throw errorCentros;
+	const idsCentrosProyecto = (centros ?? []).map((c: any) => c.id_centro_costo);
+	if (idsCentrosProyecto.length === 0) return 0;
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('monto_total')
+		.eq('tipo', 'ingreso')
+		.eq('estado', 'activo')
+		.in('id_centro_costo_destino', idsCentrosProyecto)
+		.gte('fecha', desde)
+		.lte('fecha', hasta);
 	if (error) throw error;
-	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.monto), 0);
+	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.monto_total ?? 0), 0);
 }
 
 export interface ResumenCobros {

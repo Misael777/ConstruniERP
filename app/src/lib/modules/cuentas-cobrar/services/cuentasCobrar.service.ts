@@ -17,6 +17,8 @@ import {
 } from '../config/cobro.config';
 import { construirPayloadTransaccionPorCobro, createTransaccion } from '../../transacciones/services/transacciones.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
+import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+import { getMontoRecibidoPorCentroCosto } from '../../centro-costos/services/centroCostos.service';
 
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
@@ -146,6 +148,78 @@ async function cobroTieneTransaccionAprobada(client: SupabaseClient, idCobro: nu
 	return (data as any)?.transaccion?.aprobado === true;
 }
 
+/** Estado de una Cuenta por Cobrar — a pedido explícito del usuario, ya NO es una marca manual libre:
+ * 'pagado' si ya se cubrió el saldo completo (se generó la transacción de ingreso y quedó cancelada);
+ * si no, 'vencido' cuando la fecha de vencimiento ya pasó sin haberse generado esa transacción; si no,
+ * 'pendiente'. `saldoPendiente` debe venir calculado con el mismo criterio que "Saldo Pendiente" en
+ * CuentaCobrarModal.svelte (transacciones de ingreso reales del centro de costo, ver
+ * calcularMontoCobradoYEstado más abajo), no con `monto_cobrado`/`cobros`. */
+export function computeEstadoCuentaCobrar(saldoPendiente: number, fechaVencimiento: string | null): string {
+	if (saldoPendiente <= 0) return 'pagado';
+	const hoy = new Date();
+	hoy.setHours(0, 0, 0, 0);
+	if (fechaVencimiento) {
+		const d = new Date(fechaVencimiento);
+		if (!Number.isNaN(d.getTime()) && d.getTime() < hoy.getTime()) return 'vencido';
+	}
+	return 'pendiente';
+}
+
+/** Único punto que calcula monto_cobrado/saldo_pendiente/estado de una cuenta a partir de la plata
+ * REAL ya recibida (transacción de ingreso activa en el centro de costo vinculado) — usado tanto al
+ * crear/editar como al recalcular tras un cobro. Sin centro de costo vinculado no hay forma de saber
+ * cuánto se recibió, así que queda en 0 (pendiente/vencido según fecha). */
+async function calcularMontoCobradoYEstado(
+	client: SupabaseClient,
+	idCentroCosto: number | null,
+	monto: number,
+	fechaVencimiento: string | null
+): Promise<{ montoCobrado: number; saldoPendiente: number; estado: string }> {
+	let montoCobrado = 0;
+	if (idCentroCosto != null && Number.isFinite(idCentroCosto)) {
+		const montos = await getMontoRecibidoPorCentroCosto(client, [idCentroCosto]);
+		montoCobrado = montos[idCentroCosto] ?? 0;
+	}
+	const saldoPendiente = Math.max(monto - montoCobrado, 0);
+	return { montoCobrado, saldoPendiente, estado: computeEstadoCuentaCobrar(saldoPendiente, fechaVencimiento) };
+}
+
+/**
+ * "Vencido"/"Pagado" dependen de plata recibida en tiempo real y de la fecha de hoy, no de ningún
+ * evento puntual — sin un cron en el servidor (app client-side pura), el único momento en que se puede
+ * detectar el cambio es al volver a listar. Corrige en BD las filas de ESTA página cuyo
+ * monto_cobrado/saldo_pendiente/estado ya no coinciden con lo recibido de verdad, y devuelve la lista
+ * ya corregida. Mismo patrón que autoCorregirVencidos en cuentasPagar.service.ts.
+ */
+async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCobrar[]): Promise<CuentaCobrar[]> {
+	const conCentro = items.filter((item) => item.id_centro_costo != null);
+	if (conCentro.length === 0) return items;
+
+	const ids = [...new Set(conCentro.map((item) => item.id_centro_costo as number))];
+	const montoRecibidoMap = await getMontoRecibidoPorCentroCosto(client, ids);
+
+	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
+	const resultado = items.map((item) => {
+		if (item.id_centro_costo == null) return item;
+		const recibido = montoRecibidoMap[item.id_centro_costo] ?? 0;
+		const saldo = Math.max(Number(item.monto) - recibido, 0);
+		const estado = computeEstadoCuentaCobrar(saldo, item.fecha_vencimiento);
+		const sinCambios = estado === item.estado && Math.abs(saldo - Number(item.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(item.monto_cobrado)) < 0.01;
+		if (sinCambios) return item;
+		actualizaciones.push({ id: item.id_cuenta_cobrar, estado, saldo, recibido });
+		return { ...item, estado, saldo_pendiente: saldo, monto_cobrado: recibido };
+	});
+
+	if (actualizaciones.length > 0) {
+		await Promise.all(
+			actualizaciones.map((u) =>
+				client.from(TABLE_NAME).update({ estado: u.estado, saldo_pendiente: u.saldo, monto_cobrado: u.recibido }).eq(PK_COLUMN, u.id)
+			)
+		);
+	}
+	return resultado;
+}
+
 export async function getCuentasCobrar(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<CuentaCobrar>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -174,9 +248,11 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 	const { data, error, count } = await query;
 	if (error) throw error;
 
+	const items = await autoCorregirEstadosCobrar(client, (data ?? []) as CuentaCobrar[]);
+
 	const total = count ?? 0;
 	return {
-		items: (data ?? []) as CuentaCobrar[],
+		items,
 		total,
 		page,
 		pageSize,
@@ -228,10 +304,14 @@ export async function createCuentaCobrar(
 	}
 
 	const saldoInicial = Number(payload.monto);
+	const idCentroCosto = payload.id_centro_costo != null && payload.id_centro_costo !== '' ? Number(payload.id_centro_costo) : null;
+	const fechaVencimiento = (payload.fecha_vencimiento as string) || null;
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCosto, saldoInicial, fechaVencimiento);
 	const insertData: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
-		monto_cobrado: 0,
-		saldo_pendiente: saldoInicial,
+		monto_cobrado: montoCobrado,
+		saldo_pendiente: saldoPendiente,
+		estado,
 		usuario_registro: usuarioRegistro
 	};
 
@@ -296,16 +376,23 @@ export async function updateCuentaCobrar(
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	// monto_cobrado / saldo_pendiente no se tocan aquí (showInForm:false los excluye de buildWritablePayload);
-	// si cambia "monto", el saldo se recalcula para reflejar lo ya cobrado hasta ahora.
+	// monto_cobrado / saldo_pendiente / estado no se tocan por el usuario aquí (showInForm:false los
+	// excluye de buildWritablePayload) — se recalculan siempre a partir de la plata real recibida (ver
+	// calcularMontoCobradoYEstado), no de lo que traiga el formulario.
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	// select('*') en vez de listar columnas: el parser de tipos de supabase-js no soporta el
 	// carácter acentuado de "condición_pago" en un select explícito (falla solo a nivel de tipos).
 	const { data: current } = await client.from(TABLE_NAME).select('*').eq(PK_COLUMN, id).single();
-	const cobrado = Number(current?.monto_cobrado ?? 0);
-	if (typeof updateData.monto === 'number') {
-		updateData.saldo_pendiente = Math.max(updateData.monto - cobrado, 0);
-	}
+	const montoFinal = typeof updateData.monto === 'number' ? updateData.monto : Number(current?.monto ?? 0);
+	const idCentroCostoFinal =
+		updateData.id_centro_costo != null && updateData.id_centro_costo !== ''
+			? Number(updateData.id_centro_costo)
+			: ((current?.id_centro_costo ?? null) as number | null);
+	const fechaVencimientoFinal = (typeof updateData.fecha_vencimiento === 'string' ? updateData.fecha_vencimiento : current?.fecha_vencimiento) || null;
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCostoFinal, montoFinal, fechaVencimientoFinal);
+	updateData.monto_cobrado = montoCobrado;
+	updateData.saldo_pendiente = saldoPendiente;
+	updateData.estado = estado;
 
 	const { data, error } = await client
 		.from(TABLE_NAME)
@@ -775,29 +862,26 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number, esAdm
 }
 
 /**
- * Recalcula monto_cobrado/saldo_pendiente sumando SOLO los cobros con estado_cobro='cobrado' (las
- * cuotas 'programado' generadas por generarCobrosProgramados NO cuentan hasta que se registren como
- * cobros reales, igual que en cuentasPagar.service.ts), y ajusta estado a pendiente/pagado. Preserva
- * "vencido" si ya estaba así marcado (es una marca manual, no derivada del saldo). No es una
- * transacción atómica de BD — con el volumen esperado de cobros por cuenta el riesgo de condición de
- * carrera es bajo, pero si el ERP crece a alta concurrencia, esto debería moverse a una función SQL
- * con transacción real.
+ * Recalcula monto_cobrado/saldo_pendiente/estado de una cuenta a partir de la plata REAL ya recibida
+ * (transacción de ingreso activa en su centro de costo, ver calcularMontoCobradoYEstado) — a pedido
+ * explícito del usuario, ya no se basa en `cobros`/estado_cobro='cobrado' ni preserva "vencido" como
+ * marca manual: los 3 estados (Pendiente/Pagado/Vencido) se derivan solos. Se llama tras
+ * registrar/eliminar un cobro, que es cuando cambia la transacción vinculada.
  */
 export async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
-	const { data: cuenta } = await client.from(TABLE_NAME).select('monto, estado').eq(PK_COLUMN, idCuentaCobrar).single();
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto, id_centro_costo, fecha_vencimiento').eq(PK_COLUMN, idCuentaCobrar).single();
 	if (!cuenta) return;
 
-	const { data: cobros } = await client.from(COBRO_TABLE).select('monto, estado_cobro').eq(PARENT_FK_COLUMN, idCuentaCobrar);
-	const totalCobrado = (cobros ?? [])
-		.filter((c: any) => c.estado_cobro === 'cobrado')
-		.reduce((sum: number, c: any) => sum + Number(c.monto), 0);
-	const saldoPendiente = Math.max(Number(cuenta.monto) - totalCobrado, 0);
-
-	const nuevoEstado = cuenta.estado === 'vencido' ? 'vencido' : saldoPendiente <= 0 ? 'pagado' : 'pendiente';
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(
+		client,
+		cuenta.id_centro_costo,
+		Number(cuenta.monto),
+		cuenta.fecha_vencimiento
+	);
 
 	await client
 		.from(TABLE_NAME)
-		.update({ monto_cobrado: totalCobrado, saldo_pendiente: saldoPendiente, estado: nuevoEstado })
+		.update({ monto_cobrado: montoCobrado, saldo_pendiente: saldoPendiente, estado })
 		.eq(PK_COLUMN, idCuentaCobrar);
 }
 
@@ -807,8 +891,23 @@ export async function getClienteOptions(client: SupabaseClient): Promise<FieldOp
 	return (data ?? []).map((c: any) => ({ value: String(c.id_cliente), label: c.nombre }));
 }
 
+/** A pedido explícito del usuario (corrige el criterio anterior: ya no "no dado de baja", sino
+ * exactamente esto): el selector "Proyecto" de Nueva/Editar Cuenta por Cobrar solo ofrece proyectos
+ * con `estado_proyecto = 'venta_cerrada'` — una cuenta por cobrar corresponde a una venta ya
+ * confirmada, no a un proyecto todavía en negociación ni a uno dado de baja.
+ *
+ * La etiqueta muestra el código generado del proyecto (mismo `generarCodigoProyecto` que usa Ventas
+ * y Centro de Costos) en vez de `nombre_proyecto` crudo — a pedido del usuario, el campo "Proyecto" se
+ * autocompleta con este código al elegir el Centro de Costo vinculado (ver
+ * getCentroCostoProyectoMap/handleInput en CuentaCobrarModal.svelte). */
 export async function getProyectoOptions(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data, error } = await client.from('proyecto').select('id_proyecto, nombre_proyecto').order('nombre_proyecto');
+	const { data, error } = await client
+		.from('proyecto')
+		.select(
+			'id_proyecto, tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre)'
+		)
+		.eq('estado_proyecto', 'venta_cerrada')
+		.order('fecha_inicio_plan', { ascending: false });
 	if (error) throw error;
-	return (data ?? []).map((p: any) => ({ value: String(p.id_proyecto), label: p.nombre_proyecto }));
+	return (data ?? []).map((p: any) => ({ value: String(p.id_proyecto), label: generarCodigoProyecto(p) }));
 }

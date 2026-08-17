@@ -22,7 +22,7 @@
 		confirmarCobroCobrado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getCentroCostoTipoMap, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getCentroCostoProyectoMap, getCentroCostoClienteMap, getCentroCostoTipoMap, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -91,6 +91,12 @@
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [], responsable: [] });
 	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
 	let centroCostoMontoMap = $state<Record<string, number>>({});
+	/** id_centro_costo (texto) -> id_proyecto de la venta cerrada vinculada — para autocompletar
+	 * "Proyecto" con el código de ese proyecto al elegir el Centro de Costo (ver CuentaCobrarModal). */
+	let centroCostoProyectoMap = $state<Record<string, string>>({});
+	/** id_centro_costo (texto) -> id_cliente del proyecto vinculado — para el filtrado/autocompletado
+	 * cruzado Cliente <-> Centro de Costo en CuentaCobrarModal.svelte. */
+	let centroCostoClienteMap = $state<Record<string, string>>({});
 	/** id_centro_costo (texto) -> tipo — para los botones "Consultoria"/"Obra"/"Corporativo"/"Otros" de
 	 * abajo, mismo patrón que cuentas-pagar/+page.svelte. */
 	let centroCostoTipoMap = $state<Record<string, string>>({});
@@ -221,12 +227,14 @@
 			return;
 		}
 		try {
-			const [clienteOptions, proyectoOptions, centroCostoOptions, centroCostoOptionsVentasCerradas, montoMap, empleadoOptions, tipoMap] = await Promise.all([
+			const [clienteOptions, proyectoOptions, centroCostoOptions, centroCostoOptionsVentasCerradas, montoMap, proyectoMap, clienteMap, empleadoOptions, tipoMap] = await Promise.all([
 				getClienteOptions(supabase),
 				getProyectoOptions(supabase),
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsVentasCerradas(supabase),
 				getCentroCostoMontoVentaCerrada(supabase),
+				getCentroCostoProyectoMap(supabase),
+				getCentroCostoClienteMap(supabase),
 				getEmpleadoOptions(supabase),
 				getCentroCostoTipoMap(supabase)
 			]);
@@ -236,6 +244,8 @@
 			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptionsVentasCerradas, responsable: empleadoOptions };
 			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
 			centroCostoMontoMap = montoMap;
+			centroCostoProyectoMap = proyectoMap;
+			centroCostoClienteMap = clienteMap;
 			centroCostoTipoMap = tipoMap;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
@@ -987,7 +997,17 @@
 	{/if}
 </div>
 
-<CuentaCobrarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} centroCostoMontoMap={centroCostoMontoMap} onClose={closeModal} onSaved={handleSaved} />
+<CuentaCobrarModal
+	open={modalOpen}
+	mode={modalMode}
+	cuenta={editingCuenta}
+	dynamicOptions={dynamicOptions}
+	centroCostoMontoMap={centroCostoMontoMap}
+	centroCostoProyectoMap={centroCostoProyectoMap}
+	centroCostoClienteMap={centroCostoClienteMap}
+	onClose={closeModal}
+	onSaved={handleSaved}
+/>
 <CobroModal
 	open={cobroModalOpen}
 	idCuentaCobrar={selectedId}

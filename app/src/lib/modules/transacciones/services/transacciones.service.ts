@@ -483,6 +483,7 @@ export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient
 		.from('centro_costo')
 		.select('id_centro_costo, codigo, nombre')
 		.or(filtros.join(','))
+		.eq('estado', 'activo')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
@@ -528,6 +529,59 @@ export async function getCentroCostoMontoVentaCerrada(client: SupabaseClient): P
 		}
 	}
 
+	return mapa;
+}
+
+/** id_centro_costo (como texto) -> id_proyecto de la venta cerrada vinculada — para
+ * CuentaCobrarModal.svelte: autocompletar "Proyecto" con el código de ese proyecto al elegir el
+ * Centro de Costo (mismo criterio/fuente que getCentroCostoMontoVentaCerrada), a pedido explícito del
+ * usuario ("el campo proyecto debe ser llenado con el código del proyecto que tiene ese centro de
+ * costo"). La fila histórica compartida de Consultoría (id_proyecto IS NULL) no se incluye: no
+ * corresponde a un único proyecto. */
+export async function getCentroCostoProyectoMap(client: SupabaseClient): Promise<Record<string, string>> {
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
+	if (errorCerrados) throw errorCerrados;
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	if (idsCerrados.length === 0) return {};
+
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, id_proyecto').in('id_proyecto', idsCerrados);
+	if (error) throw error;
+
+	const mapa: Record<string, string> = {};
+	for (const row of (data ?? []) as any[]) {
+		mapa[String(row.id_centro_costo)] = String(row.id_proyecto);
+	}
+	return mapa;
+}
+
+/** id_centro_costo (como texto) -> id_cliente del proyecto de esa venta cerrada — para
+ * CuentaCobrarModal.svelte: si se elige primero el Centro de Costo, autocompletar "Cliente" con el
+ * de ese proyecto; si se elige primero el Cliente, filtrar la lista de Centro de Costo a solo los
+ * suyos (a pedido explícito del usuario). Mismo universo de centros que
+ * getCentroCostoOptionsVentasCerradas (venta cerrada + estado='activo'); la fila histórica
+ * compartida de Consultoría (id_proyecto IS NULL) no se incluye: no corresponde a un único cliente. */
+export async function getCentroCostoClienteMap(client: SupabaseClient): Promise<Record<string, string>> {
+	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto, id_cliente').eq('estado_proyecto', 'venta_cerrada');
+	if (errorCerrados) throw errorCerrados;
+	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
+	if (idsCerrados.length === 0) return {};
+	const clientePorProyecto: Record<string, string> = {};
+	for (const p of (cerrados ?? []) as any[]) {
+		if (p.id_cliente != null) clientePorProyecto[String(p.id_proyecto)] = String(p.id_cliente);
+	}
+
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, id_proyecto')
+		.in('id_proyecto', idsCerrados)
+		.eq('estado', 'activo');
+	if (error) throw error;
+
+	const mapa: Record<string, string> = {};
+	for (const row of (data ?? []) as any[]) {
+		const idCliente = clientePorProyecto[String(row.id_proyecto)];
+		if (idCliente) mapa[String(row.id_centro_costo)] = idCliente;
+	}
 	return mapa;
 }
 

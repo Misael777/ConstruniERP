@@ -146,9 +146,27 @@
 		filas = filas.map((f, i) => (i === index ? { ...f, fecha } : f));
 	}
 
+	/** A pedido explícito del usuario: el campo de monto de cada fracción (modo "Montos desiguales")
+	 * solo acepta valores que "encajen" en montoTotal — ninguna fracción puede valer más que el monto
+	 * total completo (obviamente no "encajaría"). El primer intento de este arreglo recortaba al
+	 * "restante" (montoTotal menos la suma de las OTRAS filas), pero eso depende del orden en que el
+	 * usuario llena los campos: mientras las filas siguientes todavía tienen su valor por defecto (del
+	 * reparto en partes iguales) sin editar, el "restante" para la PRIMERA fila que se toca queda
+	 * artificialmente chico, recortándola a un número que no es el que el usuario escribió — y ese
+	 * recorte, aplicado mientras el campo sigue enfocado y el usuario sigue tecleando, hacía que el
+	 * cuadro de texto mostrara una cosa (lo tecleado) y el estado interno otra (lo recortado), así que
+	 * "Total fracciones" terminaba sin coincidir con lo que se veía en pantalla. Este tope absoluto
+	 * (solo contra montoTotal, sin depender de las demás filas) es estable sin importar el orden en que
+	 * se editen los campos. La suma EXACTA sigue exigiéndose al guardar (ver sumaOk/handleGuardar) —
+	 * ese chequeo, no un recorte en vivo, es el lugar correcto para la validación entre varias filas.
+	 * Puro cálculo en el cliente (sin ninguna API de plataforma), funciona igual en web, Tauri Windows y
+	 * Tauri Android. */
 	function actualizarMonto(index: number, raw: string) {
 		const masked = currencyMask(raw);
-		filas = filas.map((f, i) => (i === index ? { ...f, monto: masked === '' ? 0 : Number(masked) } : f));
+		const ingresado = masked === '' ? 0 : Number(masked);
+		const maximoPermitido = Math.max(Number((montoTotal || 0).toFixed(2)), 0);
+		const final = Math.min(ingresado, maximoPermitido);
+		filas = filas.map((f, i) => (i === index ? { ...f, monto: final } : f));
 	}
 
 	function incrementarNumero() {

@@ -38,10 +38,12 @@
  * - `estado` NO tiene CHECK constraint en la BD real (se probó insertando un valor arbitrario y
  *   Postgres lo aceptó) — las 3 opciones del select de abajo son solo convención del ERP, no un
  *   límite impuesto por la BD.
- * - `monto_cobrado` y `saldo_pendiente` NO son editables en el formulario (showInForm: false):
- *   se recalculan automáticamente en cuentasCobrar.service.ts cada vez que se registra o elimina
- *   un cobro (ver recalcularCuentaCobrar). `estado` también se actualiza ahí a pendiente/pagado,
- *   salvo que ya esté en "vencido" (que se preserva porque es una marca manual, no derivada del saldo).
+ * - `monto_cobrado`, `saldo_pendiente` y `estado` NO son editables en el formulario (showInForm:
+ *   false): se recalculan solos en cuentasCobrar.service.ts (crear/editar la cuenta, y cada vez que
+ *   se registra o elimina un cobro — ver calcularMontoCobradoYEstado/recalcularCuentaCobrar) a partir
+ *   de la plata REAL ya recibida (transacción de ingreso activa en el centro de costo vinculado, no
+ *   `cobros`). "Pagado" si el saldo quedó cubierto, si no "Vencido" cuando ya pasó la fecha de
+ *   vencimiento, si no "Pendiente" — a pedido explícito del usuario, ya no es una marca manual.
  * - `usuario_registro` NO está en FIELDS_CONFIG: se completa server-side con el email del usuario
  *   autenticado (ver +server.ts de creación), no es editable por el usuario.
  * - `tipo_documento` ya tiene su propio catálogo fijo de 5 opciones (Factura/Boleta de venta/Recibo
@@ -99,7 +101,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Proyecto',
 		tipo: 'select',
 		optionsSource: 'proyecto',
-		helpText: 'Opcional: asocia esta cuenta a un proyecto.',
+		helpText: 'Se completa automáticamente con el código del proyecto vinculado al Centro de Costo elegido.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
@@ -316,9 +318,9 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'pagado', label: 'Pagado' },
 			{ value: 'vencido', label: 'Vencido' }
 		],
-		helpText: 'Pendiente/Pagado se recalculan solos al registrar cobros. "Vencido" es una marca manual que se conserva.',
+		helpText: 'Se calcula solo: "Pagado" si ya se generó y cobró la transacción de ingreso; si no, "Vencido" cuando pasó la fecha de vencimiento, si no "Pendiente".',
 		showInTable: true,
-		showInForm: true,
+		showInForm: false,
 		sortable: true
 	},
 	{
