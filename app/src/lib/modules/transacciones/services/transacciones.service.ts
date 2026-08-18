@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency } from '$lib/shared/fieldConfig';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -120,6 +120,123 @@ function resolveEstadoTransaccion(tipoAlcance: string, estadoActual: string | nu
 	return 'activo';
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Auditoría de saldo (a pedido explícito del usuario) — antes de guardar un Egreso o el lado que
+// sale de una Transferencia interna, se audita que el recurso de origen (centro de costo propio y/o
+// cuenta bancaria registrada) realmente tenga el dinero. La regla NO se basa en `tipo_alcance`
+// ('interna'/'externa'): ese campo describe a la CONTRAPARTE, no de dónde sale nuestro propio dinero
+// — un Egreso "Externa" (ej. pagarle a un proveedor) igual puede salir de una cuenta bancaria propia
+// (`cuente_origen`), y esa sí hay que auditarla. La regla real es "¿este recurso es demostrablemente
+// nuestro?": un centro de costo SIN id_cliente/id_proveedor/id_empleado (fondo propio: Obra,
+// Consultoría, Bolsa General, o el centro de un proyecto), o un número de cuenta que matchea una fila
+// real de `cuenta_banco`. Todo lo demás (centro vinculado a un tercero, o un número de cuenta que no
+// es nuestro) es capital ajeno — no tenemos ni debemos tener visibilidad de si les alcanza o no.
+// Ingreso/Financiamiento no se auditan: son entradas de dinero, nunca generan sobregiro.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** true si el centro de costo es un fondo propio (sin vínculo a cliente/proveedor/empleado) — solo
+ * esos se auditan contra sobregiro. Si el centro no existe (dato corrupto/borrado), no se bloquea por
+ * un problema de integridad ajeno a esta validación. */
+async function esCentroCostoInterno(client: SupabaseClient, idCentroCosto: number): Promise<boolean> {
+	const { data } = await client
+		.from('centro_costo')
+		.select('id_cliente, id_proveedor, id_empleado')
+		.eq('id_centro_costo', idCentroCosto)
+		.maybeSingle();
+	if (!data) return false;
+	return data.id_cliente === null && data.id_proveedor === null && data.id_empleado === null;
+}
+
+/** true si el número de cuenta corresponde a una cuenta bancaria realmente registrada por la empresa
+ * — un valor de texto libre que no matchea ninguna fila es la cuenta del tercero, no la nuestra. */
+async function esCuentaBancoRegistrada(client: SupabaseClient, numeroCuenta: string): Promise<boolean> {
+	const { data } = await client.from('cuenta_banco').select('id_cuenta_banco').eq('numero_cuenta', numeroCuenta).maybeSingle();
+	return !!data;
+}
+
+/** Saldo disponible de un centro de costo propio: suma de todo lo que entró a su favor (Ingreso o
+ * Financiamiento como destino, o Transferencia como destino) menos todo lo que salió (Egreso o
+ * Transferencia como origen), entre las transacciones activas. `excluirIdTransaccion` se usa al
+ * editar, para no contar dos veces la fila que se está por actualizar. */
+async function saldoDisponibleCentroCosto(client: SupabaseClient, idCentroCosto: number, excluirIdTransaccion?: number): Promise<number> {
+	let query = client
+		.from(TABLE_NAME)
+		.select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total')
+		.eq('estado', 'activo')
+		.or(`id_centro_costo_origen.eq.${idCentroCosto},id_centro_costo_destino.eq.${idCentroCosto}`);
+	if (excluirIdTransaccion) query = query.neq(PK_COLUMN, excluirIdTransaccion);
+
+	const { data, error } = await query;
+	if (error) throw error;
+
+	return (data ?? []).reduce((saldo: number, t: any) => {
+		const monto = Number(t.monto_total);
+		if (t.id_centro_costo_origen === idCentroCosto && (t.tipo === 'egreso' || t.tipo === 'transferencia')) saldo -= monto;
+		if (t.id_centro_costo_destino === idCentroCosto && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) saldo += monto;
+		return saldo;
+	}, 0);
+}
+
+/** Mismo criterio que saldoDisponibleCentroCosto, pero para una cuenta bancaria registrada — suma por
+ * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo. */
+async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: string, excluirIdTransaccion?: number): Promise<number> {
+	let query = client
+		.from(TABLE_NAME)
+		.select('cuente_origen, cuente_destino, monto_total')
+		.eq('estado', 'activo')
+		.or(`cuente_origen.eq.${numeroCuenta},cuente_destino.eq.${numeroCuenta}`);
+	if (excluirIdTransaccion) query = query.neq(PK_COLUMN, excluirIdTransaccion);
+
+	const { data, error } = await query;
+	if (error) throw error;
+
+	return (data ?? []).reduce((saldo: number, t: any) => {
+		const monto = Number(t.monto_total);
+		if (t.cuente_origen === numeroCuenta) saldo -= monto;
+		if (t.cuente_destino === numeroCuenta) saldo += monto;
+		return saldo;
+	}, 0);
+}
+
+/** Punto de entrada único, llamado desde createTransaccion/updateTransaccion. Devuelve `ok:false` con
+ * un mensaje accionable (qué recurso falla, cuánto hay vs. cuánto se pide, y el siguiente paso —
+ * registrar un Financiamiento/Ingreso) apenas para no dejar al usuario con solo un "no se puede". */
+async function validarSaldoSuficiente(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	excluirIdTransaccion?: number
+): Promise<{ ok: true } | { ok: false; message: string }> {
+	const tipo = String(payload.tipo ?? '');
+	if (tipo !== 'egreso' && tipo !== 'transferencia') return { ok: true };
+
+	const monto = Number(payload.monto_total);
+	if (!Number.isFinite(monto) || monto <= 0) return { ok: true }; // validatePayload ya exige > 0 — defensivo
+
+	const idOrigen = Number(payload.id_centro_costo_origen);
+	if (Number.isFinite(idOrigen) && (await esCentroCostoInterno(client, idOrigen))) {
+		const saldo = await saldoDisponibleCentroCosto(client, idOrigen, excluirIdTransaccion);
+		if (saldo - monto < -0.01) {
+			return {
+				ok: false,
+				message: `Saldo insuficiente en el centro de costo de origen: disponible ${formatCurrency(saldo)}, se requieren ${formatCurrency(monto)}. Registra un Financiamiento o Ingreso a ese centro de costo antes de continuar.`
+			};
+		}
+	}
+
+	const cuentaOrigen = payload.cuente_origen ? String(payload.cuente_origen).trim() : '';
+	if (cuentaOrigen && (await esCuentaBancoRegistrada(client, cuentaOrigen))) {
+		const saldoCuenta = await saldoDisponibleCuentaBanco(client, cuentaOrigen, excluirIdTransaccion);
+		if (saldoCuenta - monto < -0.01) {
+			return {
+				ok: false,
+				message: `Saldo insuficiente en la cuenta bancaria ${cuentaOrigen}: disponible ${formatCurrency(saldoCuenta)}, se requieren ${formatCurrency(monto)}. Registra un depósito o ingreso a esa cuenta antes de continuar.`
+			};
+		}
+	}
+
+	return { ok: true };
+}
+
 export async function getTransacciones(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<Transaccion>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -195,6 +312,11 @@ export async function createTransaccion(
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
+	const saldoCheck = await validarSaldoSuficiente(client, payload);
+	if (!saldoCheck.ok) {
+		return { success: false, message: saldoCheck.message, errors: { monto_total: 'Saldo insuficiente' } };
+	}
+
 	const insertData = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		usuario_registro: usuarioRegistro,
@@ -231,6 +353,11 @@ export async function updateTransaccion(
 	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado && !esAdmin) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+
+	const saldoCheck = await validarSaldoSuficiente(client, payload, id);
+	if (!saldoCheck.ok) {
+		return { success: false, message: saldoCheck.message, errors: { monto_total: 'Saldo insuficiente' } };
 	}
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
