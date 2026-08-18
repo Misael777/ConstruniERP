@@ -497,6 +497,7 @@
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}
 	fraccionesIniciales={fracciones}
+	metodoSugerido={formValues.fotma_pago === '3' ? 'por_porcentaje' : undefined}
 	onClose={() => (fraccionamientoOpen = false)}
 	onConfirm={onFraccionesConfirmadas}
 	onEliminar={onFraccionamientoEliminado}

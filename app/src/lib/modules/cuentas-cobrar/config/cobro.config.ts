@@ -25,8 +25,9 @@
  *   typo, falta la "e" de "operacion"). Parecen una columna duplicada por error de diseño. Se dejó
  *   fuera del formulario (`numero_opracion`) para no confundir con dos campos "N° de operación";
  *   si el ERP en verdad necesita ambas, agrégala aquí explícitamente.
- * - `medio_cobro` sigue siendo un código SMALLINT sin catálogo de referencia — AJUSTAR a
- *   'select' con `optionsSource` cuando exista esa tabla (hoy tiene opciones fijas Efectivo/Transferencia).
+ * - `medio_cobro` sigue siendo un código SMALLINT sin catálogo de referencia (opciones fijas, mismos
+ *   códigos 1-4 que transaccion.medio_pago: Efectivo/Transferencia bancaria/Depósito/Yape o Plin) —
+ *   AJUSTAR a 'select' con `optionsSource` si algún día existe una tabla real de medios de cobro.
  * - `estado_cobro` (agregada vía migración manual, mismo patrón que `pagos.estado_pago` en
  *   cuentas_pagar) NO está en FIELDS_CONFIG a propósito: se maneja aparte en CobroModal.svelte (select
  *   "Estado" que solo aparece en modo edición). Valores: 'programado' (cuota futura autogenerada desde
@@ -70,9 +71,14 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'medio_cobro',
 		label: 'Medio de Cobro',
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
+		// Mismos códigos 1-4 que transaccion.medio_pago (ver transaccion.config.ts) — construirPayloadTransaccionPorCobro
+		// copia `medio_cobro` tal cual al crear la transacción de respaldo, así que los códigos deben
+		// coincidir con ese catálogo, no solo la etiqueta.
 		options: [
 			{ value: '1', label: 'Efectivo' },
-			{ value: '2', label: 'Transferencia bancaria' }
+			{ value: '2', label: 'Transferencia bancaria' },
+			{ value: '3', label: 'Depósito' },
+			{ value: '4', label: 'Yape o Plin' }
 		],
 		showInTable: false,
 		showInForm: true,

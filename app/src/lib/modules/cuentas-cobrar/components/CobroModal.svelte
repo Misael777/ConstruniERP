@@ -7,6 +7,8 @@
 	import { createCobro, updateCobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { Cobro } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import type { FieldOption } from '$lib/shared/fieldConfig';
 
 	let {
 		open = false,
@@ -56,19 +58,32 @@
 	let estadoCobro = $state<'programado' | 'cobrado' | 'cancelado'>(cobro?.estado_cobro ?? 'programado');
 	let fieldErrors = $state<Record<string, string>>({});
 	let submitting = $state(false);
+	let cuentaBancoOptions = $state<FieldOption[]>([]);
 
 	$effect(() => {
 		if (open) {
 			formValues = buildInitialValues();
 			estadoCobro = cobro?.estado_cobro ?? 'programado';
 			fieldErrors = {};
+			getCuentaBancoOptions(supabase)
+				.then((opts) => (cuentaBancoOptions = opts))
+				.catch((err) => console.error('[CobroModal] No se pudieron cargar las cuentas bancarias:', err));
 		}
 	});
+
+	// "N° de Cuenta Bancaria" a pedido explícito del usuario: con Medio de Cobro Transferencia bancaria
+	// (2) o Depósito (3) se elige de un dropdown con las cuentas bancarias registradas (cuenta_banco,
+	// ver getCuentaBancoOptions); con Efectivo (1) o Yape o Plin (4) — o todavía sin elegir — el campo
+	// se bloquea (no aplica ninguna cuenta bancaria).
+	const cuentaBancoEsBancaria = $derived(['2', '3'].includes(String(formValues.medio_cobro ?? '')));
 
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
+		if (key === 'medio_cobro' && !['2', '3'].includes(masked)) {
+			formValues.cuenta_banco = '';
+		}
 		revalidate();
 	}
 
@@ -155,7 +170,29 @@
 								{field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
-							{#if field.tipo === 'select' || field.options}
+							{#if field.key === 'cuenta_banco' && cuentaBancoEsBancaria}
+								<select
+									id={`cb-${field.key}`}
+									name={field.key}
+									value={formValues[field.key]}
+									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+								>
+									<option value="" disabled>Selecciona una cuenta</option>
+									{#each cuentaBancoOptions as opt}
+										<option value={opt.value}>{opt.label}</option>
+									{/each}
+								</select>
+							{:else if field.key === 'cuenta_banco'}
+								<input
+									id={`cb-${field.key}`}
+									type="text"
+									value=""
+									disabled
+									placeholder="Elige Transferencia bancaria o Depósito en Medio de Cobro"
+									class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-slate-100 text-slate-400 cursor-not-allowed"
+								/>
+							{:else if field.tipo === 'select' || field.options}
 								<select
 									id={`cb-${field.key}`}
 									name={field.key}

@@ -29,6 +29,7 @@
 		fechaEmision,
 		fechaVencimiento = null,
 		fraccionesIniciales = [],
+		metodoSugerido,
 		onClose,
 		onConfirm,
 		onEliminar
@@ -41,6 +42,12 @@
 		fechaEmision: string;
 		fechaVencimiento?: string | null;
 		fraccionesIniciales?: Fraccion[];
+		/** Método con el que abrir la ventana cuando todavía NO hay fracciones (cuenta nueva) — a pedido
+		 * del usuario, CuentaCobrarModal/CuentaPagarModal lo pasan en 'por_porcentaje' cuando "Forma de
+		 * Pago" es Por Porcentaje, para que arranque directo en ese modo en vez de "Montos iguales". Si
+		 * ya hay fracciones (edición), se ignora: se detecta el método por la forma de esos datos (ver
+		 * pareceMontosIguales) igual que antes. */
+		metodoSugerido?: 'montos_iguales' | 'montos_desiguales' | 'por_porcentaje';
 		onClose: () => void;
 		/** Puede ser async (ej. escribe en BD desde el tablero de Panoramas) — se espera antes de
 		 * cerrar la ventana, para no decirle "listo" al usuario antes de que realmente se haya
@@ -86,7 +93,7 @@
 
 	let activo = $state(fraccionesIniciales.length > 0);
 	let filas = $state<Fraccion[]>([]);
-	let metodo = $state<'montos_iguales' | 'montos_desiguales'>('montos_iguales');
+	let metodo = $state<'montos_iguales' | 'montos_desiguales' | 'por_porcentaje'>('montos_iguales');
 
 	/** ¿Los montos de `filas` calzan con lo que daría un reparto en partes iguales? (con tolerancia de
 	 * un centavo por redondeo). Se usa solo para decidir con qué método abrir una cuenta YA fraccionada
@@ -111,7 +118,11 @@
 		// nunca deja guardar (ver Svelte error "effect_update_depth_exceeded").
 		const nuevasFilas = fraccionesIniciales.length > 0 ? fraccionesIniciales.map((f) => ({ ...f })) : repartirEnPartesIguales(3);
 		filas = nuevasFilas;
-		metodo = pareceMontosIguales(nuevasFilas) ? 'montos_iguales' : 'montos_desiguales';
+		if (fraccionesIniciales.length === 0 && metodoSugerido) {
+			metodo = metodoSugerido;
+		} else {
+			metodo = pareceMontosIguales(nuevasFilas) ? 'montos_iguales' : 'montos_desiguales';
+		}
 	});
 
 	// Mientras el método sea "Montos iguales", el monto de cada fracción se recalcula solo (montoTotal
@@ -168,6 +179,26 @@
 		const final = Math.min(ingresado, maximoPermitido);
 		filas = filas.map((f, i) => (i === index ? { ...f, monto: final } : f));
 	}
+
+	/** Modo "Por porcentaje (%)" — a pedido explícito del usuario: el monto de cada fracción ya no se
+	 * edita directamente, se deriva del porcentaje que el usuario escribe (montoTotal × % ÷ 100). El
+	 * porcentaje de cada fila se muestra calculado a partir de `monto` (ver `porcentajeDeFila`), no se
+	 * guarda aparte — así el arreglo final que recibe `onConfirm` sigue siendo solo {fecha, monto},
+	 * igual que en los otros dos métodos. */
+	function porcentajeDeFila(monto: number): string {
+		if (!montoTotal) return '0.00';
+		return ((monto / montoTotal) * 100).toFixed(2);
+	}
+
+	function actualizarPorcentaje(index: number, raw: string) {
+		const masked = raw.replace(/[^\d.]/g, '');
+		const ingresado = masked === '' ? 0 : Number(masked);
+		const limitado = Math.min(Math.max(ingresado, 0), 100);
+		const monto = Number((((montoTotal || 0) * limitado) / 100).toFixed(2));
+		filas = filas.map((f, i) => (i === index ? { ...f, monto } : f));
+	}
+
+	const sumaPorcentajes = $derived(filas.reduce((sum, f) => sum + (montoTotal ? (f.monto / montoTotal) * 100 : 0), 0));
 
 	function incrementarNumero() {
 		if (filas.length === 0) {
@@ -273,14 +304,17 @@
 						<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Método de fraccionamiento</span>
 						<select
 							value={metodo}
-							onchange={(e) => (metodo = (e.target as HTMLSelectElement).value as 'montos_iguales' | 'montos_desiguales')}
+							onchange={(e) => (metodo = (e.target as HTMLSelectElement).value as 'montos_iguales' | 'montos_desiguales' | 'por_porcentaje')}
 							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
 						>
 							<option value="montos_iguales">Montos iguales</option>
 							<option value="montos_desiguales">Montos desiguales</option>
+							<option value="por_porcentaje">Por porcentaje (%)</option>
 						</select>
 						{#if metodo === 'montos_iguales'}
 							<p class="mt-1 text-xs text-slate-400">El monto de cada fracción se calcula solo y no se puede editar.</p>
+						{:else if metodo === 'por_porcentaje'}
+							<p class="mt-1 text-xs text-slate-400">El porcentaje de cada fracción determina el monto correspondiente.</p>
 						{/if}
 					</div>
 
@@ -294,14 +328,33 @@
 									onchange={(e) => actualizarFecha(i, (e.target as HTMLInputElement).value)}
 									class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
 								/>
-								<input
-									type="text"
-									inputmode="decimal"
-									value={fila.monto}
-									disabled={metodo === 'montos_iguales'}
-									oninput={(e) => actualizarMonto(i, (e.target as HTMLInputElement).value)}
-									class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-								/>
+								{#if metodo === 'por_porcentaje'}
+									<input
+										type="text"
+										inputmode="decimal"
+										value={porcentajeDeFila(fila.monto)}
+										oninput={(e) => actualizarPorcentaje(i, (e.target as HTMLInputElement).value)}
+										aria-label={`Porcentaje de la fracción ${i + 1}`}
+										class="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200"
+									/>
+									<span class="text-xs text-slate-400">%</span>
+									<input
+										type="text"
+										readonly
+										value={formatCurrency(fila.monto)}
+										aria-label={`Monto de la fracción ${i + 1}`}
+										class="w-24 rounded-lg border border-slate-300 bg-slate-100 px-2 py-1.5 text-sm text-right text-slate-500 cursor-default focus:outline-none"
+									/>
+								{:else}
+									<input
+										type="text"
+										inputmode="decimal"
+										value={fila.monto}
+										disabled={metodo === 'montos_iguales'}
+										oninput={(e) => actualizarMonto(i, (e.target as HTMLInputElement).value)}
+										class="w-28 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
+									/>
+								{/if}
 								<button type="button" onclick={() => eliminarFraccion(i)} class="p-1.5 rounded-lg text-red-500 hover:bg-red-50" aria-label="Eliminar fracción">
 									<Trash2 size={16} />
 								</button>
@@ -313,9 +366,16 @@
 						<Plus size={16} /> Agregar fracción
 					</button>
 
-					<div class={`flex justify-between rounded-lg px-3 py-2 text-sm font-medium ${sumaOk ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+					<div class={`flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium ${sumaOk ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
 						<span>Total fracciones</span>
-						<span>{formatCurrency(sumaFilas)} de {formatCurrency(montoTotal)}</span>
+						{#if metodo === 'por_porcentaje'}
+							<span class="text-right">
+								<span class="block">{sumaPorcentajes.toFixed(2)}%</span>
+								<span class="block text-xs font-normal opacity-80">{formatCurrency(sumaFilas)} de {formatCurrency(montoTotal)}</span>
+							</span>
+						{:else}
+							<span>{formatCurrency(sumaFilas)} de {formatCurrency(montoTotal)}</span>
+						{/if}
 					</div>
 					{#if !sumaOk}
 						<p class="text-xs text-red-600">La suma de las fracciones debe ser igual al monto total antes de guardar.</p>

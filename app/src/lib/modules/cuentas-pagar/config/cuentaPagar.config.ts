@@ -245,7 +245,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
 		options: [
 			{ value: '1', label: 'Contado' },
-			{ value: '2', label: 'Crédito' }
+			{ value: '2', label: 'Crédito' },
+			{ value: '3', label: 'Por Porcentaje' }
 		],
 		showInTable: false,
 		showInForm: true,
