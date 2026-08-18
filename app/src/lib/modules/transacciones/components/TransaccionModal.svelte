@@ -15,6 +15,21 @@
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
+
+	/** Algunos orígenes de archivo (ej. selector de galería en el WebView de Android) no informan bien
+	 * `File.type` — llega vacío o genérico ("application/octet-stream") aunque el archivo SÍ sea una
+	 * imagen, lo que hacía que la vista previa dentro del cuadro de "Adjuntar boucher de pago" nunca se
+	 * mostrara (se caía a la rama "solo ícono + nombre"). Se agrega la extensión como respaldo — sin
+	 * ninguna API específica de plataforma, funciona igual en web, Tauri Windows y Tauri Android. */
+	function esArchivoImagen(file: File): boolean {
+		if (file.type.startsWith('image/')) return true;
+		return /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i.test(file.name);
+	}
+
+	function esArchivoPdf(file: File): boolean {
+		return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+	}
 
 	let {
 		open = false,
@@ -244,21 +259,47 @@
 		}
 	});
 
-	// Vista previa local instantánea (antes de subir) cuando el archivo elegido es una imagen.
+	// Vista previa local instantánea (antes de subir) cuando el archivo elegido es una imagen — o, si es
+	// un PDF, la primera página renderizada a imagen vía pdf.js (ver renderPdfFirstPageToDataUrl):
+	// un `<embed>`/`<iframe>` con el PDF crudo no se ve en el WebView de Android, así que se genera una
+	// miniatura real en vez de mostrar solo un ícono + el nombre del archivo. `token` descarta el
+	// resultado si el usuario ya cambió de archivo antes de que termine de renderizar.
+	let comprobantePdfPreviewToken = 0;
 	$effect(() => {
-		if (comprobanteFile && comprobanteFile.type.startsWith('image/')) {
+		if (comprobanteFile && esArchivoImagen(comprobanteFile)) {
 			const url = URL.createObjectURL(comprobanteFile);
 			localPreviewUrl = url;
 			return () => URL.revokeObjectURL(url);
 		}
+		if (comprobanteFile && esArchivoPdf(comprobanteFile)) {
+			const token = ++comprobantePdfPreviewToken;
+			localPreviewUrl = null;
+			renderPdfFirstPageToDataUrl(comprobanteFile)
+				.then((dataUrl) => {
+					if (token === comprobantePdfPreviewToken) localPreviewUrl = dataUrl;
+				})
+				.catch((err) => console.error('[TransaccionModal] No se pudo generar la vista previa del PDF (comprobante):', err));
+			return;
+		}
 		localPreviewUrl = null;
 	});
 
+	let facturaPdfPreviewToken = 0;
 	$effect(() => {
-		if (facturaFile && facturaFile.type.startsWith('image/')) {
+		if (facturaFile && esArchivoImagen(facturaFile)) {
 			const url = URL.createObjectURL(facturaFile);
 			localPreviewUrlFactura = url;
 			return () => URL.revokeObjectURL(url);
+		}
+		if (facturaFile && esArchivoPdf(facturaFile)) {
+			const token = ++facturaPdfPreviewToken;
+			localPreviewUrlFactura = null;
+			renderPdfFirstPageToDataUrl(facturaFile)
+				.then((dataUrl) => {
+					if (token === facturaPdfPreviewToken) localPreviewUrlFactura = dataUrl;
+				})
+				.catch((err) => console.error('[TransaccionModal] No se pudo generar la vista previa del PDF (factura):', err));
+			return;
 		}
 		localPreviewUrlFactura = null;
 	});
@@ -277,7 +318,7 @@
 		fechaLocked = false;
 		montoLocked = false;
 		ocrConfianza = null;
-		if (!file.type.startsWith('image/')) return; // la Edge Function solo procesa bloques `image`, no PDF
+		if (!esArchivoImagen(file)) return; // la Edge Function solo procesa bloques `image`, no PDF
 		ocrLoading = true;
 		try {
 			const result = await reconocerComprobante(file);

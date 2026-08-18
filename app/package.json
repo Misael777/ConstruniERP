@@ -36,6 +36,7 @@
 		"@tauri-apps/plugin-notification": "^2.3.3",
 		"chart.js": "^4.5.1",
 		"exceljs": "^4.4.0",
+		"pdfjs-dist": "^6.2.108",
 		"svelte-chartjs": "^4.0.1",
 		"svelte-dnd-action": "^0.9.70",
 		"tailwindcss": "^4.3.0"

@@ -787,6 +787,10 @@ export async function construirPayloadTransaccionPorCobro(
 		tipo_documento: number | null;
 		num_documento: string | null;
 		forma_pago: number | null;
+		/** Código generado del proyecto vinculado al centro de costo (ver generarCodigoProyecto) — a
+		 * pedido explícito del usuario, se agrega a la descripción de la transacción junto con el número
+		 * de cuota. null/undefined si la cuenta no tiene proyecto vinculado. */
+		proyectoCodigo?: string | null;
 	},
 	cobro: { id_cobro?: number; monto: number; fecha_cobro: string; medio_cobro: number | null; cuenta_banco: string | null; referencia: string | null }
 ): Promise<Record<string, unknown> | null> {
@@ -816,7 +820,7 @@ export async function construirPayloadTransaccionPorCobro(
 		monto_total: cobro.monto,
 		medio_pago: cobro.medio_cobro !== null ? String(cobro.medio_cobro) : null,
 		cuente_destino: cobro.cuenta_banco,
-		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
+		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${numeroCuota !== null ? ` - Cuota ${numeroCuota}` : ''}${cuentaCobrar.proyectoCodigo ? ` - ${cuentaCobrar.proyectoCodigo}` : ''}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
 		estado: 'activo'
 	};
 }

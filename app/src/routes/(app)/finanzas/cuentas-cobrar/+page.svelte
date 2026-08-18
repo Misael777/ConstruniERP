@@ -23,6 +23,7 @@
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getCentroCostoProyectoMap, getCentroCostoClienteMap, getCentroCostoTipoMap, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -89,7 +90,7 @@
 	let columnFilters = $state<ColumnFilters>(emptyColumnFilters(FIELDS_CONFIG));
 
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({ id_cliente: [], id_proyecto: [], id_centro_costo: [], responsable: [] });
-	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [] });
+	let transaccionDynamicOptions = $state<Record<string, FieldOption[]>>({ id_centro_costo_origen: [], id_centro_costo_destino: [], cuenta_banco: [] });
 	let centroCostoMontoMap = $state<Record<string, number>>({});
 	/** id_centro_costo (texto) -> id_proyecto de la venta cerrada vinculada — para autocompletar
 	 * "Proyecto" con el código de ese proyecto al elegir el Centro de Costo (ver CuentaCobrarModal). */
@@ -227,7 +228,7 @@
 			return;
 		}
 		try {
-			const [clienteOptions, proyectoOptions, centroCostoOptions, centroCostoOptionsVentasCerradas, montoMap, proyectoMap, clienteMap, empleadoOptions, tipoMap] = await Promise.all([
+			const [clienteOptions, proyectoOptions, centroCostoOptions, centroCostoOptionsVentasCerradas, montoMap, proyectoMap, clienteMap, empleadoOptions, tipoMap, cuentaBancoOptions] = await Promise.all([
 				getClienteOptions(supabase),
 				getProyectoOptions(supabase),
 				getCentroCostoOptions(supabase),
@@ -236,13 +237,18 @@
 				getCentroCostoProyectoMap(supabase),
 				getCentroCostoClienteMap(supabase),
 				getEmpleadoOptions(supabase),
-				getCentroCostoTipoMap(supabase)
+				getCentroCostoTipoMap(supabase),
+				getCuentaBancoOptions(supabase)
 			]);
 			// "Centro de Costo" en Nueva/Editar Cuenta por Cobrar solo ofrece las ventas cerradas (a
 			// pedido del usuario) — el de la transacción de respaldo (confirmar cobro) sigue usando la
 			// lista completa sin filtrar, igual que en Cuentas por Pagar.
 			dynamicOptions = { id_cliente: clienteOptions, id_proyecto: proyectoOptions, id_centro_costo: centroCostoOptionsVentasCerradas, responsable: empleadoOptions };
-			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions };
+			// `cuenta_banco`: a pedido del usuario, "Cuenta Destino" en Confirmar Cobro / Transacción de
+			// Respaldo ofrece las cuentas bancarias registradas (ver cuentaDestinoEsBancaria en
+			// TransaccionModal.svelte, que ya la usaba — solo faltaba cargarla acá, igual que en
+			// tranzacciones/+page.svelte y cuentas-pagar/+page.svelte).
+			transaccionDynamicOptions = { id_centro_costo_origen: centroCostoOptions, id_centro_costo_destino: centroCostoOptions, cuenta_banco: cuentaBancoOptions };
 			centroCostoMontoMap = montoMap;
 			centroCostoProyectoMap = proyectoMap;
 			centroCostoClienteMap = clienteMap;

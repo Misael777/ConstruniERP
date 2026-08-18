@@ -20,6 +20,20 @@ import type { Transaccion } from '../../transacciones/services/transacciones.ser
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 import { getMontoRecibidoPorCentroCosto } from '../../centro-costos/services/centroCostos.service';
 
+/** Embed proyecto con los campos que generarCodigoProyecto necesita (mismo criterio que
+ * getProyectoOptions más abajo) — a pedido explícito del usuario, para agregar el código del proyecto
+ * (junto con el número de cuota) a la descripción de la transacción de respaldo al confirmar un cobro
+ * (ver construirPayloadTransaccionPorCobro en transacciones.service.ts). Vía `id_proyecto` de la propia
+ * cuenta_cobrar (FK ya probada, ver getCuentasCobrar/createCuentaCobrar más abajo) — no vía centro de
+ * costo, para reusar el mismo camino ya usado en el resto de este archivo. */
+const PROYECTO_CODIGO_EMBED =
+	'proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))';
+
+function codigoProyectoDe(cuenta: any): string | null {
+	const proyecto = cuenta?.proyecto;
+	return proyecto ? generarCodigoProyecto(proyecto) : null;
+}
+
 export interface CuentaCobrar {
 	id_cuenta_cobrar: number;
 	id_cliente: number;
@@ -483,7 +497,7 @@ export async function createCobro(
 
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre)')
+		.select(`id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre), ${PROYECTO_CODIGO_EMBED}`)
 		.eq(PK_COLUMN, idCuentaCobrar)
 		.single();
 	if (!cuenta?.id_centro_costo) {
@@ -516,14 +530,18 @@ export async function createCobro(
 	const { data, error } = await client.from(COBRO_TABLE).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo registrar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
 
-	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, { ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre }, {
-		id_cobro: data.id_cobro,
-		monto: Number(data.monto),
-		fecha_cobro: data.fecha_cobro,
-		medio_cobro: data.medio_cobro,
-		cuenta_banco: data.cuenta_banco,
-		referencia: data.referencia
-	});
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(
+		client,
+		{ ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre, proyectoCodigo: codigoProyectoDe(cuenta) },
+		{
+			id_cobro: data.id_cobro,
+			monto: Number(data.monto),
+			fecha_cobro: data.fecha_cobro,
+			medio_cobro: data.medio_cobro,
+			cuenta_banco: data.cuenta_banco,
+			referencia: data.referencia
+		}
+	);
 
 	return {
 		success: true,
@@ -601,7 +619,7 @@ export async function updateCobro(
 	// si cancela ese paso, este cobro se queda tal como estaba (todavía NO 'cobrado', ver arriba).
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre)')
+		.select(`id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre), ${PROYECTO_CODIGO_EMBED}`)
 		.eq(PK_COLUMN, data.id_cuenta_cobrar)
 		.single();
 
@@ -614,14 +632,18 @@ export async function updateCobro(
 		};
 	}
 
-	const transaccionSugerida = await construirPayloadTransaccionPorCobro(client, { ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre }, {
-		id_cobro: data.id_cobro,
-		monto: Number(data.monto),
-		fecha_cobro: data.fecha_cobro,
-		medio_cobro: data.medio_cobro,
-		cuenta_banco: data.cuenta_banco,
-		referencia: data.referencia
-	});
+	const transaccionSugerida = await construirPayloadTransaccionPorCobro(
+		client,
+		{ ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre, proyectoCodigo: codigoProyectoDe(cuenta) },
+		{
+			id_cobro: data.id_cobro,
+			monto: Number(data.monto),
+			fecha_cobro: data.fecha_cobro,
+			medio_cobro: data.medio_cobro,
+			cuenta_banco: data.cuenta_banco,
+			referencia: data.referencia
+		}
+	);
 
 	return {
 		success: true,
