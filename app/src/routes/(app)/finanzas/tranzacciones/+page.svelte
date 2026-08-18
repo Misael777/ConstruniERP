@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
@@ -236,14 +236,19 @@
 			toast.error(err?.message ?? 'No se pudieron cargar los catálogos');
 		}
 		await fetchList();
+	});
 
-		// Ingreso rápido desde el Share Sheet de Android (ver +layout.svelte, que llega hasta acá
-		// navegando después de detectar la imagen compartida) — abre "Nueva Transacción" directo con
-		// el comprobante ya adjunto.
+	// Ingreso rápido desde el Share Sheet de Android (ver +layout.svelte, que detecta la imagen
+	// compartida y llega hasta acá navegando a esta página) — a diferencia de un chequeo en onMount
+	// (que solo corre una vez, al montar), este $effect reacciona en cualquier momento en que
+	// pendingShareState.file cambie, incluido cuando el usuario YA está parado en esta página (el
+	// goto() de +layout.svelte a la misma ruta en la que ya está no remonta el componente, así que un
+	// chequeo de una sola vez se perdía ese caso — el glitch reportado por el usuario).
+	$effect(() => {
 		if (pendingShareState.file) {
-			sharedComprobanteFile = pendingShareState.file;
+			const file = pendingShareState.file;
 			pendingShareState.file = null;
-			openCreate();
+			openSharedTransaccion(file);
 		}
 	});
 
@@ -298,6 +303,21 @@
 		modalOpen = false;
 		editingTransaccion = null;
 		sharedComprobanteFile = null;
+	}
+
+	/** Abre "Nueva Transacción" con un comprobante ya adjunto (ver ingreso rápido desde el Share Sheet
+	 * de Android más abajo). Si el modal YA estaba abierto (ej. el usuario editando otra transacción
+	 * cuando llega el share), se fuerza un cierre + `tick()` antes de reabrir — con `open` ya en `true`,
+	 * simplemente volver a poner `true` no dispara el `$effect` de apertura de TransaccionModal (no hay
+	 * transición real de false→true), así que el archivo nunca se cargaría en el bloque de "Adjuntar
+	 * boucher de pago". */
+	async function openSharedTransaccion(file: File) {
+		if (modalOpen) {
+			modalOpen = false;
+			await tick();
+		}
+		sharedComprobanteFile = file;
+		openCreate();
 	}
 
 	async function selectRow(item: Transaccion) {
