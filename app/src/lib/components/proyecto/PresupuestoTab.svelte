@@ -2,8 +2,9 @@
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { buildTree, type WithChildren } from '$lib/utils/tree';
-	import { instanciarPlantilla } from '$lib/stores/partidas';
 	import { toast } from '$lib/stores/toast';
+	import InstanciarPlantillaModal from '$lib/components/partidas/InstanciarPlantillaModal.svelte';
+	import { ensurePresupuestoParaProyecto } from '$lib/stores/partidas';
 
 	const { projectId, proyecto } = $props<{
 		projectId: number;
@@ -65,8 +66,7 @@
 	// Plantillas (catálogo maestro → "Plantillas" tab del modal)
 	let plantillas         = $state<PlantillaResumen[]>([]);
 	let plantillasLoaded   = $state(false);
-	let usarCantidades     = $state(true);
-	let applyingPlantillaId = $state<number | null>(null);
+	let instanciandoPlantilla = $state<PlantillaResumen | null>(null);
 
 	// ── DERIVED ────────────────────────────────────────────────────────────────
 	// Nested tree honoring the partida catalog's own nivel/id_partida_padre —
@@ -100,10 +100,6 @@
 		return node.children.reduce((s, c) => s + rollupParcialMAT(c as DetalleNode), 0);
 	}
 
-	// Paleta tipo hoja de cálculo para las filas de categoría (nivel raíz) —
-	// cíclica por posición, imitando las bandas de color de "Presupuesto de
-	// Obra por Partidas".
-	const CATEGORY_COLORS = ['#748546', '#c9722c', '#3f7a8c', '#7a4f7a', '#3f6f9c', '#8c6b3f'];
 
 	let costoDirectoMO = $derived(detalles.reduce((s, d) => s + d.cantidad * d.precio_mo, 0));
 	let costoDirectoMAT = $derived(detalles.reduce((s, d) => s + d.cantidad * d.precio_mat, 0));
@@ -181,14 +177,22 @@
 		}
 	}
 
+	// A pedido explícito del usuario: antes esta función insertaba un presupuesto nuevo SIN buscar uno
+	// existente primero, lo que podía dejar dos presupuestos distintos para el mismo proyecto (uno
+	// creado desde acá, otro desde "Nuevo Presupuesto" en Gestión → pestaña Presupuesto) mostrando
+	// información diferente según por dónde se entrara. Ahora reusa el único punto de buscar-o-crear
+	// (ensurePresupuestoParaProyecto en partidas.ts), igual que el resto de la app.
 	async function ensurePresupuesto(): Promise<number | null> {
 		if (presupuestoId) return presupuestoId;
-		const { data } = await supabase
-			.from('presupuesto')
-			.insert({ id_proyecto: projectId, nombre: `Presupuesto - ${proyecto.nombre_proyecto}`, tipo: 'obra' })
-			.select('id_presupuesto')
-			.single();
-		presupuestoId = data?.id_presupuesto ?? null;
+		const {
+			data: { session }
+		} = await supabase.auth.getSession();
+		const userId = session?.user?.id;
+		if (!userId) {
+			toast.error('No hay sesión activa. Recarga la página.');
+			return null;
+		}
+		presupuestoId = await ensurePresupuestoParaProyecto(supabase, projectId, userId, `Presupuesto - ${proyecto.nombre_proyecto}`);
 		return presupuestoId;
 	}
 
@@ -208,6 +212,22 @@
 			);
 		}
 		saving = new Set([...saving].filter(id => id !== det.id_presupuesto_detalle));
+	}
+
+	// Botón "Guardar cambios" — a pedido explícito del usuario, además del autoguardado por celda al
+	// salir del campo (saveDetalle de arriba), deja un botón visible que fuerza a guardar TODAS las
+	// filas de una vez, para que quede claro que la información quedó grabada sin depender de sacar el
+	// foco de cada campo uno por uno.
+	let guardandoTodo = $state(false);
+	async function guardarTodo() {
+		if (detalles.length === 0) return;
+		guardandoTodo = true;
+		try {
+			await Promise.all(detalles.map((d) => saveDetalle(d)));
+			toast.success('Presupuesto guardado');
+		} finally {
+			guardandoTodo = false;
+		}
 	}
 
 	async function saveGastosGenerales() {
@@ -251,31 +271,17 @@
 		if (tab === 'plantillas') loadPlantillas();
 	}
 
-	// Instancia toda una plantilla (conjunto de partidas) de una sola vez en el
-	// presupuesto del proyecto. instanciarPlantilla() inserta exactamente las
-	// filas de plantilla_detalle, sin caminar ancestros — por eso recargamos
-	// con load() al terminar, que corre backfillMissingAncestors() y repara
-	// cualquier grupo padre que la plantilla no haya incluido.
-	async function aplicarPlantilla(plantilla: PlantillaResumen) {
-		if (applyingPlantillaId !== null) return;
-		applyingPlantillaId = plantilla.id_plantilla;
-		try {
-			const { data: { session } } = await supabase.auth.getSession();
-			const userId = session?.user?.id;
-			if (!userId) {
-				toast.error('No hay sesión activa. Recarga la página.');
-				return;
-			}
-			const res = await instanciarPlantilla(plantilla.id_plantilla, projectId, usarCantidades, false, userId);
-			if (res.success) {
-				toast.success(res.message || `Plantilla "${plantilla.nombre}" aplicada`);
-				await load();
-			} else {
-				toast.error(res.message || 'No se pudo aplicar la plantilla');
-			}
-		} finally {
-			applyingPlantillaId = null;
-		}
+	// Abre el checklist de InstanciarPlantillaModal.svelte para que el usuario elija qué partidas de la
+	// plantilla aplican a este presupuesto — instanciarPlantillaSeleccion() ya resuelve los ancestros
+	// faltantes antes de insertar, así que no hace falta ningún backfill posterior para esto.
+	function abrirInstanciarPlantilla(plantilla: PlantillaResumen) {
+		instanciandoPlantilla = plantilla;
+	}
+
+	async function handlePlantillaInstanciada() {
+		instanciandoPlantilla = null;
+		toast.success('Plantilla aplicada al presupuesto');
+		await load();
 	}
 
 	// Walks a partida's id_partida_padre chain up the catalog and inserts a
@@ -369,12 +375,26 @@
 				{/if}
 			</p>
 		</div>
-		<button
-			onclick={openModal}
-			class="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-medium shadow-md shadow-orange-600/10 transition-colors whitespace-nowrap"
-		>
-			<i class="fas fa-plus-circle"></i> Agregar del Catálogo
-		</button>
+		<div class="flex items-center gap-2">
+			<button
+				onclick={guardarTodo}
+				disabled={guardandoTodo || detalles.length === 0}
+				class="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-medium shadow-md shadow-emerald-600/10 transition-colors disabled:opacity-50 whitespace-nowrap"
+			>
+				{#if guardandoTodo}
+					<i class="fas fa-circle-notch fa-spin"></i>
+				{:else}
+					<i class="fas fa-save"></i>
+				{/if}
+				Guardar
+			</button>
+			<button
+				onclick={openModal}
+				class="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-medium shadow-md shadow-orange-600/10 transition-colors whitespace-nowrap"
+			>
+				<i class="fas fa-plus-circle"></i> Agregar del Catálogo
+			</button>
+		</div>
 	</div>
 
 	<!-- Gantt-sync notice -->
@@ -409,28 +429,28 @@
 	{:else}
 		<!-- Budget table -->
 		<div class="border border-slate-200 rounded-xl overflow-x-auto">
-			<table class="w-full text-sm text-left min-w-[1180px]">
-				<thead class="text-xs text-slate-500 bg-slate-50 font-bold uppercase border-b border-slate-200">
-					<tr>
-						<th class="px-4 py-3 w-28">Item</th>
-						<th class="px-4 py-3">Descripción de Partidas</th>
-						<th class="px-3 py-3 text-center w-16">Und.</th>
-						<th class="px-2 py-3 text-center w-8" title="Programado en Gantt">
+			<table class="w-full text-sm text-left min-w-[1360px] border-collapse">
+				<thead class="text-xs text-slate-600 bg-slate-50 font-bold uppercase tracking-wider border-b-2 border-orange-200">
+					<tr class="divide-x divide-slate-200">
+						<th class="px-4 py-3.5 w-28 text-center">Item</th>
+						<th class="px-4 py-3.5 text-center min-w-[380px]">Descripción de Partidas</th>
+						<th class="px-3 py-3.5 text-center w-16">Und.</th>
+						<th class="px-2 py-3.5 text-center w-8" title="Programado en Gantt">
 							<i class="fas fa-chart-gantt text-slate-400"></i>
 						</th>
-						<th class="px-3 py-3 text-right w-24">Metrado</th>
-						<th class="px-3 py-3 text-right w-24">Precio MO</th>
-						<th class="px-3 py-3 text-right w-28">P. Parcial MO</th>
-						<th class="px-3 py-3 text-right w-24">Precio Mat.</th>
-						<th class="px-3 py-3 text-right w-28">P. Parcial Mat.</th>
-						<th class="px-3 py-3 text-right w-24">P. Unitario</th>
-						<th class="px-3 py-3 text-right w-28">P. Parcial</th>
-						<th class="px-3 py-3 text-center w-16"></th>
+						<th class="px-3 py-3.5 text-center w-24">Metrado</th>
+						<th class="px-3 py-3.5 text-center w-24">Precio MO</th>
+						<th class="px-3 py-3.5 text-center w-28">P. Parcial MO</th>
+						<th class="px-3 py-3.5 text-center w-24">Precio Mat.</th>
+						<th class="px-3 py-3.5 text-center w-28">P. Parcial Mat.</th>
+						<th class="px-3 py-3.5 text-center w-24">P. Unitario</th>
+						<th class="px-3 py-3.5 text-center w-28">P. Parcial</th>
+						<th class="px-3 py-3.5 text-center w-16"></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-slate-100">
-					{#each budgetTree as node, i (node.id_presupuesto_detalle)}
-						{@render DetalleRow(node, 0, i)}
+					{#each budgetTree as node (node.id_presupuesto_detalle)}
+						{@render DetalleRow(node, 0)}
 					{/each}
 				</tbody>
 				<tfoot class="bg-slate-50 border-t-2 border-slate-200">
@@ -478,29 +498,49 @@
 {/if}
 
 <!-- ── BUDGET ROW (recursive: renders a <tr> per node, then its children) ── -->
-{#snippet DetalleRow(node: DetalleNode, depth: number, rootIndex: number)}
-	{@const isGroup     = node.children.length > 0}
-	{@const isCategoria = isGroup && depth === 0}
-	{@const bandColor   = CATEGORY_COLORS[rootIndex % CATEGORY_COLORS.length]}
+{#snippet DetalleRow(node: DetalleNode, depth: number)}
+	<!-- Un capítulo/subcapítulo/grupo intermedio sigue siéndolo aunque en ESTE presupuesto no se hayan
+	     incluido sus hijas (ej. el usuario las desmarcó en el checklist de la plantilla) — antes
+	     "isGroup" dependía solo de si tenía hijas EN ESTE ÁRBOL, así que una fila así quedaba pintada y
+	     con inputs editables como si fuera una partida real. La señal confiable es si la partida del
+	     catálogo tiene unidad de medida: una fila sin unidad es un rótulo/agrupador, nunca algo que se
+	     mida o cueste directamente. -->
+	{@const isGroup      = node.children.length > 0 || !node.partida?.unidad}
+	{@const isCategoria  = isGroup && depth === 0}
+	{@const isSubcapitulo = isGroup && depth === 1}
+	{@const isGrupoPartida = isGroup && depth >= 2}
 	{@const pUnit       = node.precio_mo + node.precio_mat}
 	{@const parcialMO   = isGroup ? rollupParcialMO(node) : node.cantidad * node.precio_mo}
 	{@const parcialMAT  = isGroup ? rollupParcialMAT(node) : node.cantidad * node.precio_mat}
 	{@const rowTotal    = isGroup ? rollupTotal(node) : node.cantidad * pUnit}
 	{@const isSaving    = saving.has(node.id_presupuesto_detalle)}
 	{@const inGantt     = ganttIds.has(node.id_partida)}
+	<!-- Un color/acento distinto por nivel — a pedido explícito del usuario, reusando la paleta que ya
+	     usa el resto del sistema: Capítulo en un naranja suave (menos intenso que el naranja "botón"
+	     del módulo, a pedido del usuario); Subcapítulo en ámbar (mismo criterio "carpeta = ámbar" que
+	     Partidas y Plantillas, ver PlantillaDetail.svelte); Partida/grupo intermedio en un naranja más
+	     claro todavía; Subpartida (la hoja real) queda blanca/neutra, como en el presupuesto de obra de
+	     referencia — un degradado de naranja que se aclara a medida que se baja de nivel. -->
 	<tr
-		class="transition-colors {isCategoria ? '' : 'hover:bg-slate-50/70'}"
+		class="transition-colors divide-x {isCategoria ? 'divide-white/20' : 'divide-slate-200'} {isCategoria ? '' : 'hover:bg-slate-50/70'} border-l-4"
 		class:opacity-60={isSaving}
-		class:bg-slate-50={isGroup && !isCategoria}
-		style={isCategoria ? `background:${bandColor}` : ''}
+		class:bg-[#d68a52]={isCategoria}
+		class:border-[#c17a45]={isCategoria}
+		class:bg-amber-100={isSubcapitulo}
+		class:border-amber-400={isSubcapitulo}
+		class:bg-orange-50={isGrupoPartida}
+		class:border-orange-300={isGrupoPartida}
+		class:border-transparent={!isCategoria && !isSubcapitulo && !isGrupoPartida}
 	>
-		<td class="px-4 py-2.5 font-mono text-xs font-medium {isCategoria ? 'text-white' : 'text-slate-500'}" style="padding-left:{16 + depth * 18}px">
+		<td class="px-4 py-2.5 font-mono text-xs font-medium {isCategoria ? 'text-white' : isSubcapitulo ? 'text-amber-800' : isGrupoPartida ? 'text-orange-800' : 'text-slate-500'}" style="padding-left:{16 + depth * 18}px">
 			{node.partida?.codigo ?? '—'}
 		</td>
-		<td class="px-4 py-2.5 {isCategoria ? 'text-white font-bold' : 'text-slate-700'}" class:font-bold={isGroup && !isCategoria} class:font-medium={!isGroup}>
+		<td
+			class="px-4 py-2.5 {isCategoria ? 'text-white font-bold' : isSubcapitulo ? 'text-amber-900 font-bold' : isGrupoPartida ? 'text-orange-900 font-semibold' : 'text-slate-700 font-medium'}"
+		>
 			{node.partida?.descripcion ?? '—'}
 		</td>
-		<td class="px-3 py-2.5 text-center text-xs {isCategoria ? 'text-white/80' : 'text-slate-500'}">
+		<td class="px-3 py-2.5 text-center text-xs {isCategoria ? 'text-white/80' : isSubcapitulo ? 'text-amber-700' : isGrupoPartida ? 'text-orange-700' : 'text-slate-500'}">
 			{node.partida?.unidad ?? '—'}
 		</td>
 		<td class="px-2 py-2.5 text-center">
@@ -511,9 +551,9 @@
 		{#if isGroup}
 			<td class="px-3 py-2.5"></td>
 			<td class="px-3 py-2.5"></td>
-			<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : 'text-slate-700'}">{fmtN(parcialMO)}</td>
+			<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : isSubcapitulo ? 'text-amber-900' : isGrupoPartida ? 'text-orange-900' : 'text-slate-700'}">{fmtN(parcialMO)}</td>
 			<td class="px-3 py-2.5"></td>
-			<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : 'text-slate-700'}">{fmtN(parcialMAT)}</td>
+			<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : isSubcapitulo ? 'text-amber-900' : isGrupoPartida ? 'text-orange-900' : 'text-slate-700'}">{fmtN(parcialMAT)}</td>
 			<td class="px-3 py-2.5"></td>
 		{:else}
 			<td class="px-3 py-2.5 text-right">
@@ -552,10 +592,10 @@
 			</td>
 			<td class="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtN(parcialMAT)}</td>
 		{/if}
-		<td class="px-3 py-2.5 text-right text-xs font-semibold tabular-nums {isCategoria ? 'text-white' : 'text-slate-600'}">
+		<td class="px-3 py-2.5 text-right text-xs font-semibold tabular-nums {isCategoria ? 'text-white' : isSubcapitulo ? 'text-amber-800' : isGrupoPartida ? 'text-orange-800' : 'text-slate-600'}">
 			{isGroup ? '—' : fmtN(pUnit)}
 		</td>
-		<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : 'text-slate-800'}">
+		<td class="px-3 py-2.5 text-right text-xs font-bold tabular-nums {isCategoria ? 'text-white' : isSubcapitulo ? 'text-amber-900' : isGrupoPartida ? 'text-orange-900' : 'text-slate-800'}">
 			{fmtN(rowTotal)}
 		</td>
 		<td class="px-3 py-2.5 text-center">
@@ -573,7 +613,7 @@
 		</td>
 	</tr>
 	{#each node.children as child (child.id_presupuesto_detalle)}
-		{@render DetalleRow(child as DetalleNode, depth + 1, rootIndex)}
+		{@render DetalleRow(child as DetalleNode, depth + 1)}
 	{/each}
 {/snippet}
 
@@ -683,12 +723,6 @@
 				</div>
 			{:else}
 				<!-- Plantillas -->
-				<div class="px-4 py-3 border-b border-slate-100">
-					<label class="flex items-center gap-2 text-xs text-slate-600">
-						<input type="checkbox" bind:checked={usarCantidades} class="rounded border-slate-300 text-orange-500 focus:ring-orange-400" />
-						Usar las cantidades sugeridas de la plantilla
-					</label>
-				</div>
 				<div class="overflow-y-auto flex-1">
 					{#if !plantillasLoaded}
 						<div class="flex justify-center py-10 text-orange-500 text-2xl">
@@ -701,7 +735,6 @@
 						</div>
 					{:else}
 						{#each plantillas as p (p.id_plantilla)}
-							{@const isApplying = applyingPlantillaId === p.id_plantilla}
 							<div class="flex items-center gap-3 px-5 py-3 border-b border-slate-50">
 								<div class="flex-1 min-w-0">
 									<p class="text-sm font-semibold text-slate-800 truncate">{p.nombre}</p>
@@ -714,15 +747,10 @@
 									</p>
 								</div>
 								<button
-									onclick={() => aplicarPlantilla(p)}
-									disabled={applyingPlantillaId !== null}
-									class="flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-600 border border-orange-200 rounded-lg text-xs font-bold transition-colors disabled:opacity-50 shrink-0"
+									onclick={() => abrirInstanciarPlantilla(p)}
+									class="flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-600 border border-orange-200 rounded-lg text-xs font-bold transition-colors shrink-0"
 								>
-									{#if isApplying}
-										<i class="fas fa-circle-notch fa-spin"></i> Aplicando…
-									{:else}
-										<i class="fas fa-magic"></i> Aplicar
-									{/if}
+									<i class="fas fa-magic"></i> Aplicar
 								</button>
 							</div>
 						{/each}
@@ -740,4 +768,15 @@
 			{/if}
 		</div>
 	</div>
+{/if}
+
+{#if instanciandoPlantilla}
+	<InstanciarPlantillaModal
+		open={true}
+		idPlantilla={instanciandoPlantilla.id_plantilla}
+		nombrePlantilla={instanciandoPlantilla.nombre}
+		idProyectoInicial={projectId}
+		onClose={() => (instanciandoPlantilla = null)}
+		onConfirmed={handlePlantillaInstanciada}
+	/>
 {/if}

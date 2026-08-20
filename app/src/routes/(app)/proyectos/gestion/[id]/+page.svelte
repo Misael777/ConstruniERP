@@ -158,6 +158,11 @@
 		if (projectId && projectId !== lastLoadedProjectId) {
 			loadProject(projectId);
 		}
+		// A pedido del usuario: tras instanciar una plantilla desde PlantillaDetail.svelte, se navega
+		// acá con ?tab=partidas para aterrizar directo en la pestaña Presupuesto (ver
+		// InstanciarPlantillaModal.svelte/handleInstanciado) en vez de la de Definición por defecto.
+		const tabParam = $page?.url?.searchParams?.get('tab');
+		if (tabParam === 'partidas') activeTab = 'partidas';
 	});
 
 	onDestroy(() => unsubscribe());

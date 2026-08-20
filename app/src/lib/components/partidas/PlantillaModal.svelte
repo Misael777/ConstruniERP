@@ -1,11 +1,11 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
     import { X } from '@lucide/svelte';
-    import { createPlantilla } from '$lib/stores/partidas';
+    import { createPlantilla, updatePlantilla, deletePlantilla, type Plantilla } from '$lib/stores/partidas';
     import { toast } from '$lib/stores/toast';
 
     const dispatch = createEventDispatcher();
-    let { isOpen = false } = $props<{ isOpen: boolean }>();
+    let { isOpen = false, plantilla = null }: { isOpen: boolean; plantilla?: Plantilla | null } = $props();
 
     const TIPOS = ['Vivienda', 'Local comercial', 'Oficina', 'Industrial', 'Otro'];
 
@@ -17,10 +17,10 @@
 
     $effect(() => {
         if (isOpen) {
-            // Reset form each time modal opens
-            nombre = '';
-            descripcion = '';
-            tipo = '';
+            // Modo edición: precarga los datos de la plantilla elegida. Modo creación: formulario limpio.
+            nombre = plantilla?.nombre ?? '';
+            descripcion = plantilla?.descripcion ?? '';
+            tipo = plantilla?.tipo ?? '';
             errorMsg = '';
         }
     });
@@ -33,16 +33,30 @@
         }
 
         isLoading = true;
-        const result = await createPlantilla({
-            nombre: nombre.trim(),
-            descripcion: descripcion.trim() || null,
-            tipo: tipo.trim() || null,
-        });
+        const payload = { nombre: nombre.trim(), descripcion: descripcion.trim() || null, tipo: tipo.trim() || null };
+        const result = plantilla ? await updatePlantilla(plantilla.id_plantilla, payload) : await createPlantilla(payload);
         isLoading = false;
 
         // A pedido del usuario: todo popup se cierra de inmediato al guardar en vez de mostrar un
         // mensaje de éxito adentro y esperar — mismo patrón que el resto de los modales (ver
         // toast.success + cierre inmediato en CuentaBancoModal.svelte y similares).
+        if (result.success) {
+            toast.success(result.message);
+            dispatch('close');
+        } else {
+            errorMsg = result.message;
+        }
+    }
+
+    async function handleDelete() {
+        if (!plantilla) return;
+        if (!confirm(`¿Eliminar la plantilla "${plantilla.nombre}"? También se eliminan sus partidas asociadas (solo de la plantilla, no del catálogo). Esta acción no se puede deshacer.`)) return;
+
+        errorMsg = '';
+        isLoading = true;
+        const result = await deletePlantilla(plantilla.id_plantilla);
+        isLoading = false;
+
         if (result.success) {
             toast.success(result.message);
             dispatch('close');
@@ -61,7 +75,7 @@
         <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
             <!-- Header -->
             <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-                <h2 class="text-lg font-semibold text-[#1e293b]">Nueva Plantilla</h2>
+                <h2 class="text-lg font-semibold text-[#1e293b]">{plantilla ? 'Editar Plantilla' : 'Nueva Plantilla'}</h2>
                 <button onclick={handleCancel} class="p-1 hover:bg-slate-100 rounded-full transition-colors">
                     <X size={20} />
                 </button>
@@ -124,12 +138,21 @@
                 >
                     Cancelar
                 </button>
+                {#if plantilla}
+                    <button
+                        onclick={handleDelete}
+                        class="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                        disabled={isLoading}
+                    >
+                        {isLoading ? 'Eliminando...' : 'Eliminar'}
+                    </button>
+                {/if}
                 <button
                     onclick={handleSubmit}
                     class="px-4 py-2 bg-[#0f3b5e] text-white rounded text-sm font-semibold hover:bg-[#1e4a6d] disabled:opacity-50"
                     disabled={isLoading}
                 >
-                    {isLoading ? 'Guardando...' : 'Crear plantilla'}
+                    {isLoading ? 'Guardando...' : plantilla ? 'Actualizar plantilla' : 'Crear plantilla'}
                 </button>
             </div>
         </div>

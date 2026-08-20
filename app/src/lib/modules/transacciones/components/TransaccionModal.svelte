@@ -657,6 +657,19 @@
 	// cuenta propia ya registrada (Origen). (2) transacción Interna: al ser un movimiento entre
 	// centros de costo propios, AMBOS lados (origen y destino) son cuentas bancarias registradas. Ver
 	// getCuentaBancoOptions.
+	// "Categoría" en "Confirmar Cobro — Transacción de Respaldo" (única pantalla donde `onConfirm` viene
+	// con Tipo='ingreso', ver cuentas-cobrar/+page.svelte) ofrece este catálogo propio en vez del genérico
+	// de Ingreso (Consultoría/Ingresos por Servicios, ver optionsWhen en transaccion.config.ts) — a
+	// pedido explícito del usuario, y solo para esta pantalla: cualquier otra transacción de tipo
+	// Ingreso (ej. "Nueva Transacción" a mano) sigue mostrando el catálogo genérico de siempre.
+	const esConfirmarCobro = $derived(!!onConfirm && formValues.tipo === 'ingreso');
+	const CATEGORIA_CONFIRMAR_COBRO: FieldOption[] = [
+		{ value: 'G. Operativos', label: 'G. Operativos' },
+		{ value: 'G. Administrativos', label: 'G. Administrativos' },
+		{ value: 'Servicio', label: 'Servicio' },
+		{ value: 'Materiales', label: 'Materiales' }
+	];
+
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
 	const cuentaOrigenEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso'));
 	// Efectivo ('1') o Yape o Plin ('4') no pasan por ninguna cuenta bancaria — a pedido del usuario,
@@ -707,6 +720,7 @@
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) return dynamicOptions.cuenta_banco || [];
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) return dynamicOptions.cuenta_banco || [];
+		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
 		if (field.optionsWhen) return field.optionsWhen(formValues);
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
 	}

@@ -7,6 +7,7 @@
         isLoadingTree, errorMessage,
         searchTerm, currentAuthUserId,
         draggingNode, draggingPos, countDescendants,
+        type Plantilla,
     } from '$lib/stores/partidas';
     import TreeView from '$lib/components/partidas/TreeView.svelte';
     import PartidaDetail from '$lib/components/partidas/PartidaDetail.svelte';
@@ -21,6 +22,7 @@
     let showPartidaModal  = $state(false);
     let showPlantillaModal = $state(false);
     let editingPartida = $state<any>(null);
+    let editingPlantilla = $state<Plantilla | null>(null);
 
     onMount(async () => {
         const { data: { session } } = await supabase.auth.getSession();
@@ -46,6 +48,21 @@
     function closePartidaModal() {
         showPartidaModal = false;
         editingPartida = null;
+    }
+
+    function openNewPlantillaModal() {
+        editingPlantilla = null;
+        showPlantillaModal = true;
+    }
+
+    function openEditPlantillaModal(plantilla: Plantilla) {
+        editingPlantilla = plantilla;
+        showPlantillaModal = true;
+    }
+
+    function closePlantillaModal() {
+        showPlantillaModal = false;
+        editingPlantilla = null;
     }
 </script>
 
@@ -90,7 +107,7 @@
                 </button>
                 <button
                     class="flex items-center px-4 py-1.5 border border-[#0f3b5e] text-[#0f3b5e] rounded text-sm font-semibold hover:bg-slate-50 transition-colors"
-                    onclick={() => showPlantillaModal = true}
+                    onclick={openNewPlantillaModal}
                 >
                     <Layers size={16} class="mr-2" /> Nueva plantilla
                 </button>
@@ -174,14 +191,14 @@
                     {/if}
                     <button
                         class="bg-[#0f3b5e] text-white px-3 py-1 rounded text-xs font-semibold hover:bg-[#1e4a6d] flex items-center"
-                        onclick={() => showPlantillaModal = true}
+                        onclick={openNewPlantillaModal}
                     >
                         <Plus size={14} class="mr-1" /> Nueva
                     </button>
                 </div>
             </div>
 
-            <PlantillaList />
+            <PlantillaList onEdit={openEditPlantillaModal} />
             <PlantillaDetail />
         </aside>
 
@@ -216,7 +233,7 @@
 
     <!-- Modals -->
     <PartidaModal isOpen={showPartidaModal} partida={editingPartida} on:close={closePartidaModal} />
-    <PlantillaModal isOpen={showPlantillaModal} on:close={() => showPlantillaModal = false} />
+    <PlantillaModal isOpen={showPlantillaModal} plantilla={editingPlantilla} on:close={closePlantillaModal} />
 
     <!-- Drag ghost: follows cursor while dragging a catalog node -->
     {#if $draggingNode && $draggingPos}

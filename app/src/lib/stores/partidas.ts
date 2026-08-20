@@ -1,6 +1,8 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { supabase } from '$lib/supabaseClient';
-import { buildTree } from '$lib/utils/tree';
+import { buildTree, fillMissingAncestors } from '$lib/utils/tree';
+import type { FieldOption } from '$lib/shared/fieldConfig';
+import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 export interface PartidaNode {
     id_partida: number;
@@ -37,7 +39,17 @@ export interface ProyectoBasico {
     nombre_proyecto: string;
 }
 
+export interface PresupuestoResumen {
+    id_presupuesto: number;
+    id_proyecto: number;
+    nombre: string;
+    fecha_creacion: string;
+    nombre_proyecto: string;
+    cliente_nombre: string | null;
+}
+
 // --- Core stores ---
+export const presupuestosList = writable<PresupuestoResumen[]>([]);
 export const partidasTree = writable<PartidaNode[]>([]);
 export const partidasCount = writable<number>(0);
 export const selectedPartida = writable<PartidaNode | null>(null);
@@ -194,67 +206,190 @@ export async function fetchPlantillaDetalle(id_plantilla: number) {
     }
 }
 
-export async function instanciarPlantilla(
+/** Igual que fetchPlantillaDetalle, pero devuelve el arreglo en vez de escribirlo en el store
+ * `selectedPlantillaDetalle` — usada por InstanciarPlantillaModal.svelte, que puede abrirse desde un
+ * contexto (ej. PresupuestoTab.svelte) sin relación con "la plantilla seleccionada" global, así que no
+ * debe pisar ese store como efecto secundario de abrir el checklist. */
+export async function fetchPlantillaDetalleData(id_plantilla: number): Promise<PlantillaDetalle[]> {
+    const { data, error } = await getClient()
+        .from('plantilla_detalle')
+        .select('id_plantilla_detalle, id_partida, cantidad_sugerida, orden, partida:id_partida(descripcion, codigo, nivel, id_partida_padre)')
+        .eq('id_plantilla', id_plantilla)
+        .order('orden', { ascending: true });
+    if (error) throw error;
+
+    return (data || []).map((r: any) => {
+        const p = Array.isArray(r.partida) ? r.partida[0] : r.partida;
+        return {
+            id_plantilla_detalle: r.id_plantilla_detalle,
+            id_partida: r.id_partida,
+            cantidad_sugerida: r.cantidad_sugerida,
+            orden: r.orden,
+            nombre_partida: p?.descripcion ?? '',
+            codigo: p?.codigo ?? '',
+            nivel: p?.nivel ?? 1,
+            id_partida_padre: p?.id_partida_padre ?? null
+        };
+    });
+}
+
+/** Busca el presupuesto del proyecto (uno solo por proyecto, ver nota en instanciarPlantillaSeleccion)
+ * o lo crea si todavía no existe. Compartido por cualquier flujo que necesite insertar en
+ * presupuesto_detalle sin duplicar esta lógica. */
+/** Busca el presupuesto del proyecto (uno solo por proyecto) o lo crea si no existe todavía — ÚNICO
+ * punto que debe insertar en `presupuesto`, para que no puedan crearse dos presupuestos distintos para
+ * el mismo proyecto por dos caminos que no se conocen entre sí (ver PresupuestoTab.svelte, que antes
+ * tenía su propia función local que insertaba sin buscar primero — corregido a pedido del usuario tras
+ * ver información distinta según desde dónde se entrara al presupuesto del mismo proyecto). */
+export async function ensurePresupuestoParaProyecto(
+    client: ReturnType<typeof getClient>,
+    id_proyecto: number,
+    auth_user_id: string,
+    nombre: string = 'Presupuesto Base'
+): Promise<number> {
+    // order('created_at', desc) para que, si alguna vez llegara a haber más de una fila para el mismo
+    // proyecto, se elija consistentemente la MISMA (la más reciente) que ya usan load() en
+    // PresupuestoTab.svelte y GanttTab.svelte — sin esto, un `.limit(1)` sin orden explícito no
+    // garantiza devolver siempre la misma fila.
+    const { data: presupuestos, error: pErr } = await client
+        .from('presupuesto')
+        .select('id_presupuesto')
+        .eq('id_proyecto', id_proyecto)
+        .order('created_at', { ascending: false })
+        .limit(1);
+    if (pErr) throw pErr;
+
+    let presupuesto_id: number | undefined = presupuestos?.[0]?.id_presupuesto;
+    if (!presupuesto_id) {
+        // Si ya existe, se abre tal cual está (no se le pisa el nombre) — `nombre` solo aplica al crear uno.
+        const { data: newP, error: nErr } = await client
+            .from('presupuesto')
+            .insert({ id_proyecto, nombre, usuario_registro: auth_user_id })
+            .select('id_presupuesto');
+        if (nErr) throw nErr;
+        presupuesto_id = newP?.[0]?.id_presupuesto;
+    }
+
+    if (!presupuesto_id) throw new Error('No se pudo obtener o crear el presupuesto');
+    return presupuesto_id;
+}
+
+/** Para el selector "Nombre" del popup "Nuevo Presupuesto" del módulo independiente Presupuesto — a
+ * pedido explícito del usuario, solo ofrece proyectos con venta cerrada, etiquetados con su código
+ * generado (mismo criterio que getProyectoOptions en cuentasCobrar.service.ts). */
+export async function getProyectoOptionsVentaCerrada(client: ReturnType<typeof getClient>): Promise<FieldOption[]> {
+    const { data, error } = await client
+        .from('proyecto')
+        .select(
+            'id_proyecto, tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre)'
+        )
+        .eq('estado_proyecto', 'venta_cerrada')
+        .order('fecha_inicio_plan', { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map((p: any) => ({ value: String(p.id_proyecto), label: generarCodigoProyecto(p) }));
+}
+
+/** Lista de presupuestos existentes (todos los proyectos) para la vista "Lista" del módulo
+ * independiente Presupuesto. */
+export async function fetchPresupuestos() {
+    try {
+        const { data, error } = await getClient()
+            .from('presupuesto')
+            .select('id_presupuesto, id_proyecto, nombre, fecha_creacion, proyecto:id_proyecto(nombre_proyecto, cliente:id_cliente(nombre))')
+            .order('fecha_creacion', { ascending: false });
+        if (error) throw error;
+
+        const items: PresupuestoResumen[] = (data ?? []).map((r: any) => {
+            const proyecto = Array.isArray(r.proyecto) ? r.proyecto[0] : r.proyecto;
+            const cliente = Array.isArray(proyecto?.cliente) ? proyecto.cliente[0] : proyecto?.cliente;
+            return {
+                id_presupuesto: r.id_presupuesto,
+                id_proyecto: r.id_proyecto,
+                nombre: r.nombre,
+                fecha_creacion: r.fecha_creacion,
+                nombre_proyecto: proyecto?.nombre_proyecto ?? '',
+                cliente_nombre: cliente?.nombre ?? null
+            };
+        });
+        errorMessage.set(null);
+        presupuestosList.set(items);
+    } catch (err: any) {
+        errorMessage.set(err.message || err.toString());
+    }
+}
+
+/** Busca o crea el presupuesto del proyecto elegido en el popup "Nuevo Presupuesto" — a pedido
+ * explícito del usuario, el nombre viene del código generado del proyecto (elegido en el selector), no
+ * de texto libre. Si el proyecto ya tenía un presupuesto, se abre ese mismo (ver
+ * ensurePresupuestoParaProyecto), sin duplicar ni renombrarlo. */
+export async function crearOAbrirPresupuesto(
+    id_proyecto: number,
+    nombre: string,
+    auth_user_id: string
+): Promise<{ success: boolean; message: string; id_presupuesto?: number }> {
+    try {
+        const client = getClient();
+        const id_presupuesto = await ensurePresupuestoParaProyecto(client, id_proyecto, auth_user_id, nombre);
+        return { success: true, message: 'Presupuesto listo', id_presupuesto };
+    } catch (err: any) {
+        return { success: false, message: err.message || err.toString() };
+    }
+}
+
+/**
+ * Instancia SOLO las partidas marcadas por el usuario (ver InstanciarPlantillaModal.svelte) — a pedido
+ * explícito del usuario: lo no marcado simplemente no se inserta, así queda fuera del presupuesto y de
+ * cualquier cálculo sin necesitar ninguna bandera "oculta" en la base de datos. Antes de insertar,
+ * completa los ancestros faltantes de cualquier partida marcada (vía fillMissingAncestors, mismo
+ * criterio que backfillMissingAncestors en PresupuestoTab.svelte) para que el árbol del presupuesto
+ * quede siempre conectado raíz→hoja, aunque el usuario no haya marcado el capítulo/subcapítulo padre.
+ */
+export async function instanciarPlantillaSeleccion(
     id_plantilla: number,
     id_proyecto: number,
+    ids_partida_seleccionadas: number[],
     usar_cantidades: boolean,
-    _crear_metrados: boolean,
     auth_user_id: string
 ) {
     isLoading.set(true);
     try {
         const client = getClient();
+        const presupuesto_id = await ensurePresupuestoParaProyecto(client, id_proyecto, auth_user_id);
 
-        // 1. Find or create presupuesto for this project
-        let { data: presupuestos, error: pErr } = await client
-            .from('presupuesto')
-            .select('id_presupuesto')
-            .eq('id_proyecto', id_proyecto)
-            .limit(1);
-
-        if (pErr) throw pErr;
-
-        let presupuesto_id: number | undefined = presupuestos?.[0]?.id_presupuesto;
-
-        if (!presupuesto_id) {
-            const { data: newP, error: nErr } = await client
-                .from('presupuesto')
-                .insert({ id_proyecto, nombre: 'Presupuesto Base', usuario_registro: auth_user_id })
-                .select('id_presupuesto');
-            if (nErr) throw nErr;
-            presupuesto_id = newP?.[0]?.id_presupuesto;
-        }
-
-        if (!presupuesto_id) throw new Error('No se pudo obtener o crear el presupuesto');
-
-        // 2. Get template line items (only the fields we need)
         const { data: detalles, error: dErr } = await client
             .from('plantilla_detalle')
-            .select('id_partida, cantidad_sugerida')
+            .select('id_partida, cantidad_sugerida, partida:id_partida(id_partida_padre)')
             .eq('id_plantilla', id_plantilla);
-
         if (dErr) throw dErr;
         if (!detalles?.length) {
             errorMessage.set(null);
             return { success: true, message: 'Esta plantilla no tiene partidas.' };
         }
 
-        // 3. Insert into presupuesto_detalle
-        const payload = detalles.map((d: any) => ({
+        const filas = detalles.map((d: any) => ({
+            id_partida: d.id_partida as number,
+            id_partida_padre: (Array.isArray(d.partida) ? d.partida[0] : d.partida)?.id_partida_padre ?? null,
+            cantidad_sugerida: d.cantidad_sugerida as number | null
+        }));
+
+        const seleccionadas = filas.filter((f) => ids_partida_seleccionadas.includes(f.id_partida));
+        const completas = fillMissingAncestors(seleccionadas, filas, 'id_partida', 'id_partida_padre');
+
+        const payload = completas.map((f) => ({
             id_presupuesto: presupuesto_id,
-            id_partida: d.id_partida,
-            cantidad: usar_cantidades ? (d.cantidad_sugerida ?? 0) : 0,
-            usuario_registro: auth_user_id,
+            id_partida: f.id_partida,
+            cantidad: usar_cantidades ? (f.cantidad_sugerida ?? 0) : 0,
+            usuario_registro: auth_user_id
         }));
 
         const { error: iErr } = await client.from('presupuesto_detalle').insert(payload);
         if (iErr) throw iErr;
 
         errorMessage.set(null);
-        return { success: true, message: `Se insertaron ${payload.length} partidas en el presupuesto` };
+        return { success: true, message: `Se insertaron ${payload.length} partidas en el presupuesto`, count: payload.length, id_presupuesto: presupuesto_id };
     } catch (err: any) {
         errorMessage.set(err.message || err.toString());
-        return { success: false, message: err.message || err.toString() };
+        return { success: false, message: err.message || err.toString(), count: 0 };
     } finally {
         isLoading.set(false);
     }
@@ -278,6 +413,49 @@ export async function createPlantilla(data: {
 
         await fetchPlantillas();
         return { success: true, message: 'Plantilla creada exitosamente', data: result };
+    } catch (err: any) {
+        return { success: false, message: err.message || err.toString() };
+    }
+}
+
+export async function updatePlantilla(
+    id_plantilla: number,
+    data: { nombre: string; descripcion?: string | null; tipo?: string | null }
+) {
+    try {
+        const { data: result, error } = await getClient()
+            .from('plantilla_presupuesto')
+            .update({ nombre: data.nombre, descripcion: data.descripcion || null, tipo: data.tipo || null })
+            .eq('id_plantilla', id_plantilla)
+            .select('id_plantilla, nombre, descripcion, tipo')
+            .single();
+
+        if (error) throw error;
+
+        await fetchPlantillas();
+        // Si la plantilla editada es la seleccionada, refresca su nombre/tipo en el panel de detalle
+        // (selectedPlantillaDetalle no cambia, solo los metadatos de la plantilla misma).
+        selectedPlantilla.update((current) => (current?.id_plantilla === id_plantilla ? { ...current, ...result } : current));
+        return { success: true, message: 'Plantilla actualizada exitosamente', data: result };
+    } catch (err: any) {
+        return { success: false, message: err.message || err.toString() };
+    }
+}
+
+/** Elimina la plantilla y, en cadena, su plantilla_detalle (ON DELETE CASCADE, ver DER2.sql) — NO
+ * afecta ninguna partida del catálogo global ni ningún presupuesto de proyecto ya instanciado desde
+ * ella (presupuesto_detalle no tiene FK hacia plantilla_detalle, son copias independientes). */
+export async function deletePlantilla(id_plantilla: number) {
+    try {
+        const { error } = await getClient().from('plantilla_presupuesto').delete().eq('id_plantilla', id_plantilla);
+        if (error) throw error;
+
+        if (get(selectedPlantilla)?.id_plantilla === id_plantilla) {
+            selectedPlantilla.set(null);
+            selectedPlantillaDetalle.set([]);
+        }
+        await fetchPlantillas();
+        return { success: true, message: 'Plantilla eliminada exitosamente' };
     } catch (err: any) {
         return { success: false, message: err.message || err.toString() };
     }
@@ -361,6 +539,24 @@ export async function removePartidaFromPlantilla(
         await fetchPlantillaDetalle(id_plantilla);
         await fetchPlantillas();
         return { success: true, message: 'Partida eliminada de la plantilla' };
+    } catch (err: any) {
+        return { success: false, message: err.message ?? String(err) };
+    }
+}
+
+/** Edita cantidad_sugerida/orden de una fila de la plantilla — a pedido del usuario, el menú "Editar"
+ * de PlantillaDetail.svelte (antes cantidad_sugerida quedaba fija en 1 al agregar, sin forma de
+ * ajustarla desde la UI). */
+export async function updatePlantillaDetalle(
+    id_plantilla_detalle: number,
+    updates: { cantidad_sugerida?: number; orden?: number },
+    id_plantilla: number
+): Promise<{ success: boolean; message: string }> {
+    try {
+        const { error } = await getClient().from('plantilla_detalle').update(updates).eq('id_plantilla_detalle', id_plantilla_detalle);
+        if (error) throw error;
+        await fetchPlantillaDetalle(id_plantilla);
+        return { success: true, message: 'Partida actualizada' };
     } catch (err: any) {
         return { success: false, message: err.message ?? String(err) };
     }

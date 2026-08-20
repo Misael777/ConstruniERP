@@ -1,47 +1,55 @@
 <script lang="ts">
+    import { goto } from '$app/navigation';
     import {
         selectedPlantilla, selectedPlantillaDetalle, isLoading,
-        instanciarPlantilla, proyectosList, currentAuthUserId,
-        draggingNode, addPartidaToPlantilla, removePartidaFromPlantilla,
+        draggingNode, addPartidaToPlantilla, removePartidaFromPlantilla, updatePlantillaDetalle,
         selectedPartida, countDescendants,
     } from '$lib/stores/partidas';
-    import { GripVertical, Plus, Rocket, ArrowLeft, MoveDown, Folder, FileText, X } from '@lucide/svelte';
+    import { GripVertical, Plus, Rocket, ArrowLeft, MoveDown, Folder, FileText, X, Pencil, Check } from '@lucide/svelte';
+    import InstanciarPlantillaModal from './InstanciarPlantillaModal.svelte';
 
-    let isInstanciando      = $state(false);
     let successMessage      = $state('');
     let errorMsg            = $state('');
-    let selectedProyectoId  = $state<number | null>(null);
-    let showProyectoSelector = $state(false);
+    let showInstanciarModal = $state(false);
     let isAdding            = $state(false);
-    let deletingId          = $state<number | null>(null);
+    let deletingId           = $state<number | null>(null);
+    let editingId            = $state<number | null>(null);
+    let editCantidad         = $state(0);
+    let editOrden            = $state(0);
+    let isSavingEdit         = $state(false);
 
-    async function handleInstanciar() {
-        if (!$selectedPlantilla) return;
-        if (!selectedProyectoId) { showProyectoSelector = true; return; }
+    function handleInstanciado(info: { idProyecto: number; count: number }) {
+        successMessage = `${info.count} partida(s) instanciadas en el presupuesto.`;
+        setTimeout(() => successMessage = '', 4000);
+        goto(`/proyectos/gestion/${info.idProyecto}?tab=partidas`);
+    }
 
-        const userId = $currentAuthUserId;
-        if (!userId) { errorMsg = 'No hay sesión activa. Recarga la página.'; return; }
+    function startEdit(item: (typeof $selectedPlantillaDetalle)[number]) {
+        editingId = item.id_plantilla_detalle;
+        editCantidad = item.cantidad_sugerida ?? 0;
+        editOrden = item.orden ?? 0;
+    }
 
-        isInstanciando = true;
-        successMessage = '';
-        errorMsg = '';
+    function cancelEdit() {
+        editingId = null;
+    }
 
-        const result = await instanciarPlantilla(
-            $selectedPlantilla.id_plantilla,
-            selectedProyectoId,
-            true,
-            false,
-            userId
+    async function saveEdit(item: (typeof $selectedPlantillaDetalle)[number]) {
+        const plantilla = $selectedPlantilla;
+        if (!plantilla) return;
+        isSavingEdit = true;
+        const result = await updatePlantillaDetalle(
+            item.id_plantilla_detalle,
+            { cantidad_sugerida: editCantidad, orden: editOrden },
+            plantilla.id_plantilla
         );
-
+        isSavingEdit = false;
         if (result.success) {
-            successMessage = result.message;
-            showProyectoSelector = false;
-            setTimeout(() => successMessage = '', 4000);
+            editingId = null;
         } else {
             errorMsg = result.message;
+            setTimeout(() => errorMsg = '', 3000);
         }
-        isInstanciando = false;
     }
 
     async function handleAddSelected() {
@@ -87,68 +95,32 @@
     {#if $selectedPlantilla}
         <div class="font-semibold text-[15px] mb-2.5 text-[#1e293b] truncate">{$selectedPlantilla.nombre}</div>
 
-        <!-- Proyecto selector -->
-        {#if showProyectoSelector}
-            <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded text-[12px]">
-                <label class="block font-medium text-[#0f3b5e] mb-1">Selecciona el proyecto destino</label>
-                {#if $proyectosList.length === 0}
-                    <p class="text-slate-500 italic">No hay proyectos activos disponibles.</p>
+        <div class="flex flex-wrap gap-1.5 mb-2.5">
+            <!-- Fixed "Agregar partida" button -->
+            <button
+                onclick={handleAddSelected}
+                disabled={!$selectedPartida || isAdding}
+                class="flex items-center bg-[#0f3b5e] text-white px-3 py-1.5 rounded text-[11px] font-semibold
+                       hover:bg-[#1e4a6d] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={$selectedPartida
+                    ? `Agregar: ${$selectedPartida.descripcion}`
+                    : 'Haz clic en una partida del catálogo primero'}
+            >
+                {#if isAdding}
+                    <span class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin mr-1.5"></span>
                 {:else}
-                    <select
-                        bind:value={selectedProyectoId}
-                        class="w-full border border-slate-300 rounded px-2 py-1.5 text-[12px] bg-white focus:outline-none focus:border-[#0f3b5e] mb-2"
-                    >
-                        <option value={null}>— Elige un proyecto —</option>
-                        {#each $proyectosList as p}
-                            <option value={p.id_proyecto}>{p.nombre_proyecto}</option>
-                        {/each}
-                    </select>
+                    <Plus size={13} class="mr-1.5" />
                 {/if}
-                <div class="flex gap-2 mt-1">
-                    <button
-                        onclick={handleInstanciar}
-                        disabled={!selectedProyectoId || isInstanciando}
-                        class="bg-[#0f3b5e] text-white px-3 py-1 rounded text-[11px] font-semibold hover:bg-[#1e4a6d] disabled:opacity-50"
-                    >
-                        {isInstanciando ? 'Procesando...' : 'Confirmar'}
-                    </button>
-                    <button
-                        onclick={() => { showProyectoSelector = false; errorMsg = ''; }}
-                        class="bg-slate-200 text-slate-700 px-3 py-1 rounded text-[11px] font-semibold hover:bg-slate-300"
-                    >
-                        Cancelar
-                    </button>
-                </div>
-            </div>
-        {:else}
-            <div class="flex flex-wrap gap-1.5 mb-2.5">
-                <!-- Fixed "Agregar partida" button -->
-                <button
-                    onclick={handleAddSelected}
-                    disabled={!$selectedPartida || isAdding}
-                    class="flex items-center bg-[#0f3b5e] text-white px-3 py-1.5 rounded text-[11px] font-semibold
-                           hover:bg-[#1e4a6d] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={$selectedPartida
-                        ? `Agregar: ${$selectedPartida.descripcion}`
-                        : 'Haz clic en una partida del catálogo primero'}
-                >
-                    {#if isAdding}
-                        <span class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin mr-1.5"></span>
-                    {:else}
-                        <Plus size={13} class="mr-1.5" />
-                    {/if}
-                    Agregar partida
-                </button>
-                <button
-                    class="flex items-center bg-[#e2e8f0] text-[#1e293b] px-3 py-1.5 rounded text-[11px] font-semibold hover:bg-[#cbd5e1] transition-colors"
-                    onclick={handleInstanciar}
-                    disabled={isInstanciando}
-                >
-                    <Rocket size={13} class="mr-1.5" />
-                    {isInstanciando ? 'Procesando...' : 'Instanciar en proyecto'}
-                </button>
-            </div>
-        {/if}
+                Agregar partida
+            </button>
+            <button
+                class="flex items-center bg-[#e2e8f0] text-[#1e293b] px-3 py-1.5 rounded text-[11px] font-semibold hover:bg-[#cbd5e1] transition-colors"
+                onclick={() => (showInstanciarModal = true)}
+            >
+                <Rocket size={13} class="mr-1.5" />
+                Instanciar en proyecto
+            </button>
+        </div>
 
         <!-- Feedback messages -->
         {#if successMessage}
@@ -204,29 +176,78 @@
                                 {item.nombre_partida}
                             </span>
 
-                            <!-- Quantity (leaf only) -->
-                            {#if !isParent}
-                                <span class="text-[10px] text-slate-400 ml-1 shrink-0 tabular-nums">
-                                    {item.cantidad_sugerida?.toFixed(2) ?? '—'}
-                                </span>
-                            {/if}
-
-                            <!-- Delete button (visible on hover) -->
-                            <button
-                                onclick={() => handleRemove(item.id_plantilla_detalle)}
-                                disabled={isDeleting}
-                                class="ml-1 shrink-0 w-5 h-5 rounded flex items-center justify-center
-                                       opacity-0 group-hover:opacity-100 transition-opacity
-                                       text-slate-300 hover:text-red-500 hover:bg-red-50
-                                       disabled:cursor-not-allowed"
-                                title="Quitar de la plantilla"
-                            >
-                                {#if isDeleting}
-                                    <span class="w-2.5 h-2.5 border border-slate-300 border-t-slate-600 rounded-full animate-spin"></span>
-                                {:else}
+                            {#if editingId === item.id_plantilla_detalle}
+                                <!-- Inline edit: cantidad sugerida + orden -->
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    bind:value={editCantidad}
+                                    class="w-14 text-[10px] border border-slate-300 rounded px-1 py-0.5 shrink-0 tabular-nums"
+                                    title="Cantidad sugerida"
+                                />
+                                <input
+                                    type="number"
+                                    step="1"
+                                    bind:value={editOrden}
+                                    class="w-10 text-[10px] border border-slate-300 rounded px-1 py-0.5 ml-1 shrink-0 tabular-nums"
+                                    title="Orden"
+                                />
+                                <button
+                                    onclick={() => saveEdit(item)}
+                                    disabled={isSavingEdit}
+                                    class="ml-1 shrink-0 w-5 h-5 rounded flex items-center justify-center text-emerald-600 hover:bg-emerald-50 disabled:cursor-not-allowed"
+                                    title="Actualizar"
+                                >
+                                    {#if isSavingEdit}
+                                        <span class="w-2.5 h-2.5 border border-emerald-300 border-t-emerald-600 rounded-full animate-spin"></span>
+                                    {:else}
+                                        <Check size={12} />
+                                    {/if}
+                                </button>
+                                <button
+                                    onclick={cancelEdit}
+                                    disabled={isSavingEdit}
+                                    class="ml-0.5 shrink-0 w-5 h-5 rounded flex items-center justify-center text-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed"
+                                    title="Cancelar"
+                                >
                                     <X size={11} />
+                                </button>
+                            {:else}
+                                <!-- Quantity (leaf only) -->
+                                {#if !isParent}
+                                    <span class="text-[10px] text-slate-400 ml-1 shrink-0 tabular-nums">
+                                        {item.cantidad_sugerida?.toFixed(2) ?? '—'}
+                                    </span>
                                 {/if}
-                            </button>
+
+                                <!-- Edit button (visible on hover) -->
+                                <button
+                                    onclick={() => startEdit(item)}
+                                    class="ml-1 shrink-0 w-5 h-5 rounded flex items-center justify-center
+                                           opacity-0 group-hover:opacity-100 transition-opacity
+                                           text-slate-300 hover:text-blue-600 hover:bg-blue-50"
+                                    title="Editar"
+                                >
+                                    <Pencil size={11} />
+                                </button>
+
+                                <!-- Delete button (visible on hover) -->
+                                <button
+                                    onclick={() => handleRemove(item.id_plantilla_detalle)}
+                                    disabled={isDeleting}
+                                    class="ml-0.5 shrink-0 w-5 h-5 rounded flex items-center justify-center
+                                           opacity-0 group-hover:opacity-100 transition-opacity
+                                           text-slate-300 hover:text-red-500 hover:bg-red-50
+                                           disabled:cursor-not-allowed"
+                                    title="Quitar de la plantilla"
+                                >
+                                    {#if isDeleting}
+                                        <span class="w-2.5 h-2.5 border border-slate-300 border-t-slate-600 rounded-full animate-spin"></span>
+                                    {:else}
+                                        <X size={11} />
+                                    {/if}
+                                </button>
+                            {/if}
                         </div>
                     {/each}
                 {/if}
@@ -264,3 +285,13 @@
         </div>
     {/if}
 </div>
+
+{#if $selectedPlantilla}
+    <InstanciarPlantillaModal
+        open={showInstanciarModal}
+        idPlantilla={$selectedPlantilla.id_plantilla}
+        nombrePlantilla={$selectedPlantilla.nombre}
+        onClose={() => (showInstanciarModal = false)}
+        onConfirmed={handleInstanciado}
+    />
+{/if}
