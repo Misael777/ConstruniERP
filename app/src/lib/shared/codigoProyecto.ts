@@ -56,8 +56,9 @@ function mesAnioDeFecha(value: string | null | undefined): { mes: string; anio: 
  *    (ej. "OBRA_LGC5_Ate1_0525_ClienteSAC" — reestructurado a pedido del usuario según una imagen de
  *    referencia; usa el mes/año propios de la pestaña Obra — mes_obra/anio_obra — no los de la fecha
  *    de venta. Todo separado por "_", sin guion medio).
- *  - Consultoría: `EXP_{tipo}{estadoPredio}{edificación}{pisos}_{mes}{año}_{distrito}_{cliente}`
- *    (mes/año derivados de la fecha de la venta; prefijo "EXP_" — de "Expediente").
+ *  - Consultoría: `{tipo}{estadoPredio}{edificación}{pisos}_{mes}{año}_{distrito}_{cliente}`
+ *    (mes/año derivados de la fecha de la venta; SIN prefijo — a pedido explícito del usuario, ya no
+ *    lleva "CONS_" ni ningún otro).
  */
 export function generarCodigoProyecto(p: ProyectoCodigoFields): string {
 	const cliente = sanitizeFileSegment((p.clienteNombre || p.cliente?.nombre || '').trim() || 'Cliente');
@@ -70,5 +71,5 @@ export function generarCodigoProyecto(p: ProyectoCodigoFields): string {
 	}
 
 	const { mes, anio } = mesAnioDeFecha(p.fecha_inicio_plan || p.created_at);
-	return `EXP_${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${pisos}_${mes}${anio}_${distrito}_${cliente}`;
+	return `${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${pisos}_${mes}${anio}_${distrito}_${cliente}`;
 }

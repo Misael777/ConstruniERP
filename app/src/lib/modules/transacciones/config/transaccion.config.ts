@@ -34,6 +34,8 @@
  *     aprobado_en                 TIMESTAMPTZ,
  *     tipo_alcance                VARCHAR(10) NOT NULL DEFAULT 'externa' CHECK (tipo_alcance IN ('interna','externa')),
  *       -- agregada por migración, ver transaccion_tipo_alcance_migration.sql
+ *     num_operacion               VARCHAR(30),  -- agregada por migración, ver transaccion_num_operacion_migration.sql
+ *     tipo_gasto                  VARCHAR(50),  -- agregada por migración, ver transaccion_tipo_gasto_migration.sql
  *   );
  *
  * Notas importantes:
@@ -143,40 +145,76 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		defaultSort: 'desc'
 	},
 	{
-		// Catálogo de categorías por tipo de movimiento (definido por el usuario, ver mockup
-		// "Movimientos de Caja y Financiamiento"). `options` trae las 7 completas (para validar
-		// cualquier valor ya guardado y traducirlo a label en tabla/badges); `optionsWhen` filtra
-		// cuáles se OFRECEN en el <select> del formulario según el `tipo` elegido — ver
-		// TransaccionModal.svelte, que además limpia este campo cuando el usuario cambia `tipo`.
+		// Catálogo de categorías por tipo de movimiento (definido por el usuario). `options` trae TODAS
+		// las categorías, vigentes y viejas (para validar cualquier valor ya guardado y traducirlo a
+		// label en tabla/badges); `optionsWhen` filtra cuáles se OFRECEN en el <select> del formulario
+		// según el `tipo` elegido — ver TransaccionModal.svelte, que además limpia este campo cuando el
+		// usuario cambia `tipo`.
 		key: 'categoria',
 		label: 'Categoría',
 		tipo: 'select',
 		options: [
+			// Catálogo vigente (a pedido explícito del usuario) — Ingreso: Adelanto/Valorización/Abonos;
+			// Egreso: Honorarios/Alquileres/Servicios/Subcontrata/Compras/Movilidad/Impuestos/Préstamo.
+			{ value: 'Adelanto', label: 'Adelanto' },
+			{ value: 'Valorización', label: 'Valorización' },
+			{ value: 'Abonos', label: 'Abonos' },
+			{ value: 'Honorarios', label: 'Honorarios' },
+			{ value: 'Alquileres', label: 'Alquileres' },
+			{ value: 'Servicios', label: 'Servicios' },
+			{ value: 'Subcontrata', label: 'Subcontrata' },
+			{ value: 'Compras', label: 'Compras' },
+			{ value: 'Movilidad', label: 'Movilidad' },
+			{ value: 'Impuestos', label: 'Impuestos' },
+			{ value: 'Préstamo', label: 'Préstamo' },
+			// Catálogo propio para proyectos de OBRA (código con prefijo "OBRA"/"SUP") — a pedido
+			// explícito del usuario, distinto del genérico de arriba. Resuelto en TransaccionModal.svelte
+			// (ver esProyectoDeObra/CATEGORIA_OBRA_INGRESO/CATEGORIA_OBRA_EGRESO), no acá en optionsWhen,
+			// porque depende del Centro de Costo elegido (necesita consultar su proyecto vinculado), no
+			// solo de `tipo`. Solo 'Adenda'/'Sub Contrata'/'Material'/'Equipos'/'Gastos generales' son
+			// nuevos — el resto ('Adelanto', 'Valorización', 'Servicios', 'Honorarios', 'Compras',
+			// 'Alquileres', 'Préstamo') ya estaban arriba.
+			{ value: 'Adenda', label: 'Adenda' },
+			{ value: 'Sub Contrata', label: 'Sub Contrata' },
+			{ value: 'Material', label: 'Material' },
+			{ value: 'Equipos', label: 'Equipos' },
+			{ value: 'Gastos generales', label: 'Gastos generales' },
+			// Catálogo propio para Centro de Costo "Corporativo" (tipo 'bolsa general') — resuelto en
+			// TransaccionModal.svelte (ver esCorporativo/CATEGORIA_CORPORATIVO_INGRESO/
+			// CATEGORIA_CORPORATIVO_EGRESO). Solo 'Inyecciones'/'Inversión' son nuevos — el resto ya
+			// estaba arriba (Honorarios/Alquileres/Servicios/Préstamo/Compras/Movilidad/Impuestos).
+			{ value: 'Inyecciones', label: 'Inyecciones' },
+			{ value: 'Inversión', label: 'Inversión' },
+			// Catálogo anterior — ya no se ofrece en el <select> (ver optionsWhen abajo), se mantiene
+			// acá solo para traducir a label cualquier transacción vieja que ya haya guardado uno de
+			// estos valores (mismo criterio que 'transferencia'/'financiamiento' en el campo 'tipo').
 			{ value: 'Consultoría', label: 'Consultoría' },
 			{ value: 'Ingresos por Servicios', label: 'Ingresos por Servicios' },
 			{ value: 'G. Operativos', label: 'G. Operativos' },
 			{ value: 'G. Administrativos', label: 'G. Administrativos' },
-			{ value: 'Servicios', label: 'Servicios' },
 			{ value: 'Materiales', label: 'Materiales' },
 			{ value: 'Préstamos', label: 'Préstamos' },
-			// Categorías propias de tipo='transferencia' (transacción Interna) — ver optionsWhen abajo.
-			{ value: 'Préstamo', label: 'Préstamo' },
 			{ value: 'Inyección', label: 'Inyección' }
 		],
 		optionsWhen: (payload) => {
 			const tipo = String(payload.tipo ?? '');
 			if (tipo === 'ingreso') {
 				return [
-					{ value: 'Consultoría', label: 'Consultoría' },
-					{ value: 'Ingresos por Servicios', label: 'Ingresos por Servicios' }
+					{ value: 'Adelanto', label: 'Adelanto' },
+					{ value: 'Valorización', label: 'Valorización' },
+					{ value: 'Abonos', label: 'Abonos' }
 				];
 			}
 			if (tipo === 'egreso') {
 				return [
-					{ value: 'G. Operativos', label: 'G. Operativos' },
-					{ value: 'G. Administrativos', label: 'G. Administrativos' },
+					{ value: 'Honorarios', label: 'Honorarios' },
+					{ value: 'Alquileres', label: 'Alquileres' },
 					{ value: 'Servicios', label: 'Servicios' },
-					{ value: 'Materiales', label: 'Materiales' }
+					{ value: 'Subcontrata', label: 'Subcontrata' },
+					{ value: 'Compras', label: 'Compras' },
+					{ value: 'Movilidad', label: 'Movilidad' },
+					{ value: 'Impuestos', label: 'Impuestos' },
+					{ value: 'Préstamo', label: 'Préstamo' }
 				];
 			}
 			if (tipo === 'financiamiento') {
@@ -208,6 +246,32 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		showInTable: true,
 		showInForm: true,
 		sortable: true
+	},
+	{
+		// A pedido del usuario: se lee sola del boucher vía OCR + regex, sin IA (ver ocrComprobante.ts),
+		// mismo criterio que 'fecha'/'monto_total' — widget "reconocido" hecho a mano en
+		// TransaccionModal.svelte (no el <select>/<input> genérico), junto a esos dos.
+		key: 'num_operacion',
+		label: 'N° de Operación',
+		tipo: 'text',
+		maxLength: 30,
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// A pedido del usuario: solo aplica a Egreso en proyectos de Obra — 7 dropdowns propios en
+		// "Otros campos" (uno por Categoría: Honorarios/Alquileres/Servicios/Sub Contrata/Compras/
+		// Movilidad/Impuestos, ver TIPOS_GASTO_OBRA en TransaccionModal.svelte), que comparten esta
+		// única columna. Sin `options` acá porque el catálogo depende de cuál de los 7 se usó — el
+		// motor genérico solo necesita esto para incluirlo en el payload al guardar.
+		key: 'tipo_gasto',
+		label: 'Tipo de Gasto',
+		tipo: 'text',
+		maxLength: 50,
+		showInTable: false,
+		showInForm: true,
+		sortable: false
 	},
 	{
 		key: 'tipo_documento',

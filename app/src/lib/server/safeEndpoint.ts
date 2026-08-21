@@ -6,8 +6,12 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { json } from '@sveltejs/kit';
 
-export function safeEndpoint(handler: RequestHandler): RequestHandler {
-	return async (event) => {
+// Genérico sobre H (en vez de sobre Params/RouteId por separado) para no tener que replicar acá el
+// bound real de RouteId (AppRouteId | null, generado por SvelteKit — no exportado para reusar) —
+// preserva el tipo exacto de cada +server.ts (ver Parameters<H>[0]/`as H` abajo) para que `export
+// const POST = safeEndpoint(handler)` siga tipando contra el RequestHandler específico de esa ruta.
+export function safeEndpoint<H extends RequestHandler<any, any>>(handler: H): H {
+	const wrapped = async (event: Parameters<H>[0]) => {
 		try {
 			return await handler(event);
 		} catch (error: any) {
@@ -58,4 +62,5 @@ export function safeEndpoint(handler: RequestHandler): RequestHandler {
 			);
 		}
 	};
+	return wrapped as H;
 }

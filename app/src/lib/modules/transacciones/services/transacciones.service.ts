@@ -29,6 +29,43 @@ import {
 import { recalcularCuentaCobrar } from '../../cuentas-cobrar/services/cuentasCobrar.service';
 import { recalcularCuentaPagar } from '../../cuentas-pagar/services/cuentasPagar.service';
 import { getOrCrearCentroCostoParaEntidad } from '../../centro-costos/services/centroCostos.service';
+import { generarCodigoProyecto, type ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
+
+// Embed + label de Centro de Costo reutilizados en TODAS las funciones getCentroCostoOptions* de más
+// abajo — mismo criterio que CENTRO_COSTO_EMBED/centroCostoLabel en cuentasPagar.service.ts: si el
+// centro está vinculado a un proyecto, `centro_costo.nombre` guarda el id_proyecto crudo (ilegible,
+// ej. "82"), así que hay que recalcular el código real vía generarCodigoProyecto en vez de mostrarlo
+// tal cual.
+const CENTRO_COSTO_PROYECTO_EMBED =
+	'proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))';
+
+// Mismo motivo que CENTRO_COSTO_PROYECTO_EMBED, pero para un centro vinculado DIRECTAMENTE a un
+// cliente (no a un proyecto): `centro_costo.nombre` también guarda ahí el id_cliente crudo (ver
+// getOrCrearCentroCostoParaEntidad en centroCostos.service.ts, que guarda `nombre: String(idEntidad)`
+// para CUALQUIER tipo de entidad, no solo proyecto) — hay que resolver el nombre real vía el embed.
+const CENTRO_COSTO_CLIENTE_EMBED = 'cliente:id_cliente(nombre)';
+// Mismos motivos que arriba, para centros vinculados a un proveedor o a un empleado.
+const CENTRO_COSTO_PROVEEDOR_EMBED = 'proveedor:id_proveedor(razon_social)';
+const CENTRO_COSTO_EMPLEADO_EMBED = 'empleado:id_empleado(nombre)';
+
+function centroCostoOptionLabel(c: {
+	codigo: string;
+	nombre: string;
+	proyecto?: ProyectoCodigoFields | ProyectoCodigoFields[] | null;
+	cliente?: { nombre: string } | { nombre: string }[] | null;
+	proveedor?: { razon_social: string } | { razon_social: string }[] | null;
+	empleado?: { nombre: string } | { nombre: string }[] | null;
+}): string {
+	const proyecto = Array.isArray(c.proyecto) ? c.proyecto[0] : c.proyecto;
+	if (proyecto) return `${c.codigo} - ${generarCodigoProyecto(proyecto)}`;
+	const cliente = Array.isArray(c.cliente) ? c.cliente[0] : c.cliente;
+	if (cliente) return `${c.codigo} - ${cliente.nombre}`;
+	const proveedor = Array.isArray(c.proveedor) ? c.proveedor[0] : c.proveedor;
+	if (proveedor) return `${c.codigo} - ${proveedor.razon_social}`;
+	const empleado = Array.isArray(c.empleado) ? c.empleado[0] : c.empleado;
+	if (empleado) return `${c.codigo} - ${empleado.nombre}`;
+	return `${c.codigo} - ${c.nombre}`;
+}
 
 export interface Transaccion {
 	id_transaccion: number;
@@ -39,6 +76,13 @@ export interface Transaccion {
 	tipo_documento: string | null;
 	num_documento: string | null;
 	tipo_transaccion: string | null;
+	/** Número de operación del boucher/comprobante — se lee solo vía OCR al subir el archivo (ver
+	 * "N° de Operación (reconocido)" en TransaccionModal.svelte), igual que fecha/monto_total. Ver
+	 * transaccion_num_operacion_migration.sql. */
+	num_operacion: string | null;
+	/** Sub-tipo de gasto — solo aplica a Egreso en proyectos de Obra (ver TIPOS_GASTO_OBRA en
+	 * TransaccionModal.svelte). Ver transaccion_tipo_gasto_migration.sql. */
+	tipo_gasto: string | null;
 	forma_pago: string | null;
 	descripcion: string | null;
 	tipo: string | null;
@@ -88,6 +132,14 @@ export interface ListParams {
 	search?: string;
 	sortBy?: string;
 	sortDir?: 'asc' | 'desc';
+	/** Filtro "Filtrar por" del listado (ver +page.svelte): un solo criterio a la vez, no combinados —
+	 * true/false filtra por `aprobado`, independiente de `fecha`/`estado` (que solo aplican si el
+	 * usuario eligió esos criterios en el dropdown). */
+	aprobado?: boolean;
+	/** Filtra por `fecha` exacta (YYYY-MM-DD). */
+	fecha?: string;
+	/** Filtra por `estado` exacto ('activo'|'anulado'|'consulta'). */
+	estado?: string;
 }
 
 export interface ListResult<T> {
@@ -258,6 +310,9 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
 		query = query.or(orFilter);
 	}
+	if (params.aprobado !== undefined) query = query.eq('aprobado', params.aprobado);
+	if (params.fecha) query = query.eq('fecha', params.fecha);
+	if (params.estado) query = query.eq('estado', params.estado);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
@@ -542,9 +597,70 @@ export async function deleteTransDetalle(client: SupabaseClient, idTransDetalle:
 }
 
 export async function getCentroCostoOptions(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre').order('nombre');
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
+		.order('nombre');
 	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Solo centros de costo vinculados DIRECTAMENTE a un proveedor (`id_proveedor` no nulo) — para
+ * "Centro de Costo Destino" en Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=
+ * Proveedores (ver TransaccionModal.svelte). */
+export async function getCentroCostoOptionsProveedores(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROVEEDOR_EMBED}`)
+		.not('id_proveedor', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Solo centros de costo vinculados DIRECTAMENTE a un empleado (`id_empleado` no nulo) — para "Centro
+ * de Costo Destino" en Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=Empleados (ver
+ * TransaccionModal.svelte). */
+export async function getCentroCostoOptionsEmpleados(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
+		.not('id_empleado', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Solo centros de costo vinculados DIRECTAMENTE a un cliente (`id_cliente` no nulo) — para "Centro
+ * de Costo Origen" en Nueva/Editar Transacción cuando Tipo=Ingreso+Externa: a pedido explícito del
+ * usuario, ese campo pasa a ofrecer la lista de clientes (antes ofrecía "solo proyectos", ver
+ * optionsFor en TransaccionModal.svelte). */
+export async function getCentroCostoOptionsClientes(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
+		.not('id_cliente', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** id_centro_costo (como texto) -> id_cliente "efectivo" de ese centro: su propio `id_cliente` si es
+ * un centro de cliente, o el `id_cliente` del proyecto vinculado si es un centro de proyecto — null si
+ * no corresponde a ningún cliente (Bolsa General, Consultoría manual, proveedor, empleado). Para
+ * TransaccionModal.svelte: una vez elegido el cliente en "Centro de Costo Origen" (Ingreso+Externa),
+ * filtra "Centro de Costo Destino" a solo los proyectos DE ESE CLIENTE (cascada), a pedido explícito
+ * del usuario. */
+export async function getCentroCostoClienteIdMap(client: SupabaseClient): Promise<Record<string, string | null>> {
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, id_cliente, proyecto:id_proyecto(id_cliente)');
+	if (error) throw error;
+	const mapa: Record<string, string | null> = {};
+	for (const row of (data ?? []) as any[]) {
+		const proyecto = Array.isArray(row.proyecto) ? row.proyecto[0] : row.proyecto;
+		const idCliente = row.id_cliente ?? proyecto?.id_cliente ?? null;
+		mapa[String(row.id_centro_costo)] = idCliente !== null && idCliente !== undefined ? String(idCliente) : null;
+	}
+	return mapa;
 }
 
 /** Mapa id_centro_costo (como string) -> "Producto y Servicio" del proveedor vinculado a ese centro
@@ -578,12 +694,12 @@ export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): 
 
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.eq('estado', 'activo')
 		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`)
 		.order('nombre');
 	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
 /** Para "Centro de Costo" en Nueva/Editar Cuenta por Cobrar — a pedido del usuario, solo ofrece los
@@ -608,12 +724,12 @@ export async function getCentroCostoOptionsVentasCerradas(client: SupabaseClient
 
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.or(filtros.join(','))
 		.eq('estado', 'activo')
 		.order('nombre');
 	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
 /** id_centro_costo (como texto) -> precio_venta de la venta cerrada vinculada — para
@@ -723,6 +839,23 @@ export async function getCentroCostoTipoMap(client: SupabaseClient): Promise<Rec
 	return mapa;
 }
 
+/** id_centro_costo (como texto) -> `tipo_venta` del proyecto vinculado ('obra'|'consultoria'), o null
+ * si el centro no está vinculado a un proyecto (Bolsa General, Consultoría manual, proveedor/cliente/
+ * empleado). Para TransaccionModal.svelte: a pedido del usuario, cuando el proyecto es de Obra (su
+ * código generado lleva de prefijo "OBRA" o "SUP" — ver codigoProyecto.ts, ambos casos son
+ * tipo_venta='obra', ya que tipo_obra solo distingue ejecución de supervisión DENTRO de Obra) el campo
+ * "Categoría" ofrece un catálogo propio, distinto del genérico. */
+export async function getCentroCostoTipoVentaMap(client: SupabaseClient): Promise<Record<string, string | null>> {
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, proyecto:id_proyecto(tipo_venta)');
+	if (error) throw error;
+	const mapa: Record<string, string | null> = {};
+	for (const row of (data ?? []) as any[]) {
+		const proyecto = Array.isArray(row.proyecto) ? row.proyecto[0] : row.proyecto;
+		mapa[String(row.id_centro_costo)] = proyecto?.tipo_venta ?? null;
+	}
+	return mapa;
+}
+
 /** Como getCentroCostoOptions, pero solo centros de costo vinculados a un PROYECTO (excluye los
  * vinculados a proveedor/cliente/empleado, ver centro_costo_vinculacion_migration.sql) — a pedido
  * del usuario, "Origen de Transacción"/"Destino de Transacción" en TransaccionModal.svelte solo
@@ -730,11 +863,11 @@ export async function getCentroCostoTipoMap(client: SupabaseClient): Promise<Rec
 export async function getCentroCostoOptionsProyectos(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.not('id_proyecto', 'is', null)
 		.order('nombre');
 	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` }));
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
 /** Para "Destino de Transacción" en "Transacción Externa" (TransaccionModal.svelte): TODOS los
@@ -743,12 +876,12 @@ export async function getCentroCostoOptionsProyectos(client: SupabaseClient): Pr
 export async function getCentroCostoOptionsExternos(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto')
+		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
 		.order('nombre');
 	if (error) throw error;
 
 	const rows = (data ?? []) as any[];
-	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` });
+	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) });
 	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
 	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
 	const empleados = rows.filter((r) => r.id_empleado !== null).map(toOption);
@@ -766,13 +899,13 @@ export async function getCentroCostoOptionsExternos(client: SupabaseClient): Pro
 export async function getCentroCostoOptionsExternosOrigen(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto')
+		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
 		.or('id_proveedor.not.is.null,id_cliente.not.is.null,id_empleado.not.is.null,id_proyecto.not.is.null')
 		.order('nombre');
 	if (error) throw error;
 
 	const rows = (data ?? []) as any[];
-	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: `${c.codigo} - ${c.nombre}` });
+	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) });
 	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
 	const proyectos = rows.filter((r) => r.id_proyecto !== null).map(toOption);
 	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
@@ -784,6 +917,58 @@ export async function getPartidaOptions(client: SupabaseClient): Promise<FieldOp
 	const { data, error } = await client.from('partida').select('id_partida, codigo, descripcion').order('codigo');
 	if (error) throw error;
 	return (data ?? []).map((p: any) => ({ value: String(p.id_partida), label: `${p.codigo} - ${p.descripcion}` }));
+}
+
+/** "Detalle de la categoría" — a pedido explícito del usuario, botón "+ Más detalle de la categoría"
+ * en Nueva/Editar Transacción (visible en cuanto se elige una Categoría): una tabla de subcategorías
+ * (Subcategoría/Descripción/Cantidad/Unidad/Precio Unitario/Total), tabla NUEVA y separada de
+ * trans_detalle/Partidas. Ver transaccion_detalle_categoria_migration.sql. */
+export interface DetalleCategoria {
+	id_detalle_categoria?: number;
+	id_transaccion?: number;
+	subcategoria: string;
+	descripcion: string | null;
+	cantidad: number;
+	unidad: string | null;
+	precio_unitario: number;
+	total: number;
+}
+
+export async function getDetalleCategoria(client: SupabaseClient, idTransaccion: number): Promise<DetalleCategoria[]> {
+	const { data, error } = await client
+		.from('transaccion_detalle_categoria')
+		.select('*')
+		.eq('id_transaccion', idTransaccion)
+		.order('id_detalle_categoria');
+	if (error) throw error;
+	return (data ?? []) as DetalleCategoria[];
+}
+
+/** Sustituye TODO el detalle de una transacción por las filas actuales (borra + reinserta) — mismo
+ * criterio que sincronizarCuotasProgramadas en cuentasPagar.service.ts: más simple que diffear altas/
+ * ediciones/bajas fila por fila, y el detalle siempre se edita completo desde la tabla del modal, no
+ * fila por fila contra el servidor. */
+export async function sincronizarDetalleCategoria(client: SupabaseClient, idTransaccion: number, filas: DetalleCategoria[]): Promise<void> {
+	const { error: deleteError } = await client.from('transaccion_detalle_categoria').delete().eq('id_transaccion', idTransaccion);
+	if (deleteError) {
+		console.error('[transacciones.service] No se pudo limpiar el detalle de categoría anterior:', deleteError);
+		return;
+	}
+	if (filas.length === 0) return;
+
+	const rows = filas.map((f) => ({
+		id_transaccion: idTransaccion,
+		subcategoria: f.subcategoria,
+		descripcion: f.descripcion || null,
+		cantidad: f.cantidad,
+		unidad: f.unidad || null,
+		precio_unitario: f.precio_unitario,
+		total: f.total
+	}));
+	const { error: insertError } = await client.from('transaccion_detalle_categoria').insert(rows);
+	if (insertError) {
+		console.error('[transacciones.service] No se pudo guardar el detalle de categoría:', insertError);
+	}
 }
 
 /** Opciones para el campo "Responsable" (texto libre, no FK) de Cuentas por Pagar/Cobrar — el

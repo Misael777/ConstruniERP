@@ -355,7 +355,7 @@ async function handleSetupPassword(e: Event) {
 			if (isTauriApp()) {
 				// @ts-ignore: module may only exist in desktop runtime
 				const core = await import('@tauri-apps/api/core');
-				const response = await core.invoke('create_first_admin', {
+				const response = await core.invoke<{ success: boolean; message?: string }>('create_first_admin', {
 					nombre: firstAdminName,
 					email: firstAdminEmail,
 					password: firstAdminPassword

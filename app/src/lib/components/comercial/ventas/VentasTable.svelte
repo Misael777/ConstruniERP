@@ -26,7 +26,9 @@
 
 	function getEstadoLabel(estado: string) {
 		if (estado === 'baja') return 'Dado de baja';
-		return estado === 'venta_cerrada' ? 'Venta Cerrada' : 'En negociación';
+		// A pedido explícito del usuario: toda venta que aún no está cerrada se muestra como "En
+		// borrador" (antes decía "En negociación").
+		return estado === 'venta_cerrada' ? 'Venta Cerrada' : 'En borrador';
 	}
 
 	let { data = [
@@ -57,15 +59,26 @@
 	let fechaHasta     = $state('');
 
 	function getProyectosDisponibles() {
-		return Array.from(new Set(data.map(row => getCodigo(row)))).sort();
+		return Array.from(new Set(data.map((row: any) => getCodigo(row)))).sort();
 	}
 
-	function getTiposDisponibles() {
-		return Array.from(new Set(data.map(row => row.tipo))).sort();
+	// A pedido explícito del usuario: el filtro "Tipo proyecto" ya NO se arma dinámicamente desde
+	// `row.tipo` (el tipo de edificación de Consultoría — "Proyecto de Obra"/"Mantenimiento"/etc, ver
+	// mapProjectType en +page.svelte) — pasa a ser un catálogo fijo de 3 opciones sobre el TIPO DE
+	// VENTA real de cada proyecto (`tipoVenta`/`tipoObra`, agregados a las filas en +page.svelte):
+	// 'Consultoria' (tipoVenta='consultoria'), 'Obra' (tipoVenta='obra' y tipoObra≠'SUP', ejecución) y
+	// 'Supervision' (tipoVenta='obra' y tipoObra='SUP').
+	const TIPOS_PROYECTO_FILTRO = ['Consultoria', 'Obra', 'Supervision'];
+
+	function tipoProyectoMatch(row: any, filtro: string) {
+		if (filtro === 'Todos') return true;
+		if (filtro === 'Consultoria') return row.tipoVenta === 'consultoria';
+		if (filtro === 'Supervision') return row.tipoVenta === 'obra' && row.tipoObra === 'SUP';
+		return row.tipoVenta === 'obra' && row.tipoObra !== 'SUP'; // 'Obra' (ejecución)
 	}
 
 	function getAsesoresDisponibles() {
-		return Array.from(new Set(data.map(row => row.asesor))).sort();
+		return Array.from(new Set(data.map((row: any) => row.asesor))).sort();
 	}
 
 	function formatMoney(amount: number) {
@@ -96,9 +109,9 @@
 	}
 
 	function getFilteredData() {
-		return data.filter(row => {
+		return data.filter((row: any) => {
 			const proyectoMatch = filtroProyecto === 'Todos' || getCodigo(row) === filtroProyecto;
-			const tipoMatch = filtroTipo === 'Todos' || row.tipo === filtroTipo;
+			const tipoMatch = tipoProyectoMatch(row, filtroTipo);
 			const asesorMatch = filtroAsesor === 'Todos' || row.asesor === filtroAsesor;
 
 			const rowDate = parseFechaRow(row.fecha);
@@ -137,7 +150,7 @@
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Tipo proyecto</label>
 			<select bind:value={filtroTipo} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full">
 				<option value="Todos">Todos</option>
-				{#each getTiposDisponibles() as tipo}
+				{#each TIPOS_PROYECTO_FILTRO as tipo}
 					<option value={tipo}>{tipo}</option>
 				{/each}
 			</select>

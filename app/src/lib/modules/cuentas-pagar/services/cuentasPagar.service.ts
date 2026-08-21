@@ -65,8 +65,9 @@ export interface CuentaPagar {
 	 * anterior de la que salió. null = creada a mano, o primera de una cadena recurrente. */
 	id_cuenta_pagar_padre: number | null;
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
-	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. */
-	proveedor?: { razon_social: string; vendedor?: string | null } | null;
+	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. `ruc` (8
+	 * dígitos ≈ DNI, 11 ≈ RUC — no hay columna DNI separada) solo viene poblado en getResumenPagosDashboard. */
+	proveedor?: { razon_social: string; ruc?: string | null; vendedor?: string | null } | null;
 	/** Centro de costo vinculado (embed) — para la columna "Centro de Costo" del listado (ver
 	 * centroCostoLabel en +page.svelte, mismo criterio que resolveEntidadVinculada en
 	 * centroCostos.service.ts: si está vinculado a un proyecto, `nombre` guarda el id_proyecto crudo —
@@ -284,6 +285,106 @@ export async function getMontoFiltrado(
 	const { data, error } = await query;
 	if (error) throw error;
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r[CAMPO_MONTO] ?? 0), 0);
+}
+
+export interface ResumenPagosDashboardFiltros {
+	/** Mismo filtro "Tipo" (Consultoria/Obra/Corporativo/Otros) que el listado principal, resuelto
+	 * client-side a ids de centro de costo — ver idsParaTipoFiltro en +page.svelte. */
+	idsCentroCosto?: number[];
+	incluirSinCentroCosto?: boolean;
+	idProveedor?: number;
+	/** 'pendiente' | 'pagado' | 'vencido' — "Parcial" es un derivado de fila (ver estadoFilaLabel en
+	 * +page.svelte), no un valor real de columna, así que no se filtra por él aquí. */
+	estado?: string;
+	/** Rango sobre fecha_vencimiento (inclusive). */
+	desde?: string;
+	hasta?: string;
+	search?: string;
+}
+
+export interface ResumenPagosDashboard {
+	filas: CuentaPagar[];
+	totalComprometido: number;
+	totalPagado: number;
+	totalSaldoPendiente: number;
+	totalRetencion: number;
+	count: number;
+}
+
+/**
+ * Panel de pagos de "Movimientos de Caja y Financiamiento" (a diferencia de getCuentasPagar, que
+ * excluye estado='pagado' por defecto para la gestión del día a día): acá se necesitan TODAS las
+ * cuentas que matcheen los filtros, incluidas las ya pagadas, porque las 4 tarjetas KPI (Total Pagos/
+ * Pagado/Pendiente/Retenciones) suman sobre el conjunto completo, no solo lo pendiente de gestionar.
+ * Sumas siempre cliente-side (mismo criterio que getMontoFiltrado) — no hay agregación SQL en este
+ * sistema. Trae `proveedor(razon_social, ruc, vendedor)` embebido para la columna Proveedor/Consultor.
+ */
+export async function getResumenPagosDashboard(client: SupabaseClient, filtros: ResumenPagosDashboardFiltros = {}): Promise<ResumenPagosDashboard> {
+	let query = client
+		.from(TABLE_NAME)
+		.select(`*, proveedor(razon_social, ruc, vendedor), ${CENTRO_COSTO_EMBED}`)
+		.eq('activo', true)
+		.order('fecha_vencimiento', { ascending: false, nullsFirst: false });
+
+	if (filtros.idProveedor) query = query.eq('id_proveedor', filtros.idProveedor);
+	if (filtros.estado) query = query.eq('estado', filtros.estado);
+	if (filtros.desde) query = query.gte('fecha_vencimiento', filtros.desde);
+	if (filtros.hasta) query = query.lte('fecha_vencimiento', filtros.hasta);
+
+	const search = filtros.search?.trim();
+	if (search) {
+		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
+		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
+		query = query.or(orFilter);
+	}
+	query = aplicarFiltroCentroCosto(query, filtros.idsCentroCosto, filtros.incluirSinCentroCosto);
+
+	const { data, error } = await query;
+	if (error) throw error;
+	const filas = (data ?? []) as CuentaPagar[];
+
+	return {
+		filas,
+		totalComprometido: filas.reduce((sum, f) => sum + Number(f.monto_comprometido ?? 0), 0),
+		totalPagado: filas.reduce((sum, f) => sum + Number(f.monto_pagado ?? 0), 0),
+		totalSaldoPendiente: filas.reduce((sum, f) => sum + Number(f.saldo_pendiente ?? 0), 0),
+		totalRetencion: filas.reduce((sum, f) => sum + Number(f.monto_retencion ?? 0), 0),
+		count: filas.length
+	};
+}
+
+/**
+ * "Método de Pago" por cuenta (Efectivo/Transferencia bancaria/Depósito bancario/Yape o Plin) para el
+ * panel de pagos — no vive en `cuentas_pagar` (que solo tiene `fotma_pago`, un TÉRMINO de pago —
+ * Contado/Crédito —, no un medio), vive en `pagos.medio_pago` (ver pago.config.ts). Se resuelve solo
+ * para las cuentas pedidas (la página actual de la tabla, no todo el dashboard) y se queda con el
+ * medio_pago de la cuota 'pagado' más reciente de cada cuenta (ORDER BY fecha_pago DESC + primer match
+ * gana). Cuenta sin ningún pago 'pagado' todavía simplemente no aparece en el resultado.
+ */
+export async function getMedioPagoPorCuenta(client: SupabaseClient, idsCuentaPagar: number[]): Promise<Record<number, string>> {
+	if (idsCuentaPagar.length === 0) return {};
+	const { data, error } = await client
+		.from(PAGO_TABLE)
+		.select(`${PARENT_FK_COLUMN}, medio_pago, fecha_pago`)
+		.in(PARENT_FK_COLUMN, idsCuentaPagar)
+		.eq('estado_pago', 'pagado')
+		.order('fecha_pago', { ascending: false });
+	if (error) throw error;
+
+	const result: Record<number, string> = {};
+	for (const row of (data ?? []) as any[]) {
+		const id = row[PARENT_FK_COLUMN] as number;
+		if (!(id in result) && row.medio_pago) result[id] = row.medio_pago as string;
+	}
+	return result;
+}
+
+/** Conteo global de proveedores activos (`estado != 'baja'`, ver proveedores.service.ts) — tarjeta KPI
+ * "Proveedores/Consultores" del panel de pagos, independiente de los filtros de la tabla. */
+export async function getProveedoresActivosCount(client: SupabaseClient): Promise<number> {
+	const { count, error } = await client.from('proveedor').select('id_proveedor', { count: 'exact', head: true }).neq('estado', 'baja');
+	if (error) throw error;
+	return count ?? 0;
 }
 
 /**

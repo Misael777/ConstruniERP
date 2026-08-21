@@ -39,6 +39,7 @@
 		"pdfjs-dist": "^6.2.108",
 		"svelte-chartjs": "^4.0.1",
 		"svelte-dnd-action": "^0.9.70",
-		"tailwindcss": "^4.3.0"
+		"tailwindcss": "^4.3.0",
+		"tesseract.js": "^7.0.0"
 	}
 }

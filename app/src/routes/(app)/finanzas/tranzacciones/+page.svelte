@@ -4,7 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock } from '@lucide/svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -60,6 +60,33 @@
 	let sortBy = $state(DEFAULT_SORT_FIELD);
 	let sortDir = $state<'asc' | 'desc'>(DEFAULT_SORT_DIR);
 	let debounceTimer: ReturnType<typeof setTimeout>;
+
+	// Dropdown "Filtrar por" — a pedido explícito del usuario: un solo criterio a la vez (no combinados
+	// entre sí, sí junto con el buscador). 'aprobado'/'desaprobado' filtran directo al elegirlos;
+	// 'fecha'/'estado' revelan un control secundario (fecha exacta / <select> de estado) para elegir el
+	// valor — ver onFiltroCriterioChange más abajo.
+	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'fecha' | 'estado';
+	let filtroCriterio = $state<FiltroCriterio>('');
+	let filtroFecha = $state('');
+	let filtroEstado = $state('');
+
+	function onFiltroCriterioChange(value: string) {
+		filtroCriterio = value as FiltroCriterio;
+		if (filtroCriterio !== 'fecha') filtroFecha = '';
+		if (filtroCriterio !== 'estado') filtroEstado = '';
+		pageNum = 1;
+		fetchList();
+	}
+	function onFiltroFechaChange(value: string) {
+		filtroFecha = value;
+		pageNum = 1;
+		fetchList();
+	}
+	function onFiltroEstadoChange(value: string) {
+		filtroEstado = value;
+		pageNum = 1;
+		fetchList();
+	}
 
 	// dynamicOptions (Origen/Destino de Transacción en el formulario) solo trae centros de costo
 	// vinculados a un PROYECTO (ver getCentroCostoOptionsProyectos) — pero la tabla de abajo puede
@@ -182,7 +209,16 @@
 	async function fetchList() {
 		loading = true;
 		try {
-			const result = await getTransacciones(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir });
+			const result = await getTransacciones(supabase, {
+				page: pageNum,
+				pageSize: DEFAULT_PAGE_SIZE,
+				search,
+				sortBy,
+				sortDir,
+				aprobado: filtroCriterio === 'aprobado' ? true : filtroCriterio === 'desaprobado' ? false : undefined,
+				fecha: filtroCriterio === 'fecha' ? filtroFecha || undefined : undefined,
+				estado: filtroCriterio === 'estado' ? filtroEstado || undefined : undefined
+			});
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -498,6 +534,38 @@
 		>
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>
+
+		<select
+			value={filtroCriterio}
+			onchange={(e) => onFiltroCriterioChange((e.target as HTMLSelectElement).value)}
+			class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+		>
+			<option value="">Todos</option>
+			<option value="aprobado">Aprobado</option>
+			<option value="desaprobado">Desaprobado</option>
+			<option value="fecha">Fecha</option>
+			<option value="estado">Estado</option>
+		</select>
+		{#if filtroCriterio === 'fecha'}
+			<input
+				type="date"
+				value={filtroFecha}
+				onchange={(e) => onFiltroFechaChange((e.target as HTMLInputElement).value)}
+				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+			/>
+		{:else if filtroCriterio === 'estado'}
+			<select
+				value={filtroEstado}
+				onchange={(e) => onFiltroEstadoChange((e.target as HTMLSelectElement).value)}
+				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+			>
+				<option value="">Todos los estados</option>
+				<option value="activo">Activo</option>
+				<option value="anulado">Anulado</option>
+				<option value="consulta">Consulta</option>
+			</select>
+		{/if}
+
 		<div class="flex-1"></div>
 		<button
 			type="button"
@@ -584,14 +652,20 @@
 					</div>
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
-					{#if item.comprobante_url}
+					{#if item.comprobante_url || item.factura_url}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
 						</button>
 					{/if}
-					<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
-						<Pencil size={16} />
-					</button>
+					{#if item.aprobado}
+						<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, ya no se puede editar">
+							<Lock size={16} />
+						</span>
+					{:else}
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
+							<Pencil size={16} />
+						</button>
+					{/if}
 				</div>
 			</div>
 		{:else}

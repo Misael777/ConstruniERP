@@ -83,10 +83,10 @@
 		const mes = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getMonth() + 1).padStart(2, '0') : '';
 		const anio = fecha && !Number.isNaN(fecha.getTime()) ? String(fecha.getFullYear()).slice(2) : '';
 		const clienteNombre = p.cliente?.nombre?.trim() || 'Cliente';
-		// Prefijo "EXP_" a pedido del usuario — mismo criterio que codigoGenerado (Consultoría) en
-		// NuevaVentaModal.svelte, ver codigoProyecto.ts. tip_proyecto/estado_predio/tipo_edifica son de
-		// selección única (sin checkboxes ni "+").
-		return `EXP_${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${p.nro_pisos ?? ''}_${mes}${anio}_${sanitizeFileSegment(p.distrito ?? '')}_${sanitizeFileSegment(clienteNombre)}`;
+		// Sin prefijo a pedido explícito del usuario (ya no lleva "CONS_" ni ningún otro) — mismo
+		// criterio que codigoGenerado (Consultoría) en NuevaVentaModal.svelte, ver codigoProyecto.ts.
+		// tip_proyecto/estado_predio/tipo_edifica son de selección única (sin checkboxes ni "+").
+		return `${p.tip_proyecto ?? ''}${p.estado_predio ?? ''}${p.tipo_edifica ?? ''}${p.nro_pisos ?? ''}_${mes}${anio}_${sanitizeFileSegment(p.distrito ?? '')}_${sanitizeFileSegment(clienteNombre)}`;
 	}
 
 	function seedForm(p: Proyecto): FormFields {

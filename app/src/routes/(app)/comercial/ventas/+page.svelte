@@ -11,7 +11,7 @@ import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.sv
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
-import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+import { getCentroCostoOptions, getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
 import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
@@ -223,6 +223,8 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			tipo_documento: null,
 			num_documento: null,
 			tipo_transaccion: null,
+			num_operacion: null,
+			tipo_gasto: null,
 			forma_pago: null,
 			descripcion: sugerida.descripcion,
 			tipo: 'egreso',
@@ -429,6 +431,10 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					contrato: project.contrato || '',
 					estado_proyecto: project.estado_proyecto || 'activo',
 					tipoVenta: project.tipo_venta || 'obra',
+					// Solo relevante cuando tipoVenta='obra': 'SUP' = Supervisión de obra, cualquier otro
+					// valor (incluido null, ventas viejas) = Obra (ejecución) — ver filtro "Tipo de
+					// Proyecto" más abajo (filtroTipoProyecto/ventasFiltradas).
+					tipoObra: project.tipo_obra || null,
 					createdAt: project.created_at
 				};
 			}).sort(compararVentasParaTabla);
@@ -488,13 +494,19 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 	async function fetchTransaccionDynamicOptions() {
 		try {
-			const [centroCostoOptions, cuentaBancoOptions] = await Promise.all([
+			const [centroCostoOptions, cuentaBancoOptions, centroCostoSoloCentrosOptions] = await Promise.all([
 				getCentroCostoOptions(supabase),
-				getCuentaBancoOptions(supabase)
+				getCuentaBancoOptions(supabase),
+				// Necesaria para "Centro de Costo Origen" en Egreso+Externa (ver optionsFor en
+				// TransaccionModal.svelte) — sin esto, la única vez que este flujo abre una transacción
+				// de Egreso (handleTransaccionBajaSugerida, devolución proyecto->cliente) Origen se
+				// quedaba con la lista sintética de un solo ítem que arma esa función para Destino.
+				getCentroCostoOptionsSoloCentros(supabase)
 			]);
 			transaccionDynamicOptions = {
 				id_centro_costo_origen: centroCostoOptions,
 				id_centro_costo_destino: centroCostoOptions,
+				id_centro_costo_destino_solo_centros: centroCostoSoloCentrosOptions,
 				cuenta_banco: cuentaBancoOptions
 			};
 		} catch (err) {

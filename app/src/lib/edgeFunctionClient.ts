@@ -73,16 +73,19 @@ export async function getUser(authUserId: string) {
  */
 export async function createUser(payload: {
 	email: string;
-	password: string;
+	// El empleado activa su propio acceso después vía "Configura tu acceso" (OTP + su contraseña, ver
+	// badge "Estado Cuenta" en iam/empleados/+page.svelte) — el único llamador real (esa misma página)
+	// nunca manda password; se deja opcional en vez de requerido para que el tipo refleje el uso real.
+	password?: string;
 	nombre?: string;
-	telefono?: string;
-	rol_id?: number;
-	area_id?: number;
+	telefono?: string | null;
+	rol_id?: number | null;
+	area_id?: number | null;
 	fecha_ingreso?: string;
 	salario?: number;
 	horas?: number;
 	periodo?: string;
-	nivel?: string;
+	nivel?: string | null;
 }) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'POST',
@@ -99,14 +102,14 @@ export async function updateUser(payload: {
 	email?: string;
 	password?: string;
 	nombre?: string;
-	telefono?: string;
-	rol_id?: number;
-	area_id?: number;
+	telefono?: string | null;
+	rol_id?: number | null;
+	area_id?: number | null;
 	fecha_ingreso?: string;
 	salario?: number;
 	horas?: number;
 	periodo?: string;
-	nivel?: string;
+	nivel?: string | null;
 }) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'PUT',
@@ -185,42 +188,3 @@ export async function confirmActivation(authUserId: string) {
 	return handleResponse(response);
 }
 
-function getOcrComprobanteUrl(): string {
-	return `${SUPABASE_URL}/functions/v1/ocr-comprobante`;
-}
-
-/** Convierte un File a base64 puro (sin el prefijo "data:...;base64,") — lo que espera la
- * Edge Function ocr-comprobante. */
-async function fileToBase64(file: File): Promise<string> {
-	const buffer = await file.arrayBuffer();
-	const bytes = new Uint8Array(buffer);
-	let binary = '';
-	for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-	return btoa(binary);
-}
-
-export interface ReconocerComprobanteResult {
-	success: boolean;
-	fecha?: string | null;
-	monto?: number | null;
-	confianza?: 'alta' | 'media' | 'baja';
-	error?: string;
-}
-
-/** Lee fecha y monto de una foto/PDF de comprobante de pago vía Claude (visión) — ver
- * "Fecha (reconocida)"/"Monto (reconocido)" en NuevaTransacción. `file` debe ser una imagen
- * (image/*); PDFs no se envían acá (la Edge Function solo soporta bloques `image`). Nunca lanza
- * — un fallo de reconocimiento no debe bloquear el registro manual de la transacción. */
-export async function reconocerComprobante(file: File): Promise<ReconocerComprobanteResult> {
-	try {
-		const imageBase64 = await fileToBase64(file);
-		const response = await fetchWithApiKey(getOcrComprobanteUrl(), {
-			method: 'POST',
-			body: JSON.stringify({ imageBase64, mediaType: file.type || 'image/jpeg' })
-		});
-		return await handleResponse(response);
-	} catch (err) {
-		console.error('[edgeFunctionClient] Error reconociendo comprobante:', err);
-		return { success: false, error: err instanceof Error ? err.message : String(err) };
-	}
-}

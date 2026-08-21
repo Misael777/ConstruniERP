@@ -1,16 +1,32 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
+	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
-	import { createTransaccion, updateTransaccion, aprobarTransaccion, desaprobarTransaccion, anularTransaccion, reactivarTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import {
+		createTransaccion,
+		updateTransaccion,
+		aprobarTransaccion,
+		desaprobarTransaccion,
+		anularTransaccion,
+		reactivarTransaccion,
+		getCentroCostoTipoVentaMap,
+		getCentroCostoOptionsClientes,
+		getCentroCostoClienteIdMap,
+		getCentroCostoOptionsProveedores,
+		getCentroCostoOptionsEmpleados,
+		getCentroCostoTipoMap,
+		getDetalleCategoria,
+		sincronizarDetalleCategoria,
+		type DetalleCategoria
+	} from '$lib/modules/transacciones/services/transacciones.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
-	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/edgeFunctionClient';
+	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
@@ -139,13 +155,15 @@
 	let localPreviewUrlFactura = $state<string | null>(null);
 	let showFacturaPreview = $state(false);
 
-	// Reconocimiento automático (OCR vía Claude, ver ocr-comprobante Edge Function) de Fecha/Monto al
-	// subir el boucher — a pedido del usuario. fechaLocked/montoLocked = true mientras el valor viene
-	// del reconocimiento automático (input deshabilitado); el lápiz de al lado lo habilita a mano.
+	// Reconocimiento automático (OCR + regex, sin IA, ver ocrComprobante.ts) de Fecha/Monto/N°
+	// de Operación al subir el boucher — a pedido del usuario. fechaLocked/montoLocked/
+	// numOperacionLocked = true mientras el valor viene del reconocimiento automático (input
+	// deshabilitado); el lápiz de al lado lo habilita a mano.
 	let ocrLoading = $state(false);
 	let ocrConfianza = $state<'alta' | 'media' | 'baja' | null>(null);
 	let fechaLocked = $state(false);
 	let montoLocked = $state(false);
+	let numOperacionLocked = $state(false);
 
 	let anulando = $state(false);
 
@@ -250,8 +268,13 @@
 			colaIndex = 0;
 			fechaLocked = false;
 			montoLocked = false;
+			numOperacionLocked = false;
+			claseDestino = '';
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
+			detalleCategoria = [];
+			detalleCategoriaAbierto = false;
+			detalleCategoriaCargadoParaId = null;
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -310,13 +333,14 @@
 	const comprobanteThumbUrl = $derived(toDriveThumbnailUrl(comprobanteUrl));
 	const facturaThumbUrl = $derived(toDriveThumbnailUrl(facturaUrl));
 
-	/** Lee fecha/monto del comprobante vía Claude (visión, ver edgeFunctionClient.ts). `cacheIndex` no
+	/** Lee fecha/monto del comprobante vía OCR + regex, sin IA (ver ocrComprobante.ts). `cacheIndex` no
 	 * nulo cuando viene de la cola de varios comprobantes (se cachea el resultado por índice para no
 	 * repetir la llamada al volver a un archivo ya revisado con las flechas). Nunca bloquea el guardado
 	 * manual: si falla o la imagen no es reconocible, el usuario completa Fecha/Monto a mano. */
 	async function runOcr(file: File, cacheIndex: number | null) {
 		fechaLocked = false;
 		montoLocked = false;
+		numOperacionLocked = false;
 		ocrConfianza = null;
 		if (!esArchivoImagen(file)) return; // la Edge Function solo procesa bloques `image`, no PDF
 		ocrLoading = true;
@@ -332,6 +356,10 @@
 				if (result.monto !== null && result.monto !== undefined) {
 					updates.monto_total = String(result.monto);
 					montoLocked = true;
+				}
+				if (result.num_operacion) {
+					updates.num_operacion = result.num_operacion;
+					numOperacionLocked = true;
 				}
 				if (Object.keys(updates).length > 0) formValues = { ...formValues, ...updates };
 				ocrConfianza = result.confianza ?? null;
@@ -424,6 +452,7 @@
 		formValues = draft ?? buildInitialValues();
 		fechaLocked = !!cached?.success && !!cached.fecha;
 		montoLocked = !!cached?.success && cached.monto !== null && cached.monto !== undefined;
+		numOperacionLocked = !!cached?.success && !!cached.num_operacion;
 		ocrConfianza = cached?.confianza ?? null;
 		if (!cached && comprobanteFile) runOcr(comprobanteFile, idx);
 		revalidate();
@@ -599,10 +628,25 @@
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
-		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) — si cambia Tipo, la
-		// categoría elegida antes puede ya no ser válida, así que se limpia para que el usuario elija
-		// de nuevo entre las opciones correctas en vez de dejar guardado un valor incoherente.
-		if (key === 'tipo') formValues.categoria = '';
+		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) y, si el proyecto es de
+		// Obra, también del Centro de Costo elegido (ver esProyectoDeObra) — si cualquiera de los tres
+		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
+		// usuario elija de nuevo entre las opciones correctas en vez de dejar guardado un valor
+		// incoherente.
+		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') formValues.categoria = '';
+		// "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA) solo aplica a Egreso en proyectos de
+		// Consultoría — mismos disparadores que Categoría para limpiarlo si deja de aplicar.
+		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') formValues.tipo_gasto = '';
+		// En Ingreso, "Centro de Costo Destino" se filtra en cascada a los proyectos del cliente elegido
+		// en "Centro de Costo Origen" (ver optionsFor/centroCostoClienteIdMap) — si Origen cambia, el
+		// Destino ya elegido puede pertenecer a otro cliente, así que se limpia.
+		if (key === 'id_centro_costo_origen' && formValues.tipo === 'ingreso') formValues.id_centro_costo_destino = '';
+		// "Clase" (Proveedores/Empleados/Cliente) solo aplica en Egreso — si Tipo cambia a otra cosa, se
+		// limpia junto con el Destino (que ya no calzaría con la lista filtrada por esa Clase).
+		if (key === 'tipo' && masked !== 'egreso') {
+			claseDestino = '';
+			formValues.id_centro_costo_destino = '';
+		}
 		// Cuenta Destino/Origen cambian de texto libre a un <select> de cuentas bancarias registradas
 		// cuando Alcance=Externa y Tipo=Ingreso (destino) o Egreso (origen) — ver cuentaDestinoEsBancaria/
 		// cuentaOrigenEsBancaria. Si Tipo o Alcance cambian, se limpian los dos para no dejar guardado un
@@ -670,6 +714,251 @@
 		{ value: 'Materiales', label: 'Materiales' }
 	];
 
+	// "Categoría" cuando el Centro de Costo del proyecto (Destino en Ingreso, Origen en Egreso — el
+	// lado que es "nuestro" en cada caso) pertenece a una venta de OBRA (código con prefijo "OBRA" o
+	// "SUP", ver getCentroCostoTipoVentaMap/codigoProyecto.ts) — a pedido explícito del usuario, ofrece
+	// un catálogo propio, distinto del genérico de transaccion.config.ts (que sigue aplicando para
+	// Consultoría/Corporativo/sin centro elegido todavía).
+	let centroCostoTipoVentaMap = $state<Record<string, string | null>>({});
+	let centroCostoTipoVentaMapCargado = $state(false);
+	$effect(() => {
+		if (open && !centroCostoTipoVentaMapCargado) {
+			centroCostoTipoVentaMapCargado = true;
+			getCentroCostoTipoVentaMap(supabase)
+				.then((mapa) => (centroCostoTipoVentaMap = mapa))
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar el tipo de venta por centro de costo:', err));
+		}
+	});
+	const idCentroCostoProyecto = $derived(formValues.tipo === 'ingreso' ? formValues.id_centro_costo_destino : formValues.tipo === 'egreso' ? formValues.id_centro_costo_origen : '');
+	const esProyectoDeObra = $derived(centroCostoTipoVentaMap[idCentroCostoProyecto] === 'obra');
+	// A pedido explícito del usuario: la sección "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA más
+	// abajo) se muestra para Consultoría, no para Obra (reemplaza la condición original) — Categoría sí
+	// sigue usando esProyectoDeObra tal cual, son dos cosas independientes.
+	const esProyectoDeConsultoria = $derived(centroCostoTipoVentaMap[idCentroCostoProyecto] === 'consultoria');
+
+	// "Corporativo" no es un tipo de PROYECTO (a diferencia de Obra/Consultoría) — es un Centro de
+	// Costo de tipo 'bolsa general', creado a mano, sin ningún proyecto vinculado (ver
+	// getCentroCostoTipoMap, que lee `centro_costo.tipo` directo, no el tipo_venta de un proyecto).
+	let centroCostoTipoMap = $state<Record<string, string>>({});
+	let centroCostoTipoMapCargado = $state(false);
+	$effect(() => {
+		if (open && !centroCostoTipoMapCargado) {
+			centroCostoTipoMapCargado = true;
+			getCentroCostoTipoMap(supabase)
+				.then((mapa) => (centroCostoTipoMap = mapa))
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar el tipo de centro de costo:', err));
+		}
+	});
+	const esCorporativo = $derived(centroCostoTipoMap[idCentroCostoProyecto] === 'bolsa general');
+
+	// "Detalle de la categoría" — a pedido explícito del usuario: tabla editable de subcategorías
+	// (Subcategoría/Descripción/Cantidad/Unidad/Precio Unitario/Total, con total autocalculado),
+	// visible en cuanto hay una Categoría elegida (cualquier tipo de proyecto). Se acumula client-side
+	// mientras se llena el formulario y se guarda TODO junto (borra + reinserta, ver
+	// sincronizarDetalleCategoria) recién cuando se confirma Crear/Actualizar — no antes, porque en
+	// modo 'create' la transacción (y su id_transaccion) todavía no existe.
+	type DetalleCategoriaFila = DetalleCategoria & { _key: number };
+	let detalleCategoriaAbierto = $state(false);
+	let detalleCategoria = $state<DetalleCategoriaFila[]>([]);
+	let detalleCategoriaKeySeq = 0;
+	const UNIDADES_DETALLE = ['und', 'kg', 'bolsa', 'm', 'm²', 'm³', 'gal', 'lt', 'caja', 'rollo', 'par', 'juego', 'global'];
+	const totalDetalleCategoria = $derived(detalleCategoria.reduce((sum, f) => sum + (Number(f.cantidad) || 0) * (Number(f.precio_unitario) || 0), 0));
+
+	function agregarFilaDetalleCategoria() {
+		detalleCategoriaKeySeq += 1;
+		detalleCategoria = [
+			...detalleCategoria,
+			{ _key: detalleCategoriaKeySeq, subcategoria: '', descripcion: '', cantidad: 1, unidad: 'und', precio_unitario: 0, total: 0 }
+		];
+	}
+	function eliminarFilaDetalleCategoria(key: number) {
+		detalleCategoria = detalleCategoria.filter((f) => f._key !== key);
+	}
+
+	// Al abrir en modo edición, trae el detalle ya guardado de esa transacción (si tiene) — en modo
+	// create arranca vacío (ver el $effect principal de `open`, que ya limpia detalleCategoria).
+	let detalleCategoriaCargadoParaId: number | null = null;
+	$effect(() => {
+		if (open && mode === 'edit' && transaccion && detalleCategoriaCargadoParaId !== transaccion.id_transaccion) {
+			detalleCategoriaCargadoParaId = transaccion.id_transaccion;
+			getDetalleCategoria(supabase, transaccion.id_transaccion)
+				.then((filas) => {
+					detalleCategoria = filas.map((f) => {
+						detalleCategoriaKeySeq += 1;
+						return { ...f, _key: detalleCategoriaKeySeq };
+					});
+					if (detalleCategoria.length > 0) detalleCategoriaAbierto = true;
+				})
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar el detalle de categoría:', err));
+		}
+	});
+
+	// A pedido explícito del usuario: en Ingreso+Externa, "Centro de Costo Origen" pasa a mostrar la
+	// lista de CLIENTES (antes mostraba "solo proyectos", ver optionsFor más abajo) y "Centro de Costo
+	// Destino", en cascada, solo los PROYECTOS de ese cliente — ver getCentroCostoClienteIdMap. También
+	// se cargan acá las listas de proveedores/empleados: en Egreso+Externa se usan para "Centro de
+	// Costo Destino" según el selector "Clase" (ver más abajo).
+	let centroCostoOptionsClientes = $state<FieldOption[]>([]);
+	let centroCostoClienteIdMap = $state<Record<string, string | null>>({});
+	let centroCostoOptionsProveedores = $state<FieldOption[]>([]);
+	let centroCostoOptionsEmpleados = $state<FieldOption[]>([]);
+	let centroCostoClientesCargado = $state(false);
+	$effect(() => {
+		if (open && !centroCostoClientesCargado) {
+			centroCostoClientesCargado = true;
+			Promise.all([
+				getCentroCostoOptionsClientes(supabase),
+				getCentroCostoClienteIdMap(supabase),
+				getCentroCostoOptionsProveedores(supabase),
+				getCentroCostoOptionsEmpleados(supabase)
+			])
+				.then(([opciones, mapa, proveedores, empleados]) => {
+					centroCostoOptionsClientes = opciones;
+					centroCostoClienteIdMap = mapa;
+					centroCostoOptionsProveedores = proveedores;
+					centroCostoOptionsEmpleados = empleados;
+				})
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/empleados/proyectos:', err));
+		}
+	});
+
+	// "Clase" (Proveedores/Empleados/Cliente) — dropdown propio, SOLO en Egreso+Externa, entre Centro
+	// de Costo Origen y Destino (a pedido explícito del usuario): clasifica qué "Cuenta Interna"
+	// ofrece Destino. No es una columna de `transaccion` — es un filtro puramente de UI, se resetea al
+	// abrir el modal (ver el $effect principal de `open` más abajo) y al cambiar Tipo/Alcance.
+	type ClaseDestino = '' | 'proveedores' | 'empleados' | 'cliente';
+	let claseDestino = $state<ClaseDestino>('');
+	function handleClaseDestinoChange(value: string) {
+		claseDestino = value as ClaseDestino;
+		formValues = { ...formValues, id_centro_costo_destino: '' };
+	}
+	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
+		{ value: 'proveedores', label: 'Proveedores' },
+		{ value: 'empleados', label: 'Empleados' },
+		{ value: 'cliente', label: 'Cliente' }
+	];
+	// Al editar una transacción de Egreso ya guardada, infiere la Clase a partir de a qué lista
+	// pertenece el Destino guardado — para no arrancar con el selector vacío y el campo Destino oculto.
+	$effect(() => {
+		if (open && mode === 'edit' && transaccion && formValues.tipo === 'egreso' && !claseDestino && centroCostoClientesCargado) {
+			const destinoId = String(transaccion.id_centro_costo_destino);
+			if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
+			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
+			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
+		}
+	});
+	const CATEGORIA_OBRA_INGRESO: FieldOption[] = [
+		{ value: 'Adelanto', label: 'Adelanto' },
+		{ value: 'Valorización', label: 'Valorización' },
+		{ value: 'Adenda', label: 'Adenda' }
+	];
+	const CATEGORIA_OBRA_EGRESO: FieldOption[] = [
+		{ value: 'Sub Contrata', label: 'Sub Contrata' },
+		{ value: 'Material', label: 'Material' },
+		{ value: 'Servicios', label: 'Servicios' },
+		{ value: 'Honorarios', label: 'Honorarios' },
+		{ value: 'Equipos', label: 'Equipos' },
+		{ value: 'Compras', label: 'Compras' },
+		{ value: 'Alquileres', label: 'Alquileres' },
+		{ value: 'Préstamo', label: 'Préstamo' },
+		{ value: 'Gastos generales', label: 'Gastos generales' }
+	];
+	// Categoría cuando el Centro de Costo es "Corporativo" (tipo 'bolsa general', ver esCorporativo) —
+	// a pedido explícito del usuario: Ingreso solo ofrece Inyecciones/Préstamo; Egreso ofrece las
+	// mismas 8 categorías del cuadro "Tipo de Gasto" de Corporativo (ver TIPOS_GASTO_CORPORATIVO).
+	const CATEGORIA_CORPORATIVO_INGRESO: FieldOption[] = [
+		{ value: 'Inyecciones', label: 'Inyecciones' },
+		{ value: 'Préstamo', label: 'Préstamo' }
+	];
+	const CATEGORIA_CORPORATIVO_EGRESO: FieldOption[] = [
+		{ value: 'Honorarios', label: 'Honorarios' },
+		{ value: 'Alquileres', label: 'Alquileres' },
+		{ value: 'Servicios', label: 'Servicios' },
+		{ value: 'Préstamo', label: 'Préstamo' },
+		{ value: 'Compras', label: 'Compras' },
+		{ value: 'Movilidad', label: 'Movilidad' },
+		{ value: 'Impuestos', label: 'Impuestos' },
+		{ value: 'Inversión', label: 'Inversión' }
+	];
+
+	// "Tipo de Gasto" — 7 dropdowns propios (uno por concepto, a pedido explícito del usuario, según
+	// su cuadro de referencia), visibles en "Otros campos" solo para Egreso en proyectos de
+	// Consultoría. Los 7 comparten formValues.tipo_gasto: cada <select> solo tiene sus propias
+	// opciones en la lista, así que el que NO tenga el valor actual entre sus opciones queda
+	// deseleccionado solo (sin lógica extra) — no hace falta limpiar los otros 6 a mano al elegir uno.
+	const TIPOS_GASTO_CONSULTORIA: { key: string; label: string; opciones: string[] }[] = [
+		{ key: 'honorarios', label: 'Honorarios', opciones: ['Oficina Técnica', 'Honorarios Firma', 'Comisión Ventas', 'Gestor(a) de Proyectos', 'Otros Honorarios'] },
+		{ key: 'alquileres', label: 'Alquileres', opciones: ['Otros Alquiler'] },
+		{ key: 'servicios', label: 'Servicios', opciones: ['Internet', 'Imprenta', 'Almacenamiento', 'Municipalidad', 'Sunarp', 'Otros Servicios'] },
+		{ key: 'sub_contrata', label: 'Sub Contrata', opciones: ['Calicatas', 'Ensayos Laboratorio', 'Equipo Topográfico', 'Otros Subcontratos'] },
+		{ key: 'compras', label: 'Compras', opciones: ['Útiles de Limpieza', 'Útiles de Oficina', 'Alimentos', 'Peajes', 'Festividad', 'Ferretería', 'Otras Compras'] },
+		{ key: 'movilidad', label: 'Movilidad', opciones: ['Visita Técnica', 'Envíos y Recojos', 'Otras Movilidades'] },
+		{ key: 'impuestos', label: 'Impuestos', opciones: ['Detracción', 'Otros Impuestos'] }
+	];
+
+	// Mismo patrón que TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — son mutuamente
+	// excluyentes, un proyecto nunca es Obra y Consultoría a la vez), pero para Egreso en proyectos de
+	// Obra, con su propio cuadro de referencia (catálogo mucho más detallado por partida de obra).
+	const TIPOS_GASTO_OBRA: { key: string; label: string; opciones: string[] }[] = [
+		{
+			key: 'sub_contrata',
+			label: 'Sub Contrata',
+			opciones: [
+				'Maestro de Obra Principal',
+				'Movimiento Tierras',
+				'Movimiento Desmonte',
+				'Transporte Madera y Puntales',
+				'Inspección de Obra',
+				'Alquiler de Herramientas',
+				'Demolición',
+				'Oficial',
+				'Peón',
+				'Ayudante',
+				'Eléctrico',
+				'Otras Subcontratos'
+			]
+		},
+		{
+			key: 'material',
+			label: 'Material',
+			opciones: [
+				'Acero 3/4"',
+				'Acero 5/8"',
+				'Acero 1/2"',
+				'Acero 3/8"',
+				'Acero 8mm',
+				'Acero 6mm',
+				'Premezclado',
+				'Ladrillo',
+				'Concreto',
+				'Arena',
+				'Confitillo',
+				'Piedra Chancada',
+				'Adhesivos Epóxicos',
+				'Otros Materiales'
+			]
+		},
+		{ key: 'servicios_obra', label: 'Servicios', opciones: ['Ensayos Laboratorio', 'Movilidad', 'Multas', 'Sindicato', 'Portátil SSHH', 'SCTR', 'IGV', 'Otros Servicios'] },
+		{ key: 'honorarios_obra', label: 'Honorarios', opciones: ['Residente', 'Soma', 'Calidad', 'Otros Honorarios'] },
+		{ key: 'equipos', label: 'Equipos', opciones: ['Compactadora', 'Vibradora', 'Winche', 'Buggies', 'Otros Equipos'] },
+		{ key: 'compras_obra', label: 'Compras', opciones: ['EPPS', 'Festividad', 'Equipo de Seguridad', 'Malla Raschel', 'Seguridad', 'Otras Compras'] },
+		{ key: 'gastos_generales', label: 'Gastos Generales', opciones: ['Implementación de Oficina de Obra', 'Implementación de Almacén', 'Otros Gastos Generales'] }
+	];
+
+	// Mismo patrón que TIPOS_GASTO_OBRA/TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — un
+	// Centro de Costo nunca es Corporativo y a la vez Obra/Consultoría), pero para "Corporativo"
+	// (Centro de Costo tipo 'bolsa general'), con su propio cuadro de referencia.
+	const TIPOS_GASTO_CORPORATIVO: { key: string; label: string; opciones: string[] }[] = [
+		{ key: 'honorarios_corp', label: 'Honorarios', opciones: ['Administración', 'Gestión de Obra', 'Coordinación de Obra', 'Comercial', 'Marketing', 'Oficina Técnica'] },
+		{ key: 'alquileres_corp', label: 'Alquileres', opciones: ['Oficina'] },
+		{ key: 'servicios_corp', label: 'Servicios', opciones: ['Agua y Luz', 'Mantenimiento Ascensor', 'Publicidad', 'Emergencia', 'Limpieza', 'Otros Servicios'] },
+		{ key: 'prestamo', label: 'Préstamo', opciones: ['Tarjeta de Crédito Pierina', 'Tarjeta de Primo de Willy'] },
+		{ key: 'compras_corp', label: 'Compras', opciones: ['Comida', 'Otras Compras'] },
+		{ key: 'movilidad_corp', label: 'Movilidad', opciones: ['Prospectos de Ventas', 'Oficina', 'Producción'] },
+		{ key: 'impuestos_corp', label: 'Impuestos', opciones: ['IGV', 'Renta', 'Tasas Muni'] },
+		{ key: 'inversion', label: 'Inversión', opciones: ['Capacitación', 'Mantenimiento Equipos', 'Año Nuevo y Navidad', 'Implementación Oficina'] }
+	];
+
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
 	const cuentaOrigenEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso'));
 	// Efectivo ('1') o Yape o Plin ('4') no pasan por ninguna cuenta bancaria — a pedido del usuario,
@@ -691,6 +980,19 @@
 		}
 	});
 
+	/** Quita el prefijo "código del centro de costo - " de cada opción (ej. "PROY-83 - OBRA_...",
+	 * "CLI-25 - Empresa 5") — a pedido explícito del usuario, Origen/Destino de Transacción ya no
+	 * muestran el código del centro de costo, solo el nombre/código del proyecto (o cliente/proveedor/
+	 * empleado) vinculado. Las etiquetas siempre vienen armadas como "{codigo} - {nombre}" (ver
+	 * centroCostoOptionLabel en transacciones.service.ts), así que basta con cortar hasta el primer
+	 * " - ". Si por alguna razón una opción no tuviera ese separador, se deja tal cual. */
+	function soloNombreCentro(opciones: FieldOption[]): FieldOption[] {
+		return opciones.map((o) => {
+			const idx = o.label.indexOf(' - ');
+			return idx === -1 ? o : { ...o, label: o.label.slice(idx + 3) };
+		});
+	}
+
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		// Origen/Destino de Transacción muestran una lista distinta según el Alcance: en Interna, solo
 		// proyectos (dynamicOptions[key]); en Externa, proveedores/clientes/empleados (dynamicOptions[key
@@ -702,27 +1004,57 @@
 		// centros sin vincular a una entidad (ej. Bolsa General, Consultoría) y dejaba ese caso sin
 		// ninguna opción que calzara con el id ya guardado.
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
-			if (lockedFields.includes(field.key)) return dynamicOptions[field.key] || [];
-			// Excepciones a pedido del usuario, ambas en Externa:
-			// - Ingreso: "Origen de Transacción" NO usa la lista mezclada de clientes/proyectos/
-			//   proveedores/empleados (getCentroCostoOptionsExternosOrigen) — se queda con la lista plana
-			//   de solo proyectos (dynamicOptions.id_centro_costo_origen), la misma que ya usa Interna.
-			// - Egreso: "Destino de Transacción" usa "Centro de Costos" en su sentido estricto (ver
-			//   getCentroCostoOptionsSoloCentros — misma definición que el tab "Centro de Costos" del
-			//   submódulo Centro de Costos y Cuentas Internas: obra/consultoría/bolsa general + proyectos
-			//   con venta cerrada), en vez de la lista mezclada con "Cuentas Internas"
-			//   (cliente/proveedor/empleado, getCentroCostoOptionsExternos).
-			const esOrigenIngresoExterna = field.key === 'id_centro_costo_origen' && formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso';
-			const esDestinoEgresoExterna = field.key === 'id_centro_costo_destino' && formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso';
-			if (esDestinoEgresoExterna) return dynamicOptions.id_centro_costo_destino_solo_centros || [];
-			const key = formValues.tipo_alcance === 'externa' && !esOrigenIngresoExterna ? `${field.key}_externo` : field.key;
-			return dynamicOptions[key] || [];
+			// A pedido explícito del usuario: en el <select> ya no se muestra el código del CENTRO DE
+			// COSTO (ej. "PROY-83 - ...", "CLI-25 - ...") — solo el nombre/código del proyecto (o
+			// cliente/proveedor/empleado) vinculado, ver soloNombreCentro más abajo.
+			if (lockedFields.includes(field.key)) return soloNombreCentro(dynamicOptions[field.key] || []);
+			// Excepciones a pedido del usuario, todas en Externa:
+			// - Ingreso: "Centro de Costo Origen" muestra la lista de CLIENTES (antes mostraba "solo
+			//   proyectos", igual que Interna) y "Centro de Costo Destino", en cascada, solo los
+			//   PROYECTOS del cliente elegido en Origen (ver centroCostoClienteIdMap más arriba) — vacío
+			//   mientras no se haya elegido un cliente todavía.
+			// - Egreso: "Centro de Costo Origen" usa "Centro de Costos" en su sentido estricto (proyectos
+			//   y corporativo — ver getCentroCostoOptionsSoloCentros, misma definición que el tab "Centro
+			//   de Costos" del submódulo Centro de Costos y Cuentas Internas) y "Centro de Costo Destino"
+			//   muestra "Cuentas Internas" (proveedor/empleado/cliente), filtradas por el selector
+			//   "Clase" que aparece entre ambos campos (ver claseDestino/OPCIONES_CLASE_DESTINO) — vacío
+			//   mientras no se haya elegido una Clase todavía.
+			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
+				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsClientes);
+				const idCliente = centroCostoClienteIdMap[formValues.id_centro_costo_origen] ?? null;
+				if (!idCliente) return [];
+				return soloNombreCentro((dynamicOptions.id_centro_costo_destino || []).filter((opt) => centroCostoClienteIdMap[opt.value] === idCliente));
+			}
+			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
+				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);
+				if (claseDestino === 'proveedores') return soloNombreCentro(centroCostoOptionsProveedores);
+				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
+				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
+				return [];
+			}
+			const key = formValues.tipo_alcance === 'externa' ? `${field.key}_externo` : field.key;
+			return soloNombreCentro(dynamicOptions[key] || []);
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) return dynamicOptions.cuenta_banco || [];
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) return dynamicOptions.cuenta_banco || [];
 		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
+		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
+		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
+		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'ingreso') return CATEGORIA_CORPORATIVO_INGRESO;
+		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'egreso') return CATEGORIA_CORPORATIVO_EGRESO;
 		if (field.optionsWhen) return field.optionsWhen(formValues);
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+	}
+
+	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo Origen/Destino en Ingreso+Externa:
+	 * como ahí muestran clientes/proyectos (ver optionsFor), a pedido explícito del usuario la etiqueta
+	 * también cambia para reflejar lo que de verdad se está eligiendo. */
+	function labelFor(field: (typeof formFields)[number]): string {
+		if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
+			if (field.key === 'id_centro_costo_origen') return 'Cliente';
+			if (field.key === 'id_centro_costo_destino') return 'Proyecto';
+		}
+		return field.label;
 	}
 
 	async function handleSubmit(event: SubmitEvent) {
@@ -834,6 +1166,22 @@
 					console.warn('[TransaccionModal] No se pudo renombrar/limpiar los archivos en Drive:', housekeepingErr);
 				}
 
+				// "Detalle de la categoría" (ver detalleCategoria más arriba) — se guarda TODO junto recién
+				// acá, ya con el id_transaccion real (en 'create' no existía hasta este punto). Mejor
+				// esfuerzo: si falla, no se revierte el guardado principal de la transacción, ya completado.
+				try {
+					const idParaDetalle = (result.data as any)?.id_transaccion;
+					if (idParaDetalle) {
+						await sincronizarDetalleCategoria(
+							supabase,
+							idParaDetalle,
+							detalleCategoria.filter((f) => f.subcategoria.trim())
+						);
+					}
+				} catch (detalleErr) {
+					console.warn('[TransaccionModal] No se pudo guardar el detalle de categoría:', detalleErr);
+				}
+
 				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
 				// avanza al siguiente borrador en vez de cerrar el modal — a pedido del usuario.
 				const hayMasEnCola = colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1;
@@ -869,7 +1217,7 @@
 	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
 	<div>
 		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-			{field.label}
+			{labelFor(field)}
 			{#if field.required}<span class="text-red-500">*</span>{/if}
 			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
 		</label>
@@ -1018,9 +1366,13 @@
 					     md: con el dropzone a la izquierda con ancho fijo y alto estirado a la misma altura
 					     que la columna de campos (items-stretch, default de flexbox). -->
 					<div class="rounded-2xl border border-slate-200 p-5">
+						<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Datos de la Transacción</h3>
 						<div class="flex flex-col md:flex-row gap-5">
-							<!-- Adjuntar boucher de pago -->
-							<div class="md:w-56 shrink-0 flex flex-col">
+							<!-- Tipo + Adjuntar boucher de pago — a pedido explícito del usuario: el campo Tipo
+							     se muestra junto al comprobante, antes que el resto de los campos núcleo. -->
+							<div class="md:w-56 shrink-0 flex flex-col gap-4">
+								{@render fieldBlock(tipoField)}
+								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
 									Adjuntar boucher de pago <span class="text-red-500">*</span>
 								</label>
@@ -1075,18 +1427,39 @@
 									disabled={bloqueadaPorAprobacion}
 									onchange={onComprobanteChange}
 								/>
+								</div>
 							</div>
 
-							<!-- Campos núcleo: Centro de costo origen/destino/Tipo, Cuenta origen/destino,
-							     Fecha/Monto (reconocidos) -->
+							<!-- Campos núcleo: Centro de costo origen/destino, Cuenta origen/destino,
+							     Fecha/Monto (reconocidos) — Tipo se movió junto al comprobante, ver arriba. -->
 							<div class="flex-1 flex flex-col gap-4 min-w-0">
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<!-- grid-cols-2 (no -3): estas dos filas siempre traen exactamente un par de
+								     campos — a diferencia de la fila de abajo (3 reconocidos), forzarlas a 3
+								     columnas dejaba un hueco vacío a la derecha, ver pedido del usuario. -->
+								<div class={`grid grid-cols-1 gap-4 ${formValues.tipo === 'egreso' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
 									{@render fieldBlock(origenField)}
+									{#if formValues.tipo === 'egreso'}
+										<div>
+											<label for="tr-clase-destino" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Clase</label>
+											<select
+												id="tr-clase-destino"
+												value={claseDestino}
+												disabled={bloqueadaPorAprobacion}
+												onchange={(e) => handleClaseDestinoChange((e.target as HTMLSelectElement).value)}
+												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+											>
+												<option value="" disabled>Selecciona una opción</option>
+												{#each OPCIONES_CLASE_DESTINO as opt}
+													<option value={opt.value}>{opt.label}</option>
+												{/each}
+											</select>
+											<p class="mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
+										</div>
+									{/if}
 									{@render fieldBlock(destinoField)}
-									{@render fieldBlock(tipoField)}
 								</div>
 
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 									{@render fieldBlock(cuentaOrigenField)}
 									{@render fieldBlock(cuentaDestinoField)}
 								</div>
@@ -1157,6 +1530,40 @@
 											<p class="mt-1 text-xs text-red-600">{fieldErrors.monto_total}</p>
 										{:else if montoLocked}
 											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+										{/if}
+									</div>
+									<div>
+										<label for="tr-num-operacion" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1 whitespace-nowrap">
+											N° de Operación
+											{#if ocrLoading}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
+										</label>
+										<div class="flex items-center gap-2">
+											<input
+												id="tr-num-operacion"
+												type="text"
+												value={formValues.num_operacion}
+												disabled={numOperacionLocked || bloqueadaPorAprobacion}
+												oninput={(e) => handleInput('num_operacion', (e.target as HTMLInputElement).value)}
+												placeholder="N° de operación"
+												class={`flex-1 min-w-0 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-70 disabled:bg-slate-50 ${fieldErrors.num_operacion ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+											/>
+											<button
+												type="button"
+												onclick={() => (numOperacionLocked = false)}
+												disabled={bloqueadaPorAprobacion || !numOperacionLocked}
+												title="Editar N° de operación"
+												aria-label="Editar N° de operación"
+												class="shrink-0 p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+											>
+												<Pencil size={14} />
+											</button>
+										</div>
+										{#if fieldErrors.num_operacion}
+											<p class="mt-1 text-xs text-red-600">{fieldErrors.num_operacion}</p>
+										{:else if numOperacionLocked}
+											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+										{:else}
+											<p class="mt-1 text-xs text-slate-400">Opcional — se completa sola si el boucher lo muestra.</p>
 										{/if}
 									</div>
 								</div>
@@ -1273,8 +1680,139 @@
 										</div>
 									{/if}
 								</div>
+								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario, solo para
+								     Egreso en proyectos de Consultoría (ver TIPOS_GASTO_CONSULTORIA/esProyectoDeConsultoria).
+								     Va ANTES que Factura/Descripción/Estado (a pedido del usuario, esos tres bajan
+								     al final del todo, ver más abajo). -->
+								{#if esProyectoDeConsultoria && formValues.tipo === 'egreso'}
+									<div>
+										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
+										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+											{#each TIPOS_GASTO_CONSULTORIA as grupo}
+												<div>
+													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
+													<select
+														id={`tr-tipo-gasto-${grupo.key}`}
+														value={formValues.tipo_gasto}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
+														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="">Selecciona una opción</option>
+														{#each grupo.opciones as opt}
+															<option value={opt}>{opt}</option>
+														{/each}
+													</select>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/if}
+
+								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario. Depende SOLO
+								     del tipo de PROYECTO (Obra, ver TIPOS_GASTO_OBRA/esProyectoDeObra), no del tipo
+								     de TRANSACCIÓN (Ingreso/Egreso) — a diferencia de Categoría, que sí distingue
+								     Ingreso/Egreso. Mutuamente excluyente con el bloque de Consultoría de arriba (un
+								     proyecto nunca es de los dos tipos a la vez), comparten formValues.tipo_gasto.
+								     También va ANTES de Factura/Descripción/Estado. -->
+								{#if esProyectoDeObra}
+									<div>
+										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
+										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+											{#each TIPOS_GASTO_OBRA as grupo}
+												<div>
+													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
+													<select
+														id={`tr-tipo-gasto-${grupo.key}`}
+														value={formValues.tipo_gasto}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
+														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="">Selecciona una opción</option>
+														{#each grupo.opciones as opt}
+															<option value={opt}>{opt}</option>
+														{/each}
+													</select>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/if}
+
+								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario, para Centro
+								     de Costo "Corporativo" (tipo 'bolsa general', ver TIPOS_GASTO_CORPORATIVO/
+								     esCorporativo) — mutuamente excluyente con Obra/Consultoría de arriba. También
+								     va ANTES de Factura/Descripción/Estado. -->
+								{#if esCorporativo}
+									<div>
+										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
+										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+											{#each TIPOS_GASTO_CORPORATIVO as grupo}
+												<div>
+													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
+													<select
+														id={`tr-tipo-gasto-${grupo.key}`}
+														value={formValues.tipo_gasto}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
+														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="">Selecciona una opción</option>
+														{#each grupo.opciones as opt}
+															<option value={opt}>{opt}</option>
+														{/each}
+													</select>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/if}
+
+								<!-- A pedido explícito del usuario: Adjuntar factura/Descripción/Estado van al FINAL
+								     de "Otros campos", después de Tipo de Gasto — 3 columnas iguales, simétrico. -->
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-									<div class="sm:col-span-2">
+									<div>
+										<label class="block text-sm font-bold text-[#0f3b5e] mb-1">Adjuntar factura o boleta de venta</label>
+										<div class="flex items-start gap-3">
+											<label
+												for="tr-factura"
+												ondragover={(e) => e.preventDefault()}
+												ondrop={onFacturaDrop}
+												class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed border-slate-300 text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}`}
+											>
+												{#if localPreviewUrlFactura}
+													<img src={localPreviewUrlFactura} alt="Vista previa de la factura" class="absolute inset-0 w-full h-full object-cover" />
+												{:else if facturaUrl && !facturaFile}
+													<img
+														src={facturaThumbUrl}
+														alt="Factura actual"
+														class="absolute inset-0 w-full h-full object-cover"
+														onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+													/>
+													<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[9px] font-medium py-0.5 flex items-center justify-center" title="Haz clic o arrastra para reemplazar">
+														<CloudUpload size={9} class="shrink-0" />
+													</div>
+												{:else if facturaFile}
+													<CloudUpload size={16} class="text-blue-400" />
+													<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{facturaFile.name}</span>
+												{:else}
+													<CloudUpload size={18} class="text-blue-400" />
+													<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
+												{/if}
+											</label>
+											<div class="flex flex-col gap-1 min-w-0 pt-0.5">
+												{#if facturaUrl && !facturaFile}
+													<button type="button" onclick={() => (showFacturaPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+														Ver factura actual
+													</button>
+												{/if}
+												<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB).</p>
+											</div>
+										</div>
+										<input id="tr-factura" type="file" accept="image/*,application/pdf" class="hidden" disabled={bloqueadaPorAprobacion} onchange={onFacturaChange} />
+									</div>
+									<div>
 										<label for="tr-descripcion" class="block text-sm font-bold text-[#0f3b5e] mb-1">{descripcionField.label}</label>
 										<textarea
 											id="tr-descripcion"
@@ -1327,47 +1865,6 @@
 									</div>
 								</div>
 
-								<div>
-									<label class="block text-sm font-bold text-[#0f3b5e] mb-1">Adjuntar factura o boleta de venta</label>
-									<div class="flex items-start gap-3">
-										<label
-											for="tr-factura"
-											ondragover={(e) => e.preventDefault()}
-											ondrop={onFacturaDrop}
-											class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed border-slate-300 text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}`}
-										>
-											{#if localPreviewUrlFactura}
-												<img src={localPreviewUrlFactura} alt="Vista previa de la factura" class="absolute inset-0 w-full h-full object-cover" />
-											{:else if facturaUrl && !facturaFile}
-												<img
-													src={facturaThumbUrl}
-													alt="Factura actual"
-													class="absolute inset-0 w-full h-full object-cover"
-													onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-												/>
-												<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[9px] font-medium py-0.5 flex items-center justify-center" title="Haz clic o arrastra para reemplazar">
-													<CloudUpload size={9} class="shrink-0" />
-												</div>
-											{:else if facturaFile}
-												<CloudUpload size={16} class="text-blue-400" />
-												<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{facturaFile.name}</span>
-											{:else}
-												<CloudUpload size={18} class="text-blue-400" />
-												<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
-											{/if}
-										</label>
-										<div class="flex flex-col gap-1 min-w-0 pt-0.5">
-											{#if facturaUrl && !facturaFile}
-												<button type="button" onclick={() => (showFacturaPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-													Ver factura actual
-												</button>
-											{/if}
-											<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB).</p>
-										</div>
-									</div>
-									<input id="tr-factura" type="file" accept="image/*,application/pdf" class="hidden" disabled={bloqueadaPorAprobacion} onchange={onFacturaChange} />
-								</div>
-
 								<p class="text-xs text-slate-400 flex items-center gap-1.5">
 									<Info size={12} class="shrink-0" />
 									Estos campos son opcionales. Otra área de la empresa se encargará de completarlos.
@@ -1376,6 +1873,126 @@
 						{/if}
 					</div>
 				</div>
+
+				<!-- Detalle — sección propia (a pedido explícito del usuario, antes vivía dentro de "Otros
+				     campos"), visible en cuanto hay una Categoría elegida, sea cual sea el tipo de
+				     proyecto/transacción. Ver detalleCategoria/agregarFilaDetalleCategoria más arriba. -->
+				{#if formValues.categoria}
+					<div class="rounded-2xl border border-slate-200 p-5">
+						<div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+							<div class="flex items-center gap-2">
+								<ListTree size={16} class="text-blue-500" />
+								<span class="text-sm font-bold text-[#0f3b5e]">Detalle</span>
+								<span class="text-xs text-slate-400">Categoría seleccionada: {getOptionLabel(categoriaField, formValues.categoria)}</span>
+							</div>
+							<button
+								type="button"
+								onclick={agregarFilaDetalleCategoria}
+								disabled={bloqueadaPorAprobacion}
+								class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
+							>
+								<Plus size={13} /> Agregar subcategoría
+							</button>
+						</div>
+
+						{#if detalleCategoria.length === 0}
+							<p class="text-xs text-slate-400 text-center py-4">Sin subcategorías todavía — usa "Agregar subcategoría".</p>
+						{:else}
+							<div class="overflow-x-auto">
+								<table class="w-full text-sm min-w-[720px]">
+									<thead>
+										<tr class="text-[11px] text-slate-500 uppercase tracking-wide">
+											<th class="text-left px-2 py-1.5 font-semibold">Subcategoría</th>
+											<th class="text-left px-2 py-1.5 font-semibold">Descripción</th>
+											<th class="text-right px-2 py-1.5 font-semibold w-20">Cantidad</th>
+											<th class="text-left px-2 py-1.5 font-semibold w-24">Unidad</th>
+											<th class="text-right px-2 py-1.5 font-semibold w-28">Precio unitario</th>
+											<th class="text-right px-2 py-1.5 font-semibold w-28">Total</th>
+											<th class="w-8"></th>
+										</tr>
+									</thead>
+									<tbody>
+										{#each detalleCategoria as fila (fila._key)}
+											<tr class="border-t border-slate-100">
+												<td class="px-2 py-1.5">
+													<input
+														type="text"
+														bind:value={fila.subcategoria}
+														disabled={bloqueadaPorAprobacion}
+														placeholder="Ej. Cemento"
+														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													/>
+												</td>
+												<td class="px-2 py-1.5">
+													<input
+														type="text"
+														bind:value={fila.descripcion}
+														disabled={bloqueadaPorAprobacion}
+														placeholder="Ej. Cemento Tipo I"
+														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													/>
+												</td>
+												<td class="px-2 py-1.5">
+													<input
+														type="number"
+														min="0"
+														step="any"
+														bind:value={fila.cantidad}
+														disabled={bloqueadaPorAprobacion}
+														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													/>
+												</td>
+												<td class="px-2 py-1.5">
+													<select
+														bind:value={fila.unidad}
+														disabled={bloqueadaPorAprobacion}
+														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													>
+														{#each UNIDADES_DETALLE as u}
+															<option value={u}>{u}</option>
+														{/each}
+													</select>
+												</td>
+												<td class="px-2 py-1.5">
+													<input
+														type="number"
+														min="0"
+														step="any"
+														bind:value={fila.precio_unitario}
+														disabled={bloqueadaPorAprobacion}
+														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													/>
+												</td>
+												<td class="px-2 py-1.5 text-right font-medium text-slate-700 whitespace-nowrap">
+													{formatCurrency((Number(fila.cantidad) || 0) * (Number(fila.precio_unitario) || 0))}
+												</td>
+												<td class="px-2 py-1.5 text-center">
+													<button
+														type="button"
+														onclick={() => eliminarFilaDetalleCategoria(fila._key)}
+														disabled={bloqueadaPorAprobacion}
+														class="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+														aria-label="Eliminar subcategoría"
+														title="Eliminar subcategoría"
+													>
+														<Trash2 size={14} />
+													</button>
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+									<tfoot>
+										<tr class="border-t border-slate-200">
+											<td colspan="5" class="px-2 py-2 text-right text-xs font-semibold text-slate-500">Total detallado:</td>
+											<td class="px-2 py-2 text-right font-bold text-[#0f3b5e] whitespace-nowrap">{formatCurrency(totalDetalleCategoria)}</td>
+											<td></td>
+										</tr>
+									</tfoot>
+								</table>
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
