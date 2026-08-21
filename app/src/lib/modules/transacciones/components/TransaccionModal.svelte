@@ -275,6 +275,7 @@
 			detalleCategoria = [];
 			detalleCategoriaAbierto = false;
 			detalleCategoriaCargadoParaId = null;
+			categoriaObraGrupo = '';
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -633,7 +634,10 @@
 		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
 		// usuario elija de nuevo entre las opciones correctas en vez de dejar guardado un valor
 		// incoherente.
-		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') formValues.categoria = '';
+		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') {
+			formValues.categoria = '';
+			categoriaObraGrupo = '';
+		}
 		// "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA) solo aplica a Egreso en proyectos de
 		// Consultoría — mismos disparadores que Categoría para limpiarlo si deja de aplicar.
 		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') formValues.tipo_gasto = '';
@@ -944,6 +948,20 @@
 		{ key: 'compras_obra', label: 'Compras', opciones: ['EPPS', 'Festividad', 'Equipo de Seguridad', 'Malla Raschel', 'Seguridad', 'Otras Compras'] },
 		{ key: 'gastos_generales', label: 'Gastos Generales', opciones: ['Implementación de Oficina de Obra', 'Implementación de Almacén', 'Otros Gastos Generales'] }
 	];
+
+	// Categoría en cascada para Obra + Egreso, a pedido explícito del usuario: primer dropdown = grupo
+	// (mismas columnas de TIPOS_GASTO_OBRA), segundo dropdown = la opción de ese grupo, que se guarda
+	// directo en formValues.categoria. categoriaObraGrupo es puro estado de UI (no se persiste); al
+	// editar una transacción existente se reconstruye buscando en qué grupo cae el valor ya guardado.
+	let categoriaObraGrupo = $state('');
+	const categoriaObraGrupoEfectivo = $derived.by(() => {
+		if (categoriaObraGrupo) return categoriaObraGrupo;
+		return TIPOS_GASTO_OBRA.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+	});
+	function handleCategoriaObraGrupoChange(value: string) {
+		categoriaObraGrupo = value;
+		handleInput('categoria', '');
+	}
 
 	// Mismo patrón que TIPOS_GASTO_OBRA/TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — un
 	// Centro de Costo nunca es Corporativo y a la vez Obra/Consultoría), pero para "Corporativo"
@@ -1613,11 +1631,53 @@
 						{#if otrosCamposAbierto}
 							<div class="mt-4 flex flex-col gap-4">
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-									{@render fieldBlock(categoriaField)}
+									{#if esProyectoDeObra && formValues.tipo === 'egreso'}
+										<!-- Categoría en cascada (Obra + Egreso), a pedido explícito del usuario: primer
+										     dropdown = grupo (columnas de la tabla de referencia), segundo dropdown = la
+										     opción de ese grupo — reemplaza al antiguo bloque "Tipo de Gasto" de 7
+										     dropdowns paralelos (ver TIPOS_GASTO_OBRA/categoriaObraGrupo más arriba). -->
+										<div>
+											<label for="tr-categoria-obra-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+												Categoría<span class="text-red-500">*</span>
+											</label>
+											<div class="grid grid-cols-2 gap-2">
+												<select
+													id="tr-categoria-obra-grupo"
+													value={categoriaObraGrupoEfectivo}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleCategoriaObraGrupoChange((e.target as HTMLSelectElement).value)}
+													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="">Categoría</option>
+													{#each TIPOS_GASTO_OBRA as grupo}
+														<option value={grupo.key}>{grupo.label}</option>
+													{/each}
+												</select>
+												<select
+													id="tr-categoria-obra-subcategoria"
+													value={formValues.categoria}
+													disabled={bloqueadaPorAprobacion || !categoriaObraGrupoEfectivo}
+													onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
+													class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+												>
+													<option value="">Subcategoría</option>
+													{#each TIPOS_GASTO_OBRA.find((g) => g.key === categoriaObraGrupoEfectivo)?.opciones ?? [] as opt}
+														<option value={opt}>{opt}</option>
+													{/each}
+												</select>
+											</div>
+											{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
+										</div>
+									{:else}
+										{@render fieldBlock(categoriaField)}
+									{/if}
 									{@render fieldBlock(tipoDocumentoField)}
 									{@render fieldBlock(numDocumentoField)}
 								</div>
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<!-- grid-cols-2 salvo que el tercer campo (Vincular con Cuenta por Pagar/Cobrar)
+								     vaya a aparecer — igual que Origen/Clase/Destino más arriba, forzar 3 columnas
+								     cuando ese campo no se muestra deja un hueco vacío a la derecha. -->
+								<div class={`grid grid-cols-1 gap-4 ${mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso') ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
 									{@render fieldBlock(formaPagoField)}
 									{@render fieldBlock(medioPagoField)}
 									{#if mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso')}
@@ -1709,42 +1769,17 @@
 									</div>
 								{/if}
 
-								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario. Depende SOLO
-								     del tipo de PROYECTO (Obra, ver TIPOS_GASTO_OBRA/esProyectoDeObra), no del tipo
-								     de TRANSACCIÓN (Ingreso/Egreso) — a diferencia de Categoría, que sí distingue
-								     Ingreso/Egreso. Mutuamente excluyente con el bloque de Consultoría de arriba (un
-								     proyecto nunca es de los dos tipos a la vez), comparten formValues.tipo_gasto.
-								     También va ANTES de Factura/Descripción/Estado. -->
-								{#if esProyectoDeObra}
-									<div>
-										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
-										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-											{#each TIPOS_GASTO_OBRA as grupo}
-												<div>
-													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
-													<select
-														id={`tr-tipo-gasto-${grupo.key}`}
-														value={formValues.tipo_gasto}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
-														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="">Selecciona una opción</option>
-														{#each grupo.opciones as opt}
-															<option value={opt}>{opt}</option>
-														{/each}
-													</select>
-												</div>
-											{/each}
-										</div>
-									</div>
-								{/if}
+								<!-- Para Obra + Egreso, el desglose "Tipo de Gasto" (7 dropdowns) fue REEMPLAZADO por
+								     Categoría en cascada (ver el bloque de Categoría más arriba, categoriaObraGrupo/
+								     TIPOS_GASTO_OBRA) a pedido explícito del usuario — evita capturar el mismo dato
+								     dos veces. TIPOS_GASTO_OBRA se sigue usando como fuente de datos de esa cascada. -->
 
 								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario, para Centro
 								     de Costo "Corporativo" (tipo 'bolsa general', ver TIPOS_GASTO_CORPORATIVO/
-								     esCorporativo) — mutuamente excluyente con Obra/Consultoría de arriba. También
-								     va ANTES de Factura/Descripción/Estado. -->
-								{#if esCorporativo}
+								     esCorporativo) y solo para Egreso (un Ingreso — Inyecciones/Préstamo — no tiene
+								     "gasto" que clasificar) — mutuamente excluyente con Obra/Consultoría de arriba.
+								     También va ANTES de Factura/Descripción/Estado. -->
+								{#if esCorporativo && formValues.tipo === 'egreso'}
 									<div>
 										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
 										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -1876,8 +1911,10 @@
 
 				<!-- Detalle — sección propia (a pedido explícito del usuario, antes vivía dentro de "Otros
 				     campos"), visible en cuanto hay una Categoría elegida, sea cual sea el tipo de
-				     proyecto/transacción. Ver detalleCategoria/agregarFilaDetalleCategoria más arriba. -->
-				{#if formValues.categoria}
+				     proyecto/transacción — EXCEPTO en proyectos de Obra con transacción de tipo Ingreso
+				     (Adelanto/Valorización/Adenda), donde no aplica desglose de subcategorías, a pedido
+				     explícito del usuario. Ver detalleCategoria/agregarFilaDetalleCategoria más arriba. -->
+				{#if formValues.categoria && !(esProyectoDeObra && formValues.tipo === 'ingreso')}
 					<div class="rounded-2xl border border-slate-200 p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2 mb-4">
 							<div class="flex items-center gap-2">
