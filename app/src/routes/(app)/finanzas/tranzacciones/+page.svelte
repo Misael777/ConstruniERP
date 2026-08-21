@@ -516,15 +516,18 @@
 			{/if}
 		</div>
 
-		<select
-			value={sortBy}
-			onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
-			class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-		>
-			{#each tableFields.filter((f) => f.sortable) as field}
-				<option value={field.key}>Ordenar: {field.label}</option>
-			{/each}
-		</select>
+		<div class="relative">
+			<select
+				value={sortBy}
+				onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
+				class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+			>
+				{#each tableFields.filter((f) => f.sortable) as field}
+					<option value={field.key}>Ordenar: {field.label}</option>
+				{/each}
+			</select>
+			<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+		</div>
 		<button
 			type="button"
 			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}
@@ -535,17 +538,20 @@
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>
 
-		<select
-			value={filtroCriterio}
-			onchange={(e) => onFiltroCriterioChange((e.target as HTMLSelectElement).value)}
-			class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-		>
-			<option value="">Todos</option>
-			<option value="aprobado">Aprobado</option>
-			<option value="desaprobado">Desaprobado</option>
-			<option value="fecha">Fecha</option>
-			<option value="estado">Estado</option>
-		</select>
+		<div class="relative">
+			<select
+				value={filtroCriterio}
+				onchange={(e) => onFiltroCriterioChange((e.target as HTMLSelectElement).value)}
+				class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+			>
+				<option value="">Todos</option>
+				<option value="aprobado">Aprobado</option>
+				<option value="desaprobado">Desaprobado</option>
+				<option value="fecha">Fecha</option>
+				<option value="estado">Estado</option>
+			</select>
+			<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+		</div>
 		{#if filtroCriterio === 'fecha'}
 			<input
 				type="date"
@@ -554,16 +560,19 @@
 				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
 			/>
 		{:else if filtroCriterio === 'estado'}
-			<select
-				value={filtroEstado}
-				onchange={(e) => onFiltroEstadoChange((e.target as HTMLSelectElement).value)}
-				class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-			>
-				<option value="">Todos los estados</option>
-				<option value="activo">Activo</option>
-				<option value="anulado">Anulado</option>
-				<option value="consulta">Consulta</option>
-			</select>
+			<div class="relative">
+				<select
+					value={filtroEstado}
+					onchange={(e) => onFiltroEstadoChange((e.target as HTMLSelectElement).value)}
+					class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
+				>
+					<option value="">Todos los estados</option>
+					<option value="activo">Activo</option>
+					<option value="anulado">Anulado</option>
+					<option value="consulta">Consulta</option>
+				</select>
+				<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+			</div>
 		{/if}
 
 		<div class="flex-1"></div>

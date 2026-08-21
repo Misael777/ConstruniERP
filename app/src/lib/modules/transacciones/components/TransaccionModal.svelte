@@ -276,6 +276,7 @@
 			detalleCategoriaAbierto = false;
 			detalleCategoriaCargadoParaId = null;
 			categoriaObraGrupo = '';
+			categoriaCorpGrupo = '';
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -637,6 +638,7 @@
 		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') {
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
+			categoriaCorpGrupo = '';
 		}
 		// "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA) solo aplica a Egreso en proyectos de
 		// Consultoría — mismos disparadores que Categoría para limpiarlo si deja de aplicar.
@@ -977,6 +979,18 @@
 		{ key: 'inversion', label: 'Inversión', opciones: ['Capacitación', 'Mantenimiento Equipos', 'Año Nuevo y Navidad', 'Implementación Oficina'] }
 	];
 
+	// Categoría en cascada para Corporativo + Egreso, a pedido explícito del usuario — mismo patrón que
+	// categoriaObraGrupo/TIPOS_GASTO_OBRA más arriba, pero con TIPOS_GASTO_CORPORATIVO como fuente.
+	let categoriaCorpGrupo = $state('');
+	const categoriaCorpGrupoEfectivo = $derived.by(() => {
+		if (categoriaCorpGrupo) return categoriaCorpGrupo;
+		return TIPOS_GASTO_CORPORATIVO.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+	});
+	function handleCategoriaCorpGrupoChange(value: string) {
+		categoriaCorpGrupo = value;
+		handleInput('categoria', '');
+	}
+
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
 	const cuentaOrigenEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso'));
 	// Efectivo ('1') o Yape o Plin ('4') no pasan por ninguna cuenta bancaria — a pedido del usuario,
@@ -1241,19 +1255,22 @@
 		</label>
 
 		{#if field.tipo === 'select' || field.options || (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
-			<select
-				id={`tr-${field.key}`}
-				name={field.key}
-				value={formValues[field.key]}
-				disabled={isDisabled}
-				onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-				class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-			>
-				<option value="" disabled>Selecciona una opción</option>
-				{#each optionsFor(field) as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
+			<div class="relative">
+				<select
+					id={`tr-${field.key}`}
+					name={field.key}
+					value={formValues[field.key]}
+					disabled={isDisabled}
+					onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
+					class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+				>
+					<option value="" disabled>Selecciona una opción</option>
+					{#each optionsFor(field) as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+				<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+			</div>
 		{:else}
 			<input
 				id={`tr-${field.key}`}
@@ -1459,18 +1476,21 @@
 									{#if formValues.tipo === 'egreso'}
 										<div>
 											<label for="tr-clase-destino" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Clase</label>
-											<select
-												id="tr-clase-destino"
-												value={claseDestino}
-												disabled={bloqueadaPorAprobacion}
-												onchange={(e) => handleClaseDestinoChange((e.target as HTMLSelectElement).value)}
-												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-											>
-												<option value="" disabled>Selecciona una opción</option>
-												{#each OPCIONES_CLASE_DESTINO as opt}
-													<option value={opt.value}>{opt.label}</option>
-												{/each}
-											</select>
+											<div class="relative">
+												<select
+													id="tr-clase-destino"
+													value={claseDestino}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleClaseDestinoChange((e.target as HTMLSelectElement).value)}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="" disabled>Selecciona una opción</option>
+													{#each OPCIONES_CLASE_DESTINO as opt}
+														<option value={opt.value}>{opt.label}</option>
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
 											<p class="mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
 										</div>
 									{/if}
@@ -1641,30 +1661,78 @@
 												Categoría<span class="text-red-500">*</span>
 											</label>
 											<div class="grid grid-cols-2 gap-2">
-												<select
-													id="tr-categoria-obra-grupo"
-													value={categoriaObraGrupoEfectivo}
-													disabled={bloqueadaPorAprobacion}
-													onchange={(e) => handleCategoriaObraGrupoChange((e.target as HTMLSelectElement).value)}
-													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Categoría</option>
-													{#each TIPOS_GASTO_OBRA as grupo}
-														<option value={grupo.key}>{grupo.label}</option>
-													{/each}
-												</select>
-												<select
-													id="tr-categoria-obra-subcategoria"
-													value={formValues.categoria}
-													disabled={bloqueadaPorAprobacion || !categoriaObraGrupoEfectivo}
-													onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
-													class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-												>
-													<option value="">Subcategoría</option>
-													{#each TIPOS_GASTO_OBRA.find((g) => g.key === categoriaObraGrupoEfectivo)?.opciones ?? [] as opt}
-														<option value={opt}>{opt}</option>
-													{/each}
-												</select>
+												<div class="relative">
+													<select
+														id="tr-categoria-obra-grupo"
+														value={categoriaObraGrupoEfectivo}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleCategoriaObraGrupoChange((e.target as HTMLSelectElement).value)}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="">Categoría</option>
+														{#each TIPOS_GASTO_OBRA as grupo}
+															<option value={grupo.key}>{grupo.label}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												<div class="relative">
+													<select
+														id="tr-categoria-obra-subcategoria"
+														value={formValues.categoria}
+														disabled={bloqueadaPorAprobacion || !categoriaObraGrupoEfectivo}
+														onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
+														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+													>
+														<option value="">Subcategoría</option>
+														{#each TIPOS_GASTO_OBRA.find((g) => g.key === categoriaObraGrupoEfectivo)?.opciones ?? [] as opt}
+															<option value={opt}>{opt}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+											</div>
+											{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
+										</div>
+									{:else if esCorporativo && formValues.tipo === 'egreso'}
+										<!-- Categoría en cascada (Corporativo + Egreso), a pedido explícito del usuario:
+										     mismo patrón que Obra arriba, pero con TIPOS_GASTO_CORPORATIVO/categoriaCorpGrupo
+										     — reemplaza al antiguo bloque "Tipo de Gasto" de 8 dropdowns paralelos. -->
+										<div>
+											<label for="tr-categoria-corp-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+												Categoría<span class="text-red-500">*</span>
+											</label>
+											<div class="grid grid-cols-2 gap-2">
+												<div class="relative">
+													<select
+														id="tr-categoria-corp-grupo"
+														value={categoriaCorpGrupoEfectivo}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleCategoriaCorpGrupoChange((e.target as HTMLSelectElement).value)}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="">Categoría</option>
+														{#each TIPOS_GASTO_CORPORATIVO as grupo}
+															<option value={grupo.key}>{grupo.label}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												<div class="relative">
+													<select
+														id="tr-categoria-corp-subcategoria"
+														value={formValues.categoria}
+														disabled={bloqueadaPorAprobacion || !categoriaCorpGrupoEfectivo}
+														onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
+														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+													>
+														<option value="">Subcategoría</option>
+														{#each TIPOS_GASTO_CORPORATIVO.find((g) => g.key === categoriaCorpGrupoEfectivo)?.opciones ?? [] as opt}
+															<option value={opt}>{opt}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
 											</div>
 											{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
 										</div>
@@ -1751,18 +1819,21 @@
 											{#each TIPOS_GASTO_CONSULTORIA as grupo}
 												<div>
 													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
-													<select
-														id={`tr-tipo-gasto-${grupo.key}`}
-														value={formValues.tipo_gasto}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
-														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="">Selecciona una opción</option>
-														{#each grupo.opciones as opt}
-															<option value={opt}>{opt}</option>
-														{/each}
-													</select>
+													<div class="relative">
+														<select
+															id={`tr-tipo-gasto-${grupo.key}`}
+															value={formValues.tipo_gasto}
+															disabled={bloqueadaPorAprobacion}
+															onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
+															class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+														>
+															<option value="">Selecciona una opción</option>
+															{#each grupo.opciones as opt}
+																<option value={opt}>{opt}</option>
+															{/each}
+														</select>
+														<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													</div>
 												</div>
 											{/each}
 										</div>
@@ -1774,35 +1845,11 @@
 								     TIPOS_GASTO_OBRA) a pedido explícito del usuario — evita capturar el mismo dato
 								     dos veces. TIPOS_GASTO_OBRA se sigue usando como fuente de datos de esa cascada. -->
 
-								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario, para Centro
-								     de Costo "Corporativo" (tipo 'bolsa general', ver TIPOS_GASTO_CORPORATIVO/
-								     esCorporativo) y solo para Egreso (un Ingreso — Inyecciones/Préstamo — no tiene
-								     "gasto" que clasificar) — mutuamente excluyente con Obra/Consultoría de arriba.
-								     También va ANTES de Factura/Descripción/Estado. -->
-								{#if esCorporativo && formValues.tipo === 'egreso'}
-									<div>
-										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
-										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-											{#each TIPOS_GASTO_CORPORATIVO as grupo}
-												<div>
-													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
-													<select
-														id={`tr-tipo-gasto-${grupo.key}`}
-														value={formValues.tipo_gasto}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
-														class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="">Selecciona una opción</option>
-														{#each grupo.opciones as opt}
-															<option value={opt}>{opt}</option>
-														{/each}
-													</select>
-												</div>
-											{/each}
-										</div>
-									</div>
-								{/if}
+								<!-- Para Corporativo + Egreso, el desglose "Tipo de Gasto" (8 dropdowns) fue
+								     REEMPLAZADO por Categoría en cascada (ver el bloque de Categoría más arriba,
+								     categoriaCorpGrupo/TIPOS_GASTO_CORPORATIVO) a pedido explícito del usuario —
+								     evita capturar el mismo dato dos veces. TIPOS_GASTO_CORPORATIVO se sigue usando
+								     como fuente de datos de esa cascada. -->
 
 								<!-- A pedido explícito del usuario: Adjuntar factura/Descripción/Estado van al FINAL
 								     de "Otros campos", después de Tipo de Gasto — 3 columnas iguales, simétrico. -->
@@ -1980,15 +2027,18 @@
 													/>
 												</td>
 												<td class="px-2 py-1.5">
-													<select
-														bind:value={fila.unidad}
-														disabled={bloqueadaPorAprobacion}
-														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
-													>
-														{#each UNIDADES_DETALLE as u}
-															<option value={u}>{u}</option>
-														{/each}
-													</select>
+													<div class="relative">
+														<select
+															bind:value={fila.unidad}
+															disabled={bloqueadaPorAprobacion}
+															class="w-full appearance-none rounded-md border border-slate-200 px-2 py-1 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+														>
+															{#each UNIDADES_DETALLE as u}
+																<option value={u}>{u}</option>
+															{/each}
+														</select>
+														<ChevronDown size={13} class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													</div>
 												</td>
 												<td class="px-2 py-1.5">
 													<input
