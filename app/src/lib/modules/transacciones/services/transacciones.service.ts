@@ -605,14 +605,30 @@ export async function getCentroCostoOptions(client: SupabaseClient): Promise<Fie
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
-/** Solo centros de costo vinculados DIRECTAMENTE a un proveedor (`id_proveedor` no nulo) — para
- * "Centro de Costo Destino" en Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=
- * Proveedores (ver TransaccionModal.svelte). */
+/** Centros de costo vinculados a un proveedor cuyo tipo es 'proveedor' (excluye 'subcontratista', ver
+ * getCentroCostoOptionsSubcontratistas) — para "Centro de Costo Destino" en Nueva/Editar Transacción
+ * cuando Tipo=Egreso+Externa y "Clase"=Proveedores (ver TransaccionModal.svelte). */
 export async function getCentroCostoOptionsProveedores(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROVEEDOR_EMBED}`)
 		.not('id_proveedor', 'is', null)
+		.eq('tipo', 'proveedor')
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Centros de costo vinculados a un proveedor cuyo tipo es 'subcontratista' — a pedido explícito del
+ * usuario, se asigna solo (ver sincronizarTipoCentroCostoProveedor en centroCostos.service.ts) cuando
+ * el proveedor tiene "Producto y Servicio" = 'SUBCONTRATISTA - OBRA'. Para "Centro de Costo Destino" en
+ * Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=Subcontratista (ver
+ * TransaccionModal.svelte). */
+export async function getCentroCostoOptionsSubcontratistas(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROVEEDOR_EMBED}`)
+		.eq('tipo', 'subcontratista')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));

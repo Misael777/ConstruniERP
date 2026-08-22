@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
-	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { getOrCrearCentroCostoParaEntidad, sincronizarTipoCentroCostoProveedor } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let { isOpen = false, proveedorEdit = null, onClose = () => {}, onSave = () => {} } = $props<{
 		isOpen?: boolean;
@@ -75,6 +75,10 @@
 					.update(payload)
 					.eq('id_proveedor', proveedorEdit.id_proveedor);
 				if (error) throw error;
+
+				// Mantiene el tipo del centro de costo en línea con "Producto y Servicio" (ver
+				// sincronizarTipoCentroCostoProveedor) por si el campo cambió al editar.
+				await sincronizarTipoCentroCostoProveedor(supabase, proveedorEdit.id_proveedor, vendedor);
 			} else {
 				// Insert
 				const { data: nuevoProveedor, error } = await supabase
@@ -91,6 +95,8 @@
 					const idCentroCosto = await getOrCrearCentroCostoParaEntidad(supabase, 'proveedor', nuevoProveedor.id_proveedor, razonSocial);
 					if (!idCentroCosto) {
 						console.warn('[ProveedorModal] No se pudo crear el centro de costo del proveedor recién creado.');
+					} else {
+						await sincronizarTipoCentroCostoProveedor(supabase, nuevoProveedor.id_proveedor, vendedor);
 					}
 				}
 			}

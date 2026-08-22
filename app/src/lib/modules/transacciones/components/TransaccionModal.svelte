@@ -15,6 +15,7 @@
 		getCentroCostoOptionsClientes,
 		getCentroCostoClienteIdMap,
 		getCentroCostoOptionsProveedores,
+		getCentroCostoOptionsSubcontratistas,
 		getCentroCostoOptionsEmpleados,
 		getCentroCostoTipoMap,
 		getDetalleCategoria,
@@ -807,6 +808,7 @@
 	let centroCostoOptionsClientes = $state<FieldOption[]>([]);
 	let centroCostoClienteIdMap = $state<Record<string, string | null>>({});
 	let centroCostoOptionsProveedores = $state<FieldOption[]>([]);
+	let centroCostoOptionsSubcontratistas = $state<FieldOption[]>([]);
 	let centroCostoOptionsEmpleados = $state<FieldOption[]>([]);
 	let centroCostoClientesCargado = $state(false);
 	$effect(() => {
@@ -816,15 +818,17 @@
 				getCentroCostoOptionsClientes(supabase),
 				getCentroCostoClienteIdMap(supabase),
 				getCentroCostoOptionsProveedores(supabase),
+				getCentroCostoOptionsSubcontratistas(supabase),
 				getCentroCostoOptionsEmpleados(supabase)
 			])
-				.then(([opciones, mapa, proveedores, empleados]) => {
+				.then(([opciones, mapa, proveedores, subcontratistas, empleados]) => {
 					centroCostoOptionsClientes = opciones;
 					centroCostoClienteIdMap = mapa;
 					centroCostoOptionsProveedores = proveedores;
+					centroCostoOptionsSubcontratistas = subcontratistas;
 					centroCostoOptionsEmpleados = empleados;
 				})
-				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/empleados/proyectos:', err));
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/subcontratistas/empleados/proyectos:', err));
 		}
 	});
 
@@ -832,14 +836,18 @@
 	// de Costo Origen y Destino (a pedido explícito del usuario): clasifica qué "Cuenta Interna"
 	// ofrece Destino. No es una columna de `transaccion` — es un filtro puramente de UI, se resetea al
 	// abrir el modal (ver el $effect principal de `open` más abajo) y al cambiar Tipo/Alcance.
-	type ClaseDestino = '' | 'proveedores' | 'empleados' | 'cliente';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente';
 	let claseDestino = $state<ClaseDestino>('');
 	function handleClaseDestinoChange(value: string) {
 		claseDestino = value as ClaseDestino;
 		formValues = { ...formValues, id_centro_costo_destino: '' };
 	}
+	// "Subcontratista" filtra los centros de costo de proveedores cuyo "Producto y Servicio" es
+	// 'SUBCONTRATISTA - OBRA' (centro_costo.tipo='subcontratista', ver sincronizarTipoCentroCostoProveedor
+	// en centroCostos.service.ts) — lista real y separada de "Proveedores", a pedido explícito del usuario.
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
 		{ value: 'proveedores', label: 'Proveedores' },
+		{ value: 'subcontratista', label: 'Subcontratista' },
 		{ value: 'empleados', label: 'Empleados' },
 		{ value: 'cliente', label: 'Cliente' }
 	];
@@ -849,6 +857,7 @@
 		if (open && mode === 'edit' && transaccion && formValues.tipo === 'egreso' && !claseDestino && centroCostoClientesCargado) {
 			const destinoId = String(transaccion.id_centro_costo_destino);
 			if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
+			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
 		}
@@ -1060,6 +1069,7 @@
 			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);
 				if (claseDestino === 'proveedores') return soloNombreCentro(centroCostoOptionsProveedores);
+				if (claseDestino === 'subcontratista') return soloNombreCentro(centroCostoOptionsSubcontratistas);
 				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
 				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
 				return [];
