@@ -34,7 +34,7 @@
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
-	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
+	import { reconocerComprobante, reconocerComprobantePago, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
@@ -159,7 +159,7 @@
 	// Documento/N° de Documento/Monto (ver transaccion_comprobante_pago_migration.sql). Para Egreso son
 	// comprobantes de pago; para Ingreso, comprobantes de recepción de dinero de Construni — mismo
 	// mecanismo, solo cambia el rótulo (ver comprobantesPagoLabel más abajo).
-	type ComprobantePagoFila = ComprobantePago & { _key: number; file?: File };
+	type ComprobantePagoFila = ComprobantePago & { _key: number; file?: File; ocrCargando?: boolean };
 	let comprobantesPago = $state<ComprobantePagoFila[]>([]);
 	// Snapshot de lo que había guardado al abrir en modo edición — para, al guardar, saber qué filas
 	// quitó el usuario y borrar esos archivos de Drive (no solo la fila de metadatos). Ver handleSubmit.
@@ -177,9 +177,33 @@
 				continue;
 			}
 			comprobantesPagoKeySeq += 1;
-			nuevas.push({ _key: comprobantesPagoKeySeq, tipo_documento: '', num_documento: '', monto: null, url: '', nombre_archivo: file.name, file });
+			nuevas.push({ _key: comprobantesPagoKeySeq, tipo_documento: '', num_documento: '', monto: null, url: '', nombre_archivo: file.name, file, ocrCargando: true });
 		}
 		comprobantesPago = [...comprobantesPago, ...nuevas];
+		for (const fila of nuevas) ejecutarOcrComprobantePago(fila);
+	}
+
+	/** Lee Tipo de Documento/N° de Documento/Monto del archivo recién agregado (imagen o PDF, ver
+	 * reconocerComprobantePago) y completa esa fila sola — a pedido explícito del usuario. Si no
+	 * reconoce nada, la fila queda igual para completarla a mano; nunca bloquea el flujo. */
+	async function ejecutarOcrComprobantePago(fila: ComprobantePagoFila) {
+		if (!fila.file) return;
+		try {
+			const result = await reconocerComprobantePago(fila.file);
+			comprobantesPago = comprobantesPago.map((f) => {
+				if (f._key !== fila._key) return f;
+				const actualizado: ComprobantePagoFila = { ...f, ocrCargando: false };
+				if (result.success) {
+					if (result.tipo_documento) actualizado.tipo_documento = result.tipo_documento;
+					if (result.num_documento) actualizado.num_documento = result.num_documento;
+					if (result.monto !== null && result.monto !== undefined) actualizado.monto = result.monto;
+				}
+				return actualizado;
+			});
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo reconocer el comprobante de pago:', err);
+			comprobantesPago = comprobantesPago.map((f) => (f._key === fila._key ? { ...f, ocrCargando: false } : f));
+		}
 	}
 	function onComprobantesPagoChange(e: Event) {
 		const files = (e.target as HTMLInputElement).files;
@@ -1401,7 +1425,8 @@
 						await sincronizarComprobantesPago(supabase, idParaComprobantes, filasFinal);
 					}
 				} catch (comprobantesErr) {
-					console.warn('[TransaccionModal] No se pudo guardar los comprobantes de pago:', comprobantesErr);
+					console.error('[TransaccionModal] No se pudo guardar los comprobantes de pago:', comprobantesErr);
+					toast.error('No se pudieron guardar los comprobantes de la sección "Comprobantes" — revisa la consola (F12) para más detalle.');
 				} finally {
 					uploadingComprobantesPago = false;
 				}
@@ -2061,10 +2086,11 @@
 				     catalogoDetalleActual) — SIN el "o catalogoDetalleActual" quedaba en punto muerto: para
 				     esos casos Categoría YA NO se elige en "Otros campos" (ver más arriba, ahora es de solo
 				     lectura), así que Detalle nunca llegaba a mostrarse para elegirla la primera vez.
-				     EXCEPTO en proyectos de Obra con transacción de tipo Ingreso (Adelanto/Valorización/
-				     Adenda), donde no aplica desglose de subcategorías, a pedido explícito del usuario. Ver
-				     detalleCategoria/agregarFilaDetalleCategoria más arriba. -->
-				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && !(esProyectoDeObra && formValues.tipo === 'ingreso')}
+				     EXCEPTO cuando el tipo de transacción es Ingreso — a pedido explícito del usuario,
+				     bloqueada (oculta) por completo en Ingreso, sea cual sea el tipo de proyecto (antes
+				     solo se excluía Obra+Ingreso). Ver detalleCategoria/agregarFilaDetalleCategoria más
+				     arriba. -->
+				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && formValues.tipo !== 'ingreso'}
 					<div class="rounded-2xl border border-slate-200 p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
@@ -2278,9 +2304,16 @@
 													class="flex items-center gap-2 text-left hover:underline min-w-0"
 													title="Ver comprobante"
 												>
-													<FileText size={16} class="shrink-0 text-blue-400" />
+													{#if fila.ocrCargando}
+														<Loader2 size={16} class="shrink-0 animate-spin text-slate-400" />
+													{:else}
+														<FileText size={16} class="shrink-0 text-blue-400" />
+													{/if}
 													<span class="truncate text-blue-600">{fila.nombre_archivo}</span>
 												</button>
+												{#if fila.ocrCargando}
+													<span class="text-[10px] text-slate-400">Leyendo datos…</span>
+												{/if}
 											</td>
 											<td class="px-2 py-1.5">
 												<div class="relative">
