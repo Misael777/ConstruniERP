@@ -257,18 +257,34 @@
 		cuentaVinculadaResultados = [];
 	}
 
+	// El centro de costo que "es nuestro" en cada tipo — Egreso sale del origen, Ingreso entra al
+	// destino (el otro lado ya es la contraparte externa, ver optionsFor más abajo). El buscador solo
+	// debe ofrecer cuentas de ESE centro de costo (a pedido del usuario: no se puede vincular el gasto
+	// de un proyecto contra el presupuesto de otro).
+	const idCentroCostoParaVinculo = $derived(
+		formValues.tipo === 'egreso'
+			? Number(formValues.id_centro_costo_origen) || null
+			: formValues.tipo === 'ingreso'
+				? Number(formValues.id_centro_costo_destino) || null
+				: null
+	);
+
 	async function ejecutarBusquedaCuentaVinculada(query: string) {
+		if (!idCentroCostoParaVinculo) {
+			cuentaVinculadaResultados = [];
+			return;
+		}
 		cuentaVinculadaBuscando = true;
 		try {
 			if (formValues.tipo === 'egreso') {
-				const items = await buscarCuentasPagarVinculables(supabase, query);
+				const items = await buscarCuentasPagarVinculables(supabase, query, idCentroCostoParaVinculo);
 				cuentaVinculadaResultados = items.map((it) => ({
 					id: it.id_cuenta_pagar,
 					label: `${it.proveedorNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
 					saldo: it.saldo_pendiente
 				}));
 			} else if (formValues.tipo === 'ingreso') {
-				const items = await buscarCuentasCobrarVinculables(supabase, query);
+				const items = await buscarCuentasCobrarVinculables(supabase, query, idCentroCostoParaVinculo);
 				cuentaVinculadaResultados = items.map((it) => ({
 					id: it.id_cuenta_cobrar,
 					label: `${it.clienteNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
@@ -287,6 +303,7 @@
 
 	function onCuentaVinculadaFocus() {
 		cuentaVinculadaAbierta = true;
+		if (!idCentroCostoParaVinculo) return;
 		if (cuentaVinculadaResultados.length === 0 && !cuentaVinculadaBuscando) ejecutarBusquedaCuentaVinculada(cuentaVinculadaBusqueda);
 	}
 
@@ -770,7 +787,10 @@
 				formValues.tipo = 'transferencia';
 			}
 		}
-		if (key === 'tipo') {
+		// El buscador de vínculo filtra por centro de costo (ver idCentroCostoParaVinculo) — si Tipo u
+		// alguno de los dos Centro de Costo cambia, lo ya elegido/buscado puede ya no calzar, así que se
+		// limpia para no dejar una cuenta vinculada de un centro de costo distinto al actual.
+		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') {
 			cuentaVinculadaSeleccionada = null;
 			cuentaVinculadaBusqueda = '';
 			cuentaVinculadaResultados = [];
@@ -1965,18 +1985,19 @@
 													oninput={onCuentaVinculadaInput}
 													onfocus={onCuentaVinculadaFocus}
 													onblur={onCuentaVinculadaBlur}
-													placeholder="Buscar proveedor/cliente, N° doc. o ID…"
+													disabled={!idCentroCostoParaVinculo}
+													placeholder={idCentroCostoParaVinculo ? 'Buscar proveedor/cliente, N° doc. o ID…' : `Elige primero el Centro de costo ${formValues.tipo === 'egreso' ? 'origen' : 'destino'}`}
 													autocomplete="off"
-													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
 												/>
-												{#if cuentaVinculadaAbierta}
+												{#if cuentaVinculadaAbierta && idCentroCostoParaVinculo}
 													<div class="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
 														{#if cuentaVinculadaBuscando}
 															<p class="px-3 py-2 text-xs text-slate-400 flex items-center gap-1.5">
 																<Loader2 size={12} class="animate-spin" /> Buscando…
 															</p>
 														{:else if cuentaVinculadaResultados.length === 0}
-															<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas con saldo pendiente que coincidan.</p>
+															<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas con saldo pendiente en ese centro de costo.</p>
 														{:else}
 															{#each cuentaVinculadaResultados as opcion (opcion.id)}
 																<button
@@ -1991,7 +2012,11 @@
 														{/if}
 													</div>
 												{/if}
-												<p class="mt-1 text-xs text-slate-400">Opcional — registra un pago/cobro real contra esa cuenta.</p>
+												<p class="mt-1 text-xs text-slate-400">
+													{idCentroCostoParaVinculo
+														? 'Opcional — registra un pago/cobro real contra esa cuenta.'
+														: `Solo se muestran cuentas del centro de costo ${formValues.tipo === 'egreso' ? 'origen' : 'destino'} elegido arriba.`}
+												</p>
 											{/if}
 										</div>
 									{/if}
