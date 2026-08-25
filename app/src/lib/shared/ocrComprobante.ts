@@ -11,6 +11,7 @@
  */
 
 import { recognize } from 'tesseract.js';
+import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
 
 export interface ReconocerComprobanteResult {
 	success: boolean;
@@ -95,6 +96,26 @@ function extraerMonto(texto: string): number | null {
 	return Number.isFinite(valor) ? valor : null;
 }
 
+/** Monto de una factura/boleta (a diferencia de extraerMonto, pensada para un boucher de pago) — prueba
+ * etiquetas típicas de un comprobante de venta, de la más a la menos específica ("total a pagar" antes
+ * que "total" a secas, para no toparse con "Sub Total" u otra fila secundaria primero). El símbolo "S/"
+ * es OPCIONAL acá: algunas facturas solo indican la moneda una vez ("SOLES") y muestran los montos en
+ * una tabla sin el símbolo en cada línea — exige 2 decimales para no confundirse con un RUC/N° de
+ * documento cercano. Si una etiqueta aparece varias veces (ej. "Total" de cada ítem de una tabla), se
+ * queda con la ÚLTIMA — el total general va al final, después del detalle/subtotal/IGV. */
+function extraerMontoFactura(texto: string): number | null {
+	for (const etiqueta of ['total a pagar', 'importe total', 'total general', 'monto total', 'total']) {
+		const regex = new RegExp(`${etiqueta}\\D{0,15}?(?:S\\/\\.?\\s*)?(\\d{1,3}(?:,\\d{3})*\\.\\d{2}|\\d+\\.\\d{2})`, 'gi');
+		let ultimo: RegExpExecArray | null = null;
+		for (let m = regex.exec(texto); m !== null; m = regex.exec(texto)) ultimo = m;
+		if (ultimo) {
+			const valor = Number(ultimo[1].replace(/,/g, ''));
+			if (Number.isFinite(valor)) return valor;
+		}
+	}
+	return extraerMonto(texto);
+}
+
 /** Busca el número/código de operación: una etiqueta reconocible ("N°"/"Nro."/"Número"/"Código" + "de
  * operación"/"transacción"/"referencia"/"constancia"/"rastreo"/"confirmación" — cada banco usa la
  * suya: Yape/Plin dicen "operación", BCP escribe "Número de operación" completo, Interbank "N° de
@@ -116,6 +137,65 @@ function calcularConfianza(fecha: string | null, monto: number | null, numOperac
 	if (encontrados === 3) return 'alta';
 	if (encontrados > 0) return 'media';
 	return 'baja';
+}
+
+/** Detecta el Tipo de Documento (mismo catálogo del campo homónimo, ver transaccion.config.ts) por
+ * palabra clave en el texto reconocido — para la sección "Comprobantes" (ver
+ * reconocerComprobantePago). */
+function extraerTipoDocumento(texto: string): string | null {
+	const t = sinTildes(texto.toLowerCase());
+	if (/\bfactura\b/.test(t)) return '1';
+	if (/\bboleta\b/.test(t)) return '2';
+	if (/recibo\s+por\s+honorarios/.test(t)) return '3';
+	if (/\bticket\b/.test(t)) return '4';
+	if (/autodetraccion|\bdetraccion\b/.test(t)) return '5';
+	return null;
+}
+
+/** N° de documento peruano: serie (letra + 2-3 dígitos, ej. F001/B001/E001) + correlativo (hasta 8
+ * dígitos), ej. "F001-00123" — distinto de extraerNumeroOperacion (N° de operación bancaria, con su
+ * propia etiqueta y sin la serie con letra). */
+function extraerNumeroDocumento(texto: string): string | null {
+	const m = texto.match(/\b([A-Z]{1,3}\d{2,3})[\s-]+(\d{1,8})\b/);
+	return m ? `${m[1]}-${m[2]}` : null;
+}
+
+export interface ReconocerComprobantePagoResult {
+	success: boolean;
+	tipo_documento?: string | null;
+	num_documento?: string | null;
+	monto?: number | null;
+	error?: string;
+}
+
+/** Lee Tipo de Documento/N° de Documento/Monto de un comprobante (factura, boleta, etc.) vía OCR +
+ * regex, para autocompletar cada fila de la sección "Comprobantes" en TransaccionModal.svelte — a
+ * pedido explícito del usuario. A diferencia de reconocerComprobante (boucher de pago del área 1, solo
+ * imágenes), esta SÍ procesa PDF: renderiza su primera página a imagen (ver
+ * renderPdfFirstPageToDataUrl, a mayor resolución que la miniatura de vista previa, para que el OCR
+ * tenga texto más nítido) antes de pasarla a Tesseract. Nunca lanza. */
+export async function reconocerComprobantePago(file: File): Promise<ReconocerComprobantePagoResult> {
+	try {
+		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
+		const { data } = await recognize(fuente, 'spa');
+		const texto = data.text || '';
+		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada factura/boleta
+		// (en vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un archivo.
+		console.log('[ocrComprobante] Texto reconocido (comprobante de pago):', texto);
+
+		const tipo_documento = extraerTipoDocumento(texto);
+		const num_documento = extraerNumeroDocumento(texto);
+		const monto = extraerMontoFactura(texto);
+
+		if (tipo_documento === null && num_documento === null && monto === null) {
+			return { success: false, error: 'No se pudo reconocer ningún dato del comprobante. Complétalos a mano.' };
+		}
+		return { success: true, tipo_documento, num_documento, monto };
+	} catch (err) {
+		console.error('[ocrComprobante] Error reconociendo comprobante de pago:', err);
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	}
 }
 
 /** Lee fecha, monto y N° de operación de una foto de comprobante de pago vía OCR (Tesseract.js) +

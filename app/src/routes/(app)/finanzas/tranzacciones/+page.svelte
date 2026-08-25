@@ -24,7 +24,8 @@
 		getCentroCostoOptionsExternosOrigen,
 		getCentroCostoOptionsSoloCentros,
 		getCentroCostoProductoLookup,
-		getPartidaOptions
+		getPartidaOptions,
+		getComprobantesPago
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -39,6 +40,7 @@
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
 	const tipoField = FIELDS_CONFIG.find((f) => f.key === 'tipo')!;
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
+	const tipoDocumentoField = FIELDS_CONFIG.find((f) => f.key === 'tipo_documento')!;
 	const tipoBadgeClass: Record<string, string> = {
 		ingreso: 'bg-emerald-100 text-emerald-700',
 		egreso: 'bg-red-100 text-red-700'
@@ -145,20 +147,52 @@
 	let detalleModalOpen = $state(false);
 	let editingDetalle = $state<TransDetalle | null>(null);
 
-	// Previsualización rápida de los documentos (comprobante + factura, si tiene) desde la lista, sin
-	// tener que abrir el formulario de edición completo — mismo componente compartido que usa Ventas
-	// para contrato/proforma. Si hay más de uno, DocumentPreviewModal muestra un selector en la
-	// cabecera para elegir cuál ver (a pedido del usuario).
+	// Previsualización rápida de los documentos (comprobante/boucher + factura vieja si tiene + TODOS
+	// los comprobantes de la sección "Comprobantes" del formulario, ver transaccion_comprobante_pago)
+	// desde la lista, sin tener que abrir el formulario de edición completo — mismo componente
+	// compartido que usa Ventas para contrato/proforma. DocumentPreviewModal muestra un selector en la
+	// cabecera para elegir cuál ver/descargar cuando hay más de uno (a pedido del usuario).
 	let previewOpen = $state(false);
 	let previewTitle = $state('');
 	let previewDocuments = $state<{ url: string; label: string }[]>([]);
-	function openComprobantePreview(item: Transaccion) {
+	async function openComprobantePreview(item: Transaccion) {
 		previewDocuments = [
-			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Comprobante' }] : []),
+			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Boucher' }] : []),
 			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta' }] : [])
 		];
-		previewTitle = `Documentos - ${item.num_documento || 'Transacción'}`;
+		previewTitle = nombrePdfTransaccion(item);
 		previewOpen = true;
+
+		try {
+			const comprobantes = await getComprobantesPago(supabase, item.id_transaccion);
+			previewDocuments = [
+				...previewDocuments,
+				...comprobantes.map((c, i) => ({
+					url: c.url,
+					label:
+						[c.tipo_documento ? getOptionLabel(tipoDocumentoField, c.tipo_documento) : null, c.num_documento].filter(Boolean).join(' ') ||
+						c.nombre_archivo ||
+						`Comprobante ${i + 1}`
+				}))
+			];
+		} catch (err) {
+			console.error('[Transacciones] No se pudieron cargar los comprobantes de pago:', err);
+		}
+	}
+
+	/** Nombre del PDF al descargar desde el ojito de la lista (ver DocumentPreviewModal, que arma el
+	 * archivo final como `{este título} - {label del documento}.pdf` si hay más de uno) — a pedido
+	 * explícito del usuario, el orden de los segmentos cambia según el tipo. PENDIENTE (nota del
+	 * usuario): definir qué va en N° de Operación cuando el Medio de Pago es Efectivo — hoy ese
+	 * segmento queda vacío si la transacción no tiene uno guardado. */
+	function nombrePdfTransaccion(item: Transaccion): string {
+		const fecha = item.fecha || '';
+		const numDocumento = item.num_documento || '';
+		const numOperacion = item.num_operacion || '';
+		const etiquetaSistema = 'TRANSACCION GENERADA POR EL SISTEMA';
+		if (item.tipo === 'egreso') return `${fecha}_${numDocumento}_${etiquetaSistema}_${numOperacion}`;
+		if (item.tipo === 'ingreso') return `${numDocumento}_${etiquetaSistema}_${numOperacion}_${fecha}`;
+		return `Documentos - ${item.num_documento || 'Transacción'}`;
 	}
 
 	// Tab "Calendario" — muestra las transacciones reales (no las cuotas pendientes de

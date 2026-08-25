@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import jsPDF from 'jspdf';
+	import { arrayBufferToBase64 } from '$lib/shared/base64';
+	import { guardarArchivoBinario } from '$lib/shared/saveFile';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
@@ -13,20 +16,25 @@
 		reactivarTransaccion,
 		getCentroCostoTipoVentaMap,
 		getCentroCostoOptionsClientes,
+		getCentroCostoSocioBancaYCorporativo,
 		getCentroCostoClienteIdMap,
 		getCentroCostoOptionsProveedores,
+		getCentroCostoOptionsSubcontratistas,
 		getCentroCostoOptionsEmpleados,
 		getCentroCostoTipoMap,
 		getDetalleCategoria,
 		sincronizarDetalleCategoria,
-		type DetalleCategoria
+		type DetalleCategoria,
+		getComprobantesPago,
+		sincronizarComprobantesPago,
+		type ComprobantePago
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
-	import { reconocerComprobante, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
+	import { reconocerComprobante, reconocerComprobantePago, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
@@ -104,7 +112,6 @@
 	const cuentaDestinoField = otherFields.find((f) => f.key === 'cuente_destino')!;
 	const categoriaField = otherFields.find((f) => f.key === 'categoria')!;
 	const tipoDocumentoField = otherFields.find((f) => f.key === 'tipo_documento')!;
-	const numDocumentoField = otherFields.find((f) => f.key === 'num_documento')!;
 	const formaPagoField = otherFields.find((f) => f.key === 'forma_pago')!;
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
@@ -147,13 +154,69 @@
 	let localPreviewUrl = $state<string | null>(null);
 	let showComprobantePreview = $state(false);
 
-	// Factura o boleta de venta — adjunto SEPARADO y OPCIONAL del comprobante (ver
-	// transaccion_factura_migration.sql), a pedido del usuario en el nuevo diseño.
-	let facturaFile = $state<File | null>(null);
-	let facturaUrl = $state<string | null>(null);
-	let uploadingFactura = $state(false);
-	let localPreviewUrlFactura = $state<string | null>(null);
-	let showFacturaPreview = $state(false);
+	// Comprobantes de pago — cuarta sección, a pedido explícito del usuario: reemplaza el antiguo campo
+	// único "Adjuntar factura o boleta de venta" por VARIOS adjuntos, cada uno con su propio Tipo de
+	// Documento/N° de Documento/Monto (ver transaccion_comprobante_pago_migration.sql). Para Egreso son
+	// comprobantes de pago; para Ingreso, comprobantes de recepción de dinero de Construni — mismo
+	// mecanismo, solo cambia el rótulo (ver comprobantesPagoLabel más abajo).
+	type ComprobantePagoFila = ComprobantePago & { _key: number; file?: File; ocrCargando?: boolean };
+	let comprobantesPago = $state<ComprobantePagoFila[]>([]);
+	// Snapshot de lo que había guardado al abrir en modo edición — para, al guardar, saber qué filas
+	// quitó el usuario y borrar esos archivos de Drive (no solo la fila de metadatos). Ver handleSubmit.
+	let comprobantesPagoOriginales: ComprobantePagoFila[] = [];
+	let comprobantesPagoKeySeq = 0;
+	let comprobantesPagoCargadoParaId: number | null = null;
+	let uploadingComprobantesPago = $state(false);
+	let previewComprobantePago = $state<ComprobantePagoFila | null>(null);
+
+	function agregarComprobantesPago(files: FileList | File[]) {
+		const nuevas: ComprobantePagoFila[] = [];
+		for (const file of Array.from(files)) {
+			if (file.size > MAX_FILE_SIZE) {
+				toast.error(`"${file.name}" supera el máximo de 5MB.`);
+				continue;
+			}
+			comprobantesPagoKeySeq += 1;
+			nuevas.push({ _key: comprobantesPagoKeySeq, tipo_documento: '', num_documento: '', monto: null, url: '', nombre_archivo: file.name, file, ocrCargando: true });
+		}
+		comprobantesPago = [...comprobantesPago, ...nuevas];
+		for (const fila of nuevas) ejecutarOcrComprobantePago(fila);
+	}
+
+	/** Lee Tipo de Documento/N° de Documento/Monto del archivo recién agregado (imagen o PDF, ver
+	 * reconocerComprobantePago) y completa esa fila sola — a pedido explícito del usuario. Si no
+	 * reconoce nada, la fila queda igual para completarla a mano; nunca bloquea el flujo. */
+	async function ejecutarOcrComprobantePago(fila: ComprobantePagoFila) {
+		if (!fila.file) return;
+		try {
+			const result = await reconocerComprobantePago(fila.file);
+			comprobantesPago = comprobantesPago.map((f) => {
+				if (f._key !== fila._key) return f;
+				const actualizado: ComprobantePagoFila = { ...f, ocrCargando: false };
+				if (result.success) {
+					if (result.tipo_documento) actualizado.tipo_documento = result.tipo_documento;
+					if (result.num_documento) actualizado.num_documento = result.num_documento;
+					if (result.monto !== null && result.monto !== undefined) actualizado.monto = result.monto;
+				}
+				return actualizado;
+			});
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo reconocer el comprobante de pago:', err);
+			comprobantesPago = comprobantesPago.map((f) => (f._key === fila._key ? { ...f, ocrCargando: false } : f));
+		}
+	}
+	function onComprobantesPagoChange(e: Event) {
+		const files = (e.target as HTMLInputElement).files;
+		if (files && files.length > 0) agregarComprobantesPago(files);
+		(e.target as HTMLInputElement).value = '';
+	}
+	function onComprobantesPagoDrop(e: DragEvent) {
+		e.preventDefault();
+		if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) agregarComprobantesPago(e.dataTransfer.files);
+	}
+	function eliminarComprobantePago(key: number) {
+		comprobantesPago = comprobantesPago.filter((f) => f._key !== key);
+	}
 
 	// Reconocimiento automático (OCR + regex, sin IA, ver ocrComprobante.ts) de Fecha/Monto/N°
 	// de Operación al subir el boucher — a pedido del usuario. fechaLocked/montoLocked/
@@ -260,8 +323,9 @@
 			comprobanteFile = null;
 			comprobanteUrl = transaccion?.comprobante_url ?? null;
 			comprobanteError = '';
-			facturaFile = null;
-			facturaUrl = transaccion?.factura_url ?? null;
+			comprobantesPago = [];
+			comprobantesPagoOriginales = [];
+			comprobantesPagoCargadoParaId = null;
 			colaArchivos = [];
 			colaDrafts = {};
 			colaOcrCache = {};
@@ -277,6 +341,8 @@
 			detalleCategoriaCargadoParaId = null;
 			categoriaObraGrupo = '';
 			categoriaCorpGrupo = '';
+			categoriaConsultoriaGrupo = '';
+			catalogoAbiertoAuto = false;
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -309,31 +375,10 @@
 		localPreviewUrl = null;
 	});
 
-	let facturaPdfPreviewToken = 0;
-	$effect(() => {
-		if (facturaFile && esArchivoImagen(facturaFile)) {
-			const url = URL.createObjectURL(facturaFile);
-			localPreviewUrlFactura = url;
-			return () => URL.revokeObjectURL(url);
-		}
-		if (facturaFile && esArchivoPdf(facturaFile)) {
-			const token = ++facturaPdfPreviewToken;
-			localPreviewUrlFactura = null;
-			renderPdfFirstPageToDataUrl(facturaFile)
-				.then((dataUrl) => {
-					if (token === facturaPdfPreviewToken) localPreviewUrlFactura = dataUrl;
-				})
-				.catch((err) => console.error('[TransaccionModal] No se pudo generar la vista previa del PDF (factura):', err));
-			return;
-		}
-		localPreviewUrlFactura = null;
-	});
-
 	// Miniatura del archivo ya subido a Drive (para mostrarla de fondo en el recuadro de arrastrar y
 	// soltar) — la URL cruda guardada en BD es de descarga directa, no sirve como `<img src>` (ver
 	// toDriveThumbnailUrl).
 	const comprobanteThumbUrl = $derived(toDriveThumbnailUrl(comprobanteUrl));
-	const facturaThumbUrl = $derived(toDriveThumbnailUrl(facturaUrl));
 
 	/** Lee fecha/monto del comprobante vía OCR + regex, sin IA (ver ocrComprobante.ts). `cacheIndex` no
 	 * nulo cuando viene de la cola de varios comprobantes (se cachea el resultado por índice para no
@@ -413,29 +458,6 @@
 		e.preventDefault();
 		if (bloqueadaPorAprobacion) return;
 		processComprobanteFiles(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
-	}
-
-	function processFacturaFile(files: File[]) {
-		const file = files[0];
-		if (!file) return;
-		if (file.size > MAX_FILE_SIZE) {
-			toast.error(`"${file.name}" supera el máximo de 5MB.`);
-			return;
-		}
-		facturaFile = file;
-	}
-
-	function onFacturaChange(e: Event) {
-		const input = e.currentTarget as HTMLInputElement;
-		const files = input.files ? Array.from(input.files) : [];
-		input.value = '';
-		processFacturaFile(files);
-	}
-
-	function onFacturaDrop(e: DragEvent) {
-		e.preventDefault();
-		if (bloqueadaPorAprobacion) return;
-		processFacturaFile(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
 	}
 
 	/** Guarda el formulario a medio llenar del índice actual de la cola antes de navegar a otro. */
@@ -626,6 +648,73 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
 	}
 
+	// Botones "R1"/"R2" (a pedido explícito del usuario, junto a Cancelar): antes armaban un mensaje y
+	// lo enviaban por WhatsApp (wa.me) — a pedido explícito del usuario, ahora en vez de enviarse arman
+	// el mismo texto y lo DESCARGAN como PDF (ver generarPdfBase64/guardarArchivoBinario), sin pedir
+	// ningún número de teléfono.
+	function labelClaseDestinoActual(): string {
+		if (claseDestino === 'proveedores') return 'Proveedor';
+		if (claseDestino === 'subcontratista') return 'Subcontratista';
+		if (claseDestino === 'empleados') return 'Empleado';
+		if (claseDestino === 'cliente') return 'Cliente';
+		return labelFor(destinoField);
+	}
+	/** Convierte un texto plano en un PDF de una o más páginas (ajustando el salto de línea al ancho de
+	 * hoja) y lo devuelve en base64, listo para guardarArchivoBinario (mismo helper multiplataforma que
+	 * ya usan las exportaciones a Excel — Tauri abre el diálogo nativo "Guardar como", navegador usa la
+	 * descarga normal). */
+	function generarPdfBase64(mensaje: string): string {
+		const doc = new jsPDF();
+		const margin = 15;
+		const maxWidth = doc.internal.pageSize.getWidth() - margin * 2;
+		const pageHeight = doc.internal.pageSize.getHeight();
+		let y = 20;
+		doc.setFontSize(11);
+		for (const linea of doc.splitTextToSize(mensaje, maxWidth)) {
+			if (y > pageHeight - margin) {
+				doc.addPage();
+				y = margin;
+			}
+			doc.text(linea, margin, y);
+			y += 7;
+		}
+		return arrayBufferToBase64(doc.output('arraybuffer'));
+	}
+	async function handleEnviarR1() {
+		const nombreDestino = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+		await guardarArchivoBinario(generarPdfBase64(armarMensajeR1(nombreDestino)), `R1-${formValues.fecha || Date.now()}.pdf`, 'application/pdf');
+	}
+	async function handleEnviarR2() {
+		const nombreDestino = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+		await guardarArchivoBinario(generarPdfBase64(armarMensajeR2(nombreDestino)), `R2-${formValues.fecha || Date.now()}.pdf`, 'application/pdf');
+	}
+	function armarMensajeR1(nombreDestino: string): string {
+		return `Yo ${permisosState.userName || 'Usuario'}, he pagado ${formatCurrency(formValues.monto_total)} por el pago de ${labelClaseDestinoActual()} cuyo nombre es ${nombreDestino}, con fecha ${formatFecha(formValues.fecha)}.`;
+	}
+	// R2 — "Resumen 2", a pedido explícito del usuario: mismo encabezado que R1, con la fecha ACTUAL (no
+	// la fecha del pago, a diferencia de R1) y, si hay filas en "Detalle" (ver detalleCategoria más
+	// abajo), un desglose línea por línea ("S/1000 para planilla de semana 1", etc.).
+	function armarMensajeR2(nombreDestino: string): string {
+		const fechaHoy = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
+		let mensaje = `Yo ${permisosState.userName || 'Usuario'}, he pagado ${formatCurrency(formValues.monto_total)} por el pago de ${labelClaseDestinoActual()} al nombre de ${nombreDestino}, con fecha ${fechaHoy}.`;
+		// Registro por registro (a pedido explícito del usuario): cada fila de Detalle completa, no
+		// resumida — Subcategoría, Descripción (si tiene), Cantidad/Unidad/Precio unitario y Total.
+		const filasConDatos = detalleCategoria.filter((f) => f.subcategoria.trim());
+		if (filasConDatos.length > 0) {
+			const lineas = filasConDatos
+				.map((f, i) => {
+					const cantidad = Number(f.cantidad) || 0;
+					const precioUnitario = Number(f.precio_unitario) || 0;
+					const total = cantidad * precioUnitario;
+					const descripcion = f.descripcion?.trim() ? ` (${f.descripcion.trim()})` : '';
+					return `${i + 1}. ${f.subcategoria}${descripcion}: ${cantidad} ${f.unidad ?? ''} x ${formatCurrency(precioUnitario)} = ${formatCurrency(total)}`;
+				})
+				.join('\n');
+			mensaje += `\n\nDetalladamente se pagó:\n${lineas}`;
+		}
+		return mensaje;
+	}
+
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -639,6 +728,7 @@
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
 			categoriaCorpGrupo = '';
+			categoriaConsultoriaGrupo = '';
 		}
 		// "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA) solo aplica a Egreso en proyectos de
 		// Consultoría — mismos disparadores que Categoría para limpiarlo si deja de aplicar.
@@ -799,6 +889,23 @@
 		}
 	});
 
+	// Al abrir en modo edición, trae los comprobantes de pago ya guardados de esa transacción — mismo
+	// patrón que el detalle de categoría de arriba.
+	$effect(() => {
+		if (open && mode === 'edit' && transaccion && comprobantesPagoCargadoParaId !== transaccion.id_transaccion) {
+			comprobantesPagoCargadoParaId = transaccion.id_transaccion;
+			getComprobantesPago(supabase, transaccion.id_transaccion)
+				.then((filas) => {
+					comprobantesPago = filas.map((f) => {
+						comprobantesPagoKeySeq += 1;
+						return { ...f, _key: comprobantesPagoKeySeq };
+					});
+					comprobantesPagoOriginales = comprobantesPago;
+				})
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar los comprobantes de pago:', err));
+		}
+	});
+
 	// A pedido explícito del usuario: en Ingreso+Externa, "Centro de Costo Origen" pasa a mostrar la
 	// lista de CLIENTES (antes mostraba "solo proyectos", ver optionsFor más abajo) y "Centro de Costo
 	// Destino", en cascada, solo los PROYECTOS de ese cliente — ver getCentroCostoClienteIdMap. También
@@ -807,7 +914,12 @@
 	let centroCostoOptionsClientes = $state<FieldOption[]>([]);
 	let centroCostoClienteIdMap = $state<Record<string, string | null>>({});
 	let centroCostoOptionsProveedores = $state<FieldOption[]>([]);
+	let centroCostoOptionsSubcontratistas = $state<FieldOption[]>([]);
 	let centroCostoOptionsEmpleados = $state<FieldOption[]>([]);
+	// "Socio o Banca" (Cliente) / "CORPORATIVO" (Proyecto) para Ingreso+Externa — ver
+	// getCentroCostoSocioBancaYCorporativo/optionsFor.
+	let centroCostoSocioBanca = $state<FieldOption | null>(null);
+	let centroCostoCorporativoIngreso = $state<FieldOption | null>(null);
 	let centroCostoClientesCargado = $state(false);
 	$effect(() => {
 		if (open && !centroCostoClientesCargado) {
@@ -816,15 +928,20 @@
 				getCentroCostoOptionsClientes(supabase),
 				getCentroCostoClienteIdMap(supabase),
 				getCentroCostoOptionsProveedores(supabase),
-				getCentroCostoOptionsEmpleados(supabase)
+				getCentroCostoOptionsSubcontratistas(supabase),
+				getCentroCostoOptionsEmpleados(supabase),
+				getCentroCostoSocioBancaYCorporativo(supabase)
 			])
-				.then(([opciones, mapa, proveedores, empleados]) => {
+				.then(([opciones, mapa, proveedores, subcontratistas, empleados, socioBancaYCorporativo]) => {
 					centroCostoOptionsClientes = opciones;
 					centroCostoClienteIdMap = mapa;
 					centroCostoOptionsProveedores = proveedores;
+					centroCostoOptionsSubcontratistas = subcontratistas;
 					centroCostoOptionsEmpleados = empleados;
+					centroCostoSocioBanca = socioBancaYCorporativo.socioBanca;
+					centroCostoCorporativoIngreso = socioBancaYCorporativo.corporativo;
 				})
-				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/empleados/proyectos:', err));
+				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/subcontratistas/empleados/proyectos:', err));
 		}
 	});
 
@@ -832,14 +949,18 @@
 	// de Costo Origen y Destino (a pedido explícito del usuario): clasifica qué "Cuenta Interna"
 	// ofrece Destino. No es una columna de `transaccion` — es un filtro puramente de UI, se resetea al
 	// abrir el modal (ver el $effect principal de `open` más abajo) y al cambiar Tipo/Alcance.
-	type ClaseDestino = '' | 'proveedores' | 'empleados' | 'cliente';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente';
 	let claseDestino = $state<ClaseDestino>('');
 	function handleClaseDestinoChange(value: string) {
 		claseDestino = value as ClaseDestino;
 		formValues = { ...formValues, id_centro_costo_destino: '' };
 	}
+	// "Subcontratista" filtra los centros de costo de proveedores cuyo "Producto y Servicio" es
+	// 'SUBCONTRATISTA - OBRA' (centro_costo.tipo='subcontratista', ver sincronizarTipoCentroCostoProveedor
+	// en centroCostos.service.ts) — lista real y separada de "Proveedores", a pedido explícito del usuario.
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
 		{ value: 'proveedores', label: 'Proveedores' },
+		{ value: 'subcontratista', label: 'Subcontratista' },
 		{ value: 'empleados', label: 'Empleados' },
 		{ value: 'cliente', label: 'Cliente' }
 	];
@@ -849,6 +970,7 @@
 		if (open && mode === 'edit' && transaccion && formValues.tipo === 'egreso' && !claseDestino && centroCostoClientesCargado) {
 			const destinoId = String(transaccion.id_centro_costo_destino);
 			if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
+			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
 		}
@@ -902,6 +1024,18 @@
 		{ key: 'impuestos', label: 'Impuestos', opciones: ['Detracción', 'Otros Impuestos'] }
 	];
 
+	// Categoría en cascada para Consultoría + Egreso, a pedido explícito del usuario — mismo patrón que
+	// categoriaObraGrupo/categoriaCorpGrupo más abajo, pero con TIPOS_GASTO_CONSULTORIA como fuente.
+	let categoriaConsultoriaGrupo = $state('');
+	const categoriaConsultoriaGrupoEfectivo = $derived.by(() => {
+		if (categoriaConsultoriaGrupo) return categoriaConsultoriaGrupo;
+		return TIPOS_GASTO_CONSULTORIA.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+	});
+	function handleCategoriaConsultoriaGrupoChange(value: string) {
+		categoriaConsultoriaGrupo = value;
+		handleInput('categoria', '');
+	}
+
 	// Mismo patrón que TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — son mutuamente
 	// excluyentes, un proyecto nunca es Obra y Consultoría a la vez), pero para Egreso en proyectos de
 	// Obra, con su propio cuadro de referencia (catálogo mucho más detallado por partida de obra).
@@ -948,7 +1082,13 @@
 		{ key: 'honorarios_obra', label: 'Honorarios', opciones: ['Residente', 'Soma', 'Calidad', 'Otros Honorarios'] },
 		{ key: 'equipos', label: 'Equipos', opciones: ['Compactadora', 'Vibradora', 'Winche', 'Buggies', 'Otros Equipos'] },
 		{ key: 'compras_obra', label: 'Compras', opciones: ['EPPS', 'Festividad', 'Equipo de Seguridad', 'Malla Raschel', 'Seguridad', 'Otras Compras'] },
-		{ key: 'gastos_generales', label: 'Gastos Generales', opciones: ['Implementación de Oficina de Obra', 'Implementación de Almacén', 'Otros Gastos Generales'] }
+		{ key: 'gastos_generales', label: 'Gastos Generales', opciones: ['Implementación de Oficina de Obra', 'Implementación de Almacén', 'Otros Gastos Generales'] },
+		// A pedido explícito del usuario: 'Alquileres' y 'Préstamo' se agregan como grupos propios del
+		// Catálogo de Obra/Supervisión (antes solo existían como categorías planas del sistema viejo,
+		// CATEGORIA_OBRA_EGRESO). Sin un cuadro de referencia con subopciones específicas, cada uno
+		// arranca con un solo item genérico — mismo criterio que 'Alquileres' en TIPOS_GASTO_CONSULTORIA.
+		{ key: 'alquileres_obra', label: 'Alquileres', opciones: ['Otros Alquiler'] },
+		{ key: 'prestamo_obra', label: 'Préstamo', opciones: ['Otros Préstamo'] }
 	];
 
 	// Categoría en cascada para Obra + Egreso, a pedido explícito del usuario: primer dropdown = grupo
@@ -989,6 +1129,53 @@
 	function handleCategoriaCorpGrupoChange(value: string) {
 		categoriaCorpGrupo = value;
 		handleInput('categoria', '');
+	}
+
+	// "Catálogo" de la sección Detalle, a pedido explícito del usuario: reusa el mismo cuadro de
+	// referencia (Grupo → Subopción) que ya arma la Categoría en cascada de arriba, según el tipo de
+	// proyecto del Centro de Costo elegido — para no mantener un catálogo duplicado. Si el proyecto no es
+	// Obra/Consultoría/Corporativo (o todavía no se eligió Centro de Costo) no hay catálogo que ofrecer;
+	// en ese caso "+Agregar subcategoría" (ver template) vuelve a agregar una fila en blanco para
+	// escribir a mano, como única alternativa funcional.
+	// Solo aplica a Egreso — en Ingreso, Obra usa Adelanto/Valorización/Adenda y Corporativo usa
+	// Inyecciones/Préstamo (ambas listas planas, sin desglose de subcategorías), así que "Otros campos"
+	// debe seguir mostrando el selector normal de Categoría en vez de la vista de solo lectura.
+	const catalogoDetalleActual = $derived(
+		formValues.tipo !== 'egreso' ? [] : esProyectoDeObra ? TIPOS_GASTO_OBRA : esProyectoDeConsultoria ? TIPOS_GASTO_CONSULTORIA : esCorporativo ? TIPOS_GASTO_CORPORATIVO : []
+	);
+	// A pedido explícito del usuario: en cuanto el Centro de Costo elegido resuelve a un catálogo
+	// (Obra/Consultoría/Corporativo + Egreso), la sección "Detalle" se abre sola — no hace falta que el
+	// usuario haga clic en la flechita. catalogoAbiertoAuto evita reabrirla de nuevo si el usuario la
+	// cierra a mano mientras la condición sigue vigente; se resetea apenas esa condición deja de darse.
+	let catalogoAbiertoAuto = false;
+	$effect(() => {
+		if (open && catalogoDetalleActual.length > 0 && !catalogoAbiertoAuto) {
+			catalogoAbiertoAuto = true;
+			detalleCategoriaAbierto = true;
+		} else if (catalogoDetalleActual.length === 0) {
+			catalogoAbiertoAuto = false;
+		}
+	});
+	// El Grupo elegido en el Catálogo de Detalle reusa el mismo estado (categoriaObraGrupo/
+	// categoriaCorpGrupo/categoriaConsultoriaGrupo) que antes vivía en "Otros campos" — a pedido
+	// explícito del usuario, esa cascada se movió por completo acá, así que ya no hace falta un cuarto
+	// estado paralelo solo para Detalle.
+	const detalleCatalogoGrupoEfectivo = $derived(esProyectoDeObra ? categoriaObraGrupoEfectivo : esProyectoDeConsultoria ? categoriaConsultoriaGrupoEfectivo : esCorporativo ? categoriaCorpGrupoEfectivo : '');
+	function handleDetalleCatalogoGrupoChange(value: string) {
+		if (esProyectoDeObra) handleCategoriaObraGrupoChange(value);
+		else if (esProyectoDeConsultoria) handleCategoriaConsultoriaGrupoChange(value);
+		else if (esCorporativo) handleCategoriaCorpGrupoChange(value);
+	}
+	function agregarFilaDesdeCatalogo(subcategoria: string) {
+		if (!subcategoria) return;
+		// Además de agregar la fila al Detalle, esta selección ES la Categoría de la transacción — a
+		// pedido explícito del usuario, ya no hay un selector aparte en "Otros campos" para elegirla.
+		handleInput('categoria', subcategoria);
+		detalleCategoriaKeySeq += 1;
+		detalleCategoria = [
+			...detalleCategoria,
+			{ _key: detalleCategoriaKeySeq, subcategoria, descripcion: '', cantidad: 1, unidad: 'und', precio_unitario: 0, total: 0 }
+		];
 	}
 
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
@@ -1052,7 +1239,15 @@
 			//   "Clase" que aparece entre ambos campos (ver claseDestino/OPCIONES_CLASE_DESTINO) — vacío
 			//   mientras no se haya elegido una Clase todavía.
 			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
-				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsClientes);
+				if (field.key === 'id_centro_costo_origen') {
+					const opciones = soloNombreCentro(centroCostoOptionsClientes);
+					return centroCostoSocioBanca ? [...opciones, centroCostoSocioBanca] : opciones;
+				}
+				// "Socio o Banca" como Cliente no tiene proyectos propios — el Proyecto pasa a ser fijo
+				// "CORPORATIVO", a pedido explícito del usuario (ver getCentroCostoSocioBancaYCorporativo).
+				if (centroCostoSocioBanca && formValues.id_centro_costo_origen === centroCostoSocioBanca.value) {
+					return centroCostoCorporativoIngreso ? [centroCostoCorporativoIngreso] : [];
+				}
 				const idCliente = centroCostoClienteIdMap[formValues.id_centro_costo_origen] ?? null;
 				if (!idCliente) return [];
 				return soloNombreCentro((dynamicOptions.id_centro_costo_destino || []).filter((opt) => centroCostoClienteIdMap[opt.value] === idCliente));
@@ -1060,6 +1255,7 @@
 			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);
 				if (claseDestino === 'proveedores') return soloNombreCentro(centroCostoOptionsProveedores);
+				if (claseDestino === 'subcontratista') return soloNombreCentro(centroCostoOptionsSubcontratistas);
 				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
 				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
 				return [];
@@ -1128,26 +1324,7 @@
 				}
 			}
 
-			let finalFacturaUrl = facturaUrl;
-			let uploadedFacturaFileId: string | null = null;
-			let oldFacturaFileIdToDelete: string | null = null;
-
-			if (facturaFile) {
-				uploadingFactura = true;
-				try {
-					const baseName = mode === 'edit' && transaccion ? `factura-${transaccion.id_transaccion}` : `factura-temp-${Date.now()}`;
-					const uploaded = await subirArchivo(facturaFile, baseName);
-					finalFacturaUrl = uploaded.url;
-					uploadedFacturaFileId = uploaded.fileId;
-					if (mode === 'edit' && transaccion?.factura_url) {
-						oldFacturaFileIdToDelete = extractDriveFileId(transaccion.factura_url);
-					}
-				} finally {
-					uploadingFactura = false;
-				}
-			}
-
-			const payload = { ...formValues, comprobante_url: finalComprobanteUrl, factura_url: finalFacturaUrl };
+			const payload = { ...formValues, comprobante_url: finalComprobanteUrl };
 
 			let result;
 			if (onConfirm) {
@@ -1188,12 +1365,6 @@
 					if (oldFileIdToDelete && oldFileIdToDelete !== uploadedFileId) {
 						await borrarArchivo(oldFileIdToDelete);
 					}
-					if (uploadedFacturaFileId && mode !== 'edit' && idNuevo) {
-						await renombrarArchivo(uploadedFacturaFileId, `factura-${idNuevo}${fileExt(facturaFile!.name)}`);
-					}
-					if (oldFacturaFileIdToDelete && oldFacturaFileIdToDelete !== uploadedFacturaFileId) {
-						await borrarArchivo(oldFacturaFileIdToDelete);
-					}
 				} catch (housekeepingErr) {
 					console.warn('[TransaccionModal] No se pudo renombrar/limpiar los archivos en Drive:', housekeepingErr);
 				}
@@ -1214,6 +1385,52 @@
 					console.warn('[TransaccionModal] No se pudo guardar el detalle de categoría:', detalleErr);
 				}
 
+				// Comprobantes de pago (ver comprobantesPago más arriba) — se suben a Drive y se sincronizan
+				// recién acá, ya con el id_transaccion real. Los que existían antes y el usuario quitó en
+				// esta edición se borran de Drive aparte (no solo de la tabla de metadatos), para no dejar
+				// archivos huérfanos. Mejor esfuerzo: si falla, no se revierte el guardado principal.
+				try {
+					const idParaComprobantes = (result.data as any)?.id_transaccion;
+					if (idParaComprobantes) {
+						uploadingComprobantesPago = true;
+						const urlsActuales = new Set(comprobantesPago.map((f) => f.url).filter(Boolean));
+						const quitados = comprobantesPagoOriginales.filter((f) => f.url && !urlsActuales.has(f.url));
+						for (const fila of quitados) {
+							const fileId = extractDriveFileId(fila.url);
+							if (fileId) await borrarArchivo(fileId).catch(() => {});
+						}
+
+						const filasFinal: ComprobantePago[] = [];
+						for (const fila of comprobantesPago) {
+							if (fila.file) {
+								const baseName = `comprobante-pago-${idParaComprobantes}-${Date.now()}-${fila._key}`;
+								const uploaded = await subirArchivo(fila.file, baseName);
+								filasFinal.push({
+									tipo_documento: fila.tipo_documento,
+									num_documento: fila.num_documento,
+									monto: fila.monto,
+									url: uploaded.url,
+									nombre_archivo: fila.nombre_archivo
+								});
+							} else if (fila.url) {
+								filasFinal.push({
+									tipo_documento: fila.tipo_documento,
+									num_documento: fila.num_documento,
+									monto: fila.monto,
+									url: fila.url,
+									nombre_archivo: fila.nombre_archivo
+								});
+							}
+						}
+						await sincronizarComprobantesPago(supabase, idParaComprobantes, filasFinal);
+					}
+				} catch (comprobantesErr) {
+					console.error('[TransaccionModal] No se pudo guardar los comprobantes de pago:', comprobantesErr);
+					toast.error('No se pudieron guardar los comprobantes de la sección "Comprobantes" — revisa la consola (F12) para más detalle.');
+				} finally {
+					uploadingComprobantesPago = false;
+				}
+
 				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
 				// avanza al siguiente borrador en vez de cerrar el modal — a pedido del usuario.
 				const hayMasEnCola = colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1;
@@ -1222,8 +1439,8 @@
 					const { [colaIndex]: _omitido, ...restoDrafts } = colaDrafts;
 					colaDrafts = restoDrafts;
 					colaIndex += 1;
-					facturaFile = null;
-					facturaUrl = null;
+					comprobantesPago = [];
+					comprobantesPagoOriginales = [];
 					cargarDraft(colaIndex);
 				} else {
 					toast.success(result.message ?? 'Operación realizada con éxito');
@@ -1316,9 +1533,19 @@
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
-				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
-					<X size={20} />
-				</button>
+				<div class="flex items-center gap-2">
+					<!-- N° de transacción — a pedido explícito del usuario, esquina superior, solo lectura.
+					     En modo 'create' todavía no existe (recién se genera al guardar), así que no se
+					     muestra. -->
+					{#if mode === 'edit' && transaccion}
+						<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium" title="Número de transacción">
+							N° {transaccion.id_transaccion}
+						</span>
+					{/if}
+					<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
+						<X size={20} />
+					</button>
+				</div>
 			</div>
 
 			<form onsubmit={handleSubmit}>
@@ -1650,27 +1877,32 @@
 
 						{#if otrosCamposAbierto}
 							<div class="mt-4 flex flex-col gap-4">
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-									{#if esProyectoDeObra && formValues.tipo === 'egreso'}
-										<!-- Categoría en cascada (Obra + Egreso), a pedido explícito del usuario: primer
-										     dropdown = grupo (columnas de la tabla de referencia), segundo dropdown = la
-										     opción de ese grupo — reemplaza al antiguo bloque "Tipo de Gasto" de 7
-										     dropdowns paralelos (ver TIPOS_GASTO_OBRA/categoriaObraGrupo más arriba). -->
+								<!-- A pedido explícito del usuario: Tipo de Documento/N° de Documento ya no van acá —
+								     esa info ahora se captura por cada comprobante en la 4ta sección, más abajo (ver
+								     comprobantesPago). Categoría queda sola, sin grid para no dejar huecos vacíos. -->
+								<div class="sm:max-w-sm">
+									{#if catalogoDetalleActual.length > 0}
+										<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
+										     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
+										     Detalle (detalleCatalogoGrupoEfectivo/handleDetalleCatalogoGrupoChange), así
+										     que elegir acá o en Detalle queda siempre sincronizado. Elegir acá SOLO fija
+										     la Categoría (no agrega una fila a Detalle, a diferencia de elegir allá, ver
+										     agregarFilaDesdeCatalogo). -->
 										<div>
-											<label for="tr-categoria-obra-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+											<label for="tr-categoria-otros-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 												Categoría<span class="text-red-500">*</span>
 											</label>
 											<div class="grid grid-cols-2 gap-2">
 												<div class="relative">
 													<select
-														id="tr-categoria-obra-grupo"
-														value={categoriaObraGrupoEfectivo}
+														id="tr-categoria-otros-grupo"
+														value={detalleCatalogoGrupoEfectivo}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleCategoriaObraGrupoChange((e.target as HTMLSelectElement).value)}
+														onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
 														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
 													>
 														<option value="">Categoría</option>
-														{#each TIPOS_GASTO_OBRA as grupo}
+														{#each catalogoDetalleActual as grupo}
 															<option value={grupo.key}>{grupo.label}</option>
 														{/each}
 													</select>
@@ -1678,56 +1910,14 @@
 												</div>
 												<div class="relative">
 													<select
-														id="tr-categoria-obra-subcategoria"
+														id="tr-categoria-otros-subcategoria"
 														value={formValues.categoria}
-														disabled={bloqueadaPorAprobacion || !categoriaObraGrupoEfectivo}
+														disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
 														onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
 														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 													>
 														<option value="">Subcategoría</option>
-														{#each TIPOS_GASTO_OBRA.find((g) => g.key === categoriaObraGrupoEfectivo)?.opciones ?? [] as opt}
-															<option value={opt}>{opt}</option>
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-												</div>
-											</div>
-											{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
-										</div>
-									{:else if esCorporativo && formValues.tipo === 'egreso'}
-										<!-- Categoría en cascada (Corporativo + Egreso), a pedido explícito del usuario:
-										     mismo patrón que Obra arriba, pero con TIPOS_GASTO_CORPORATIVO/categoriaCorpGrupo
-										     — reemplaza al antiguo bloque "Tipo de Gasto" de 8 dropdowns paralelos. -->
-										<div>
-											<label for="tr-categoria-corp-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-												Categoría<span class="text-red-500">*</span>
-											</label>
-											<div class="grid grid-cols-2 gap-2">
-												<div class="relative">
-													<select
-														id="tr-categoria-corp-grupo"
-														value={categoriaCorpGrupoEfectivo}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleCategoriaCorpGrupoChange((e.target as HTMLSelectElement).value)}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="">Categoría</option>
-														{#each TIPOS_GASTO_CORPORATIVO as grupo}
-															<option value={grupo.key}>{grupo.label}</option>
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-												</div>
-												<div class="relative">
-													<select
-														id="tr-categoria-corp-subcategoria"
-														value={formValues.categoria}
-														disabled={bloqueadaPorAprobacion || !categoriaCorpGrupoEfectivo}
-														onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
-														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-													>
-														<option value="">Subcategoría</option>
-														{#each TIPOS_GASTO_CORPORATIVO.find((g) => g.key === categoriaCorpGrupoEfectivo)?.opciones ?? [] as opt}
+														{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
 															<option value={opt}>{opt}</option>
 														{/each}
 													</select>
@@ -1739,8 +1929,6 @@
 									{:else}
 										{@render fieldBlock(categoriaField)}
 									{/if}
-									{@render fieldBlock(tipoDocumentoField)}
-									{@render fieldBlock(numDocumentoField)}
 								</div>
 								<!-- grid-cols-2 salvo que el tercer campo (Vincular con Cuenta por Pagar/Cobrar)
 								     vaya a aparecer — igual que Origen/Clase/Destino más arriba, forzar 3 columnas
@@ -1808,37 +1996,11 @@
 										</div>
 									{/if}
 								</div>
-								<!-- Tipo de Gasto — 7 dropdowns propios, a pedido explícito del usuario, solo para
-								     Egreso en proyectos de Consultoría (ver TIPOS_GASTO_CONSULTORIA/esProyectoDeConsultoria).
-								     Va ANTES que Factura/Descripción/Estado (a pedido del usuario, esos tres bajan
-								     al final del todo, ver más abajo). -->
-								{#if esProyectoDeConsultoria && formValues.tipo === 'egreso'}
-									<div>
-										<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo de Gasto</span>
-										<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-											{#each TIPOS_GASTO_CONSULTORIA as grupo}
-												<div>
-													<label for={`tr-tipo-gasto-${grupo.key}`} class="block text-xs font-semibold text-slate-500 mb-1">{grupo.label}</label>
-													<div class="relative">
-														<select
-															id={`tr-tipo-gasto-${grupo.key}`}
-															value={formValues.tipo_gasto}
-															disabled={bloqueadaPorAprobacion}
-															onchange={(e) => handleInput('tipo_gasto', (e.target as HTMLSelectElement).value)}
-															class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-														>
-															<option value="">Selecciona una opción</option>
-															{#each grupo.opciones as opt}
-																<option value={opt}>{opt}</option>
-															{/each}
-														</select>
-														<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-													</div>
-												</div>
-											{/each}
-										</div>
-									</div>
-								{/if}
+								<!-- Para Consultoría + Egreso, el desglose "Tipo de Gasto" (7 dropdowns) fue
+								     REEMPLAZADO por Categoría en cascada (ver el bloque de Categoría más arriba,
+								     categoriaConsultoriaGrupo/TIPOS_GASTO_CONSULTORIA) a pedido explícito del
+								     usuario — evita capturar el mismo dato dos veces. TIPOS_GASTO_CONSULTORIA se
+								     sigue usando como fuente de datos de esa cascada. -->
 
 								<!-- Para Obra + Egreso, el desglose "Tipo de Gasto" (7 dropdowns) fue REEMPLAZADO por
 								     Categoría en cascada (ver el bloque de Categoría más arriba, categoriaObraGrupo/
@@ -1851,49 +2013,11 @@
 								     evita capturar el mismo dato dos veces. TIPOS_GASTO_CORPORATIVO se sigue usando
 								     como fuente de datos de esa cascada. -->
 
-								<!-- A pedido explícito del usuario: Adjuntar factura/Descripción/Estado van al FINAL
-								     de "Otros campos", después de Tipo de Gasto — 3 columnas iguales, simétrico. -->
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-									<div>
-										<label class="block text-sm font-bold text-[#0f3b5e] mb-1">Adjuntar factura o boleta de venta</label>
-										<div class="flex items-start gap-3">
-											<label
-												for="tr-factura"
-												ondragover={(e) => e.preventDefault()}
-												ondrop={onFacturaDrop}
-												class={`relative flex flex-col items-center justify-center gap-1 w-24 h-24 shrink-0 rounded-xl border-2 border-dashed border-slate-300 text-center overflow-hidden transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}`}
-											>
-												{#if localPreviewUrlFactura}
-													<img src={localPreviewUrlFactura} alt="Vista previa de la factura" class="absolute inset-0 w-full h-full object-cover" />
-												{:else if facturaUrl && !facturaFile}
-													<img
-														src={facturaThumbUrl}
-														alt="Factura actual"
-														class="absolute inset-0 w-full h-full object-cover"
-														onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-													/>
-													<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[9px] font-medium py-0.5 flex items-center justify-center" title="Haz clic o arrastra para reemplazar">
-														<CloudUpload size={9} class="shrink-0" />
-													</div>
-												{:else if facturaFile}
-													<CloudUpload size={16} class="text-blue-400" />
-													<span class="text-[10px] font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{facturaFile.name}</span>
-												{:else}
-													<CloudUpload size={18} class="text-blue-400" />
-													<span class="text-[10px] font-medium text-slate-600 leading-tight px-1">Arrastra o selecciona</span>
-												{/if}
-											</label>
-											<div class="flex flex-col gap-1 min-w-0 pt-0.5">
-												{#if facturaUrl && !facturaFile}
-													<button type="button" onclick={() => (showFacturaPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-														Ver factura actual
-													</button>
-												{/if}
-												<p class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB).</p>
-											</div>
-										</div>
-										<input id="tr-factura" type="file" accept="image/*,application/pdf" class="hidden" disabled={bloqueadaPorAprobacion} onchange={onFacturaChange} />
-									</div>
+								<!-- A pedido explícito del usuario: "Adjuntar factura o boleta de venta" se retiró por
+								     completo de acá — ese adjunto (y ahora varios, cada uno con su propio Tipo/N° de
+								     Documento/Monto) vive en la 4ta sección "Comprobantes", más abajo. Descripción/
+								     Estado quedan en 2 columnas (ya no 3, para no dejar un hueco vacío). -->
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 									<div>
 										<label for="tr-descripcion" class="block text-sm font-bold text-[#0f3b5e] mb-1">{descripcionField.label}</label>
 										<textarea
@@ -1956,31 +2080,97 @@
 					</div>
 				</div>
 
-				<!-- Detalle — sección propia (a pedido explícito del usuario, antes vivía dentro de "Otros
-				     campos"), visible en cuanto hay una Categoría elegida, sea cual sea el tipo de
-				     proyecto/transacción — EXCEPTO en proyectos de Obra con transacción de tipo Ingreso
-				     (Adelanto/Valorización/Adenda), donde no aplica desglose de subcategorías, a pedido
-				     explícito del usuario. Ver detalleCategoria/agregarFilaDetalleCategoria más arriba. -->
-				{#if formValues.categoria && !(esProyectoDeObra && formValues.tipo === 'ingreso')}
+				<!-- Detalle — tercera sección plegable (a pedido explícito del usuario, mismo patrón visual
+				     que "Otros campos"), visible en cuanto hay una Categoría elegida O ya hay un catálogo
+				     disponible para elegirla (Obra/Consultoría/Corporativo + Egreso, ver
+				     catalogoDetalleActual) — SIN el "o catalogoDetalleActual" quedaba en punto muerto: para
+				     esos casos Categoría YA NO se elige en "Otros campos" (ver más arriba, ahora es de solo
+				     lectura), así que Detalle nunca llegaba a mostrarse para elegirla la primera vez.
+				     EXCEPTO cuando el tipo de transacción es Ingreso — a pedido explícito del usuario,
+				     bloqueada (oculta) por completo en Ingreso, sea cual sea el tipo de proyecto (antes
+				     solo se excluía Obra+Ingreso). Ver detalleCategoria/agregarFilaDetalleCategoria más
+				     arriba. -->
+				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && formValues.tipo !== 'ingreso'}
 					<div class="rounded-2xl border border-slate-200 p-5">
-						<div class="flex items-center justify-between flex-wrap gap-2 mb-4">
-							<div class="flex items-center gap-2">
-								<ListTree size={16} class="text-blue-500" />
-								<span class="text-sm font-bold text-[#0f3b5e]">Detalle</span>
-								<span class="text-xs text-slate-400">Categoría seleccionada: {getOptionLabel(categoriaField, formValues.categoria)}</span>
-							</div>
+						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
 								type="button"
-								onclick={agregarFilaDetalleCategoria}
-								disabled={bloqueadaPorAprobacion}
-								class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
+								onclick={() => (detalleCategoriaAbierto = !detalleCategoriaAbierto)}
+								class="flex items-center gap-1.5 text-sm font-bold text-blue-600"
 							>
-								<Plus size={13} /> Agregar subcategoría
+								<ListTree size={16} class="text-blue-500" />
+								Detalle
+								{#if detalleCategoriaAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 							</button>
+							<span class="text-xs text-slate-400">Categoría seleccionada: {formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : 'Sin elegir'}</span>
 						</div>
 
+						{#if detalleCategoriaAbierto}
+							<div class="mt-4 flex flex-col gap-4">
+								<!-- Categoría/Subcategoría (a pedido explícito del usuario, antes "Catálogo"/
+								     "Subcatálogo"): elegir Categoría→Subcategoría agrega la fila directo Y fija la
+								     Categoría de la transacción (ver agregarFilaDesdeCatalogo) — ya no se escribe la
+								     Subcategoría a mano, salvo que este tipo de proyecto no tenga catálogo propio
+								     (catalogoDetalleActual vacío), donde se mantiene "Agregar subcategoría" (fila en
+								     blanco) como única alternativa. -->
+								{#if catalogoDetalleActual.length > 0}
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+										<div>
+											<label for="tr-detalle-catalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Categoría</label>
+											<div class="relative">
+												<select
+													id="tr-detalle-catalogo"
+													value={detalleCatalogoGrupoEfectivo}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="">Selecciona una opción</option>
+													{#each catalogoDetalleActual as grupo}
+														<option value={grupo.key}>{grupo.label}</option>
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+										</div>
+										<div>
+											<label for="tr-detalle-subcatalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Subcategoría</label>
+											<div class="relative">
+												<select
+													id="tr-detalle-subcatalogo"
+													value=""
+													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
+													onchange={(e) => {
+														const target = e.target as HTMLSelectElement;
+														agregarFilaDesdeCatalogo(target.value);
+														target.value = '';
+													}}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="">Elige una opción para agregarla</option>
+													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
+														<option value={opt}>{opt}</option>
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+										</div>
+									</div>
+								{:else}
+									<button
+										type="button"
+										onclick={agregarFilaDetalleCategoria}
+										disabled={bloqueadaPorAprobacion}
+										class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
+									>
+										<Plus size={13} /> Agregar subcategoría
+									</button>
+								{/if}
+
 						{#if detalleCategoria.length === 0}
-							<p class="text-xs text-slate-400 text-center py-4">Sin subcategorías todavía — usa "Agregar subcategoría".</p>
+							<p class="text-xs text-slate-400 text-center py-4">
+								{catalogoDetalleActual.length > 0 ? 'Sin subcategorías todavía — elige una del Catálogo.' : 'Sin subcategorías todavía — usa "Agregar subcategoría".'}
+							</p>
 						{:else}
 							<div class="overflow-x-auto">
 								<table class="w-full text-sm min-w-[720px]">
@@ -2078,10 +2268,153 @@
 								</table>
 							</div>
 						{/if}
+							</div>
+						{/if}
 					</div>
 				{/if}
 
+				<!-- Comprobantes — cuarta sección, a pedido explícito del usuario: reemplaza el antiguo campo
+				     único "Adjuntar factura o boleta de venta". Egreso = comprobantes de pago; Ingreso =
+				     comprobantes de recepción de dinero de Construni — mismo mecanismo, distinto rótulo (ver
+				     comprobantesPago/agregarComprobantesPago más arriba). -->
+				<div class="rounded-2xl border border-slate-200 p-5">
+					<span class="block text-sm font-bold text-[#0f3b5e] mb-4">
+						{formValues.tipo === 'ingreso' ? 'Comprobantes de recepción de dinero de Construni' : 'Comprobantes de pago'}
+					</span>
+
+					{#if comprobantesPago.length > 0}
+						<div class="overflow-x-auto mb-4">
+							<table class="w-full text-sm min-w-[640px]">
+								<thead>
+									<tr class="text-[11px] text-slate-500 uppercase tracking-wide">
+										<th class="text-left px-2 py-1.5 font-semibold">Documento adjunto</th>
+										<th class="text-left px-2 py-1.5 font-semibold w-40">Tipo de documento</th>
+										<th class="text-left px-2 py-1.5 font-semibold w-40">N° de documento</th>
+										<th class="text-right px-2 py-1.5 font-semibold w-40">Monto que figura en el documento</th>
+										<th class="w-8"></th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each comprobantesPago as fila (fila._key)}
+										<tr class="border-t border-slate-100">
+											<td class="px-2 py-1.5">
+												<button
+													type="button"
+													onclick={() => (previewComprobantePago = fila)}
+													class="flex items-center gap-2 text-left hover:underline min-w-0"
+													title="Ver comprobante"
+												>
+													{#if fila.ocrCargando}
+														<Loader2 size={16} class="shrink-0 animate-spin text-slate-400" />
+													{:else}
+														<FileText size={16} class="shrink-0 text-blue-400" />
+													{/if}
+													<span class="truncate text-blue-600">{fila.nombre_archivo}</span>
+												</button>
+												{#if fila.ocrCargando}
+													<span class="text-[10px] text-slate-400">Leyendo datos…</span>
+												{/if}
+											</td>
+											<td class="px-2 py-1.5">
+												<div class="relative">
+													<select
+														value={fila.tipo_documento ?? ''}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => (fila.tipo_documento = (e.target as HTMLSelectElement).value)}
+														class="w-full appearance-none rounded-md border border-slate-200 px-2 py-1 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+													>
+														<option value="">Selecciona</option>
+														{#each optionsFor(tipoDocumentoField) as opt}
+															<option value={opt.value}>{opt.label}</option>
+														{/each}
+													</select>
+													<ChevronDown size={13} class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+											</td>
+											<td class="px-2 py-1.5">
+												<input
+													type="text"
+													value={fila.num_documento ?? ''}
+													disabled={bloqueadaPorAprobacion}
+													oninput={(e) => (fila.num_documento = (e.target as HTMLInputElement).value)}
+													placeholder="N° de documento"
+													class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+												/>
+											</td>
+											<td class="px-2 py-1.5">
+												<input
+													type="number"
+													min="0"
+													step="any"
+													value={fila.monto ?? ''}
+													disabled={bloqueadaPorAprobacion}
+													oninput={(e) => (fila.monto = (e.target as HTMLInputElement).value === '' ? null : Number((e.target as HTMLInputElement).value))}
+													placeholder="0.00"
+													class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
+												/>
+											</td>
+											<td class="px-2 py-1.5 text-center">
+												<button
+													type="button"
+													onclick={() => eliminarComprobantePago(fila._key)}
+													disabled={bloqueadaPorAprobacion}
+													class="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+													aria-label="Quitar comprobante"
+													title="Quitar comprobante"
+												>
+													<Trash2 size={14} />
+												</button>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+
+					<label
+						for="tr-comprobantes-pago"
+						ondragover={(e) => e.preventDefault()}
+						ondrop={onComprobantesPagoDrop}
+						class={`flex flex-col items-center justify-center gap-1 w-full h-20 rounded-xl border-2 border-dashed border-slate-300 text-center transition-colors ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'}`}
+					>
+						<CloudUpload size={20} class="text-blue-400" />
+						<span class="text-xs font-medium text-slate-600">Arrastra o selecciona</span>
+						<span class="text-[11px] text-slate-400">JPG, PNG o PDF (máx. 5MB c/u) — puedes elegir varios</span>
+					</label>
+					<input
+						id="tr-comprobantes-pago"
+						type="file"
+						accept="image/*,application/pdf"
+						multiple
+						class="hidden"
+						disabled={bloqueadaPorAprobacion}
+						onchange={onComprobantesPagoChange}
+					/>
+
+					<p class="mt-3 text-xs text-slate-400 flex items-center gap-1.5">
+						<Info size={12} class="shrink-0" />
+						Estos campos son opcionales. Otra área de la empresa se encargará de completarlos.
+					</p>
+				</div>
+
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
+					<button
+						type="button"
+						onclick={handleEnviarR1}
+						title="Descargar mensaje de pago en PDF"
+						class="px-3 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+					>
+						R1
+					</button>
+					<button
+						type="button"
+						onclick={handleEnviarR2}
+						title="Descargar resumen detallado en PDF"
+						class="px-3 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+					>
+						R2
+					</button>
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
 						Cancelar
 					</button>
@@ -2089,7 +2422,7 @@
 						<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 							{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
 							{#if submitting}
-								{uploadingComprobante || uploadingFactura ? 'Subiendo archivos…' : 'Guardando…'}
+								{uploadingComprobante || uploadingComprobantesPago ? 'Subiendo archivos…' : 'Guardando…'}
 							{:else if colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1}
 								Guardar y continuar
 							{:else}
@@ -2111,8 +2444,9 @@
 />
 
 <DocumentPreviewModal
-	open={showFacturaPreview}
-	url={facturaUrl}
-	title="Factura o boleta de venta"
-	onClose={() => (showFacturaPreview = false)}
+	open={!!previewComprobantePago}
+	url={previewComprobantePago?.file ? URL.createObjectURL(previewComprobantePago.file) : (previewComprobantePago?.url ?? null)}
+	title={previewComprobantePago?.nombre_archivo ?? 'Comprobante'}
+	onClose={() => (previewComprobantePago = null)}
 />
+

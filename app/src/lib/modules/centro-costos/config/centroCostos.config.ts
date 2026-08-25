@@ -199,14 +199,16 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		tipo: 'select',
 		required: true,
 		// `options` (completa) debe reflejar exactamente el CHECK (tipo IN (...)) de la tabla
-		// centro_costo — ver centro_costo_vinculacion_migration.sql, centro_costo_empleado_migration.sql
-		// y la migración que agrega 'bolsa general'. Se usa para traducir CUALQUIER valor existente a
-		// su label bonito en la tabla. `formOptions` (más abajo) es el subconjunto que se puede elegir
-		// a mano en el formulario: 'proyecto'/'cliente'/'proveedor'/'empleado' se completan solos
-		// (getOrCrearCentroCostoParaEntidad o su equivalente en user-admin) cuando se crea esa entidad
-		// — no se eligen a mano, por eso no están en `formOptions` — y 'area'/'otro' quedaron fuera del
-		// catálogo manual a pedido del usuario (se dejan en `options` solo por si alguna fila vieja los
-		// tuviera, no hay ninguna hoy).
+		// centro_costo — ver centro_costo_vinculacion_migration.sql, centro_costo_empleado_migration.sql,
+		// la migración que agrega 'bolsa general' y centro_costo_tipo_subcontratista_migration.sql. Se
+		// usa para traducir CUALQUIER valor existente a su label bonito en la tabla. `formOptions` (más
+		// abajo) es el subconjunto que se puede elegir a mano en el formulario: 'proyecto'/'cliente'/
+		// 'proveedor'/'empleado' se completan solos (getOrCrearCentroCostoParaEntidad o su equivalente en
+		// user-admin) cuando se crea esa entidad, y 'subcontratista' se asigna solo (en vez de
+		// 'proveedor') cuando el proveedor tiene "Producto y Servicio" = 'SUBCONTRATISTA - OBRA' (ver
+		// sincronizarTipoCentroCostoProveedor) — ninguno de los cinco se elige a mano, por eso no están en
+		// `formOptions` — y 'area'/'otro' quedaron fuera del catálogo manual a pedido del usuario (se
+		// dejan en `options` solo por si alguna fila vieja los tuviera, no hay ninguna hoy).
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
@@ -216,6 +218,7 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 			{ value: 'proyecto', label: 'Proyecto (automático)' },
 			{ value: 'cliente', label: 'Cliente (automático)' },
 			{ value: 'proveedor', label: 'Proveedor (automático)' },
+			{ value: 'subcontratista', label: 'Subcontratista (automático)' },
 			{ value: 'empleado', label: 'Empleado (automático)' }
 		],
 		formOptions: [

@@ -416,6 +416,24 @@ export async function eliminarCentroCostoPermanente(client: SupabaseClient, id: 
 	return { success: true, message: 'Centro de costo eliminado permanentemente' };
 }
 
+/** Valor exacto de `proveedor.vendedor` ("Producto y Servicio" en el formulario) que clasifica a ese
+ * proveedor como Subcontratista — a pedido explícito del usuario. */
+const VENDEDOR_SUBCONTRATISTA = 'SUBCONTRATISTA - OBRA';
+
+/**
+ * Mantiene sincronizado `centro_costo.tipo` ('proveedor' | 'subcontratista') con el campo `vendedor`
+ * del proveedor — a pedido explícito del usuario: un proveedor cuyo "Producto y Servicio" sea
+ * exactamente 'SUBCONTRATISTA - OBRA' debe clasificarse como Subcontratista (ver OPCIONES_CLASE_DESTINO
+ * en TransaccionModal.svelte). Se llama al crear Y al editar un proveedor (ProveedorModal.svelte), para
+ * que también reaccione si el campo cambia después de creado. Nunca lanza: es secundario al guardado
+ * del proveedor, igual que getOrCrearCentroCostoParaEntidad.
+ */
+export async function sincronizarTipoCentroCostoProveedor(client: SupabaseClient, idProveedor: number, vendedor: string | null): Promise<void> {
+	const tipo = vendedor === VENDEDOR_SUBCONTRATISTA ? 'subcontratista' : 'proveedor';
+	const { error } = await client.from(TABLE_NAME).update({ tipo }).eq('id_proveedor', idProveedor);
+	if (error) console.error('[centroCostos.service] No se pudo sincronizar el tipo del centro de costo del proveedor:', error);
+}
+
 /**
  * Busca el centro de costo ya vinculado a esta entidad (proyecto/cliente/proveedor) y, si no existe,
  * lo crea — idempotente (protegido además por el índice único parcial de la migración, ante una
