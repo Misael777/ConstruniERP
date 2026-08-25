@@ -157,8 +157,23 @@
 			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Comprobante' }] : []),
 			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta' }] : [])
 		];
-		previewTitle = `Documentos - ${item.num_documento || 'Transacción'}`;
+		previewTitle = nombrePdfTransaccion(item);
 		previewOpen = true;
+	}
+
+	/** Nombre del PDF al descargar desde el ojito de la lista (ver DocumentPreviewModal, que arma el
+	 * archivo final como `{este título} - {label del documento}.pdf` si hay más de uno) — a pedido
+	 * explícito del usuario, el orden de los segmentos cambia según el tipo. PENDIENTE (nota del
+	 * usuario): definir qué va en N° de Operación cuando el Medio de Pago es Efectivo — hoy ese
+	 * segmento queda vacío si la transacción no tiene uno guardado. */
+	function nombrePdfTransaccion(item: Transaccion): string {
+		const fecha = item.fecha || '';
+		const numDocumento = item.num_documento || '';
+		const numOperacion = item.num_operacion || '';
+		const etiquetaSistema = 'TRANSACCION GENERADA POR EL SISTEMA';
+		if (item.tipo === 'egreso') return `${fecha}_${numDocumento}_${etiquetaSistema}_${numOperacion}`;
+		if (item.tipo === 'ingreso') return `${numDocumento}_${etiquetaSistema}_${numOperacion}_${fecha}`;
+		return `Documentos - ${item.num_documento || 'Transacción'}`;
 	}
 
 	// Tab "Calendario" — muestra las transacciones reales (no las cuotas pendientes de

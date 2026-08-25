@@ -264,6 +264,31 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Mantenimiento Equipos', label: 'Mantenimiento Equipos' },
 			{ value: 'Año Nuevo y Navidad', label: 'Año Nuevo y Navidad' },
 			{ value: 'Implementación Oficina', label: 'Implementación Oficina' },
+			// Subcategorías del dropdown en cascada de Consultoría + Egreso (ver TIPOS_GASTO_CONSULTORIA en
+			// TransaccionModal.svelte) — mismo motivo que el bloque de Obra/Corporativo de arriba.
+			{ value: 'Honorarios Firma', label: 'Honorarios Firma' },
+			{ value: 'Comisión Ventas', label: 'Comisión Ventas' },
+			{ value: 'Gestor(a) de Proyectos', label: 'Gestor(a) de Proyectos' },
+			{ value: 'Otros Alquiler', label: 'Otros Alquiler' },
+			{ value: 'Otros Préstamo', label: 'Otros Préstamo' },
+			{ value: 'Internet', label: 'Internet' },
+			{ value: 'Imprenta', label: 'Imprenta' },
+			{ value: 'Almacenamiento', label: 'Almacenamiento' },
+			{ value: 'Municipalidad', label: 'Municipalidad' },
+			{ value: 'Sunarp', label: 'Sunarp' },
+			{ value: 'Calicatas', label: 'Calicatas' },
+			{ value: 'Equipo Topográfico', label: 'Equipo Topográfico' },
+			{ value: 'Otros Subcontratos', label: 'Otros Subcontratos' },
+			{ value: 'Útiles de Limpieza', label: 'Útiles de Limpieza' },
+			{ value: 'Útiles de Oficina', label: 'Útiles de Oficina' },
+			{ value: 'Alimentos', label: 'Alimentos' },
+			{ value: 'Peajes', label: 'Peajes' },
+			{ value: 'Ferretería', label: 'Ferretería' },
+			{ value: 'Visita Técnica', label: 'Visita Técnica' },
+			{ value: 'Envíos y Recojos', label: 'Envíos y Recojos' },
+			{ value: 'Otras Movilidades', label: 'Otras Movilidades' },
+			{ value: 'Detracción', label: 'Detracción' },
+			{ value: 'Otros Impuestos', label: 'Otros Impuestos' },
 			// Catálogo anterior — ya no se ofrece en el <select> (ver optionsWhen abajo), se mantiene
 			// acá solo para traducir a label cualquier transacción vieja que ya haya guardado uno de
 			// estos valores (mismo criterio que 'transferencia'/'financiamiento' en el campo 'tipo').

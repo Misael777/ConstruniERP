@@ -647,6 +647,28 @@ export async function getCentroCostoOptionsEmpleados(client: SupabaseClient): Pr
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
+/** "Socio o Banca" (Centro de Costo Origen) y "CORPORATIVO" (Centro de Costo Destino) — a pedido
+ * explícito del usuario: en Ingreso+Externa, el Cliente puede ser "Socio o Banca" (aporte de socio o
+ * préstamo bancario, sin cliente real de por medio) en vez de un cliente de la lista, y en ese caso el
+ * Proyecto pasa a ser fijo "CORPORATIVO" (ver optionsFor en TransaccionModal.svelte). Ambos son Centros
+ * de Costo reales y ya existentes (ver centro_costo_socio_banca_migration.sql), no valores inventados.
+ * Una sola consulta porque ambos son filas puntuales que rara vez cambian. */
+export async function getCentroCostoSocioBancaYCorporativo(client: SupabaseClient): Promise<{ socioBanca: FieldOption | null; corporativo: FieldOption | null }> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre, tipo')
+		.eq('estado', 'activo')
+		.or('nombre.eq.Socio o Banca,tipo.eq.bolsa general');
+	if (error) throw error;
+	const filas = data ?? [];
+	const socio = filas.find((c: any) => c.nombre === 'Socio o Banca');
+	const corporativo = filas.find((c: any) => c.tipo === 'bolsa general');
+	return {
+		socioBanca: socio ? { value: String(socio.id_centro_costo), label: socio.nombre } : null,
+		corporativo: corporativo ? { value: String(corporativo.id_centro_costo), label: corporativo.nombre } : null
+	};
+}
+
 /** Solo centros de costo vinculados DIRECTAMENTE a un cliente (`id_cliente` no nulo) — para "Centro
  * de Costo Origen" en Nueva/Editar Transacción cuando Tipo=Ingreso+Externa: a pedido explícito del
  * usuario, ese campo pasa a ofrecer la lista de clientes (antes ofrecía "solo proyectos", ver
@@ -984,6 +1006,53 @@ export async function sincronizarDetalleCategoria(client: SupabaseClient, idTran
 	const { error: insertError } = await client.from('transaccion_detalle_categoria').insert(rows);
 	if (insertError) {
 		console.error('[transacciones.service] No se pudo guardar el detalle de categoría:', insertError);
+	}
+}
+
+export interface ComprobantePago {
+	id_comprobante_pago?: number;
+	id_transaccion?: number;
+	tipo_documento: string | null;
+	num_documento: string | null;
+	monto: number | null;
+	url: string;
+	nombre_archivo: string | null;
+}
+
+export async function getComprobantesPago(client: SupabaseClient, idTransaccion: number): Promise<ComprobantePago[]> {
+	const { data, error } = await client
+		.from('transaccion_comprobante_pago')
+		.select('*')
+		.eq('id_transaccion', idTransaccion)
+		.order('id_comprobante_pago');
+	if (error) throw error;
+	return (data ?? []) as ComprobantePago[];
+}
+
+/** Sustituye TODOS los comprobantes de pago de una transacción por los actuales (borra + reinserta) —
+ * mismo criterio que sincronizarDetalleCategoria: se editan siempre completos desde la tabla del modal
+ * (agregar/quitar archivos), no fila por fila contra el servidor. Los archivos en Google Drive de los
+ * comprobantes quitados se borran aparte, ANTES de llamar a esto (ver handleSubmit en
+ * TransaccionModal.svelte) — acá solo se sincroniza la tabla de metadatos. */
+export async function sincronizarComprobantesPago(client: SupabaseClient, idTransaccion: number, filas: ComprobantePago[]): Promise<void> {
+	const { error: deleteError } = await client.from('transaccion_comprobante_pago').delete().eq('id_transaccion', idTransaccion);
+	if (deleteError) {
+		console.error('[transacciones.service] No se pudo limpiar los comprobantes de pago anteriores:', deleteError);
+		return;
+	}
+	if (filas.length === 0) return;
+
+	const rows = filas.map((f) => ({
+		id_transaccion: idTransaccion,
+		tipo_documento: f.tipo_documento || null,
+		num_documento: f.num_documento || null,
+		monto: f.monto ?? null,
+		url: f.url,
+		nombre_archivo: f.nombre_archivo || null
+	}));
+	const { error: insertError } = await client.from('transaccion_comprobante_pago').insert(rows);
+	if (insertError) {
+		console.error('[transacciones.service] No se pudo guardar los comprobantes de pago:', insertError);
 	}
 }
 
