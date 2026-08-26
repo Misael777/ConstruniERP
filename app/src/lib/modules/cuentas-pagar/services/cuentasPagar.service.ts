@@ -945,16 +945,26 @@ export interface CuentaPagarVinculable {
  * Busca cuentas por pagar con saldo pendiente para vincular una transacción manual (ver
  * TransaccionModal.svelte, buscador "Vincular con Cuenta por Pagar" del alta libre de Transacciones —
  * reemplaza al viejo campo de texto "Número de Cuota", que no tenía uso real fuera del flujo de
- * confirmar un pago). Trae todas las cuentas activas con saldo pendiente (mismo criterio de volumen
- * que getTransaccionesCalendario: instantáneo al tamaño actual del ERP) y filtra en el cliente por
+ * confirmar un pago). `idCentroCosto` es obligatorio en la práctica — a pedido del usuario, el
+ * buscador solo debe ofrecer cuentas del MISMO centro de costo elegido en la transacción (el origen,
+ * que es el que paga), para no poder vincular el gasto de un proyecto contra el presupuesto de otro.
+ * Trae todas las cuentas activas con saldo pendiente de ese centro (mismo criterio de volumen que
+ * getTransaccionesCalendario: instantáneo al tamaño actual del ERP) y filtra en el cliente por
  * proveedor/N° de documento/id, porque el proveedor vive en una tabla unida y PostgREST no permite un
  * OR de texto libre entre columnas de dos tablas distintas sin un RPC aparte.
  */
-export async function buscarCuentasPagarVinculables(client: SupabaseClient, query: string): Promise<CuentaPagarVinculable[]> {
+export async function buscarCuentasPagarVinculables(
+	client: SupabaseClient,
+	query: string,
+	idCentroCosto: number | null
+): Promise<CuentaPagarVinculable[]> {
+	if (!idCentroCosto) return [];
+
 	const { data, error } = await client
 		.from(TABLE_NAME)
 		.select('id_cuenta_pagar, num_documento, saldo_pendiente, proveedor(razon_social)')
 		.eq('activo', true)
+		.eq('id_centro_costo', idCentroCosto)
 		.gt('saldo_pendiente', 0)
 		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
 	if (error) throw error;
