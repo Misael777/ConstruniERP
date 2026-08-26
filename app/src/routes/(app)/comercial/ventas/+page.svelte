@@ -225,6 +225,8 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			tipo_transaccion: null,
 			num_operacion: null,
 			tipo_gasto: null,
+			num_comprobante_interno: null,
+			num_recibo_pago: null,
 			forma_pago: null,
 			descripcion: sugerida.descripcion,
 			tipo: 'egreso',

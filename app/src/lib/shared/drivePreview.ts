@@ -22,6 +22,32 @@ export function toDrivePreviewUrl(url: string | null | undefined): string {
 }
 
 /**
+ * Convierte una URL de Drive al endpoint REAL de descarga binaria — a pedido explícito del usuario, que
+ * reportó comprobantes descargados que se veían "en negro"/vacíos al abrirlos: `uc?export=download`
+ * (el formato guardado en BD) responde 303 y redirige a `drive.usercontent.google.com/download`, pero
+ * ese primer salto RECHAZA (403) cualquier request con encabezado `Origin` — exactamente lo que manda
+ * `fetch(..., {mode:'cors'})` desde el navegador — así que la descarga terminaba trayendo la página HTML
+ * de error, no el archivo. `usercontent.google.com/download` sí expone `Access-Control-Allow-Origin: *`
+ * (verificado con curl), así que DocumentPreviewModal.svelte debe pedir esta URL directo para descargar,
+ * no la de solo-vista-previa (esa, en cambio, es la correcta para el <iframe>, ver toDrivePreviewUrl).
+ */
+export function toDriveDirectDownloadUrl(url: string | null | undefined): string {
+	if (!url) return '';
+	try {
+		const u = new URL(url);
+		if (u.hostname.includes('drive.google.com') || u.hostname.includes('drive.usercontent.google.com')) {
+			const id = u.searchParams.get('id');
+			if (id) return `https://drive.usercontent.google.com/download?id=${id}&export=download`;
+			const m = u.pathname.match(/\/file\/d\/([^/]+)/);
+			if (m) return `https://drive.usercontent.google.com/download?id=${m[1]}&export=download`;
+		}
+		return url;
+	} catch {
+		return url;
+	}
+}
+
+/**
  * Convierte una URL de Drive a una miniatura real (`.../thumbnail?id=...&sz=w400`) que sí sirve como
  * `<img src>` — a diferencia de la URL de descarga directa (`uc?export=download`), que Drive a veces
  * responde con una página HTML intermedia en vez de los bytes de la imagen, dejando el `<img>` roto.

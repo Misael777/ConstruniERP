@@ -142,6 +142,23 @@ export async function renameDriveFileClient(fileId: string, newName: string): Pr
 	}
 }
 
+/** Downloads the REAL binary content of a Drive file via the authenticated API (same auth as
+ * uploadToDriveClient) — used only in Tauri, where there's no SvelteKit server to proxy through (see
+ * the GET handler on /api/upload-document/+server.ts, used instead in the browser build). The public
+ * download links (`uc?export=download`, `usercontent.google.com/download`) don't reliably send CORS
+ * headers for a browser-side fetch(), which is why this authenticated API call is used instead — same
+ * pattern already proven working for upload/rename/delete. */
+export async function downloadFromDriveClient(fileId: string): Promise<Blob> {
+	const accessToken = await getAccessToken();
+	const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+		headers: { Authorization: `Bearer ${accessToken}` }
+	});
+	if (!res.ok) {
+		throw new Error(`Google Drive download failed: ${await res.text()}`);
+	}
+	return res.blob();
+}
+
 /** Deletes a Drive file by id — used to remove a comprobante's previous file when it's replaced,
  * so re-uploads don't pile up as duplicates (see TransaccionModal.svelte). */
 export async function deleteDriveFileClient(fileId: string): Promise<void> {

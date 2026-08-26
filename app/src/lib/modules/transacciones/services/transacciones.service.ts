@@ -83,6 +83,14 @@ export interface Transaccion {
 	/** Sub-tipo de gasto — solo aplica a Egreso en proyectos de Obra (ver TIPOS_GASTO_OBRA en
 	 * TransaccionModal.svelte). Ver transaccion_tipo_gasto_migration.sql. */
 	tipo_gasto: string | null;
+	/** Correlativo del PDF "RECIBO - TRANSFERENCIA INTERNA" (ver comprobanteTransferenciaInterna.ts) —
+	 * solo aplica a transacciones con tipo_alcance='interna'; se asigna UNA sola vez al crearse (no
+	 * cambia si se edita después). Ver transaccion_num_comprobante_interno_migration.sql. */
+	num_comprobante_interno: number | null;
+	/** Correlativo del PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — solo aplica a transacciones
+	 * Externa+Ingreso+Efectivo; se asigna UNA sola vez al generarse el recibo (no cambia si se edita
+	 * después). Ver transaccion_num_recibo_pago_migration.sql. */
+	num_recibo_pago: number | null;
 	forma_pago: string | null;
 	descripcion: string | null;
 	tipo: string | null;
@@ -361,9 +369,11 @@ export async function createTransaccion(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 	// comprobante_url no vive en FIELDS_CONFIG (lo sube TransaccionModal.svelte a Google Drive antes de
-	// llamar aquí, ver uploadComprobante) — toda transacción debe tener uno, se valida server-side
-	// también por si algún día se llama a esto desde otro lado que no sea ese modal.
-	if (!payload.comprobante_url) {
+	// llamar aquí, ver uploadComprobante) — toda transacción Externa debe tener uno, se valida
+	// server-side también por si algún día se llama a esto desde otro lado que no sea ese modal. Una
+	// transacción Interna emite su propio comprobante oficial (ver comprobanteTransferenciaInterna.ts)
+	// y no requiere este adjunto — mismo criterio que el chequeo client-side en TransaccionModal.svelte.
+	if (payload.tipo_alcance !== 'interna' && !payload.comprobante_url) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
@@ -381,6 +391,13 @@ export async function createTransaccion(
 		// factura_url tampoco vive en FIELDS_CONFIG (mismo criterio que comprobante_url) — a diferencia
 		// de ese, es opcional, así que null es un valor válido, no solo string.
 		factura_url: (payload.factura_url as string | null) ?? null,
+		// N° del PDF "RECIBO - TRANSFERENCIA INTERNA" (ver comprobanteTransferenciaInterna.ts y el botón
+		// "Autogenerar Boucher de Transferencia" en TransaccionModal.svelte) — tampoco vive en
+		// FIELDS_CONFIG; null si el botón nunca se presionó para esta transacción.
+		num_comprobante_interno: (payload.num_comprobante_interno as number | null) ?? null,
+		// N° del PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — tampoco vive en FIELDS_CONFIG; null
+		// si el popup "Autogenerar Boucher de Transferencia" nunca se completó para esta transacción.
+		num_recibo_pago: (payload.num_recibo_pago as number | null) ?? null,
 		// estado tampoco vive en FIELDS_CONFIG (showInForm:false) — ver resolveEstadoTransaccion.
 		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
 	};
@@ -401,7 +418,7 @@ export async function updateTransaccion(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
-	if (!payload.comprobante_url) {
+	if (payload.tipo_alcance !== 'interna' && !payload.comprobante_url) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
@@ -418,6 +435,8 @@ export async function updateTransaccion(
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	updateData.comprobante_url = payload.comprobante_url as string;
 	updateData.factura_url = (payload.factura_url as string | null) ?? null;
+	updateData.num_comprobante_interno = (payload.num_comprobante_interno as number | null) ?? null;
+	updateData.num_recibo_pago = (payload.num_recibo_pago as number | null) ?? null;
 	updateData.estado = resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), actual?.estado);
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
@@ -1007,6 +1026,38 @@ export async function sincronizarDetalleCategoria(client: SupabaseClient, idTran
 	if (insertError) {
 		console.error('[transacciones.service] No se pudo guardar el detalle de categoría:', insertError);
 	}
+}
+
+/** Siguiente correlativo para el PDF "RECIBO - TRANSFERENCIA INTERNA" (ver
+ * comprobanteTransferenciaInterna.ts) — MAX(num_comprobante_interno) + 1, mismo criterio pragmático que
+ * generarCodigoCentroCostoManual (centroCostos.service.ts) para el resto de correlativos de este ERP:
+ * no usa una SEQUENCE de Postgres para no depender de una función RPC aparte. Empieza en 1 si todavía
+ * no hay ninguno asignado. */
+export async function getSiguienteNumeroComprobanteInterno(client: SupabaseClient): Promise<number> {
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_comprobante_interno')
+		.not('num_comprobante_interno', 'is', null)
+		.order('num_comprobante_interno', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+	if (error) throw error;
+	return (data?.num_comprobante_interno ?? 0) + 1;
+}
+
+/** Siguiente correlativo para el PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — mismo criterio
+ * pragmático que getSiguienteNumeroComprobanteInterno (MAX + 1, sin SEQUENCE de Postgres). Empieza en 1
+ * si todavía no hay ninguno asignado. */
+export async function getSiguienteNumeroReciboPago(client: SupabaseClient): Promise<number> {
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_recibo_pago')
+		.not('num_recibo_pago', 'is', null)
+		.order('num_recibo_pago', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+	if (error) throw error;
+	return (data?.num_recibo_pago ?? 0) + 1;
 }
 
 export interface ComprobantePago {

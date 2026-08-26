@@ -125,6 +125,28 @@ export async function renameDriveFile(fileId: string, newName: string): Promise<
 }
 
 /**
+ * Trae el CONTENIDO binario real de un archivo de Drive — a pedido explícito del usuario: los enlaces
+ * públicos de Drive (`uc?export=download`, `usercontent.google.com/download`) no garantizan el
+ * encabezado CORS de forma confiable cuando se piden con fetch() desde el navegador (a veces sí, a
+ * veces "blocked by CORS policy"), así que la descarga con nombre de archivo personalizado dejó de
+ * funcionar. Esto en cambio pasa por ESTE servidor (server-to-server con Google, sin CORS de por
+ * medio) usando la misma autenticación que ya usa uploadToDrive/renameDriveFile/deleteDriveFile —
+ * confiable, ya probada. El endpoint GET de +server.ts la usa para servirle el archivo al navegador
+ * con el Content-Disposition que arma el nombre exacto que se quiere.
+ */
+export async function downloadDriveFile(fileId: string): Promise<{ body: ReadableStream<Uint8Array> | null; contentType: string }> {
+	const accessToken = await getDriveAccessToken();
+	const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+		headers: { Authorization: `Bearer ${accessToken}` }
+	});
+	if (!response.ok) {
+		const errorBody = await response.text();
+		throw new Error(`Google Drive download failed: ${errorBody}`);
+	}
+	return { body: response.body, contentType: response.headers.get('Content-Type') || 'application/octet-stream' };
+}
+
+/**
  * Borra un archivo de Drive por su id — usado para quitar el comprobante anterior de una transacción
  * cuando se reemplaza por uno nuevo, para no dejar duplicados (ver TransaccionModal.svelte).
  */

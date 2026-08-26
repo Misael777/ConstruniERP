@@ -27,8 +27,13 @@
 		type DetalleCategoria,
 		getComprobantesPago,
 		sincronizarComprobantesPago,
-		type ComprobantePago
+		type ComprobantePago,
+		getSiguienteNumeroComprobanteInterno,
+		getSiguienteNumeroReciboPago
 	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { generarComprobanteTransferenciaInternaBase64 } from '$lib/shared/comprobanteTransferenciaInterna';
+	import { generarReciboPagoBase64 } from '$lib/shared/reciboPagoEfectivo';
+	import ReciboPagoModal, { type DatosPopupReciboPago } from '$lib/modules/transacciones/components/ReciboPagoModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
@@ -343,6 +348,8 @@
 			categoriaCorpGrupo = '';
 			categoriaConsultoriaGrupo = '';
 			catalogoAbiertoAuto = false;
+			comprobanteInternoNumero = transaccion?.num_comprobante_interno ?? null;
+			numeroReciboPago = transaccion?.num_recibo_pago ?? null;
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -658,6 +665,121 @@
 		if (claseDestino === 'empleados') return 'Empleado';
 		if (claseDestino === 'cliente') return 'Cliente';
 		return labelFor(destinoField);
+	}
+	/** Los labels de Origen/Destino vienen como "código - nombre" (ver centroCostoOptionLabel en
+	 * transacciones.service.ts) — separa las dos partes para el comprobante de transferencia interna
+	 * (ver comprobanteTransferenciaInterna.ts), que las muestra en líneas distintas. */
+	function separarCodigoNombre(label: string): [string, string] {
+		const idx = label.indexOf(' - ');
+		return idx === -1 ? [label, ''] : [label.slice(0, idx), label.slice(idx + 3)];
+	}
+
+	// Botón "Autogenerar Boucher de Transferencia" (a pedido explícito del usuario, con imagen de
+	// referencia) — solo para Alcance=Interna, en el área 1 junto al comprobante. A diferencia del
+	// diseño anterior (se emitía SOLO al guardar), ahora el PDF se genera y descarga EN EL MOMENTO que
+	// se presiona el botón, esté o no guardada todavía la transacción. El N° de comprobante se pide una
+	// sola vez (la primera vez que se presiona para esta transacción) y se reusa en cualquier descarga
+	// posterior — recién se persiste en la BD al guardar (ver payload en handleSubmit), para no gastar
+	// un correlativo si el usuario nunca llega a guardar.
+	let comprobanteInternoNumero = $state<number | null>(null);
+	let generandoComprobanteInterno = $state(false);
+	async function handleGenerarBoucherTransferencia() {
+		generandoComprobanteInterno = true;
+		try {
+			let numero = comprobanteInternoNumero;
+			if (!numero) {
+				numero = await getSiguienteNumeroComprobanteInterno(supabase);
+				comprobanteInternoNumero = numero;
+			}
+
+			const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
+			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+			const [origenCodigo, origenNombre] = separarCodigoNombre(origenLabel);
+			const [destinoCodigo, destinoNombre] = separarCodigoNombre(destinoLabel);
+
+			const base64 = generarComprobanteTransferenciaInternaBase64({
+				numero,
+				fecha: formValues.fecha,
+				origenCodigo,
+				origenNombre,
+				destinoCodigo,
+				destinoNombre,
+				monto: Number(formValues.monto_total) || 0,
+				concepto: formValues.descripcion || '',
+				usuario: permisosState.userName || 'Usuario'
+			});
+			await guardarArchivoBinario(base64, `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`, 'application/pdf');
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo generar el boucher de transferencia:', err);
+			toast.error('No se pudo generar el boucher de transferencia.');
+		} finally {
+			generandoComprobanteInterno = false;
+		}
+	}
+
+	// Popup "Autogenerar Boucher de Transferencia" para Externa+Ingreso+Efectivo (a pedido explícito del
+	// usuario, con imagen de referencia) — a diferencia de Interna (que genera directo al presionar el
+	// botón), este caso necesita datos que no están en el formulario principal (cliente que paga, quien
+	// recibe el efectivo, ambas firmas manuscritas — ver ReciboPagoModal.svelte), así que el botón abre
+	// un popup en vez de generar de inmediato. Mismo criterio de correlativo que comprobanteInternoNumero:
+	// se pide una sola vez y se reusa en cualquier regeneración posterior.
+	const mostrarBotonReciboPago = $derived(
+		formValues.tipo_alcance === 'externa' &&
+			formValues.tipo === 'ingreso' &&
+			formValues.forma_pago === '1' && // '1' = Contado (ver FIELDS_CONFIG)
+			formValues.medio_pago === '1' // '1' = Efectivo (ver FIELDS_CONFIG)
+	);
+	let reciboPagoModalOpen = $state(false);
+	let numeroReciboPago = $state<number | null>(null);
+	let generandoReciboPago = $state(false);
+
+	async function handleGenerarReciboPago(datos: DatosPopupReciboPago) {
+		generandoReciboPago = true;
+		try {
+			let numero = numeroReciboPago;
+			if (!numero) {
+				numero = await getSiguienteNumeroReciboPago(supabase);
+				numeroReciboPago = numero;
+			}
+
+			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+			const [proyectoCodigo, proyectoNombre] = separarCodigoNombre(destinoLabel);
+
+			const base64 = generarReciboPagoBase64({
+				numero,
+				fecha: formValues.fecha,
+				proyectoCodigo,
+				proyectoNombre,
+				monto: Number(formValues.monto_total) || 0,
+				concepto: datos.concepto,
+				clienteNombre: datos.clienteNombre,
+				clienteDni: datos.clienteDni,
+				firmaClienteDataUrl: datos.firmaClienteDataUrl,
+				receptorNombre: datos.receptorNombre,
+				receptorDni: datos.receptorDni,
+				firmaReceptorDataUrl: datos.firmaReceptorDataUrl
+			});
+			await guardarArchivoBinario(base64, `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`, 'application/pdf');
+			reciboPagoModalOpen = false;
+
+			// Si ya existe la fila (edición), se persiste el correlativo de una vez para que quede
+			// consistente con el número impreso — igual que handleGenerarBoucherTransferencia con
+			// comprobanteInternoNumero. En 'create' (todavía sin guardar) el número viaja en el payload
+			// principal cuando el usuario presione "Crear" (ver handleSubmit).
+			if (mode === 'edit' && transaccion) {
+				await updateTransaccion(
+					supabase,
+					transaccion.id_transaccion,
+					{ ...formValues, comprobante_url: comprobanteUrl, num_comprobante_interno: comprobanteInternoNumero, num_recibo_pago: numero },
+					isAdmin()
+				);
+			}
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo generar el recibo de pago:', err);
+			toast.error('No se pudo generar el recibo de pago.');
+		} finally {
+			generandoReciboPago = false;
+		}
 	}
 	/** Convierte un texto plano en un PDF de una o más páginas (ajustando el salto de línea al ancho de
 	 * hoja) y lo devuelve en base64, listo para guardarArchivoBinario (mismo helper multiplataforma que
@@ -1292,10 +1414,19 @@
 			return;
 		}
 		revalidate();
-		if (hasErrors) return;
+		if (hasErrors) {
+			toast.error('Revisa los campos marcados en rojo antes de guardar.');
+			return;
+		}
 
-		if (!comprobanteFile && !comprobanteUrl) {
+		// Una transacción Interna emite su propio comprobante oficial (el "RECIBO - TRANSFERENCIA
+		// INTERNA" autogenerado, ver handleGenerarBoucherTransferencia) — a diferencia de una Externa, no
+		// requiere que el usuario adjunte además una foto/PDF de respaldo. Antes este chequeo era
+		// incondicional y bloqueaba el guardado sin ningún aviso visible (solo un texto rojo pequeño bajo
+		// el dropzone), lo que hacía parecer que el botón "Crear" no hacía nada.
+		if (formValues.tipo_alcance !== 'interna' && !comprobanteFile && !comprobanteUrl) {
 			comprobanteError = 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.';
+			toast.error(comprobanteError);
 			return;
 		}
 
@@ -1324,7 +1455,15 @@
 				}
 			}
 
-			const payload = { ...formValues, comprobante_url: finalComprobanteUrl };
+			// num_comprobante_interno: solo viaja si el botón "Autogenerar Boucher de Transferencia" ya
+			// se presionó al menos una vez (ver comprobanteInternoNumero/handleGenerarBoucherTransferencia
+			// más arriba) — si nunca se presionó, se guarda null (no se emitió ningún comprobante).
+			const payload = {
+				...formValues,
+				comprobante_url: finalComprobanteUrl,
+				num_comprobante_interno: comprobanteInternoNumero,
+				num_recibo_pago: numeroReciboPago
+			};
 
 			let result;
 			if (onConfirm) {
@@ -1429,6 +1568,28 @@
 					toast.error('No se pudieron guardar los comprobantes de la sección "Comprobantes" — revisa la consola (F12) para más detalle.');
 				} finally {
 					uploadingComprobantesPago = false;
+				}
+
+				// A pedido explícito del usuario: "cuando cree la transferencia, tengo que poder descargar el
+				// boucher de transferencia autogenerado" — al crear (no al editar) una transacción interna se
+				// genera y descarga el comprobante automáticamente, se haya presionado o no el botón manual
+				// "Autogenerar Boucher de Transferencia" (que sigue disponible para volver a descargarlo
+				// después). Si el botón nunca se presionó, el correlativo recién se asigna acá — se persiste
+				// en la fila ya creada para que quede consistente con el número impreso en el PDF descargado.
+				if (mode === 'create' && formValues.tipo_alcance === 'interna') {
+					try {
+						const idParaVoucher = (result.data as any)?.id_transaccion;
+						await handleGenerarBoucherTransferencia();
+						// OJO: updateTransaccion valida TODOS los campos obligatorios del payload que recibe (ver
+						// validatePayload en fieldConfig.ts) — pasar solo { num_comprobante_interno } fallaba la
+						// validación de todos los demás campos obligatorios y no actualizaba nada (el error quedaba
+						// silenciado por el catch de abajo). Se reusa el `payload` completo ya armado arriba.
+						if (idParaVoucher && comprobanteInternoNumero) {
+							await updateTransaccion(supabase, idParaVoucher, { ...payload, num_comprobante_interno: comprobanteInternoNumero }, isAdmin());
+						}
+					} catch (voucherErr) {
+						console.warn('[TransaccionModal] No se pudo autogenerar el boucher de transferencia interna:', voucherErr);
+					}
 				}
 
 				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
@@ -1636,7 +1797,8 @@
 								{@render fieldBlock(tipoField)}
 								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
-									Adjuntar boucher de pago <span class="text-red-500">*</span>
+									Adjuntar boucher de pago
+									{#if formValues.tipo_alcance !== 'interna'}<span class="text-red-500">*</span>{/if}
 								</label>
 								<label
 									for="tr-comprobante"
@@ -1678,6 +1840,8 @@
 										<p class="text-xs text-red-600">{comprobanteError}</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
+									{:else if formValues.tipo_alcance === 'interna'}
+										<p class="text-xs text-slate-400">Opcional: esta transacción ya emite su propio comprobante (ver botón abajo).</p>
 									{/if}
 								</div>
 								<input
@@ -1689,6 +1853,43 @@
 									disabled={bloqueadaPorAprobacion}
 									onchange={onComprobanteChange}
 								/>
+
+								<!-- Botón "Autogenerar Boucher de Transferencia" — a pedido explícito del usuario,
+								     según su imagen de referencia. Dos casos, con comportamiento distinto al
+								     presionarlo: Interna genera y descarga el PDF "RECIBO - TRANSFERENCIA INTERNA" EN
+								     EL MOMENTO (no hace falta guardar primero, ver handleGenerarBoucherTransferencia
+								     más arriba); Externa+Ingreso+Efectivo abre un popup a pedir los datos que le faltan
+								     (cliente, quien recibe, firmas — ver ReciboPagoModal.svelte) antes de generar el
+								     "RECIBO DE PAGO". -->
+								{#if formValues.tipo_alcance === 'interna'}
+									<button
+										type="button"
+										onclick={handleGenerarBoucherTransferencia}
+										disabled={generandoComprobanteInterno || bloqueadaPorAprobacion}
+										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
+									>
+										{#if generandoComprobanteInterno}
+											<Loader2 size={14} class="animate-spin shrink-0" />
+										{:else}
+											<FileText size={14} class="shrink-0" />
+										{/if}
+										Autogenerar Boucher de Transferencia
+									</button>
+								{:else if mostrarBotonReciboPago}
+									<button
+										type="button"
+										onclick={() => (reciboPagoModalOpen = true)}
+										disabled={generandoReciboPago || bloqueadaPorAprobacion}
+										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
+									>
+										{#if generandoReciboPago}
+											<Loader2 size={14} class="animate-spin shrink-0" />
+										{:else}
+											<FileText size={14} class="shrink-0" />
+										{/if}
+										Autogenerar Boucher de Transferencia
+									</button>
+								{/if}
 								</div>
 							</div>
 
@@ -2448,5 +2649,13 @@
 	url={previewComprobantePago?.file ? URL.createObjectURL(previewComprobantePago.file) : (previewComprobantePago?.url ?? null)}
 	title={previewComprobantePago?.nombre_archivo ?? 'Comprobante'}
 	onClose={() => (previewComprobantePago = null)}
+/>
+
+<ReciboPagoModal
+	open={reciboPagoModalOpen}
+	conceptoInicial={formValues.descripcion || ''}
+	generando={generandoReciboPago}
+	onCancel={() => (reciboPagoModalOpen = false)}
+	onGenerar={handleGenerarReciboPago}
 />
 

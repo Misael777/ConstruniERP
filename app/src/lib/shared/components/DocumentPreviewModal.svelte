@@ -5,7 +5,9 @@
 	// el padre (open/url/title/onClose como props), la conversión de la URL de Drive a su visor
 	// embebible y la descarga viven adentro para que cada llamador solo tenga que pasar la URL cruda.
 	import { toDrivePreviewUrl } from '$lib/shared/drivePreview';
-	import { isRunningInTauri } from '$lib/driveUploadClient';
+	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
+	import { isRunningInTauri, downloadFromDriveClient } from '$lib/driveUploadClient';
+	import { resolveApiUrl } from '$lib/apiClient';
 	import { toast } from '$lib/stores/toast';
 
 	let {
@@ -22,8 +24,11 @@
 		/** Cuando el documento tiene más de una versión asociada (ej. varias proformas de un proyecto,
 		 * o comprobante + factura de una transacción) — a pedido del usuario, se muestra un selector de
 		 * pastillas en la cabecera para cambiar entre ellas sin cerrar el popup. Con 0 o 1 elementos se
-		 * ignora por completo y el modal se comporta igual que antes, mostrando `url` directo. */
-		documents?: { url: string; label: string }[];
+		 * ignora por completo y el modal se comporta igual que antes, mostrando `url` directo. `filename`
+		 * es opcional: si el llamador ya arma un nombre completo por documento (ej. boucher vs. factura
+		 * de Transacciones, cada uno con su propia estructura de nombre) se usa tal cual al descargar en
+		 * vez del genérico `{title} - {label}`. */
+		documents?: { url: string; label: string; filename?: string }[];
 		/** Cuál de `documents` mostrar al abrir (ej. la proforma marcada como final, en vez de siempre
 		 * la primera de la lista). Se ignora si no hay `documents`. */
 		initialIndex?: number;
@@ -37,29 +42,23 @@
 
 	const activeDoc = $derived(documents.length > 0 ? documents[Math.min(selectedIndex, documents.length - 1)] : null);
 	const effectiveUrl = $derived(activeDoc ? activeDoc.url : url);
-	const downloadTitle = $derived(documents.length > 1 && activeDoc ? `${title} - ${activeDoc.label}` : title);
+	const downloadTitle = $derived(activeDoc?.filename ? activeDoc.filename : documents.length > 1 && activeDoc ? `${title} - ${activeDoc.label}` : title);
 	let previewUrl = $derived(toDrivePreviewUrl(effectiveUrl));
 
 	function sanitizeFilename(name: string) {
 		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
 	}
 
-	// A pedido del usuario: antes de descargar, pedir confirmación y (cuando la plataforma lo permite)
-	// dejar elegir la ruta de destino — en vez de descargar directo al hacer clic en el botón. Mientras
-	// descarga, el botón muestra un spinner y, si el servidor informa el tamaño del archivo (header
-	// Content-Length — no siempre viene, depende de cómo responda Drive), una barra de progreso real
-	// (downloadProgress) en vez de solo un spinner indeterminado.
+	// A pedido del usuario: antes de descargar, pedir confirmación — en vez de descargar directo al
+	// hacer clic en el botón.
 	let showDownloadConfirm = $state(false);
 	let isDownloading = $state(false);
-	let downloadProgress = $state<number | null>(null);
-	let downloadError = $state('');
 
 	function requestDownload() {
-		if (!previewUrl) {
+		if (!effectiveUrl) {
 			alert('URL no disponible para descargar');
 			return;
 		}
-		downloadError = '';
 		showDownloadConfirm = true;
 	}
 
@@ -67,93 +66,58 @@
 		showDownloadConfirm = false;
 	}
 
-	/** Guarda un blob ya descargado en disco, con ruta elegida por el usuario cuando la plataforma lo
-	 * permite: en Tauri (Windows/Android) usa el diálogo nativo "Guardar como" (@tauri-apps/plugin-dialog
-	 * + escritura binaria de @tauri-apps/plugin-fs, mismo patrón que guardarArchivoDeTexto.ts para el
-	 * CSV de Ventas, adaptado a binario). En navegador, si soporta el selector de archivos nativo
-	 * (Chrome/Edge de escritorio) lo usa para elegir la ruta real; si no, cae al Blob + `<a download>`
-	 * de siempre, que el navegador guarda según su propia configuración de descargas. */
-	async function guardarBinario(blob: Blob, filename: string): Promise<void> {
-		if (isRunningInTauri()) {
-			const { save } = await import('@tauri-apps/plugin-dialog');
-			const { writeFile } = await import('@tauri-apps/plugin-fs');
-
-			const extension = filename.includes('.') ? filename.split('.').pop()! : 'pdf';
-			const path = await save({
-				defaultPath: filename,
-				filters: [{ name: extension.toUpperCase(), extensions: [extension] }]
-			});
-			if (!path) return; // el usuario canceló el diálogo nativo — no es un error
-
-			const buffer = new Uint8Array(await blob.arrayBuffer());
-			await writeFile(path, buffer);
-			return;
-		}
-
-		const picker = (window as any).showSaveFilePicker;
-		if (typeof picker === 'function') {
-			try {
-				const handle = await picker({ suggestedName: filename });
-				const writable = await handle.createWritable();
-				await writable.write(blob);
-				await writable.close();
-				return;
-			} catch (err: any) {
-				if (err?.name === 'AbortError') return; // el usuario canceló el selector nativo
-				console.warn('[DocumentPreviewModal] showSaveFilePicker falló, uso el flujo clásico', err);
-			}
-		}
-
-		const objUrl = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = objUrl;
-		a.download = filename;
-		document.body.appendChild(a);
-		a.click();
-		a.remove();
-		URL.revokeObjectURL(objUrl);
+	function extensionPorContentType(contentType: string | null): string {
+		if (!contentType) return 'pdf';
+		if (contentType.includes('png')) return 'png';
+		if (contentType.includes('jpeg') || contentType.includes('jpg')) return 'jpg';
+		if (contentType.includes('webp')) return 'webp';
+		return 'pdf';
 	}
 
+	/** A pedido explícito del usuario: los enlaces públicos de Drive (`uc?export=download`,
+	 * `usercontent.google.com/download`) no garantizan CORS de forma confiable para fetch() desde el
+	 * navegador (a veces sí, a veces "blocked by CORS policy") — y una simple navegación directa a
+	 * esos enlaces SÍ descarga sin problema, pero pierde el control del nombre de archivo (Drive decide
+	 * el suyo). Para tener las dos cosas (descarga confiable Y nombre propio) se usa la MISMA vía
+	 * autenticada que ya usa el resto de la app para subir/renombrar/borrar en Drive — sin CORS de por
+	 * medio porque en el navegador pasa por este mismo servidor (GET /api/upload-document, server-to-
+	 * server con Google) y en Tauri es una llamada directa autenticada (ver downloadFromDriveClient). */
 	async function confirmDownload() {
 		showDownloadConfirm = false;
-		if (!previewUrl) return;
+		if (!effectiveUrl) return;
 
-		const filename = sanitizeFilename(downloadTitle) + '.pdf';
+		const fileId = extractDriveFileId(effectiveUrl);
+		if (!fileId) {
+			toast.error('No se pudo determinar el archivo a descargar.');
+			return;
+		}
+		const nombreBase = sanitizeFilename(downloadTitle);
+
 		isDownloading = true;
-		downloadProgress = null;
-		downloadError = '';
 		try {
-			const res = await fetch(previewUrl, { mode: 'cors' });
-			if (!res.ok || !res.body) throw new Error('Fetch failed');
-
-			// Streaming manual (en vez de res.blob() directo) para poder reportar progreso en el camino —
-			// si el header no trae el tamaño total, downloadProgress se queda en null y el botón solo
-			// muestra el spinner (progreso indeterminado), sin barra.
-			const totalStr = res.headers.get('Content-Length');
-			const total = totalStr ? Number(totalStr) : 0;
-			const reader = res.body.getReader();
-			const chunks: BlobPart[] = [];
-			let recibido = 0;
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				if (value) {
-					chunks.push(value);
-					recibido += value.byteLength;
-					if (total > 0) downloadProgress = Math.round((recibido / total) * 100);
-				}
+			if (isRunningInTauri()) {
+				const blob = await downloadFromDriveClient(fileId);
+				const { save } = await import('@tauri-apps/plugin-dialog');
+				const { writeFile } = await import('@tauri-apps/plugin-fs');
+				const extension = extensionPorContentType(blob.type);
+				const filename = `${nombreBase}.${extension}`;
+				const path = await save({ defaultPath: filename, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
+				if (!path) return; // el usuario canceló el diálogo nativo
+				await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+				toast.success(`Se guardó en: ${path}`);
+			} else {
+				// Same-origin: el navegador descarga sin ningún problema de CORS, con el nombre que arma
+				// el servidor (ver GET en upload-document/+server.ts, que ya sabe la extensión real).
+				const downloadEndpoint = resolveApiUrl(`/api/upload-document?fileId=${encodeURIComponent(fileId)}&filename=${encodeURIComponent(nombreBase)}`);
+				window.open(downloadEndpoint, '_blank', 'noopener');
+				toast.success('Descarga iniciada — revisa la carpeta de Descargas o la barra de descargas de tu navegador.');
 			}
-
-			const blob = new Blob(chunks);
-			await guardarBinario(blob, filename);
-			toast.success(`"${downloadTitle}" se descargó correctamente.`);
 		} catch (err) {
-			console.warn('[DocumentPreviewModal] descarga por fetch falló, abriendo en nueva pestaña', err);
+			console.warn('[DocumentPreviewModal] Descarga vía API de Drive falló, abriendo en nueva pestaña', err);
 			toast.info('No se pudo descargar directamente — se abrió en una nueva pestaña.');
 			window.open(previewUrl, '_blank', 'noopener');
 		} finally {
 			isDownloading = false;
-			downloadProgress = null;
 		}
 	}
 </script>
@@ -203,15 +167,6 @@
 				</div>
 			</div>
 
-			<!-- Barra de progreso — solo aparece si el servidor informó el tamaño del archivo
-			     (downloadProgress !== null); archivos sin Content-Length quedan con el spinner del botón de
-			     arriba como único indicador (progreso indeterminado). -->
-			{#if isDownloading && downloadProgress !== null}
-				<div class="h-1 bg-slate-100 flex-shrink-0">
-					<div class="h-full bg-blue-500 transition-all duration-150" style={`width: ${downloadProgress}%`}></div>
-				</div>
-			{/if}
-
 			<div class="flex-1 overflow-hidden bg-slate-100">
 				{#if previewUrl}
 					<iframe
@@ -245,11 +200,12 @@
 			>
 				<h3 id="download-confirm-title" class="text-base font-semibold text-slate-800 mb-1">Descargar documento</h3>
 				<p class="text-sm text-slate-600 mb-4">
-					¿Deseas descargar <strong>{sanitizeFilename(downloadTitle)}.pdf</strong>?
+					¿Deseas descargar <strong>{sanitizeFilename(downloadTitle)}</strong>?
 					{#if isRunningInTauri()}
 						Se abrirá un diálogo para que elijas dónde guardarlo.
 					{:else}
-						Si tu navegador lo permite, podrás elegir la carpeta de destino; si no, se guardará en tu carpeta de Descargas.
+						Se guardará en tu carpeta de Descargas (o donde tu navegador esté configurado para
+						guardar descargas).
 					{/if}
 				</p>
 				<div class="flex justify-end gap-2">

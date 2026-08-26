@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { supabase } from '$lib/server/supabase';
 import { safeEndpoint } from '$lib/server/safeEndpoint';
-import { uploadToDrive, renameDriveFile, deleteDriveFile } from '$lib/server/config';
+import { uploadToDrive, renameDriveFile, deleteDriveFile, downloadDriveFile } from '$lib/server/config';
 import { sanitizeFileSegment, generateUniqueFileName } from '$lib/shared/fileNaming';
 
 const handler: RequestHandler = async ({ request }) => {
@@ -78,6 +78,41 @@ const handler: RequestHandler = async ({ request }) => {
 };
 
 export const POST = safeEndpoint(handler);
+
+/** Extensión según el Content-Type real que devuelve Drive — el cliente (DocumentPreviewModal.svelte)
+ * solo conoce el nombre BASE que quiere (su convención propia, ej. "F001-00123_TRANSACCION..."), no la
+ * extensión real del archivo, así que ese cálculo se hace acá, del lado del servidor, que sí tiene el
+ * Content-Type verdadero. */
+function extensionPorContentType(contentType: string): string {
+	if (contentType.includes('png')) return 'png';
+	if (contentType.includes('jpeg') || contentType.includes('jpg')) return 'jpg';
+	if (contentType.includes('webp')) return 'webp';
+	return 'pdf';
+}
+
+/** Sirve el contenido REAL de un archivo de Drive con un `Content-Disposition` que fuerza el nombre de
+ * descarga exacto que arma el cliente (ver DocumentPreviewModal.svelte) — a pedido explícito del
+ * usuario, reemplaza enlazar directo a Drive (`uc?export=download`), que Google no garantiza servir
+ * con CORS habilitado desde fetch() del navegador. Al ser same-origin (este mismo servidor), el
+ * navegador descarga sin ningún problema de CORS, y respeta el nombre que le pasamos. */
+const getHandler: RequestHandler = async ({ url }) => {
+	const fileId = url.searchParams.get('fileId');
+	const nombreBase = (url.searchParams.get('filename') || 'documento').replace(/["\\]/g, '_');
+	if (!fileId) {
+		return json({ success: false, error: 'fileId es requerido.' }, { status: 400 });
+	}
+
+	const { body, contentType } = await downloadDriveFile(fileId);
+	const filename = `${nombreBase}.${extensionPorContentType(contentType)}`;
+	return new Response(body, {
+		headers: {
+			'Content-Type': contentType,
+			'Content-Disposition': `attachment; filename="${filename}"`
+		}
+	});
+};
+
+export const GET = safeEndpoint(getHandler);
 
 /** Renombra un archivo ya subido — ver renameDriveFile en $lib/server/config.ts. */
 const patchHandler: RequestHandler = async ({ request }) => {

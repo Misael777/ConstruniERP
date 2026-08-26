@@ -154,13 +154,13 @@
 	// cabecera para elegir cuál ver/descargar cuando hay más de uno (a pedido del usuario).
 	let previewOpen = $state(false);
 	let previewTitle = $state('');
-	let previewDocuments = $state<{ url: string; label: string }[]>([]);
+	let previewDocuments = $state<{ url: string; label: string; filename: string }[]>([]);
 	async function openComprobantePreview(item: Transaccion) {
 		previewDocuments = [
-			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Boucher' }] : []),
-			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta' }] : [])
+			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Boucher', filename: nombreArchivoBoucher(item) }] : []),
+			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta', filename: nombrePdfTransaccion(item) }] : [])
 		];
-		previewTitle = nombrePdfTransaccion(item);
+		previewTitle = `Documentos - ${item.num_documento || 'Transacción'}`;
 		previewOpen = true;
 
 		try {
@@ -172,7 +172,8 @@
 					label:
 						[c.tipo_documento ? getOptionLabel(tipoDocumentoField, c.tipo_documento) : null, c.num_documento].filter(Boolean).join(' ') ||
 						c.nombre_archivo ||
-						`Comprobante ${i + 1}`
+						`Comprobante ${i + 1}`,
+					filename: nombrePdfTransaccion(item, c.num_documento)
 				}))
 			];
 		} catch (err) {
@@ -180,14 +181,34 @@
 		}
 	}
 
-	/** Nombre del PDF al descargar desde el ojito de la lista (ver DocumentPreviewModal, que arma el
-	 * archivo final como `{este título} - {label del documento}.pdf` si hay más de uno) — a pedido
-	 * explícito del usuario, el orden de los segmentos cambia según el tipo. PENDIENTE (nota del
-	 * usuario): definir qué va en N° de Operación cuando el Medio de Pago es Efectivo — hoy ese
-	 * segmento queda vacío si la transacción no tiene uno guardado. */
-	function nombrePdfTransaccion(item: Transaccion): string {
-		const fecha = item.fecha || '';
-		const numDocumento = item.num_documento || '';
+	/** `item.fecha` se guarda como 'YYYY-MM-DD' — para el nombre del PDF, a pedido explícito del usuario
+	 * (ejemplo: "..._12_01_2026"), se reordena a 'DD_MM_YYYY'. */
+	function fechaParaNombreArchivo(fecha: string | null | undefined): string {
+		const partes = (fecha ?? '').split('-');
+		if (partes.length !== 3) return fecha ?? '';
+		const [yyyy, mm, dd] = partes;
+		return `${dd}_${mm}_${yyyy}`;
+	}
+
+	/** Nombre del PDF al descargar el Boucher (el comprobante principal, área 1 del formulario) — a
+	 * pedido explícito del usuario, estructura propia, distinta de la Factura/Comprobantes de pago (ver
+	 * nombrePdfTransaccion): Fecha_N° de Operación_N° de Transacción. */
+	function nombreArchivoBoucher(item: Transaccion): string {
+		return `${fechaParaNombreArchivo(item.fecha)}_${item.num_operacion || ''}_${item.id_transaccion}`;
+	}
+
+	/** Nombre del PDF al descargar una Factura/boleta o un comprobante de la sección "Comprobantes" —
+	 * a pedido explícito del usuario, el orden de los segmentos cambia según el tipo de transacción.
+	 * PENDIENTE (nota del usuario): definir qué va en N° de Operación cuando el Medio de Pago es
+	 * Efectivo — hoy ese segmento queda vacío si la transacción no tiene uno guardado. */
+	/** `numDocumentoOverride` (a pedido explícito del usuario, corrigiendo un bug real): para un
+	 * comprobante de la sección "Comprobantes" hay que usar el N° de Documento PROPIO de esa fila (el
+	 * que reconoce el OCR o se escribe a mano ahí), no el de la transacción en general — ese campo ya
+	 * no se llena desde que Tipo de Documento/N° de Documento se sacaron de "Otros campos", así que
+	 * siempre salía vacío (el nombre del PDF quedaba con un guion bajo al inicio). */
+	function nombrePdfTransaccion(item: Transaccion, numDocumentoOverride?: string | null): string {
+		const fecha = fechaParaNombreArchivo(item.fecha);
+		const numDocumento = numDocumentoOverride || item.num_documento || '';
 		const numOperacion = item.num_operacion || '';
 		const etiquetaSistema = 'TRANSACCION GENERADA POR EL SISTEMA';
 		if (item.tipo === 'egreso') return `${fecha}_${numDocumento}_${etiquetaSistema}_${numOperacion}`;
