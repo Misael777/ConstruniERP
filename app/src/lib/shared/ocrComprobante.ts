@@ -198,14 +198,20 @@ export async function reconocerComprobantePago(file: File): Promise<ReconocerCom
 	}
 }
 
-/** Lee fecha, monto y N° de operación de una foto de comprobante de pago vía OCR (Tesseract.js) +
+/** Lee fecha, monto y N° de operación de una foto o PDF de comprobante de pago vía OCR (Tesseract.js) +
  * regex — ver "Fecha (reconocida)"/"Monto (reconocido)"/"N° de Operación (reconocido)" en
- * TransaccionModal.svelte. `file` debe ser una imagen (image/*); PDFs no se procesan acá (mismo
- * límite que tenía la versión anterior). Nunca lanza — un fallo de reconocimiento no debe bloquear el
- * registro manual de la transacción. */
+ * TransaccionModal.svelte. Si `file` es un PDF (ej. el boucher de un banco exportado como PDF, o el
+ * "RECIBO - TRANSFERENCIA INTERNA"/"RECIBO DE PAGO" autogenerados), se renderiza su primera página a
+ * imagen (ver renderPdfFirstPageToDataUrl) antes de pasarla a Tesseract — mismo criterio que
+ * reconocerComprobantePago, que ya soportaba PDF; antes esta función SOLO procesaba imágenes y un PDF
+ * se descartaba en silencio (ver runOcr en TransaccionModal.svelte), dejando Fecha/Monto/N° de
+ * Operación sin ningún valor reconocido y sin ningún aviso al usuario. Nunca lanza — un fallo de
+ * reconocimiento no debe bloquear el registro manual de la transacción. */
 export async function reconocerComprobante(file: File): Promise<ReconocerComprobanteResult> {
 	try {
-		const { data } = await recognize(file, 'spa');
+		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
+		const { data } = await recognize(fuente, 'spa');
 		const texto = data.text || '';
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada boucher (en
 		// vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un boucher.

@@ -371,9 +371,10 @@ export async function createTransaccion(
 	// comprobante_url no vive en FIELDS_CONFIG (lo sube TransaccionModal.svelte a Google Drive antes de
 	// llamar aquí, ver uploadComprobante) — toda transacción Externa debe tener uno, se valida
 	// server-side también por si algún día se llama a esto desde otro lado que no sea ese modal. Una
-	// transacción Interna emite su propio comprobante oficial (ver comprobanteTransferenciaInterna.ts)
-	// y no requiere este adjunto — mismo criterio que el chequeo client-side en TransaccionModal.svelte.
-	if (payload.tipo_alcance !== 'interna' && !payload.comprobante_url) {
+	// transacción Interna emite su propio comprobante oficial (ver comprobanteTransferenciaInterna.ts),
+	// y una Externa+Ingreso+Efectivo con su "RECIBO DE PAGO" ya generado (ver reciboPagoEfectivo.ts,
+	// num_recibo_pago asignado) tampoco requiere este adjunto — mismo criterio que TransaccionModal.svelte.
+	if (payload.tipo_alcance !== 'interna' && !payload.num_recibo_pago && !payload.comprobante_url) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
@@ -403,7 +404,10 @@ export async function createTransaccion(
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
-	if (error) return { success: false, message: `No se pudo crear la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	if (error) {
+		console.error('[transacciones.service] Error crudo de Postgres al crear la transacción:', error, insertData);
+		return { success: false, message: `No se pudo crear la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	}
 
 	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
 }
@@ -418,7 +422,7 @@ export async function updateTransaccion(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
-	if (payload.tipo_alcance !== 'interna' && !payload.comprobante_url) {
+	if (payload.tipo_alcance !== 'interna' && !payload.num_recibo_pago && !payload.comprobante_url) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 

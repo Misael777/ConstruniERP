@@ -404,16 +404,21 @@
 	// toDriveThumbnailUrl).
 	const comprobanteThumbUrl = $derived(toDriveThumbnailUrl(comprobanteUrl));
 
-	/** Lee fecha/monto del comprobante vía OCR + regex, sin IA (ver ocrComprobante.ts). `cacheIndex` no
-	 * nulo cuando viene de la cola de varios comprobantes (se cachea el resultado por índice para no
-	 * repetir la llamada al volver a un archivo ya revisado con las flechas). Nunca bloquea el guardado
-	 * manual: si falla o la imagen no es reconocible, el usuario completa Fecha/Monto a mano. */
+	/** Lee fecha/monto del comprobante vía OCR + regex, sin IA (ver ocrComprobante.ts, ya soporta imagen
+	 * y PDF). `cacheIndex` no nulo cuando viene de la cola de varios comprobantes (se cachea el
+	 * resultado por índice para no repetir la llamada al volver a un archivo ya revisado con las
+	 * flechas). Nunca bloquea el guardado manual: si falla o el archivo no es reconocible (de cualquier
+	 * tipo), el usuario completa Fecha/Monto/N° de Operación a mano — los campos ya quedan habilitados
+	 * (fechaLocked/montoLocked/numOperacionLocked en false) y se avisa con un toast. */
 	async function runOcr(file: File, cacheIndex: number | null) {
 		fechaLocked = false;
 		montoLocked = false;
 		numOperacionLocked = false;
 		ocrConfianza = null;
-		if (!esArchivoImagen(file)) return; // la Edge Function solo procesa bloques `image`, no PDF
+		if (!esArchivoImagen(file) && !esArchivoPdf(file)) {
+			toast.error('Este tipo de archivo no se puede leer automáticamente — completa Fecha/Monto/N° de Operación a mano.');
+			return;
+		}
 		ocrLoading = true;
 		try {
 			const result = await reconocerComprobante(file);
@@ -743,7 +748,6 @@
 	const mostrarBotonReciboPago = $derived(
 		formValues.tipo_alcance === 'externa' &&
 			formValues.tipo === 'ingreso' &&
-			formValues.forma_pago === '1' && // '1' = Contado (ver FIELDS_CONFIG)
 			formValues.medio_pago === '1' // '1' = Efectivo (ver FIELDS_CONFIG)
 	);
 	let reciboPagoModalOpen = $state(false);
@@ -1440,11 +1444,13 @@
 		}
 
 		// Una transacción Interna emite su propio comprobante oficial (el "RECIBO - TRANSFERENCIA
-		// INTERNA" autogenerado, ver handleGenerarBoucherTransferencia) — a diferencia de una Externa, no
-		// requiere que el usuario adjunte además una foto/PDF de respaldo. Antes este chequeo era
-		// incondicional y bloqueaba el guardado sin ningún aviso visible (solo un texto rojo pequeño bajo
-		// el dropzone), lo que hacía parecer que el botón "Crear" no hacía nada.
-		if (formValues.tipo_alcance !== 'interna' && !comprobanteFile && !comprobanteUrl) {
+		// INTERNA" autogenerado, ver handleGenerarBoucherTransferencia), y una Externa+Ingreso+Efectivo ya
+		// generada con el "RECIBO DE PAGO" (ver handleGenerarReciboPago/numeroReciboPago) también — en
+		// ninguno de los dos casos se requiere que el usuario adjunte además una foto/PDF de respaldo.
+		// Antes este chequeo era incondicional y bloqueaba el guardado sin ningún aviso visible (solo un
+		// texto rojo pequeño bajo el dropzone), lo que hacía parecer que el botón "Crear" no hacía nada.
+		const reciboPagoYaGenerado = mostrarBotonReciboPago && !!numeroReciboPago;
+		if (formValues.tipo_alcance !== 'interna' && !reciboPagoYaGenerado && !comprobanteFile && !comprobanteUrl) {
 			comprobanteError = 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.';
 			toast.error(comprobanteError);
 			return;
@@ -1818,7 +1824,7 @@
 								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
 									Adjuntar boucher de pago
-									{#if formValues.tipo_alcance !== 'interna'}<span class="text-red-500">*</span>{/if}
+									{#if formValues.tipo_alcance !== 'interna' && !mostrarBotonReciboPago}<span class="text-red-500">*</span>{/if}
 								</label>
 								<label
 									for="tr-comprobante"
@@ -1860,7 +1866,7 @@
 										<p class="text-xs text-red-600">{comprobanteError}</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
-									{:else if formValues.tipo_alcance === 'interna'}
+									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago}
 										<p class="text-xs text-slate-400">Opcional: esta transacción ya emite su propio comprobante (ver botón abajo).</p>
 									{/if}
 								</div>
