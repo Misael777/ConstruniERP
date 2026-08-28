@@ -19,6 +19,9 @@
 		correo?: string;
 		rol_id: number;
 		area_id?: number | null;
+		/** Ver empleados_dni_migration.sql — usado para autocompletar "Datos de quien recibe" en el
+		 * RECIBO DE PAGO (ver ReciboPagoModal.svelte). */
+		dni?: string;
 		auth_user_id: string;
 		/** true = ya completó el flujo de "Configura tu acceso" (código OTP + su propia contraseña),
 		 * distinto de solo tener auth_user_id — ver nota junto al badge de Estado Cuenta más abajo. */
@@ -61,6 +64,7 @@
 	let nuevasHoras = $state(0);
 	let nuevoPeriodo = $state('Mensual');
 	let nuevoNivel = $state('');
+	let nuevoDni = $state('');
 
 	function onInputChange() {
 		if (modalError) {
@@ -79,6 +83,7 @@
 			correo: emp.correo,
 			rol_id: emp.rol_id,
 			area_id: emp.area_id || null,
+			dni: emp.dni || '',
 			auth_user_id: emp.auth_user_id,
 			passwordConfigurado: Boolean(emp.password_configurado),
 			fecha_ingreso: emp.fecha_ingreso,
@@ -103,7 +108,7 @@
 		let query = supabase
 			.from('empleados')
 			.select(`
-				id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
+				id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
 				fecha_ingreso, salario, horas, periodo, nivel, area_id, estado,
 				roles ( nombre )
 			`)
@@ -197,7 +202,8 @@
 			salario: nuevoSalario,
 			horas: nuevasHoras,
 			periodo: nuevoPeriodo,
-			nivel: nuevoNivel.trim() || null
+			nivel: nuevoNivel.trim() || null,
+			dni: nuevoDni.trim() || null
 		};
 
 		console.log("[IAM UI] Validaciones de formulario superadas. Payload a enviar:", payload);
@@ -215,7 +221,8 @@
 				salario: payload.salario,
 				horas: payload.horas,
 				periodo: payload.periodo,
-				nivel: payload.nivel
+				nivel: payload.nivel,
+				dni: payload.dni
 			});
 
 			if (!result.success) {
@@ -235,7 +242,7 @@
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
@@ -273,6 +280,7 @@
 		nuevasHoras = emp.horas || 0;
 		nuevoPeriodo = emp.periodo || 'Mensual';
 		nuevoNivel = emp.nivel || '';
+		nuevoDni = emp.dni || '';
 		modalError = '';
 		isModalOpen = true;
 	}
@@ -315,7 +323,8 @@
 				salario: nuevoSalario,
 				horas: nuevasHoras,
 				periodo: nuevoPeriodo,
-				nivel: nuevoNivel.trim() || null
+				nivel: nuevoNivel.trim() || null,
+				dni: nuevoDni.trim() || null
 			};
 
 			console.log("[IAM UI] Actualizando empleado mediante Supabase Edge Function para ID:", editingEmpleadoId);
@@ -330,7 +339,8 @@
 				salario: payload.salario,
 				horas: payload.horas,
 				periodo: payload.periodo,
-				nivel: payload.nivel
+				nivel: payload.nivel,
+				dni: payload.dni
 			});
 
 			if (!result.success) {
@@ -348,7 +358,7 @@
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
@@ -487,6 +497,7 @@
 		nuevasHoras = 0;
 		nuevoPeriodo = 'Mensual';
 		nuevoNivel = '';
+		nuevoDni = '';
 		modalError = '';
 		editingEmpleadoId = null;
 	}
@@ -761,6 +772,13 @@
 						<div>
 							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Teléfono</label>
 							<input type="text" bind:value={nuevoTelefono} oninput={onInputChange} placeholder="987654321" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
+						</div>
+						<div>
+							<label for="emp-dni" class="block text-xs font-semibold text-[#0f3b5e] mb-1">
+								DNI
+								<span class="font-normal text-slate-400">(para el Recibo de Pago en efectivo)</span>
+							</label>
+							<input id="emp-dni" type="text" bind:value={nuevoDni} oninput={onInputChange} placeholder="12345678" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 					</div>
 					<div class="mt-4">

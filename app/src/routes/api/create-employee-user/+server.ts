@@ -18,7 +18,8 @@ const handler: RequestHandler = async ({ request }) => {
 			salario,
 			horas,
 			periodo,
-			nivel
+			nivel,
+			dni
 		} = body;
 
 		// 1. Crear usuario en Supabase Auth usando el Service Role Key
@@ -58,11 +59,12 @@ const handler: RequestHandler = async ({ request }) => {
 					horas: horas ?? 0,
 					periodo: periodo || 'Mensual',
 					nivel: nivel?.trim() || null,
+					dni: dni?.trim() || null,
 					auth_user_id: newAuthUserId
 				}
 			])
 			.select(`
-				id, nombre, telefono, correo, rol_id, auth_user_id,
+				id, nombre, telefono, correo, rol_id, auth_user_id, dni,
 				roles ( nombre )
 			`);
 

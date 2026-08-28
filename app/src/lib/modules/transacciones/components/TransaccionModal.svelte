@@ -3,7 +3,7 @@
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import jsPDF from 'jspdf';
-	import { arrayBufferToBase64 } from '$lib/shared/base64';
+	import { arrayBufferToBase64, base64ToUint8Array } from '$lib/shared/base64';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -719,7 +719,13 @@
 			const [origenCodigo, origenNombre] = separarCodigoNombre(origenLabel);
 			const [destinoCodigo, destinoNombre] = separarCodigoNombre(destinoLabel);
 
-			const base64 = generarComprobanteTransferenciaInternaBase64({
+			// Fecha y Monto salen de los campos "reconocidos" del área 1 (formValues.fecha/monto_total) —
+			// a pedido explícito del usuario. N° de Operación no aplica de verdad en una transferencia
+			// interna (no hay banco externo de por medio), así que en vez de dejar lo que haya reconocido
+			// el OCR del boucher adjunto, se sobrescribe con el propio N° del recibo recién generado —
+			// mismo formato con el que se imprime en el PDF ("N° 0000").
+			const numeroTexto = String(numero).padStart(4, '0');
+			const base64 = await generarComprobanteTransferenciaInternaBase64({
 				numero,
 				fecha: formValues.fecha,
 				origenCodigo,
@@ -727,10 +733,23 @@
 				destinoCodigo,
 				destinoNombre,
 				monto: Number(formValues.monto_total) || 0,
-				concepto: formValues.descripcion || '',
+				// A pedido explícito del usuario: el concepto del recibo siempre es "Transferencia Interna"
+				// (no la Descripción del formulario, que puede estar vacía o hablar de otra cosa).
+				concepto: 'Transferencia Interna',
 				usuario: permisosState.userName || 'Usuario'
 			});
-			await guardarArchivoBinario(base64, `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`, 'application/pdf');
+			formValues = { ...formValues, num_operacion: numeroTexto };
+			numOperacionLocked = false;
+
+			// A pedido explícito del usuario: una vez generado, el recibo también queda como el
+			// comprobante adjunto de la transacción (mismo campo de "Adjuntar boucher de pago") — no solo
+			// se descarga. Al ser un File PDF, el efecto que genera la vista previa (ver arriba,
+			// comprobantePdfPreviewToken) lo detecta solo y muestra la miniatura de su primera página.
+			const nombreArchivo = `RECIBO-TRANSFERENCIA-INTERNA-${numeroTexto}.pdf`;
+			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+			comprobanteError = '';
+
+			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el boucher de transferencia:', err);
 			toast.error('No se pudo generar el boucher de transferencia.');
@@ -753,6 +772,24 @@
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
 	let generandoReciboPago = $state(false);
+	// Cliente que paga — a pedido explícito del usuario, se autocompleta desde la transacción en vez de
+	// escribirse a mano: para Externa+Ingreso, "Centro de Costo Origen" ES el cliente (ver
+	// centroCostoClienteIdMap/optionsFor más abajo), así que basta resolver su id y traer nombre/documento.
+	let clienteReciboNombre = $state('');
+	let clienteReciboDni = $state('');
+	async function abrirReciboPago() {
+		clienteReciboNombre = '';
+		clienteReciboDni = '';
+		const idCliente = centroCostoClienteIdMap[formValues.id_centro_costo_origen];
+		if (idCliente) {
+			const { data } = await supabase.from('cliente').select('nombre, num_documento').eq('id_cliente', idCliente).maybeSingle();
+			if (data) {
+				clienteReciboNombre = data.nombre ?? '';
+				clienteReciboDni = data.num_documento ?? '';
+			}
+		}
+		reciboPagoModalOpen = true;
+	}
 
 	async function handleGenerarReciboPago(datos: DatosPopupReciboPago) {
 		generandoReciboPago = true;
@@ -766,7 +803,7 @@
 			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
 			const [proyectoCodigo, proyectoNombre] = separarCodigoNombre(destinoLabel);
 
-			const base64 = generarReciboPagoBase64({
+			const base64 = await generarReciboPagoBase64({
 				numero,
 				fecha: formValues.fecha,
 				proyectoCodigo,
@@ -1721,14 +1758,6 @@
 			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
 				<div class="flex items-center gap-2">
-					<!-- N° de transacción — a pedido explícito del usuario, esquina superior, solo lectura.
-					     En modo 'create' todavía no existe (recién se genera al guardar), así que no se
-					     muestra. -->
-					{#if mode === 'edit' && transaccion}
-						<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium" title="Número de transacción">
-							N° {transaccion.id_transaccion}
-						</span>
-					{/if}
 					<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
 						<X size={20} />
 					</button>
@@ -1815,7 +1844,17 @@
 					     md: con el dropzone a la izquierda con ancho fijo y alto estirado a la misma altura
 					     que la columna de campos (items-stretch, default de flexbox). -->
 					<div class="rounded-2xl border border-slate-200 p-5">
-						<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Datos de la Transacción</h3>
+						<div class="flex items-center justify-between mb-4">
+							<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Datos de la Transacción</h3>
+							<!-- N° de transacción — a pedido explícito del usuario, arriba del área de datos de la
+							     transacción, solo lectura. En modo 'create' todavía no existe (recién se genera al
+							     guardar), así que no se muestra. -->
+							{#if mode === 'edit' && transaccion}
+								<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium" title="Número de transacción">
+									N° {transaccion.id_transaccion}
+								</span>
+							{/if}
+						</div>
 						<div class="flex flex-col md:flex-row gap-5">
 							<!-- Tipo + Adjuntar boucher de pago — a pedido explícito del usuario: el campo Tipo
 							     se muestra junto al comprobante, antes que el resto de los campos núcleo. -->
@@ -1904,7 +1943,7 @@
 								{:else if mostrarBotonReciboPago}
 									<button
 										type="button"
-										onclick={() => (reciboPagoModalOpen = true)}
+										onclick={abrirReciboPago}
 										disabled={generandoReciboPago || bloqueadaPorAprobacion}
 										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
 									>
@@ -1913,7 +1952,7 @@
 										{:else}
 											<FileText size={14} class="shrink-0" />
 										{/if}
-										Autogenerar Boucher de Transferencia
+										Autogenerar Recibo por Pago
 									</button>
 								{/if}
 								</div>
@@ -2684,7 +2723,9 @@
 
 <ReciboPagoModal
 	open={reciboPagoModalOpen}
-	conceptoInicial={formValues.descripcion || ''}
+	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
+	clienteNombreInicial={clienteReciboNombre}
+	clienteDniInicial={clienteReciboDni}
 	generando={generandoReciboPago}
 	onCancel={() => (reciboPagoModalOpen = false)}
 	onGenerar={handleGenerarReciboPago}

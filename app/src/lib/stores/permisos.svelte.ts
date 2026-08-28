@@ -12,12 +12,17 @@ export const permisosState = $state<{
   rolNombre: string;
   userName: string;
   userInitial: string;
+  /** DNI del empleado (ver empleados.dni, migración empleados_dni_migration.sql) — usado para
+   * autocompletar "Datos de quien recibe" en el RECIBO DE PAGO (ver ReciboPagoModal.svelte). Vacío si
+   * el empleado todavía no lo tiene cargado en IAM → Empleados. */
+  dni: string;
   loaded: boolean;
 }>({
   permisos: [],
   rolNombre: '',
   userName: '',
   userInitial: '',
+  dni: '',
   loaded: false,
 });
 
@@ -32,6 +37,11 @@ export async function loadPermisos(userId: string): Promise<void> {
   try {
     // 1. Get employee + role name
     console.log('[Permisos] Fetching employee profile and role from Supabase for auth_user_id:', userId);
+    // OJO: `dni` NO va en este select — esta consulta es crítica (corre en cada carga de la app, para
+    // TODOS los usuarios) y si la columna todavía no existe en un entorno donde no se corrió
+    // empleados_dni_migration.sql, el error tira todo el query abajo (empError truthy), degradando a
+    // CUALQUIER usuario a "sin rol" / permisos vacíos = bloqueado del ERP entero. Se carga aparte, en
+    // una consulta best-effort separada que no puede romper esto (ver más abajo).
     const { data: empleado, error: empError } = await supabase
       .from('empleados')
       .select(`
@@ -48,6 +58,7 @@ export async function loadPermisos(userId: string): Promise<void> {
       permisosState.rolNombre = 'sin rol';
       permisosState.userName = 'Usuario';
       permisosState.userInitial = 'U';
+      permisosState.dni = '';
       permisosState.loaded = true;
       console.log('[Permisos] State fallback initialized:', JSON.stringify(permisosState));
       return;
@@ -65,6 +76,17 @@ export async function loadPermisos(userId: string): Promise<void> {
     permisosState.rolNombre = rolNombre;
     permisosState.userName = nombre;
     permisosState.userInitial = nombre.charAt(0).toUpperCase();
+
+    // Best-effort, aparte de todo lo de arriba: si la columna dni no existe todavía (o cualquier otro
+    // fallo), esto NUNCA debe degradar rol/permisos — solo el campo dni se queda vacío.
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('empleados').select('dni').eq('auth_user_id', userId).maybeSingle();
+        if (!error) permisosState.dni = (data as any)?.dni ?? '';
+      } catch {
+        // Best-effort — ver comentario arriba.
+      }
+    })();
 
     // 2. If admin, set wildcard — no need to query permissions
     if (rolNombre === ADMIN_ROLE) {

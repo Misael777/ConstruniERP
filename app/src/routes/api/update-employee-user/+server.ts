@@ -20,7 +20,8 @@ const handler: RequestHandler = async ({ request }) => {
 			salario,
 			horas,
 			periodo,
-			nivel
+			nivel,
+			dni
 		} = body;
 
 		if (!id) {
@@ -59,12 +60,13 @@ const handler: RequestHandler = async ({ request }) => {
 				salario: salario ?? 0,
 				horas: horas ?? 0,
 				periodo: periodo || 'Mensual',
-				nivel: nivel?.trim() || null
+				nivel: nivel?.trim() || null,
+				dni: dni?.trim() || null
 			})
 			.eq('id', id)
 			.select(`
 				id, nombre, telefono, correo, rol_id, auth_user_id,
-				area_id, fecha_ingreso, salario, horas, periodo, nivel,
+				area_id, fecha_ingreso, salario, horas, periodo, nivel, dni,
 				roles ( nombre )
 			`);
 

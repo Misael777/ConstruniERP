@@ -1,22 +1,26 @@
 /**
  * Genera el PDF "RECIBO DE PAGO" que se emite para un pago en Efectivo de una transacción Externa de
- * tipo Ingreso — a pedido explícito del usuario, replica el formato de su comprobante físico real (dos
- * copias por hoja: Original + Copia), con las firmas manuscritas del pagador y de quien recibe (ver
- * SignaturePad.svelte / ReciboPagoModal.svelte) incrustadas como imagen. Igual que
- * comprobanteTransferenciaInterna.ts, cada recuadro se dimensiona según el texto real que trae (nombre
- * de proyecto largo, concepto largo, etc.) en vez de una altura fija que podía desbordar el recuadro.
- * 100% cliente (jsPDF), sin backend — funciona igual en navegador, Tauri Windows y Android.
+ * tipo Ingreso — a pedido explícito del usuario, replica AL PIXEL un HTML de referencia que compartió
+ * (posicionamiento absoluto dentro de una hoja fija de 544×682px, con las dos copias — Original y
+ * "COPIA" — ya dispuestas una debajo de la otra separadas por una línea punteada). El CSS de acá es
+ * prácticamente un calco de esa referencia; solo se cambia el logo embebido en base64 por el logo real
+ * de la empresa (/logo.png, mismo que usa el resto del ERP) y se reemplazan los valores de ejemplo por
+ * los datos reales de la transacción. Las firmas manuscritas (ver SignaturePad.svelte/
+ * ReciboPagoModal.svelte) se incrustan como imagen. Arma la hoja completa como HTML/CSS y la convierte a
+ * UNA sola imagen con html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en
+ * navegador, Tauri Windows y Tauri Android.
  */
 import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
 import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
-import { escribirLineas, alturaTexto } from './pdfTextoUtil';
 import { formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
+import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
+import { escapeHtml } from './pdfVoucherEstilos';
 
-const MARGEN_IZQ = 15;
-const MARGEN_DER = 195;
-const MITAD = (MARGEN_IZQ + MARGEN_DER) / 2;
+const ANCHO_PLANTILLA_PX = 544; // ancho fijo de la hoja de referencia (.page)
+const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
+const MARGEN_PAGINA_MM = 10;
 
 export interface DatosReciboPago {
 	numero: number;
@@ -35,219 +39,157 @@ export interface DatosReciboPago {
 	firmaReceptorDataUrl: string;
 }
 
-/** Círculo numerado azul con texto blanco, mismo estilo que comprobanteTransferenciaInterna.ts — marca
- * el inicio de cada sección. */
-function dibujarNumeroSeccion(doc: jsPDF, numero: number, x: number, y: number): void {
-	doc.setFillColor(15, 59, 94);
-	doc.circle(x, y - 1, 2.2, 'F');
-	doc.setTextColor(255);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(7);
-	doc.text(String(numero), x, y - 0.3, { align: 'center' });
-	doc.setTextColor(0);
+// CSS calcado de la referencia del usuario (posiciones/tamaños en px tal cual) — ver comentario de
+// archivo arriba. No usa las clases "v-*" de pdfVoucherEstilos.ts porque este diseño es un
+// posicionamiento absoluto propio, distinto del layout flexbox del comprobante de transferencia interna.
+const ESTILOS_RECIBO_PAGO = `
+	* { box-sizing: border-box; }
+	.rp-page { position: relative; width: 544px; height: 682px; background: #fff; overflow: hidden; font-family: Arial, Helvetica, sans-serif; color: #111; }
+	.rp-receipt { position: absolute; left: 87px; width: 369px; height: 251px; font-size: 5.2px; line-height: 1.05; }
+	.rp-r1 { top: 74px; }
+	.rp-r2 { top: 383px; }
+	.rp-separador { position: absolute; left: 87px; top: 358px; width: 369px; border-top: 1px dotted #777; }
+	.rp-logo { position: absolute; left: 0; top: 0; width: 151px; height: 30px; object-fit: contain; object-position: left center; }
+	.rp-header-right { position: absolute; right: 0; top: 0; width: 92px; text-align: center; }
+	.rp-number { font-size: 8px; font-weight: 700; margin-bottom: 2px; }
+	.rp-badge { display: inline-block; border: 1px solid #111; border-radius: 2px; padding: 1px 5px; font-size: 6px; font-weight: 700; letter-spacing: .1px; }
+	.rp-meta { font-size: 4.8px; margin-top: 2px; line-height: 1.15; }
+	.rp-intro { position: absolute; left: 0; right: 0; top: 33px; border-bottom: 1px solid #777; padding-bottom: 2px; font-size: 5px; line-height: 1.15; }
+	.rp-section { position: absolute; left: 0; right: 0; border: 1px solid #777; border-radius: 2px; }
+	.rp-section-title { position: absolute; left: 0; top: -8px; font-size: 5.2px; font-weight: 700; background: #fff; }
+	.rp-project { top: 59px; height: 22px; padding: 7px 7px 3px; }
+	.rp-project-name { font-size: 7px; font-weight: 700; }
+	.rp-project-sub { font-size: 5px; margin-top: 1px; }
+	.rp-amount { top: 88px; height: 33px; }
+	.rp-amount-left { position: absolute; left: 0; top: 0; width: 142px; height: 100%; border-right: 1px solid #777; text-align: center; }
+	.rp-amount-right { position: absolute; left: 142px; right: 0; top: 0; height: 100%; padding: 8px 7px; }
+	.rp-amount-head { font-size: 4.5px; font-weight: 700; margin-top: 2px; }
+	.rp-amount-value { font-size: 9px; font-weight: 700; margin-top: 5px; }
+	.rp-amount-words { font-size: 4.4px; margin-top: 1px; }
+	.rp-concept-head { font-size: 4.5px; font-weight: 700; text-align: center; }
+	.rp-concept { font-size: 4.6px; line-height: 1.15; margin-top: 6px; }
+	.rp-document { font-size: 7px; margin-right: 4px; }
+	.rp-payment { top: 128px; height: 28px; padding: 7px 7px 3px; }
+	.rp-cashbox { font-size: 6px; font-weight: 700; margin-bottom: 2px; }
+	.rp-cashbox::before { content: ""; display: inline-block; width: 7px; height: 7px; border: 1px solid #777; border-radius: 1px; vertical-align: -2px; margin-right: 6px; }
+	.rp-payment-note { font-size: 4.5px; line-height: 1.2; }
+	.rp-detail { top: 162px; height: 21px; }
+	.rp-detail-cell { position: absolute; top: 0; height: 100%; padding: 5px 7px 2px; }
+	.rp-detail-cell.rp-first { left: 0; width: 50%; border-right: 1px solid #777; }
+	.rp-detail-cell.rp-last { left: 50%; width: 50%; }
+	.rp-detail-head { font-size: 4.5px; text-align: center; }
+	.rp-detail-value { font-size: 6px; font-weight: 700; text-align: center; margin-top: 2px; }
+	.rp-signatures { position: absolute; left: 0; right: 0; top: 187px; height: 61px; border-top: 1px dotted #777; }
+	.rp-sig { position: absolute; top: 6px; width: 130px; text-align: center; }
+	.rp-sig.rp-left { left: 14px; }
+	.rp-sig.rp-right { right: 14px; }
+	.rp-sig-title { font-size: 4.5px; font-weight: 700; margin-bottom: 2px; }
+	.rp-sig-title .rp-normal { font-weight: normal; }
+	.rp-firma-img-wrap { height: 10px; display: flex; align-items: flex-end; justify-content: center; }
+	.rp-firma-img { max-height: 10px; max-width: 120px; object-fit: contain; }
+	.rp-line { border-top: 1px solid #777; width: 130px; margin: 1px auto 0; }
+	.rp-sig-name { font-size: 5.1px; font-weight: 700; margin-top: 3px; }
+	.rp-sig-info { font-size: 4.5px; line-height: 1.15; margin-top: 1px; }
+`;
+
+/** Un bloque de recibo (Original o Copia) — misma estructura para r1/r2, la referencia solo agrega la
+ * etiqueta "COPIA" arriba a la derecha en la segunda. */
+function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: DatosReciboPago): string {
+	const numeroTexto = String(datos.numero).padStart(7, '0');
+	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
+
+	return `
+		<div class="rp-receipt ${posicionClase}">
+			<img class="rp-logo" src="/logo.png" alt="${escapeHtml(EMPRESA_NOMBRE)}" />
+			<div class="rp-header-right">
+				<div class="rp-number">N° ${escapeHtml(numeroTexto)}</div>
+				<div class="rp-badge">${esCopia ? 'COPIA - ' : ''}RECIBO DE PAGO</div>
+				<div class="rp-meta">Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))}<br>Página: 1 de 1</div>
+			</div>
+
+			<div class="rp-intro">Yo, ${escapeHtml(datos.clienteNombre)}, identificado con RUC/DNI ${escapeHtml(datos.clienteDni)}, <b>dejo constancia de haber pagado a favor de ${escapeHtml(EMPRESA_NOMBRE)}</b>, identificado con RUC ${escapeHtml(EMPRESA_RUC)}, el importe que se detalla a continuación:</div>
+
+			<div class="rp-section rp-project">
+				<div class="rp-section-title">1&nbsp;&nbsp;POR CONCEPTO DE</div>
+				<div class="rp-project-name">${escapeHtml(datos.proyectoNombre)}</div>
+				<div class="rp-project-sub">Código: ${escapeHtml(datos.proyectoCodigo)}</div>
+			</div>
+
+			<div class="rp-section rp-amount">
+				<div class="rp-section-title">2&nbsp;&nbsp;IMPORTE Y CONCEPTO</div>
+				<div class="rp-amount-left">
+					<div class="rp-amount-head">IMPORTE (S/)</div>
+					<div class="rp-amount-value">${escapeHtml(formatearMonto(datos.monto))}</div>
+					<div class="rp-amount-words">(${escapeHtml(montoEnLetras(datos.monto))})</div>
+				</div>
+				<div class="rp-amount-right">
+					<div class="rp-concept-head"><span class="rp-document">▧</span> CONCEPTO</div>
+					<div class="rp-concept">${escapeHtml(datos.concepto)}</div>
+				</div>
+			</div>
+
+			<div class="rp-section rp-payment">
+				<div class="rp-section-title">3&nbsp;&nbsp;FORMA DE PAGO</div>
+				<div class="rp-cashbox">EFECTIVO</div>
+				<div class="rp-payment-note">El pago se realizó en efectivo por la suma indicada en el presente recibo.</div>
+			</div>
+
+			<div class="rp-section rp-detail">
+				<div class="rp-section-title">4&nbsp;&nbsp;DETALLE DEL RECIBO</div>
+				<div class="rp-detail-cell rp-first">
+					<div class="rp-detail-head">N° DE RECIBO</div>
+					<div class="rp-detail-value">${escapeHtml(numeroTexto)}</div>
+				</div>
+				<div class="rp-detail-cell rp-last">
+					<div class="rp-detail-head">FECHA DE EMISIÓN</div>
+					<div class="rp-detail-value">${escapeHtml(formatearFechaCorta(datos.fecha))}</div>
+				</div>
+			</div>
+
+			<div class="rp-signatures">
+				<div class="rp-sig rp-left">
+					<div class="rp-sig-title">FIRMA DIGITAL DEL CLIENTE<br><span class="rp-normal">(Firma manuscrita)</span></div>
+					<div class="rp-firma-img-wrap">
+						${datos.firmaClienteDataUrl ? `<img class="rp-firma-img" src="${datos.firmaClienteDataUrl}" />` : ''}
+					</div>
+					<div class="rp-line"></div>
+					<div class="rp-sig-name">${escapeHtml(datos.clienteNombre)}</div>
+					<div class="rp-sig-info">RUC/DNI: ${escapeHtml(datos.clienteDni)}<br>Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
+				</div>
+				<div class="rp-sig rp-right">
+					<div class="rp-sig-title">FIRMA DE QUIEN RECIBE</div>
+					<div class="rp-firma-img-wrap">
+						${datos.firmaReceptorDataUrl ? `<img class="rp-firma-img" src="${datos.firmaReceptorDataUrl}" />` : ''}
+					</div>
+					<div class="rp-line"></div>
+					<div class="rp-sig-name">NOMBRE: ${escapeHtml(datos.receptorNombre)}</div>
+					<div class="rp-sig-info">DNI: ${escapeHtml(datos.receptorDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
+				</div>
+			</div>
+		</div>
+	`;
 }
 
-/** Dibuja UNA copia del recibo (Original o Copia) empezando en `y0`. Devuelve el Y donde terminó (para
- * ubicar la segunda copia justo después, sin superponerse). */
-function dibujarRecibo(doc: jsPDF, y0: number, esCopia: boolean, datos: DatosReciboPago): number {
-	const numeroTexto = `N° ${String(datos.numero).padStart(7, '0')}`;
-	const anchoCompleto = MARGEN_DER - MARGEN_IZQ;
-	const anchoMedio = MITAD - MARGEN_IZQ - 6;
-
-	// --- Encabezado ---
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(11);
-	doc.text(EMPRESA_NOMBRE, MARGEN_IZQ, y0 + 6);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(8);
-	doc.text(`RUC: ${EMPRESA_RUC}`, MARGEN_IZQ, y0 + 11);
-
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(13);
-	doc.text(numeroTexto, MARGEN_DER, y0 + 6, { align: 'right' });
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(8);
-	doc.text(`${esCopia ? 'COPIA - ' : ''}RECIBO DE PAGO`, MARGEN_DER, y0 + 11, { align: 'right' });
-	doc.text(`Fecha: ${formatearFechaCorta(datos.fecha)}`, MARGEN_DER, y0 + 15, { align: 'right' });
-	doc.text('Página: 1 de 1', MARGEN_DER, y0 + 19, { align: 'right' });
-
-	doc.setDrawColor(180);
-	doc.line(MARGEN_IZQ, y0 + 22, MARGEN_DER, y0 + 22);
-
-	// --- Intro ---
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(9);
-	const introAltura = escribirLineas(
-		doc,
-		`Yo, ${datos.clienteNombre}, identificado con RUC/DNI ${datos.clienteDni}, dejo constancia de haber pagado a favor de ${EMPRESA_NOMBRE} con RUC ${EMPRESA_RUC}, el importe que se detalla a continuación:`,
-		MARGEN_IZQ,
-		y0 + 28,
-		anchoCompleto
-	);
-
-	// --- Sección 1: Por concepto de ---
-	let y = y0 + 29 + introAltura;
-	dibujarNumeroSeccion(doc, 1, MARGEN_IZQ + 2, y);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(9);
-	doc.text('POR CONCEPTO DE', MARGEN_IZQ + 6, y);
-	y += 3;
-
-	const alturaProyecto = alturaTexto(doc, datos.proyectoNombre, anchoCompleto - 6);
-	const altoSeccion1 = 6 + alturaProyecto + 6;
-	doc.setDrawColor(120);
-	doc.rect(MARGEN_IZQ, y, anchoCompleto, altoSeccion1);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(10);
-	const alturaNombreProyecto = escribirLineas(doc, datos.proyectoNombre, MARGEN_IZQ + 3, y + 6, anchoCompleto - 6);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7.5);
-	doc.setTextColor(120);
-	doc.text(`Código: ${datos.proyectoCodigo}`, MARGEN_IZQ + 3, y + 6 + alturaNombreProyecto + 2);
-	doc.setTextColor(0);
-
-	// --- Sección 2: Importe y concepto ---
-	y += altoSeccion1 + 6;
-	dibujarNumeroSeccion(doc, 2, MARGEN_IZQ + 2, y);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(9);
-	doc.text('IMPORTE Y CONCEPTO', MARGEN_IZQ + 6, y);
-	y += 3;
-
-	const alturaLetras = alturaTexto(doc, `(${montoEnLetras(datos.monto)})`, anchoMedio);
-	const alturaImporte = 11 + alturaLetras;
-	const alturaConcepto = 5 + alturaTexto(doc, datos.concepto, MARGEN_DER - MITAD - 6);
-	const altoSeccion2 = Math.max(alturaImporte, alturaConcepto) + 3;
-	doc.rect(MARGEN_IZQ, y, anchoCompleto, altoSeccion2);
-	doc.line(MITAD, y, MITAD, y + altoSeccion2);
-
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7);
-	doc.setTextColor(120);
-	doc.text('IMPORTE (S/)', MARGEN_IZQ + 3, y + 5);
-	doc.text('CONCEPTO', MITAD + 3, y + 5);
-	doc.setTextColor(0);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(12);
-	doc.text(formatearMonto(datos.monto), MARGEN_IZQ + 3, y + 11);
-	doc.setFont('helvetica', 'italic');
-	doc.setFontSize(6.5);
-	escribirLineas(doc, `(${montoEnLetras(datos.monto)})`, MARGEN_IZQ + 3, y + 15, anchoMedio);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(8);
-	escribirLineas(doc, datos.concepto, MITAD + 3, y + 10, MARGEN_DER - MITAD - 6);
-
-	// --- Sección 3: Forma de pago ---
-	y += altoSeccion2 + 6;
-	dibujarNumeroSeccion(doc, 3, MARGEN_IZQ + 2, y);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(9);
-	doc.text('FORMA DE PAGO', MARGEN_IZQ + 6, y);
-	y += 3;
-
-	const textoFormaPago = 'El pago se realizó en efectivo por la suma indicada en el presente recibo.';
-	const alturaTextoFormaPago = alturaTexto(doc, textoFormaPago, anchoCompleto - 6);
-	const altoSeccion3 = 6 + alturaTextoFormaPago + 3;
-	doc.rect(MARGEN_IZQ, y, anchoCompleto, altoSeccion3);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(9);
-	doc.text('EFECTIVO', MARGEN_IZQ + 3, y + 5);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7.5);
-	doc.setTextColor(120);
-	escribirLineas(doc, textoFormaPago, MARGEN_IZQ + 3, y + 10, anchoCompleto - 6);
-	doc.setTextColor(0);
-
-	// --- Sección 4: Detalle del recibo ---
-	y += altoSeccion3 + 6;
-	dibujarNumeroSeccion(doc, 4, MARGEN_IZQ + 2, y);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(9);
-	doc.text('DETALLE DEL RECIBO', MARGEN_IZQ + 6, y);
-	y += 3;
-
-	// 4a: N° de recibo / Fecha de emisión (fila corta, valores siempre cortos, sin necesidad de altura
-	// dinámica).
-	const altoDatos = 12;
-	doc.rect(MARGEN_IZQ, y, anchoCompleto, altoDatos);
-	doc.line(MITAD, y, MITAD, y + altoDatos);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7);
-	doc.setTextColor(120);
-	doc.text('N° DE RECIBO', MARGEN_IZQ + 3, y + 5);
-	doc.text('FECHA DE EMISIÓN', MITAD + 3, y + 5);
-	doc.setTextColor(0);
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(10);
-	doc.text(String(datos.numero).padStart(7, '0'), MARGEN_IZQ + 3, y + 10);
-	doc.text(formatearFechaCorta(datos.fecha), MITAD + 3, y + 10);
-
-	// 4b: Firmas — imagen (PNG del canvas) + nombre/documento debajo, dos columnas.
-	y += altoDatos + 4;
-	const anchoFirma = 34;
-	const altoFirma = 12;
-	const nombreClienteAltura = alturaTexto(doc, datos.clienteNombre, anchoMedio);
-	const nombreReceptorAltura = alturaTexto(doc, datos.receptorNombre, anchoMedio);
-	const altoSeccion4b = 5 + altoFirma + 3 + Math.max(nombreClienteAltura, nombreReceptorAltura) + 7;
-	doc.rect(MARGEN_IZQ, y, anchoCompleto, altoSeccion4b);
-	doc.line(MITAD, y, MITAD, y + altoSeccion4b);
-
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7);
-	doc.setTextColor(120);
-	doc.text('FIRMA DIGITAL DEL CLIENTE', MARGEN_IZQ + 3, y + 5);
-	doc.text('FIRMA DE QUIEN RECIBE', MITAD + 3, y + 5);
-	doc.setTextColor(0);
-
-	if (datos.firmaClienteDataUrl) {
-		try {
-			doc.addImage(datos.firmaClienteDataUrl, 'PNG', MARGEN_IZQ + 3, y + 7, anchoFirma, altoFirma);
-		} catch {
-			/* si el data URL no es una imagen válida, se deja el espacio en blanco — mejor esfuerzo */
-		}
-	}
-	if (datos.firmaReceptorDataUrl) {
-		try {
-			doc.addImage(datos.firmaReceptorDataUrl, 'PNG', MITAD + 3, y + 7, anchoFirma, altoFirma);
-		} catch {
-			/* ídem */
-		}
-	}
-
-	let yFirmaTexto = y + 7 + altoFirma + 3;
-	doc.setFont('helvetica', 'bold');
-	doc.setFontSize(8);
-	const hCliente = escribirLineas(doc, datos.clienteNombre, MARGEN_IZQ + 3, yFirmaTexto, anchoMedio);
-	const hReceptor = escribirLineas(doc, datos.receptorNombre, MITAD + 3, yFirmaTexto, anchoMedio);
-	doc.setFont('helvetica', 'normal');
-	doc.setFontSize(7);
-	doc.setTextColor(120);
-	const yDniLinea = yFirmaTexto + Math.max(hCliente, hReceptor) + 3;
-	doc.text(`RUC/DNI: ${datos.clienteDni}`, MARGEN_IZQ + 3, yDniLinea);
-	doc.text(`DNI: ${datos.receptorDni}`, MITAD + 3, yDniLinea);
-	doc.setTextColor(0);
-
-	// --- Pie ---
-	y += altoSeccion4b + 8;
-	doc.setDrawColor(180);
-	doc.line(MARGEN_IZQ, y, MARGEN_DER, y);
-
-	return y;
+function construirPaginaHtml(datos: DatosReciboPago): string {
+	return `
+		<div class="rp-page">
+			${construirBloqueRecibo('rp-r1', false, datos)}
+			<div class="rp-separador"></div>
+			${construirBloqueRecibo('rp-r2', true, datos)}
+		</div>
+	`;
 }
 
-/** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
- * guardarArchivoBinario. La segunda copia empieza justo después de donde terminó la primera. */
-export function generarReciboPagoBase64(datos: DatosReciboPago): string {
+/** Arma el PDF completo (Original + Copia ya dispuestas en una sola hoja de 544×682px, ver referencia
+ * del usuario) y lo devuelve en base64, listo para guardarArchivoBinario. Se renderiza UNA sola vez —
+ * ambas copias ya están posicionadas dentro de la misma plantilla. */
+export async function generarReciboPagoBase64(datos: DatosReciboPago): Promise<string> {
+	const html = `<style>${ESTILOS_RECIBO_PAGO}</style>${construirPaginaHtml(datos)}`;
+	const pagina = await renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
+
 	const doc = new jsPDF();
-	const finPrimera = dibujarRecibo(doc, 10, false, datos);
-
-	const ySeparador = finPrimera + 4;
-	doc.setDrawColor(150);
-	doc.setLineDashPattern([1.5, 1.5], 0);
-	doc.line(MARGEN_IZQ, ySeparador, MARGEN_DER, ySeparador);
-	doc.setLineDashPattern([], 0);
-
-	dibujarRecibo(doc, ySeparador + 6, true, datos);
+	const alturaMm = (pagina.heightPx / pagina.widthPx) * ANCHO_PAGINA_MM;
+	doc.addImage(pagina.dataUrl, 'PNG', MARGEN_PAGINA_MM, MARGEN_PAGINA_MM, ANCHO_PAGINA_MM, alturaMm);
 
 	return arrayBufferToBase64(doc.output('arraybuffer'));
 }

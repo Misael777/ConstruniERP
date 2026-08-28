@@ -89,7 +89,7 @@ async function listUsers() {
 
   const { data: empleados, error: empleadosError } = await supabase
     .from('empleados')
-    .select('id, nombre, correo, telefono, rol_id, area_id, fecha_ingreso, salario, horas, periodo, nivel, auth_user_id');
+    .select('id, nombre, correo, telefono, rol_id, area_id, fecha_ingreso, salario, horas, periodo, nivel, dni, auth_user_id');
 
   if (empleadosError) return buildJsonResponse({ success: false, error: empleadosError.message }, 500);
 
@@ -155,6 +155,7 @@ async function createUser(body: any) {
       horas: body.horas ?? 0,
       periodo: body.periodo ?? 'Mensual',
       nivel: body.nivel ?? null,
+      dni: body.dni ?? null,
       auth_user_id: authUserId
     }
   ]).select('*').single();
@@ -203,6 +204,7 @@ async function updateUser(body: any) {
   if (body.horas !== undefined) empleadoUpdate.horas = body.horas;
   if (body.periodo) empleadoUpdate.periodo = body.periodo;
   if (body.nivel) empleadoUpdate.nivel = body.nivel;
+  if (body.dni !== undefined) empleadoUpdate.dni = body.dni;
 
   let empleadoData = null;
   if (Object.keys(empleadoUpdate).length > 0) {

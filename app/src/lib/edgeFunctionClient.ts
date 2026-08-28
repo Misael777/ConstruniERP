@@ -86,6 +86,7 @@ export async function createUser(payload: {
 	horas?: number;
 	periodo?: string;
 	nivel?: string | null;
+	dni?: string | null;
 }) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'POST',
@@ -110,6 +111,7 @@ export async function updateUser(payload: {
 	horas?: number;
 	periodo?: string;
 	nivel?: string | null;
+	dni?: string | null;
 }) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'PUT',
