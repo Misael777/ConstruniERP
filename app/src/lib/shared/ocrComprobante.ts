@@ -77,9 +77,18 @@ function extraerFecha(texto: string): string | null {
 }
 
 /** Patrón común a BCP/BBVA/Interbank/Yape/Plin: símbolo "S/" (a veces "S/." — Interbank), seguido de
- * un número con separador de miles opcional (coma) y decimales opcionales (punto). Se usa tanto para
- * la búsqueda con etiqueta como sin ella, ver extraerMonto. */
-const PATRON_MONTO = /S\/\.?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
+ * un número con separador de miles opcional (coma) y decimales opcionales (punto). El separador de
+ * miles también acepta un ESPACIO en vez de coma — confirmado con OCR real sobre el "RECIBO -
+ * TRANSFERENCIA INTERNA" autogenerado (ver comprobanteTransferenciaInterna.ts): a ese tamaño de fuente
+ * Tesseract leyó "S/ 5,000.00" como "S/ 5 000.00", perdiendo la coma — sin esto, extraerMonto solo
+ * reconocía el "5" suelto. Se usa tanto para la búsqueda con etiqueta como sin ella, ver extraerMonto. */
+const PATRON_MONTO = /S\/\.?\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
+
+/** Quita los separadores de miles (coma o espacio, ver PATRON_MONTO) antes de convertir a número. */
+function limpiarMonto(valorCrudo: string): number | null {
+	const valor = Number(valorCrudo.replace(/[,\s]/g, ''));
+	return Number.isFinite(valor) ? valor : null;
+}
 
 /** Busca el monto pagado. Dos pasadas, en orden de prioridad:
  *  1. Junto a una etiqueta explícita ("Monto"/"Importe"/"Total"/"Pagaste"/"Enviaste"/"Pagado") — evita
@@ -91,9 +100,7 @@ const PATRON_MONTO = /S\/\.?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2}
 function extraerMonto(texto: string): number | null {
 	const conEtiqueta = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,15}?${PATRON_MONTO.source}`, 'i'));
 	const m = conEtiqueta ?? texto.match(PATRON_MONTO);
-	if (!m) return null;
-	const valor = Number(m[1].replace(/,/g, ''));
-	return Number.isFinite(valor) ? valor : null;
+	return m ? limpiarMonto(m[1]) : null;
 }
 
 /** Monto de una factura/boleta (a diferencia de extraerMonto, pensada para un boucher de pago) — prueba
@@ -105,31 +112,59 @@ function extraerMonto(texto: string): number | null {
  * queda con la ÚLTIMA — el total general va al final, después del detalle/subtotal/IGV. */
 function extraerMontoFactura(texto: string): number | null {
 	for (const etiqueta of ['total a pagar', 'importe total', 'total general', 'monto total', 'total']) {
-		const regex = new RegExp(`${etiqueta}\\D{0,15}?(?:S\\/\\.?\\s*)?(\\d{1,3}(?:,\\d{3})*\\.\\d{2}|\\d+\\.\\d{2})`, 'gi');
+		// Separador de miles coma o espacio — mismo motivo que PATRON_MONTO arriba.
+		const regex = new RegExp(`${etiqueta}\\D{0,15}?(?:S\\/\\.?\\s*)?(\\d{1,3}(?:[,\\s]\\d{3})*\\.\\d{2}|\\d+\\.\\d{2})`, 'gi');
 		let ultimo: RegExpExecArray | null = null;
 		for (let m = regex.exec(texto); m !== null; m = regex.exec(texto)) ultimo = m;
 		if (ultimo) {
-			const valor = Number(ultimo[1].replace(/,/g, ''));
-			if (Number.isFinite(valor)) return valor;
+			const valor = limpiarMonto(ultimo[1]);
+			if (valor !== null) return valor;
 		}
 	}
 	return extraerMonto(texto);
 }
 
-/** Busca el número/código de operación: una etiqueta reconocible ("N°"/"Nro."/"Número"/"Código" + "de
+/** Prefijo "N°"/"Nro."/"Número"/"Código" tolerante a cómo Tesseract suele leer mal el símbolo "°" —
+ * confirmado corriendo OCR de verdad sobre el "RECIBO DE PAGO" autogenerado (ver reciboPagoEfectivo.ts):
+ * en un mismo documento lo leyó como `N*` en un lugar y como `N"` en otro. Sin esto, cualquier etiqueta
+ * que dependa de "N°" es frágil. */
+const PREFIJO_NUMERO = '(?:n[°º*"\']?\\.?|nro\\.?|n[uú]mero|c[oó]digo)';
+
+/** Busca un N° de operación bancario: etiqueta reconocible ("N°"/"Nro."/"Número"/"Código" + "de
  * operación"/"transacción"/"referencia"/"constancia"/"rastreo"/"confirmación" — cada banco usa la
  * suya: Yape/Plin dicen "operación", BCP escribe "Número de operación" completo, Interbank "N° de
- * constancia") seguida de un bloque de dígitos — descarta cualquier otro número del comprobante
- * (monto, celular, código de seguridad) que no venga con esa etiqueta al lado. Tolera espacios/guiones
- * internos en el número (se limpian) y exige al menos 6 dígitos, para no confundirlo con un código de
- * seguridad corto (ej. el de 3 dígitos de Yape). */
-function extraerNumeroOperacion(texto: string): string | null {
+ * constancia") seguida DE INMEDIATO de un bloque de dígitos — descarta cualquier otro número del
+ * comprobante (monto, celular, código de seguridad) que no venga con esa etiqueta al lado. Tolera
+ * espacios/guiones internos en el número (se limpian) y exige al menos 6 dígitos, para no confundirlo
+ * con un código de seguridad corto (ej. el de 3 dígitos de Yape). Compartida por extraerNumeroOperacion
+ * (área 1, boucher principal) y extraerNumeroDocumento (sección "Comprobantes") — a pedido explícito
+ * del usuario, un boucher bancario normal adjuntado ahí también debe reconocer su N° de operación, no
+ * solo la serie de factura/boleta o el N° de recibo autogenerado. */
+function extraerNumeroConEtiquetaBancaria(texto: string): string | null {
 	const m = texto.match(
-		/(?:n[°ºo]?\.?|nro\.?|n[uú]mero|c[oó]digo)\s*(?:de\s*)?(?:operaci[oó]n|transacci[oó]n|referencia|constancia|rastreo|confirmaci[oó]n)\s*[:\-]?\s*(\d[\d\s-]{4,14}\d)/i
+		new RegExp(`${PREFIJO_NUMERO}\\s*(?:de\\s*)?(?:operaci[oó]n|transacci[oó]n|referencia|constancia|rastreo|confirmaci[oó]n)\\s*[:\\-]?\\s*(\\d[\\d\\s-]{4,14}\\d)`, 'i')
 	);
 	if (!m) return null;
 	const soloDigitos = m[1].replace(/[\s-]/g, '');
 	return soloDigitos.length >= 6 ? soloDigitos : null;
+}
+
+/** Busca el número/código de operación para "Fecha (reconocida)"/"Monto (reconocido)"/"N° de Operación
+ * (reconocido)" del área 1 (ver reconocerComprobante). Primero prueba la etiqueta bancaria (ver
+ * extraerNumeroConEtiquetaBancaria); si no encuentra nada así, prueba "N° DE RECIBO" — el propio "RECIBO
+ * DE PAGO"/"RECIBO - TRANSFERENCIA INTERNA" autogenerados de este ERP (ver
+ * reciboPagoEfectivo.ts/comprobanteTransferenciaInterna.ts), cuando alguno de esos PDF se vuelve a
+ * adjuntar como boucher. A diferencia de los bancos, ahí la etiqueta vive en un encabezado de DOS
+ * COLUMNAS junto a "FECHA DE EMISIÓN" — confirmado con OCR real, Tesseract linealiza las dos etiquetas
+ * juntas ANTES que los dos valores ("N° DE RECIBO FECHA DE EMISIÓN" en una línea, "0000117 21/08/2025"
+ * en la siguiente) — por eso este segundo intento tolera hasta 40 caracteres que no sean dígitos entre
+ * la etiqueta y el número, a diferencia del primero. */
+function extraerNumeroOperacion(texto: string): string | null {
+	const conEtiquetaBancaria = extraerNumeroConEtiquetaBancaria(texto);
+	if (conEtiquetaBancaria) return conEtiquetaBancaria;
+
+	const conEtiquetaRecibo = texto.match(new RegExp(`${PREFIJO_NUMERO}\\s*(?:de\\s*)?recibo\\D{0,40}?(\\d{6,10})`, 'i'));
+	return conEtiquetaRecibo ? conEtiquetaRecibo[1] : null;
 }
 
 function calcularConfianza(fecha: string | null, monto: number | null, numOperacion: string | null): 'alta' | 'media' | 'baja' {
@@ -141,7 +176,9 @@ function calcularConfianza(fecha: string | null, monto: number | null, numOperac
 
 /** Detecta el Tipo de Documento (mismo catálogo del campo homónimo, ver transaccion.config.ts) por
  * palabra clave en el texto reconocido — para la sección "Comprobantes" (ver
- * reconocerComprobantePago). */
+ * reconocerComprobantePago). "Recibo de pago"/"transferencia interna" (los PDF que este mismo ERP
+ * autogenera, ver reciboPagoEfectivo.ts/comprobanteTransferenciaInterna.ts) tienen su propia opción
+ * "Recibo" en el catálogo (valor '9') — a pedido explícito del usuario. */
 function extraerTipoDocumento(texto: string): string | null {
 	const t = sinTildes(texto.toLowerCase());
 	if (/\bfactura\b/.test(t)) return '1';
@@ -149,15 +186,44 @@ function extraerTipoDocumento(texto: string): string | null {
 	if (/recibo\s+por\s+honorarios/.test(t)) return '3';
 	if (/\bticket\b/.test(t)) return '4';
 	if (/autodetraccion|\bdetraccion\b/.test(t)) return '5';
+	if (/recibo\s+de\s+pago|transferencia\s+interna/.test(t)) return '9';
 	return null;
 }
 
-/** N° de documento peruano: serie (letra + 2-3 dígitos, ej. F001/B001/E001) + correlativo (hasta 8
- * dígitos), ej. "F001-00123" — distinto de extraerNumeroOperacion (N° de operación bancaria, con su
- * propia etiqueta y sin la serie con letra). */
+/** N° de documento — cuatro intentos, de más a menos específico:
+ *
+ * 1. Serie peruana (letra + 2-3 dígitos, ej. F001/B001/E001) + correlativo (hasta 8 dígitos), ej.
+ *    "F001-00123" — facturas/boletas.
+ *
+ * 2. N° de operación bancario (ver extraerNumeroConEtiquetaBancaria) — a pedido explícito del usuario:
+ *    un boucher normal (Yape/Plin/BCP/BBVA/Interbank) adjuntado en la sección "Comprobantes" no tiene
+ *    esa serie con letra, así que antes se quedaba sin N° de documento aunque el boucher sí mostrara
+ *    claramente su N° de operación — ahora también se reconoce acá, igual que ya hacía
+ *    extraerNumeroOperacion para el boucher principal del área 1.
+ *
+ * 3. El N° suelto que aparece en la PARTE SUPERIOR del documento (ej. "N° 0000117" en el encabezado del
+ *    "RECIBO DE PAGO"/"RECIBO - TRANSFERENCIA INTERNA" autogenerados — ver
+ *    reciboPagoEfectivo.ts/comprobanteTransferenciaInterna.ts) — más confiable que "N° DE RECIBO" (el
+ *    intento 4) porque no depende de que el OCR linealice bien un encabezado de dos columnas, solo de
+ *    leer un número grande y aislado casi al inicio del texto. Acotado a los primeros ~120 caracteres
+ *    para no confundirlo con cualquier otro "N°" que aparezca más adelante en el documento.
+ *
+ * 4. "N° DE RECIBO" (sección 4 de esos mismos recibos autogenerados) como último respaldo — mismo
+ *    patrón tolerante a encabezados de dos columnas y a cómo Tesseract lee mal "°" que ya usa
+ *    extraerNumeroOperacion (ver PREFIJO_NUMERO). */
 function extraerNumeroDocumento(texto: string): string | null {
 	const m = texto.match(/\b([A-Z]{1,3}\d{2,3})[\s-]+(\d{1,8})\b/);
-	return m ? `${m[1]}-${m[2]}` : null;
+	if (m) return `${m[1]}-${m[2]}`;
+
+	const conEtiquetaBancaria = extraerNumeroConEtiquetaBancaria(texto);
+	if (conEtiquetaBancaria) return conEtiquetaBancaria;
+
+	const inicio = texto.slice(0, 120);
+	const mEncabezado = inicio.match(new RegExp(`${PREFIJO_NUMERO}\\s*(\\d{6,10})\\b`, 'i'));
+	if (mEncabezado) return mEncabezado[1];
+
+	const mRecibo = texto.match(new RegExp(`${PREFIJO_NUMERO}\\s*(?:de\\s*)?recibo\\D{0,40}?(\\d{6,10})`, 'i'));
+	return mRecibo ? mRecibo[1] : null;
 }
 
 export interface ReconocerComprobantePagoResult {

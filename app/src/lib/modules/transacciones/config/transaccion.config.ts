@@ -392,11 +392,15 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: '6', label: 'Otros' },
 			// Solo se ofrecen cuando "Alcance de la Transacción" = Interna, ver optionsWhen abajo.
 			{ value: '7', label: 'Talonario' },
-			{ value: '8', label: 'Boucher' }
+			{ value: '8', label: 'Boucher' },
+			// "Recibo" — a pedido explícito del usuario, para el "RECIBO DE PAGO" que este mismo ERP
+			// autogenera (ver reciboPagoEfectivo.ts) cuando se vuelve a adjuntar como comprobante — antes
+			// cualquiera de esos caía en "Otros" por no tener opción propia en el catálogo.
+			{ value: '9', label: 'Recibo' }
 		],
 		// En Interna, un comprobante externo (factura/boleta/etc.) no aplica — solo talonario/boucher
-		// internos. En Externa se mantiene el catálogo original de 6 — ver TransaccionModal.svelte,
-		// que además limpia este campo cuando cambia el Alcance para no dejar un valor inválido.
+		// internos. En Externa se mantiene el catálogo original — ver TransaccionModal.svelte, que
+		// además limpia este campo cuando cambia el Alcance para no dejar un valor inválido.
 		optionsWhen: (payload) => {
 			if (String(payload.tipo_alcance ?? '') === 'interna') {
 				return [
@@ -410,7 +414,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 				{ value: '3', label: 'Recibo por Honorarios' },
 				{ value: '4', label: 'Ticket' },
 				{ value: '5', label: 'Autodetracción' },
-				{ value: '6', label: 'Otros' }
+				{ value: '6', label: 'Otros' },
+				{ value: '9', label: 'Recibo' }
 			];
 		},
 		showInTable: false,

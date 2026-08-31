@@ -1033,35 +1033,30 @@ export async function sincronizarDetalleCategoria(client: SupabaseClient, idTran
 }
 
 /** Siguiente correlativo para el PDF "RECIBO - TRANSFERENCIA INTERNA" (ver
- * comprobanteTransferenciaInterna.ts) — MAX(num_comprobante_interno) + 1, mismo criterio pragmático que
- * generarCodigoCentroCostoManual (centroCostos.service.ts) para el resto de correlativos de este ERP:
- * no usa una SEQUENCE de Postgres para no depender de una función RPC aparte. Empieza en 1 si todavía
- * no hay ninguno asignado. */
+ * comprobanteTransferenciaInterna.ts) — cada llamada INSERTA una fila nueva en
+ * num_comprobante_interno_log (ver transaccion_correlativos_secuencia_migration.sql) y usa su `id`
+ * SERIAL como correlativo; NO es un simple MAX(columna guardada) + 1. El botón "Autogenerar Boucher..."
+ * genera y descarga el PDF EN EL MOMENTO que se presiona, esté o no guardada todavía la transacción —
+ * con MAX+1, si el usuario cerraba el modal sin guardar después de generarlo, el número quedaba "libre"
+ * y la próxima vez se repetía, imprimiendo el mismo N° en dos recibos distintos (confirmado con datos
+ * reales: la tabla no tenía NINGUNA fila guardada pese a haberse generado varios recibos de prueba). El
+ * INSERT consume el número de forma atómica e irreversible apenas se pide, así que nunca se repite —
+ * puede dejar huecos (una transacción abandonada es como una boleta anulada), pero eso es preferible a
+ * un duplicado. (Se descartó una primera versión con una función/RPC de Postgres — nunca llegó a
+ * aparecer en el schema cache de PostgREST pese a correr la migración varias veces; un INSERT normal a
+ * una tabla es el mismo mecanismo que ya usa el resto de la app de forma confiable.) */
 export async function getSiguienteNumeroComprobanteInterno(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client
-		.from('transaccion')
-		.select('num_comprobante_interno')
-		.not('num_comprobante_interno', 'is', null)
-		.order('num_comprobante_interno', { ascending: false })
-		.limit(1)
-		.maybeSingle();
+	const { data, error } = await client.from('num_comprobante_interno_log').insert({}).select('id').single();
 	if (error) throw error;
-	return (data?.num_comprobante_interno ?? 0) + 1;
+	return data.id as number;
 }
 
-/** Siguiente correlativo para el PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — mismo criterio
- * pragmático que getSiguienteNumeroComprobanteInterno (MAX + 1, sin SEQUENCE de Postgres). Empieza en 1
- * si todavía no hay ninguno asignado. */
+/** Siguiente correlativo para el PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — mismo criterio que
+ * getSiguienteNumeroComprobanteInterno (INSERT en num_recibo_pago_log, nunca se repite). */
 export async function getSiguienteNumeroReciboPago(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client
-		.from('transaccion')
-		.select('num_recibo_pago')
-		.not('num_recibo_pago', 'is', null)
-		.order('num_recibo_pago', { ascending: false })
-		.limit(1)
-		.maybeSingle();
+	const { data, error } = await client.from('num_recibo_pago_log').insert({}).select('id').single();
 	if (error) throw error;
-	return (data?.num_recibo_pago ?? 0) + 1;
+	return data.id as number;
 }
 
 export interface ComprobantePago {

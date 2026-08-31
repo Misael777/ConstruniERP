@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import jsPDF from 'jspdf';
 	import { arrayBufferToBase64, base64ToUint8Array } from '$lib/shared/base64';
@@ -37,7 +37,7 @@
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
-	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient } from '$lib/driveUploadClient';
+	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient, downloadFromDriveClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import { reconocerComprobante, reconocerComprobantePago, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
@@ -210,6 +210,54 @@
 			comprobantesPago = comprobantesPago.map((f) => (f._key === fila._key ? { ...f, ocrCargando: false } : f));
 		}
 	}
+
+	/** Vuelve a leer un comprobante YA GUARDADO (fila.url, subido a Drive en una edición anterior) — a
+	 * pedido explícito del usuario: el OCR de arriba (ejecutarOcrComprobantePago) solo corre para
+	 * archivos recién agregados en esta misma sesión de edición (fila.file); una fila cargada desde la
+	 * BD (ver getComprobantesPago más abajo) nunca se vuelve a reconocer sola, así que si quedó con
+	 * datos incorrectos (ej. guardada antes de un ajuste al OCR) se queda así para siempre a menos que
+	 * el usuario presione este botón. Descarga el archivo real de Drive (mismo patrón dual Tauri/
+	 * navegador que DocumentPreviewModal.svelte) y le corre reconocerComprobantePago encima. */
+	async function releerComprobantePago(fila: ComprobantePagoFila) {
+		if (!fila.url) return;
+		const fileId = extractDriveFileId(fila.url);
+		if (!fileId) {
+			toast.error('No se pudo identificar el archivo para volver a leerlo.');
+			return;
+		}
+		comprobantesPago = comprobantesPago.map((f) => (f._key === fila._key ? { ...f, ocrCargando: true } : f));
+		try {
+			let blob: Blob;
+			if (isRunningInTauri()) {
+				blob = await downloadFromDriveClient(fileId);
+			} else {
+				const nombreBase = (fila.nombre_archivo || 'comprobante').replace(/\.[^./]+$/, '');
+				const res = await fetch(resolveApiUrl(`/api/upload-document?fileId=${encodeURIComponent(fileId)}&filename=${encodeURIComponent(nombreBase)}`));
+				if (!res.ok) throw new Error(`No se pudo descargar el archivo (HTTP ${res.status}).`);
+				blob = await res.blob();
+			}
+			const nombreArchivo = fila.nombre_archivo || 'comprobante.pdf';
+			const file = new File([blob], nombreArchivo, { type: blob.type || 'application/pdf' });
+			const result = await reconocerComprobantePago(file);
+			comprobantesPago = comprobantesPago.map((f) => {
+				if (f._key !== fila._key) return f;
+				const actualizado: ComprobantePagoFila = { ...f, ocrCargando: false };
+				if (result.success) {
+					if (result.tipo_documento) actualizado.tipo_documento = result.tipo_documento;
+					if (result.num_documento) actualizado.num_documento = result.num_documento;
+					if (result.monto !== null && result.monto !== undefined) actualizado.monto = result.monto;
+				}
+				return actualizado;
+			});
+			if (result.success) toast.success('Comprobante releído — revisa los campos.');
+			else toast.error('No se pudo reconocer ningún dato de este comprobante. Complétalos a mano.');
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo volver a leer el comprobante:', err);
+			toast.error('No se pudo volver a leer el comprobante.');
+			comprobantesPago = comprobantesPago.map((f) => (f._key === fila._key ? { ...f, ocrCargando: false } : f));
+		}
+	}
+
 	function onComprobantesPagoChange(e: Event) {
 		const files = (e.target as HTMLInputElement).files;
 		if (files && files.length > 0) agregarComprobantesPago(files);
@@ -758,17 +806,17 @@
 		}
 	}
 
-	// Popup "Autogenerar Boucher de Transferencia" para Externa+Ingreso+Efectivo (a pedido explícito del
-	// usuario, con imagen de referencia) — a diferencia de Interna (que genera directo al presionar el
-	// botón), este caso necesita datos que no están en el formulario principal (cliente que paga, quien
-	// recibe el efectivo, ambas firmas manuscritas — ver ReciboPagoModal.svelte), así que el botón abre
-	// un popup en vez de generar de inmediato. Mismo criterio de correlativo que comprobanteInternoNumero:
-	// se pide una sola vez y se reusa en cualquier regeneración posterior.
-	const mostrarBotonReciboPago = $derived(
-		formValues.tipo_alcance === 'externa' &&
-			formValues.tipo === 'ingreso' &&
-			formValues.medio_pago === '1' // '1' = Efectivo (ver FIELDS_CONFIG)
-	);
+	// Popup "Autogenerar Boucher de Transferencia" para Externa+Ingreso (a pedido explícito del usuario,
+	// con imagen de referencia) — a diferencia de Interna (que genera directo al presionar el botón),
+	// este caso necesita datos que no están en el formulario principal (cliente que paga, quien recibe el
+	// pago, ambas firmas manuscritas — ver ReciboPagoModal.svelte), así que el botón abre un popup en vez
+	// de generar de inmediato. Mismo criterio de correlativo que comprobanteInternoNumero: se pide una
+	// sola vez y se reusa en cualquier regeneración posterior. Aplica para CUALQUIER medio de pago, no
+	// solo Efectivo — la sección "FORMA DE PAGO" del PDF cambia según cuál sea (ver
+	// esReciboPagoEfectivo/reciboPagoEfectivo.ts): con Efectivo muestra el casillero fijo de siempre; con
+	// Transferencia/Depósito/Yape o Plin, un recuadro con la descripción libre que se pide en el popup.
+	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
+	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG)
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
 	let generandoReciboPago = $state(false);
@@ -815,7 +863,9 @@
 				firmaClienteDataUrl: datos.firmaClienteDataUrl,
 				receptorNombre: datos.receptorNombre,
 				receptorDni: datos.receptorDni,
-				firmaReceptorDataUrl: datos.firmaReceptorDataUrl
+				firmaReceptorDataUrl: datos.firmaReceptorDataUrl,
+				esEfectivo: esReciboPagoEfectivo,
+				formaPagoTexto: datos.formaPagoTexto
 			});
 			await guardarArchivoBinario(base64, `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`, 'application/pdf');
 			reciboPagoModalOpen = false;
@@ -2625,16 +2675,30 @@
 												/>
 											</td>
 											<td class="px-2 py-1.5 text-center">
-												<button
-													type="button"
-													onclick={() => eliminarComprobantePago(fila._key)}
-													disabled={bloqueadaPorAprobacion}
-													class="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-													aria-label="Quitar comprobante"
-													title="Quitar comprobante"
-												>
-													<Trash2 size={14} />
-												</button>
+												<div class="flex items-center justify-center gap-1">
+													{#if fila.url}
+														<button
+															type="button"
+															onclick={() => releerComprobantePago(fila)}
+															disabled={bloqueadaPorAprobacion || fila.ocrCargando}
+															class="p-1 rounded text-slate-400 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-40"
+															aria-label="Volver a leer este comprobante"
+															title="Volver a leer este comprobante"
+														>
+															<RefreshCw size={14} class={fila.ocrCargando ? 'animate-spin' : ''} />
+														</button>
+													{/if}
+													<button
+														type="button"
+														onclick={() => eliminarComprobantePago(fila._key)}
+														disabled={bloqueadaPorAprobacion}
+														class="p-1 rounded text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+														aria-label="Quitar comprobante"
+														title="Quitar comprobante"
+													>
+														<Trash2 size={14} />
+													</button>
+												</div>
 											</td>
 										</tr>
 									{/each}
@@ -2726,6 +2790,8 @@
 	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
 	clienteNombreInicial={clienteReciboNombre}
 	clienteDniInicial={clienteReciboDni}
+	esEfectivo={esReciboPagoEfectivo}
+	formaPagoInicial={formValues.medio_pago ? getOptionLabel(medioPagoField, formValues.medio_pago) : ''}
 	generando={generandoReciboPago}
 	onCancel={() => (reciboPagoModalOpen = false)}
 	onGenerar={handleGenerarReciboPago}

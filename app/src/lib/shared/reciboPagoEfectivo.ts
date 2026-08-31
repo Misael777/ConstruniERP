@@ -37,6 +37,15 @@ export interface DatosReciboPago {
 	receptorDni: string;
 	/** PNG en base64 (data URL completa, ver SignaturePad.svelte) */
 	firmaReceptorDataUrl: string;
+	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO" con su
+	 * descripción de siempre. false = cualquier otro medio (Transferencia/Depósito/Yape o Plin, ver
+	 * FIELDS_CONFIG) — la sección 3 muestra en cambio un recuadro simple con `formaPagoTexto` tal cual lo
+	 * escribió el usuario (ej. "Yape a Willy Melchor") — a pedido explícito del usuario, con imagen de
+	 * referencia. */
+	esEfectivo: boolean;
+	/** Descripción libre del medio de pago no efectivo (ej. "Yape a Willy Melchor", "Transferencia BCP a
+	 * Juan Pérez") — solo se usa/requiere cuando esEfectivo es false. */
+	formaPagoTexto?: string;
 }
 
 // CSS calcado de la referencia del usuario (posiciones/tamaños en px tal cual) — ver comentario de
@@ -73,6 +82,7 @@ const ESTILOS_RECIBO_PAGO = `
 	.rp-cashbox { font-size: 6px; font-weight: 700; margin-bottom: 2px; }
 	.rp-cashbox::before { content: ""; display: inline-block; width: 7px; height: 7px; border: 1px solid #777; border-radius: 1px; vertical-align: -2px; margin-right: 6px; }
 	.rp-payment-note { font-size: 4.5px; line-height: 1.2; }
+	.rp-forma-pago-texto { border: 1.2px solid #94a3b8; border-radius: 3px; padding: 5px 7px; font-size: 6.5px; font-weight: 700; color: #1e293b; letter-spacing: .02em; margin-top: 2px; }
 	.rp-detail { top: 162px; height: 21px; }
 	.rp-detail-cell { position: absolute; top: 0; height: 100%; padding: 5px 7px 2px; }
 	.rp-detail-cell.rp-first { left: 0; width: 50%; border-right: 1px solid #777; }
@@ -130,8 +140,12 @@ function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: D
 
 			<div class="rp-section rp-payment">
 				<div class="rp-section-title">3&nbsp;&nbsp;FORMA DE PAGO</div>
-				<div class="rp-cashbox">EFECTIVO</div>
-				<div class="rp-payment-note">El pago se realizó en efectivo por la suma indicada en el presente recibo.</div>
+				${
+					datos.esEfectivo
+						? `<div class="rp-cashbox">EFECTIVO</div>
+					<div class="rp-payment-note">El pago se realizó en efectivo por la suma indicada en el presente recibo.</div>`
+						: `<div class="rp-forma-pago-texto">${escapeHtml((datos.formaPagoTexto || '').toUpperCase())}</div>`
+				}
 			</div>
 
 			<div class="rp-section rp-detail">
