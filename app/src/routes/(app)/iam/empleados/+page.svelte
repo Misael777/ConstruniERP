@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { createUser, updateUser, darDeBajaEmpleado, restaurarEmpleado, deleteUser } from '$lib/edgeFunctionClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
@@ -149,6 +150,12 @@
 		verEliminados = !verEliminados;
 		fetchEmpleados();
 	}
+
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz) — mismo
+	// handler que el botón "Nuevo Empleado" del header (isModalOpen=true, sin resetear el formulario:
+	// mismo comportamiento que ya tenía ese botón, se apoya en que resetForm() ya lo dejó limpio al
+	// cerrar la última vez).
+	onDestroy(setMobileFab(() => { isModalOpen = true; }, 'Nuevo Empleado'));
 
 	onMount(async () => {
 		console.log("[IAM UI] Iniciando carga de datos iniciales en onMount...");
@@ -553,7 +560,7 @@
 			{#if !verEliminados}
 				<button
 					onclick={() => isModalOpen = true}
-					class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all flex items-center gap-2"
+					class="hidden md:flex px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-md shadow-blue-600/10 active:scale-[0.98] transition-all items-center gap-2"
 				>
 					<i class="fas fa-user-plus"></i> Nuevo Empleado
 				</button>

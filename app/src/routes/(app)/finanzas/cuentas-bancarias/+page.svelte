@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
@@ -79,6 +80,9 @@
 			loading = false;
 		}
 	}
+
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
+	onDestroy(setMobileFab(openCreate, 'Nueva Cuenta Bancaria'));
 
 	onMount(async () => {
 		if (!isAdmin()) {
@@ -255,7 +259,7 @@
 				{verEliminados ? 'Volver' : 'Ver eliminados'}
 			</button>
 			{#if !verEliminados}
-				<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+				<button type="button" onclick={openCreate} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 					<Plus size={16} /> Nueva Cuenta Bancaria
 				</button>
 			{/if}

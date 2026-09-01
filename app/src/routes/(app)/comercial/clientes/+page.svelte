@@ -3,6 +3,7 @@
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { crearSolicitud, darDeBajaCliente, restaurarCliente, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { exportarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 	import { toast } from '$lib/stores/toast';
@@ -52,6 +53,9 @@
 	// entera al instante y vuelve a pedir la lista, sin recargar la página. Requiere
 	// ventas_clientes_realtime_migration.sql aplicada en Supabase.
 	let realtimeChannel: RealtimeChannel | null = null;
+
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
+	onDestroy(setMobileFab(() => openModal(null), 'Nuevo Cliente'));
 
 	onMount(() => {
 		fetchClientes();
@@ -270,7 +274,7 @@
 					{/if}
 					Exportar
 				</button>
-				<button onclick={() => openModal(null)} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
+				<button onclick={() => openModal(null)} class="hidden md:flex px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] items-center gap-2">
 					<i class="fas fa-plus"></i> Nuevo Cliente
 				</button>
 			{/if}

@@ -12,6 +12,8 @@
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { isRunningInTauri } from '$lib/driveUploadClient';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
+	import { mobileFabState } from '$lib/stores/mobileFab.svelte';
+	import MobileFab from '$lib/shared/components/MobileFab.svelte';
 
 	let { children } = $props();
 
@@ -219,6 +221,13 @@
 		>
 			<i class="fas fa-bars text-lg"></i>
 		</button>
+	{/if}
+
+	<!-- Botón flotante de "+" para la acción de alta de la página actual (ver mobileFabState) — mismo
+	     motivo que el botón del menú de arriba para vivir acá y no dentro de cada página: un ancestro
+	     overflow-hidden recorta position:fixed en algunos WebView de Android. -->
+	{#if mobileFabState.action}
+		<MobileFab onclick={mobileFabState.action} label={mobileFabState.label} />
 	{/if}
 
 	<Toast />

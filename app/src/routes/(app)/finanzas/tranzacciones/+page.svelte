@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
+	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
 	import { armarMensajeR2 } from '$lib/shared/mensajeR2';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
@@ -300,6 +301,10 @@
 		}
 	}
 
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz) — reemplaza
+	// al botón "Nueva Transacción" del header, que en pantallas angostas se oculta (ver hidden md:flex).
+	onDestroy(setMobileFab(openCreate, 'Nueva Transacción'));
+
 	onMount(async () => {
 		if (!isAdmin()) {
 			goto('/dashboard');
@@ -572,7 +577,7 @@
 			<button type="button" onclick={() => goto('/finanzas/tranzacciones/movimientos-caja')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
 				<Wallet size={16} /> Movimientos de Caja
 			</button>
-			<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+			<button type="button" onclick={openCreate} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 				<Plus size={16} /> Nueva Transacción
 			</button>
 		</div>
