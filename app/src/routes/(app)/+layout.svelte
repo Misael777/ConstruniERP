@@ -226,8 +226,8 @@
 	<!-- Botón flotante de "+" para la acción de alta de la página actual (ver mobileFabState) — mismo
 	     motivo que el botón del menú de arriba para vivir acá y no dentro de cada página: un ancestro
 	     overflow-hidden recorta position:fixed en algunos WebView de Android. -->
-	{#if mobileFabState.action}
-		<MobileFab onclick={mobileFabState.action} label={mobileFabState.label} />
+	{#if mobileFabState.actions.length > 0}
+		<MobileFab actions={mobileFabState.actions} />
 	{/if}
 
 	<Toast />

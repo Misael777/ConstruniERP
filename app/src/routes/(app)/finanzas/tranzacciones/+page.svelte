@@ -4,7 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
-	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
+	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
 	import { armarMensajeR2 } from '$lib/shared/mensajeR2';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
@@ -302,8 +302,15 @@
 	}
 
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz) — reemplaza
-	// al botón "Nueva Transacción" del header, que en pantallas angostas se oculta (ver hidden md:flex).
-	onDestroy(setMobileFab(openCreate, 'Nueva Transacción'));
+	// a los dos botones "Nueva Transacción"/"Movimientos de Caja" del header, que en pantallas angostas
+	// se ocultan (ver hidden md:flex): el segundo desbordaba la pantalla al no caber en la fila. Con dos
+	// acciones, el FAB se despliega en un mini-menú al tocarlo en vez de disparar directo.
+	onDestroy(
+		setMobileFabActions([
+			{ label: 'Nueva Transacción', icon: Plus, onclick: openCreate },
+			{ label: 'Movimientos de Caja', icon: Wallet, onclick: () => goto('/finanzas/tranzacciones/movimientos-caja') }
+		])
+	);
 
 	onMount(async () => {
 		if (!isAdmin()) {
@@ -574,7 +581,7 @@
 					<CalendarDays size={14} /> Calendario
 				</button>
 			</div>
-			<button type="button" onclick={() => goto('/finanzas/tranzacciones/movimientos-caja')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
+			<button type="button" onclick={() => goto('/finanzas/tranzacciones/movimientos-caja')} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
 				<Wallet size={16} /> Movimientos de Caja
 			</button>
 			<button type="button" onclick={openCreate} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
@@ -700,66 +707,73 @@
 		{/if}
 		{#each items as item (item.id_transaccion)}
 			<div
-				class={`flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${selectedId === item.id_transaccion ? 'bg-blue-50 hover:bg-blue-50' : ''}`}
+				class={`flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${selectedId === item.id_transaccion ? 'bg-blue-50 hover:bg-blue-50' : ''}`}
 				onclick={() => selectRow(item)}
 			>
-				<input
-					type="checkbox"
-					checked={checkedIds.has(item.id_transaccion)}
-					onclick={(e) => e.stopPropagation()}
-					onchange={() => toggleChecked(item.id_transaccion)}
-					class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 shrink-0"
-					aria-label={`Seleccionar transacción ${item.num_documento || item.id_transaccion}`}
-				/>
-				<div class="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-100 text-slate-500 flex items-center justify-center">
-					{#if item.comprobante_url}
-						<img
-							src={item.comprobante_url}
-							alt="Comprobante"
-							class="w-full h-full object-cover"
-							onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget as HTMLImageElement).nextElementSibling?.classList.remove('hidden'); }}
-						/>
-						<FileText size={18} class="hidden" />
-					{:else}
-						<FileText size={18} />
-					{/if}
-				</div>
-				<div class="flex-1 min-w-0">
-					<div class="flex items-center gap-1.5">
-						<p class="font-semibold text-slate-800 truncate min-w-0">
-							{centroCostoLabel(item.id_centro_costo_origen)} → {centroCostoLabel(item.id_centro_costo_destino)}
-						</p>
-						{#if item.aprobado}
-							<ShieldCheck size={14} class="text-emerald-600 shrink-0" title={`Aprobado por ${item.aprobado_por ?? 'un administrador'}`} />
-						{/if}
-						{#if item.tipo_alcance === 'externa' && item.tipo === 'egreso'}
-							<button
-								type="button"
-								onclick={(e) => { e.stopPropagation(); mostrarMsjeDe(item); }}
-								disabled={msjeCargandoId === item.id_transaccion}
-								title="Ver mensaje del pago para copiarlo"
-								aria-label="Ver mensaje del pago para copiarlo"
-								class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 shrink-0"
-							>
-								{#if msjeCargandoId === item.id_transaccion}
-									<Loader2 size={11} class="animate-spin" />
-								{:else}
-									<MessageSquare size={11} />
-								{/if}
-								Msje
-							</button>
+				<div class="flex items-center gap-3 min-w-0">
+					<input
+						type="checkbox"
+						checked={checkedIds.has(item.id_transaccion)}
+						onclick={(e) => e.stopPropagation()}
+						onchange={() => toggleChecked(item.id_transaccion)}
+						class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 shrink-0"
+						aria-label={`Seleccionar transacción ${item.num_documento || item.id_transaccion}`}
+					/>
+					<div class="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-100 text-slate-500 flex items-center justify-center">
+						{#if item.comprobante_url}
+							<img
+								src={item.comprobante_url}
+								alt="Comprobante"
+								class="w-full h-full object-cover"
+								onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget as HTMLImageElement).nextElementSibling?.classList.remove('hidden'); }}
+							/>
+							<FileText size={18} class="hidden" />
+						{:else}
+							<FileText size={18} />
 						{/if}
 					</div>
-					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
-					<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
-					<p class="text-[11px] text-slate-400 mt-0.5 truncate">
-						Producto: {productoProveedorLabel(item)}
-						{#if item.tipo_transaccion}· N° Cuota: {item.tipo_transaccion}{/if}
-					</p>
+					<div class="flex-1 min-w-0">
+						<div class="flex items-center gap-1.5">
+							<p class="font-semibold text-slate-800 truncate min-w-0">
+								{centroCostoLabel(item.id_centro_costo_origen)} → {centroCostoLabel(item.id_centro_costo_destino)}
+							</p>
+							{#if item.aprobado}
+								<ShieldCheck size={14} class="text-emerald-600 shrink-0" title={`Aprobado por ${item.aprobado_por ?? 'un administrador'}`} />
+							{/if}
+							{#if item.tipo_alcance === 'externa' && item.tipo === 'egreso'}
+								<button
+									type="button"
+									onclick={(e) => { e.stopPropagation(); mostrarMsjeDe(item); }}
+									disabled={msjeCargandoId === item.id_transaccion}
+									title="Ver mensaje del pago para copiarlo"
+									aria-label="Ver mensaje del pago para copiarlo"
+									class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 shrink-0"
+								>
+									{#if msjeCargandoId === item.id_transaccion}
+										<Loader2 size={11} class="animate-spin" />
+									{:else}
+										<MessageSquare size={11} />
+									{/if}
+									Msje
+								</button>
+							{/if}
+						</div>
+						<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
+						<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
+						<p class="text-[11px] text-slate-400 mt-0.5 truncate">
+							Producto: {productoProveedorLabel(item)}
+							{#if item.tipo_transaccion}· N° Cuota: {item.tipo_transaccion}{/if}
+						</p>
+					</div>
 				</div>
-				<div class="text-right shrink-0">
+				<!-- Monto + badges: fila propia a lo ancho completo en móvil (antes compartía fila con el
+				     bloque de arriba, lo que dejaba muy poco espacio al título y hacía que los badges, al
+				     envolver, se superpusieran visualmente con el texto de Fecha/Producto). Los badges se
+				     apilan verticalmente en móvil (a pedido del usuario) y vuelven a la fila horizontal de
+				     siempre desde sm: en adelante. -->
+				<div class="flex items-center justify-between gap-3 sm:flex-col sm:items-end sm:justify-start sm:shrink-0 sm:gap-0">
 					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_total)}</p>
-					<div class="flex items-center gap-1 justify-end mt-1">
+					<div class="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-1 sm:mt-1">
 						{#if item.tipo}
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${tipoBadgeClass[item.tipo] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(tipoField, item.tipo)}
@@ -777,7 +791,7 @@
 						{/if}
 					</div>
 				</div>
-				<div class="flex items-center gap-1 shrink-0 ml-2">
+				<div class="flex items-center justify-end gap-1 sm:shrink-0 sm:ml-2">
 					{#if item.comprobante_url || item.factura_url}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
