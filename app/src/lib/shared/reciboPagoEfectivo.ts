@@ -54,7 +54,7 @@ export interface DatosReciboPago {
 const ESTILOS_RECIBO_PAGO = `
 	* { box-sizing: border-box; }
 	.rp-page { position: relative; width: 544px; height: 682px; background: #fff; overflow: hidden; font-family: Arial, Helvetica, sans-serif; color: #111; }
-	.rp-receipt { position: absolute; left: 87px; width: 369px; height: 251px; font-size: 5.2px; line-height: 1.05; }
+	.rp-receipt { position: absolute; left: 87px; width: 369px; height: 251px; font-size: 5.2px; line-height: 1.05; background: #fff; }
 	.rp-r1 { top: 74px; }
 	.rp-r2 { top: 383px; }
 	.rp-separador { position: absolute; left: 87px; top: 358px; width: 369px; border-top: 1px dotted #777; }
@@ -66,6 +66,12 @@ const ESTILOS_RECIBO_PAGO = `
 	.rp-intro { position: absolute; left: 0; right: 0; top: 33px; border-bottom: 1px solid #777; padding-bottom: 2px; font-size: 5px; line-height: 1.15; }
 	.rp-section { position: absolute; left: 0; right: 0; border: 1px solid #777; border-radius: 2px; }
 	.rp-section-title { position: absolute; left: 0; top: -8px; font-size: 5.2px; font-weight: 700; background: #fff; }
+	/* Recibo NO EFECTIVO — a pedido explícito del usuario, con imagen de referencia: fondo crema/beige
+	   para diferenciarlo de un vistazo del recibo en Efectivo (blanco, arriba). Las etiquetas numeradas
+	   de cada sección ("1 POR CONCEPTO DE", etc.) tienen su propio fondo blanco fijo para "recortar" la
+	   línea del borde — acá también cambian a crema para no quedar como un rectángulo blanco flotando. */
+	.rp-receipt-no-efectivo { background: #f4e9d2; }
+	.rp-receipt-no-efectivo .rp-section-title { background: #f4e9d2; }
 	.rp-project { top: 59px; height: 22px; padding: 7px 7px 3px; }
 	.rp-project-name { font-size: 7px; font-weight: 700; }
 	.rp-project-sub { font-size: 5px; margin-top: 1px; }
@@ -109,7 +115,7 @@ function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: D
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
 	return `
-		<div class="rp-receipt ${posicionClase}">
+		<div class="rp-receipt ${posicionClase} ${datos.esEfectivo ? '' : 'rp-receipt-no-efectivo'}">
 			<img class="rp-logo" src="/logo.png" alt="${escapeHtml(EMPRESA_NOMBRE)}" />
 			<div class="rp-header-right">
 				<div class="rp-number">N° ${escapeHtml(numeroTexto)}</div>

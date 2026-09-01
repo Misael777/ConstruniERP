@@ -42,10 +42,13 @@
 	// panorama_persistencia_migration.sql) — sobrevive a recargar la página. Drag-and-drop con
 	// svelte-dnd-action (funciona con mouse Y touch).
 	//
-	// FRACCIONAMIENTO: una cuenta con 2+ cuotas 'programado' se dibuja como CLUSTER — su tarjeta
-	// muestra una fila por cuota. Arrastrar la tarjeta del cluster completa mueve todas sus cuotas
-	// visibles juntas ("en bloque"). Cada fila de cuota individual tiene sus propios botones rápidos
-	// para moverla ELLA SOLA a otra columna, independiente de sus hermanas (ver moverFraccion).
+	// FRACCIONAMIENTO — a pedido explícito del usuario, el comportamiento es ASIMÉTRICO entre columnas:
+	// en la BANDEJA, una cuenta con 2+ cuotas 'programado' se sigue dibujando como CLUSTER (una tarjeta
+	// con una fila por cuota); arrastrar la tarjeta del cluster completa mueve todas sus cuotas visibles
+	// juntas ("en bloque"), y cada fila individual tiene sus propios botones rápidos P1/P2 para moverla
+	// ELLA SOLA sin arrastrar (ver moverFraccion). En PANORAMA 1/PANORAMA 2, en cambio, cada cuota se
+	// desglosa en su PROPIA tarjeta individual (ver desglosarEnTarjetas) apenas se arrastra ahí — ya NO
+	// hay arrastre en bloque dentro de un panorama, cada cuota se mueve por separado de sus hermanas.
 
 	const PANORAMAS = [
 		{ id: 1 as const, nombre: 'Panorama 1', subtitulo: 'Escenario base' },
@@ -163,6 +166,10 @@
 				page: bandejaPage,
 				pageSize: BANDEJA_PAGE_SIZE
 			});
+			// A pedido explícito del usuario: el desglose en tarjetas individuales (ver
+			// desglosarEnTarjetas) SOLO aplica dentro de Panorama 1/2 — la Bandeja sigue agrupando las
+			// cuotas de una cuenta fraccionada en una sola tarjeta "cluster" hasta que se arrastren a un
+			// panorama, recién ahí se separan.
 			bandeja = result.items;
 			bandejaTotal = result.total;
 			bandejaTotalPages = result.totalPages;
@@ -202,8 +209,11 @@
 	async function fetchPanoramas() {
 		try {
 			const [p1, p2, p0] = await Promise.all([getPanoramaItems(supabase, 1), getPanoramaItems(supabase, 2), getTodasLasCuentasPendientes(supabase)]);
-			panorama1 = p1;
-			panorama2 = p2;
+			panorama1 = desglosarEnTarjetas(p1);
+			panorama2 = desglosarEnTarjetas(p2);
+			// panorama0Items (Calendario "Panorama Actual") NO se desglosa a propósito: ahí cada cuenta se
+			// muestra completa con todas sus cuotas, no partida por columna (ver PanoramaCalendarView.svelte
+			// y el comentario de getTodasLasCuentasPendientes en panoramas.service.ts).
 			panorama0Items = p0;
 			// Este refetch se llama justo después de soltar un arrastre (ver handlePanoramaFinalize/
 			// handleBandejaFinalize) — bumpear la versión de inmediato fuerza el remount del {#key} (ver
@@ -221,9 +231,44 @@
 		}
 	}
 
-	/** Convierte una lista de tarjetas (mezcla de cuentas simples y clusters) a PanoramaEntry[] para
-	 * persistir con reorderPanorama — un cluster escribe el mismo orden en TODAS sus cuotas visibles
-	 * en esa tarjeta (se mueven en bloque). */
+	/** Convierte la lista de cuentas que devuelve panoramas.service.ts (una cuenta fraccionada trae
+	 * TODAS sus cuotas visibles agrupadas bajo `fracciones`) en tarjetas arrastrables INDIVIDUALES — a
+	 * pedido explícito del usuario, SOLO se usa para Panorama 1/Panorama 2 (ver fetchPanoramas/
+	 * sembrarPanoramasDesdeBandeja/copiarItemCalendarioAPanorama más abajo), NO para la Bandeja: una
+	 * cuenta fraccionada sigue llegando agrupada en una sola tarjeta "cluster" a la Bandeja (arrastre en
+	 * bloque, botones P1/P2 por cuota) y recién se separa en tarjetas individuales AL SER ARRASTRADA a
+	 * un panorama — no antes. Una cuenta sin fraccionar (0 cuotas en `fracciones`) sigue siendo una sola
+	 * tarjeta, sin cambios. `monto`/`fechaVencimiento` de una tarjeta-cuota pasan a ser los propios de
+	 * ESA cuota (antes eran la suma/fecha contractual de la cuenta completa) para que las tarjetas y los
+	 * totales de columna (proyeccionPagos, etc.) reflejen cada cuota individualmente. El `id` de una
+	 * tarjeta-cuota se marca NEGATIVO (-id_pago): id_cuenta_pagar e id_pago son secuencias de tablas
+	 * distintas y podrían coincidir numéricamente dentro de la misma columna — svelte-dnd-action exige
+	 * que el `id` sea único en toda la lista que recibe. */
+	function desglosarEnTarjetas(items: PagoPendienteItem[]): PagoPendienteItem[] {
+		const tarjetas: PagoPendienteItem[] = [];
+		for (const item of items) {
+			if (item.fracciones.length === 0) {
+				tarjetas.push(item);
+				continue;
+			}
+			for (const fraccion of item.fracciones) {
+				tarjetas.push({
+					...item,
+					id: -fraccion.id,
+					monto: fraccion.monto,
+					fechaVencimiento: fraccion.fecha,
+					panoramaId: fraccion.panoramaId,
+					panoramaOrden: fraccion.panoramaOrden,
+					fracciones: [fraccion]
+				});
+			}
+		}
+		return tarjetas;
+	}
+
+	/** Convierte una lista de tarjetas (mezcla de cuentas simples y cuotas individuales) a
+	 * PanoramaEntry[] para persistir con reorderPanorama — una tarjeta-cuota ya trae una sola
+	 * `fracciones[0]`, así que produce un 'cluster' de un solo elemento (mueve solo esa cuota). */
 	function aEntradas(items: PagoPendienteItem[]): PanoramaEntry[] {
 		return items.map((item) =>
 			item.fracciones.length > 0 ? { tipo: 'cluster' as const, idsFraccion: item.fracciones.map((f) => f.id) } : { tipo: 'cuenta' as const, id: item.id_cuenta_pagar }
@@ -424,8 +469,9 @@
 		if (bandejaTotal === 0) return;
 		try {
 			const todos = await getPagosPendientes(supabase, { pageSize: Math.max(bandejaTotal, 1000) });
-			panorama1 = todos.items.map((i) => ({ ...i }));
-			panorama2 = todos.items.map((i) => ({ ...i }));
+			const tarjetas = desglosarEnTarjetas(todos.items);
+			panorama1 = tarjetas.map((i) => ({ ...i }));
+			panorama2 = tarjetas.map((i) => ({ ...i }));
 			panorama1Version++;
 			panorama2Version++;
 			await fetchBandeja();
@@ -452,13 +498,17 @@
 
 	/** Misma copia de sesión que copiarItemAOtroPanorama (arriba), pero para el calendario: ahí el
 	 * botón de copiar de cada tarjeta pasa el destino EXPLÍCITO en vez de "el otro", porque desde
-	 * Panorama Actual (id 0) se puede copiar a cualquiera de los dos, no hay un único "otro". */
+	 * Panorama Actual (id 0) se puede copiar a cualquiera de los dos, no hay un único "otro". A
+	 * diferencia de panorama1/panorama2 (ya desglosados en tarjetas individuales, ver
+	 * desglosarEnTarjetas), `item` viene de panorama0Items SIN desglosar (cuenta completa con todas sus
+	 * cuotas) — se desglosa acá antes de copiar para no reintroducir una tarjeta "cluster" agrupada. */
 	function copiarItemCalendarioAPanorama(item: PagoPendienteItem, destino: 1 | 2) {
-		if (panoramaItems(destino).some((i) => i.id === item.id)) {
+		const nuevas = desglosarEnTarjetas([item]).filter((t) => !panoramaItems(destino).some((i) => i.id === t.id));
+		if (nuevas.length === 0) {
 			toast.error(`Ya está en ${PANORAMAS[destino - 1].nombre}`);
 			return;
 		}
-		setPanoramaItems(destino, [...panoramaItems(destino), { ...item }]);
+		setPanoramaItems(destino, [...panoramaItems(destino), ...nuevas]);
 		if (destino === 1) panorama1Version++;
 		else panorama2Version++;
 		toast.success(`Copiado a ${PANORAMAS[destino - 1].nombre}`);
@@ -917,20 +967,15 @@
 								</div>
 
 								{#if item.fracciones.length > 0}
-									<div class="mt-1.5 flex items-center gap-1 text-[10px] text-blue-600 font-semibold">
-										<Layers size={11} /> Fraccionada · {item.fracciones.length} cuota{item.fracciones.length === 1 ? '' : 's'} aquí
-									</div>
-									<div class="mt-1 space-y-1 border-t border-slate-100 pt-1.5">
-										{#each item.fracciones as fraccion (fraccion.id)}
-											<div class="flex items-center justify-between gap-1.5 text-[11px]">
-												<span class="text-slate-500 truncate">Cuota {fraccion.numeroCuota}/{fraccion.totalCuotas} · {fraccion.fecha}</span>
-												<div class="flex items-center gap-1 shrink-0">
-													<span class="font-semibold text-slate-700">{formatCurrency(fraccion.monto)}</span>
-													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, null); }} title="Regresar solo esta cuota a la Bandeja" class="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 hover:bg-slate-200">Bandeja</button>
-													<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, otroPanorama); }} title={`Mover solo esta cuota a Panorama ${otroPanorama}`} class="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-600 hover:bg-blue-100">P{otroPanorama}</button>
-												</div>
-											</div>
-										{/each}
+									{@const fraccion = item.fracciones[0]}
+									<div class="mt-1.5 flex items-center justify-between gap-1.5 text-[10px]">
+										<span class="flex items-center gap-1 text-blue-600 font-semibold shrink-0">
+											<Layers size={11} /> Cuota {fraccion.numeroCuota}/{fraccion.totalCuotas}
+										</span>
+										<div class="flex items-center gap-1 shrink-0">
+											<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, null); }} title="Regresar esta cuota a la Bandeja" class="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 hover:bg-slate-200">Bandeja</button>
+											<button type="button" onclick={(e) => { e.stopPropagation(); moverFraccion(fraccion.id, otroPanorama); }} title={`Mover esta cuota a Panorama ${otroPanorama}`} class="px-1 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-600 hover:bg-blue-100">P{otroPanorama}</button>
+										</div>
 									</div>
 								{/if}
 							</div>

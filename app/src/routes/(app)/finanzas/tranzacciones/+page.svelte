@@ -2,9 +2,10 @@
 	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
+	import { armarMensajeR2 } from '$lib/shared/mensajeR2';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -25,7 +26,9 @@
 		getCentroCostoOptionsSoloCentros,
 		getCentroCostoProductoLookup,
 		getPartidaOptions,
-		getComprobantesPago
+		getComprobantesPago,
+		getClaseCentroCosto,
+		getDetalleCategoria
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -380,6 +383,41 @@
 		return centroCostoLookup.get(String(id)) ?? `#${id}`;
 	}
 
+	// Botón "Msje" — a pedido explícito del usuario, se sacó del modal Nueva/Editar Transacción y ahora
+	// vive junto a cada proyecto en esta lista (solo Externa + Egreso, ver template), disponible sin
+	// tener que abrir la transacción. `mensajeR2Texto` null = popup cerrado; `msjeCargandoId` muestra un
+	// spinner en el botón de la fila mientras se arma el mensaje (getClaseCentroCosto + getDetalleCategoria
+	// son consultas puntuales, no vienen precargadas — ver armarMensajeR2 en mensajeR2.ts).
+	let mensajeR2Texto = $state<string | null>(null);
+	let msjeCargandoId = $state<number | null>(null);
+	async function mostrarMsjeDe(item: Transaccion) {
+		msjeCargandoId = item.id_transaccion;
+		try {
+			const [clase, detalle] = await Promise.all([getClaseCentroCosto(supabase, item.id_centro_costo_destino), getDetalleCategoria(supabase, item.id_transaccion)]);
+			mensajeR2Texto = armarMensajeR2({
+				userName: permisosState.userName || 'Usuario',
+				montoTotal: item.monto_total,
+				clase,
+				nombreDestino: centroCostoLabel(item.id_centro_costo_destino),
+				detalleCategoria: detalle
+			});
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo armar el mensaje');
+		} finally {
+			msjeCargandoId = null;
+		}
+	}
+	async function copiarMensajeR2() {
+		if (!mensajeR2Texto) return;
+		try {
+			await navigator.clipboard.writeText(mensajeR2Texto);
+			toast.success('Mensaje copiado al portapapeles.');
+		} catch (err) {
+			console.error('[tranzacciones] No se pudo copiar el mensaje:', err);
+			toast.error('No se pudo copiar — selecciona el texto y cópialo manualmente.');
+		}
+	}
+
 	function openCreate() {
 		modalMode = 'create';
 		editingTransaccion = null;
@@ -682,12 +720,31 @@
 					{/if}
 				</div>
 				<div class="flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 truncate flex items-center gap-1.5">
-						{centroCostoLabel(item.id_centro_costo_origen)} → {centroCostoLabel(item.id_centro_costo_destino)}
+					<div class="flex items-center gap-1.5">
+						<p class="font-semibold text-slate-800 truncate min-w-0">
+							{centroCostoLabel(item.id_centro_costo_origen)} → {centroCostoLabel(item.id_centro_costo_destino)}
+						</p>
 						{#if item.aprobado}
 							<ShieldCheck size={14} class="text-emerald-600 shrink-0" title={`Aprobado por ${item.aprobado_por ?? 'un administrador'}`} />
 						{/if}
-					</p>
+						{#if item.tipo_alcance === 'externa' && item.tipo === 'egreso'}
+							<button
+								type="button"
+								onclick={(e) => { e.stopPropagation(); mostrarMsjeDe(item); }}
+								disabled={msjeCargandoId === item.id_transaccion}
+								title="Ver mensaje del pago para copiarlo"
+								aria-label="Ver mensaje del pago para copiarlo"
+								class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 shrink-0"
+							>
+								{#if msjeCargandoId === item.id_transaccion}
+									<Loader2 size={11} class="animate-spin" />
+								{:else}
+									<MessageSquare size={11} />
+								{/if}
+								Msje
+							</button>
+						{/if}
+					</div>
 					<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
 					<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
 					<p class="text-[11px] text-slate-400 mt-0.5 truncate">
@@ -822,3 +879,43 @@
 	onConfirm={handleBulkDeleteConfirm}
 	onClose={closeBulkDeleteModal}
 />
+
+<!-- Popup del botón "Msje" (ver mostrarMsjeDe/mensajeR2Texto arriba) — muestra el mensaje en pantalla
+     con un botón "Copiar" (Clipboard API) para que el usuario lo pegue donde quiera (WhatsApp, correo,
+     etc.). Mismo diseño que tenía dentro del modal, ahora accesible por fila sin abrir la transacción. -->
+{#if mensajeR2Texto !== null}
+	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+			<div class="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+				<h2 class="text-base font-bold text-[#0f3b5e]">Msje</h2>
+				<button type="button" onclick={() => (mensajeR2Texto = null)} class="text-slate-400 hover:text-slate-600" aria-label="Cerrar">
+					<X size={20} />
+				</button>
+			</div>
+			<div class="p-5">
+				<textarea
+					readonly
+					rows="8"
+					value={mensajeR2Texto}
+					class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-none bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-200"
+				></textarea>
+			</div>
+			<div class="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-200">
+				<button
+					type="button"
+					onclick={() => (mensajeR2Texto = null)}
+					class="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-semibold hover:bg-slate-50"
+				>
+					Cerrar
+				</button>
+				<button
+					type="button"
+					onclick={copiarMensajeR2}
+					class="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+				>
+					<Copy size={16} /> Copiar
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}

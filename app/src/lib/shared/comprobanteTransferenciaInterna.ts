@@ -84,7 +84,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 
 			<div class="v-seccion">
 				<div class="v-seccion-titulo"><span class="v-num-circulo">2</span> IMPORTE Y CONCEPTO</div>
-				<div class="v-caja v-caja-2col">
+				<div class="v-caja v-caja-vertical">
 					<div class="v-col">
 						<div class="v-col-label">Importe (S/)</div>
 						<div class="v-importe">${escapeHtml(formatearMonto(datos.monto))}</div>

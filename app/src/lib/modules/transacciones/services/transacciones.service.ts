@@ -87,10 +87,20 @@ export interface Transaccion {
 	 * solo aplica a transacciones con tipo_alcance='interna'; se asigna UNA sola vez al crearse (no
 	 * cambia si se edita después). Ver transaccion_num_comprobante_interno_migration.sql. */
 	num_comprobante_interno: number | null;
-	/** Correlativo del PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — solo aplica a transacciones
-	 * Externa+Ingreso+Efectivo; se asigna UNA sola vez al generarse el recibo (no cambia si se edita
-	 * después). Ver transaccion_num_recibo_pago_migration.sql. */
+	/** Correlativo del PDF "RECIBO DE PAGO" en Efectivo (ver reciboPagoEfectivo.ts) — solo aplica a
+	 * transacciones Externa+Ingreso+Efectivo; se asigna UNA sola vez al generarse el recibo (no cambia si
+	 * se edita después). Ver transaccion_num_recibo_pago_migration.sql. */
 	num_recibo_pago: number | null;
+	/** Correlativo del PDF "RECIBO DE PAGO" NO Efectivo (ver reciboPagoEfectivo.ts) — a pedido explícito
+	 * del usuario, es un recibo DIFERENTE del de arriba (otro color de fondo) con su propia numeración
+	 * serial independiente, no comparte el correlativo con num_recibo_pago. Solo aplica a Externa+Ingreso
+	 * con medio_pago distinto de Efectivo. Ver transaccion_num_recibo_pago_no_efectivo_migration.sql. */
+	num_recibo_pago_no_efectivo: number | null;
+	/** Correlativo del PDF "RECIBO DE PAGO A PROVEEDOR" (ver reciboPagoProveedor.ts) — solo aplica a
+	 * transacciones Externa+Egreso+Efectivo; es un documento DIFERENTE de los dos de arriba (la empresa
+	 * entrega el dinero, no lo recibe) con su propia numeración serial independiente. Se asigna UNA sola
+	 * vez al generarse el recibo. Ver transaccion_num_recibo_pago_proveedor_migration.sql. */
+	num_recibo_pago_proveedor: number | null;
 	forma_pago: string | null;
 	descripcion: string | null;
 	tipo: string | null;
@@ -399,6 +409,12 @@ export async function createTransaccion(
 		// N° del PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — tampoco vive en FIELDS_CONFIG; null
 		// si el popup "Autogenerar Boucher de Transferencia" nunca se completó para esta transacción.
 		num_recibo_pago: (payload.num_recibo_pago as number | null) ?? null,
+		// N° del PDF "RECIBO DE PAGO" NO Efectivo — correlativo independiente, ver comentario en la
+		// interfaz Transaccion más arriba.
+		num_recibo_pago_no_efectivo: (payload.num_recibo_pago_no_efectivo as number | null) ?? null,
+		// N° del PDF "RECIBO DE PAGO A PROVEEDOR" (ver reciboPagoProveedor.ts) — correlativo independiente,
+		// ver comentario en la interfaz Transaccion más arriba.
+		num_recibo_pago_proveedor: (payload.num_recibo_pago_proveedor as number | null) ?? null,
 		// estado tampoco vive en FIELDS_CONFIG (showInForm:false) — ver resolveEstadoTransaccion.
 		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
 	};
@@ -441,6 +457,8 @@ export async function updateTransaccion(
 	updateData.factura_url = (payload.factura_url as string | null) ?? null;
 	updateData.num_comprobante_interno = (payload.num_comprobante_interno as number | null) ?? null;
 	updateData.num_recibo_pago = (payload.num_recibo_pago as number | null) ?? null;
+	updateData.num_recibo_pago_no_efectivo = (payload.num_recibo_pago_no_efectivo as number | null) ?? null;
+	updateData.num_recibo_pago_proveedor = (payload.num_recibo_pago_proveedor as number | null) ?? null;
 	updateData.estado = resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), actual?.estado);
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
@@ -900,6 +918,24 @@ export async function getCentroCostoTipoMap(client: SupabaseClient): Promise<Rec
 	return mapa;
 }
 
+/** Resuelve la "Clase" del Centro de Costo Destino de UNA transacción puntual (Proveedor/
+ * Subcontratista/Empleado/Cliente) — mismo criterio de detección que TransaccionModal.svelte usaba
+ * internamente (ver claseDestino: 'proveedores' -> tipo='proveedor', 'subcontratista' -> tipo=
+ * 'subcontratista', 'empleados' -> id_empleado no nulo, 'cliente' -> id_cliente no nulo), pero con UNA
+ * sola consulta puntual en vez de cargar las 4 listas completas de centroCostoOptions* — para el botón
+ * "Msje" (ver mensajeR2.ts) en la lista de finanzas/tranzacciones, que necesita esta etiqueta por fila
+ * sin abrir el modal. Cae a 'Centro de costo destino' si no matchea ninguna clase conocida. */
+export async function getClaseCentroCosto(client: SupabaseClient, idCentroCosto: number | null): Promise<string> {
+	if (!idCentroCosto) return 'Centro de costo destino';
+	const { data, error } = await client.from('centro_costo').select('tipo, id_empleado, id_cliente').eq('id_centro_costo', idCentroCosto).maybeSingle();
+	if (error || !data) return 'Centro de costo destino';
+	if (data.tipo === 'proveedor') return 'Proveedor';
+	if (data.tipo === 'subcontratista') return 'Subcontratista';
+	if (data.id_empleado !== null) return 'Empleado';
+	if (data.id_cliente !== null) return 'Cliente';
+	return 'Centro de costo destino';
+}
+
 /** id_centro_costo (como texto) -> `tipo_venta` del proyecto vinculado ('obra'|'consultoria'), o null
  * si el centro no está vinculado a un proyecto (Bolsa General, Consultoría manual, proveedor/cliente/
  * empleado). Para TransaccionModal.svelte: a pedido del usuario, cuando el proyecto es de Obra (su
@@ -1033,30 +1069,78 @@ export async function sincronizarDetalleCategoria(client: SupabaseClient, idTran
 }
 
 /** Siguiente correlativo para el PDF "RECIBO - TRANSFERENCIA INTERNA" (ver
- * comprobanteTransferenciaInterna.ts) — cada llamada INSERTA una fila nueva en
- * num_comprobante_interno_log (ver transaccion_correlativos_secuencia_migration.sql) y usa su `id`
- * SERIAL como correlativo; NO es un simple MAX(columna guardada) + 1. El botón "Autogenerar Boucher..."
- * genera y descarga el PDF EN EL MOMENTO que se presiona, esté o no guardada todavía la transacción —
- * con MAX+1, si el usuario cerraba el modal sin guardar después de generarlo, el número quedaba "libre"
- * y la próxima vez se repetía, imprimiendo el mismo N° en dos recibos distintos (confirmado con datos
- * reales: la tabla no tenía NINGUNA fila guardada pese a haberse generado varios recibos de prueba). El
- * INSERT consume el número de forma atómica e irreversible apenas se pide, así que nunca se repite —
- * puede dejar huecos (una transacción abandonada es como una boleta anulada), pero eso es preferible a
- * un duplicado. (Se descartó una primera versión con una función/RPC de Postgres — nunca llegó a
- * aparecer en el schema cache de PostgREST pese a correr la migración varias veces; un INSERT normal a
- * una tabla es el mismo mecanismo que ya usa el resto de la app de forma confiable.) */
+ * comprobanteTransferenciaInterna.ts) — MAX(num_comprobante_interno ya guardado) + 1, sobre la columna
+ * que ya existe en `transaccion` (confirmada funcionando toda la sesión), sin depender de ninguna tabla
+ * ni función nueva.
+ *
+ * OJO — limitación conocida y ACEPTADA: el botón "Autogenerar Boucher..." genera y descarga el PDF EN EL
+ * MOMENTO que se presiona, esté o no guardada todavía la transacción. Si el usuario genera un recibo y
+ * después cierra el modal SIN guardar, ese número nunca queda en la BD, y la próxima vez este cálculo
+ * puede volver a devolver el mismo número (dos PDF distintos con el mismo N° impreso). La alternativa
+ * correcta (un contador atómico en su propia tabla/secuencia) se intentó dos veces en esta sesión y
+ * ninguna migración nueva llegó a aplicarse en la base de datos real por una razón que no se pudo
+ * diagnosticar a distancia — se revierte a este criterio simple, que solo usa columnas ya existentes,
+ * para no seguir bloqueando la función completa. Si se resuelve esa causa raíz más adelante, vale la
+ * pena retomar el contador atómico. */
 export async function getSiguienteNumeroComprobanteInterno(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client.from('num_comprobante_interno_log').insert({}).select('id').single();
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_comprobante_interno')
+		.not('num_comprobante_interno', 'is', null)
+		.order('num_comprobante_interno', { ascending: false })
+		.limit(1)
+		.maybeSingle();
 	if (error) throw error;
-	return data.id as number;
+	return (data?.num_comprobante_interno ?? 0) + 1;
 }
 
-/** Siguiente correlativo para el PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — mismo criterio que
- * getSiguienteNumeroComprobanteInterno (INSERT en num_recibo_pago_log, nunca se repite). */
+/** Siguiente correlativo para el PDF "RECIBO DE PAGO" (ver reciboPagoEfectivo.ts) — mismo criterio y
+ * misma limitación aceptada que getSiguienteNumeroComprobanteInterno (ver comentario ahí). */
 export async function getSiguienteNumeroReciboPago(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client.from('num_recibo_pago_log').insert({}).select('id').single();
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_recibo_pago')
+		.not('num_recibo_pago', 'is', null)
+		.order('num_recibo_pago', { ascending: false })
+		.limit(1)
+		.maybeSingle();
 	if (error) throw error;
-	return data.id as number;
+	return (data?.num_recibo_pago ?? 0) + 1;
+}
+
+/** Siguiente correlativo para el PDF "RECIBO DE PAGO" NO Efectivo (ver reciboPagoEfectivo.ts) — a
+ * pedido explícito del usuario, es un recibo DIFERENTE del de Efectivo (otro color de fondo) con su
+ * propia numeración serial independiente sobre num_recibo_pago_no_efectivo (ver
+ * transaccion_num_recibo_pago_no_efectivo_migration.sql), no comparte el correlativo con
+ * getSiguienteNumeroReciboPago. Misma limitación aceptada — ver comentario en
+ * getSiguienteNumeroComprobanteInterno. */
+export async function getSiguienteNumeroReciboPagoNoEfectivo(client: SupabaseClient): Promise<number> {
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_recibo_pago_no_efectivo')
+		.not('num_recibo_pago_no_efectivo', 'is', null)
+		.order('num_recibo_pago_no_efectivo', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+	if (error) throw error;
+	return (data?.num_recibo_pago_no_efectivo ?? 0) + 1;
+}
+
+/** Siguiente correlativo para el PDF "RECIBO DE PAGO A PROVEEDOR" (ver reciboPagoProveedor.ts) — a
+ * pedido explícito del usuario, para Externa+Egreso+Efectivo (la empresa entrega el dinero, no lo
+ * recibe), con su propia numeración serial independiente sobre num_recibo_pago_proveedor (ver
+ * transaccion_num_recibo_pago_proveedor_migration.sql). Misma limitación aceptada — ver comentario en
+ * getSiguienteNumeroComprobanteInterno. */
+export async function getSiguienteNumeroReciboPagoProveedor(client: SupabaseClient): Promise<number> {
+	const { data, error } = await client
+		.from('transaccion')
+		.select('num_recibo_pago_proveedor')
+		.not('num_recibo_pago_proveedor', 'is', null)
+		.order('num_recibo_pago_proveedor', { ascending: false })
+		.limit(1)
+		.maybeSingle();
+	if (error) throw error;
+	return (data?.num_recibo_pago_proveedor ?? 0) + 1;
 }
 
 export interface ComprobantePago {

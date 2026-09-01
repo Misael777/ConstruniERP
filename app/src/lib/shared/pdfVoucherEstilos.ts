@@ -26,13 +26,18 @@ export const ESTILOS_VOUCHER_BASE = `
 	.v-caja-1col { padding: 10px 14px; }
 	.v-col { flex: 1; min-width: 0; padding: 10px 14px; }
 	.v-col + .v-col { border-left: 1.5px solid #dbe3ec; position: relative; }
+	/* Importe/Concepto (ver .v-importe/.v-texto, agrandados 4x a pedido explícito del usuario) ya no
+	   caben lado a lado sin desbordarse y superponerse — esta sección se apila en una sola columna, cada
+	   bloque a todo el ancho, en vez de usar v-caja-2col. */
+	.v-caja-vertical { display: flex; flex-direction: column; }
+	.v-caja-vertical .v-col + .v-col { border-left: none; border-top: 1.5px solid #dbe3ec; }
 	.v-col-label { font-size: 9.5px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 4px; }
 	.v-col-codigo { font-weight: 700; font-size: 13.5px; color: #0f3b5e; }
 	.v-col-nombre { font-size: 11px; color: #334155; margin-top: 2px; word-break: break-word; }
 	.v-flecha { width: 26px; height: 26px; border-radius: 50%; background: #0f3b5e; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 13px; position: absolute; left: -13px; top: 50%; transform: translateY(-50%); z-index: 1; box-shadow: 0 0 0 3px #f8fafc; }
-	.v-importe { font-weight: 700; font-size: 17px; color: #0f3b5e; }
+	.v-importe { font-weight: 700; font-size: 68px; color: #0f3b5e; line-height: 1.1; }
 	.v-importe-letras { font-size: 9.5px; font-style: italic; color: #64748b; margin-top: 3px; }
-	.v-texto { font-size: 11px; color: #334155; word-break: break-word; }
+	.v-texto { font-size: 44px; line-height: 1.15; color: #334155; word-break: break-word; }
 	.v-cuenta-codigo { font-weight: 700; font-size: 12px; color: #0f3b5e; display: inline-block; min-width: 52px; }
 	.v-cuenta-nombre { font-size: 10.5px; color: #334155; }
 	.v-footer { border-top: 1px solid #dbe3ec; margin-top: 10px; padding-top: 10px; font-size: 10.5px; color: #475569; line-height: 1.6; }

@@ -2,8 +2,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import jsPDF from 'jspdf';
-	import { arrayBufferToBase64, base64ToUint8Array } from '$lib/shared/base64';
+	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -29,11 +28,15 @@
 		sincronizarComprobantesPago,
 		type ComprobantePago,
 		getSiguienteNumeroComprobanteInterno,
-		getSiguienteNumeroReciboPago
+		getSiguienteNumeroReciboPago,
+		getSiguienteNumeroReciboPagoNoEfectivo,
+		getSiguienteNumeroReciboPagoProveedor
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { generarComprobanteTransferenciaInternaBase64 } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64 } from '$lib/shared/reciboPagoEfectivo';
+	import { generarReciboPagoProveedorBase64 } from '$lib/shared/reciboPagoProveedor';
 	import ReciboPagoModal, { type DatosPopupReciboPago } from '$lib/modules/transacciones/components/ReciboPagoModal.svelte';
+	import ReciboPagoProveedorModal, { type DatosPopupReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
@@ -415,6 +418,8 @@
 			catalogoAbiertoAuto = false;
 			comprobanteInternoNumero = transaccion?.num_comprobante_interno ?? null;
 			numeroReciboPago = transaccion?.num_recibo_pago ?? null;
+			numeroReciboPagoNoEfectivo = transaccion?.num_recibo_pago_no_efectivo ?? null;
+			numeroReciboPagoProveedor = transaccion?.num_recibo_pago_proveedor ?? null;
 			limpiarCuentaVinculada();
 			if (mode === 'create' && initialComprobanteFile) {
 				processComprobanteFiles([initialComprobanteFile]);
@@ -725,17 +730,6 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
 	}
 
-	// Botones "R1"/"R2" (a pedido explícito del usuario, junto a Cancelar): antes armaban un mensaje y
-	// lo enviaban por WhatsApp (wa.me) — a pedido explícito del usuario, ahora en vez de enviarse arman
-	// el mismo texto y lo DESCARGAN como PDF (ver generarPdfBase64/guardarArchivoBinario), sin pedir
-	// ningún número de teléfono.
-	function labelClaseDestinoActual(): string {
-		if (claseDestino === 'proveedores') return 'Proveedor';
-		if (claseDestino === 'subcontratista') return 'Subcontratista';
-		if (claseDestino === 'empleados') return 'Empleado';
-		if (claseDestino === 'cliente') return 'Cliente';
-		return labelFor(destinoField);
-	}
 	/** Los labels de Origen/Destino vienen como "código - nombre" (ver centroCostoOptionLabel en
 	 * transacciones.service.ts) — separa las dos partes para el comprobante de transferencia interna
 	 * (ver comprobanteTransferenciaInterna.ts), que las muestra en líneas distintas. */
@@ -816,9 +810,17 @@
 	// esReciboPagoEfectivo/reciboPagoEfectivo.ts): con Efectivo muestra el casillero fijo de siempre; con
 	// Transferencia/Depósito/Yape o Plin, un recuadro con la descripción libre que se pide en el popup.
 	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
+	// Botón "Autogenerar Recibo de Pago a Proveedor" (ver reciboPagoProveedor.ts) — a pedido explícito del
+	// usuario, con imagen de referencia: mismo caso que mostrarBotonReciboPago pero para Egreso en vez de
+	// Ingreso (acá la empresa entrega el dinero) y SOLO Efectivo (a diferencia de "Recibo por Pago", que
+	// aplica a cualquier medio — el usuario no pidió una variante no-efectivo para este caso).
+	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso' && formValues.medio_pago === '1');
 	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG)
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
+	// Correlativo independiente del recibo NO Efectivo — son dos recibos DIFERENTES (ver
+	// reciboPagoEfectivo.ts), cada uno con su propia numeración serial, a pedido explícito del usuario.
+	let numeroReciboPagoNoEfectivo = $state<number | null>(null);
 	let generandoReciboPago = $state(false);
 	// Cliente que paga — a pedido explícito del usuario, se autocompleta desde la transacción en vez de
 	// escribirse a mano: para Externa+Ingreso, "Centro de Costo Origen" ES el cliente (ver
@@ -839,13 +841,96 @@
 		reciboPagoModalOpen = true;
 	}
 
+	// Popup "Autogenerar Recibo de Pago a Proveedor" — mismo criterio que abrirReciboPago/
+	// handleGenerarReciboPago de arriba, pero para Externa+Egreso+Efectivo: acá "Centro de Costo Destino"
+	// ES el proveedor (ver getCentroCostoOptionsProveedores/optionsFor más abajo), así que basta resolver
+	// su id_proveedor y traer razón social/RUC.
+	let reciboPagoProveedorModalOpen = $state(false);
+	let numeroReciboPagoProveedor = $state<number | null>(null);
+	let generandoReciboPagoProveedor = $state(false);
+	let proveedorReciboNombre = $state('');
+	let proveedorReciboRuc = $state('');
+	async function abrirReciboPagoProveedor() {
+		proveedorReciboNombre = '';
+		proveedorReciboRuc = '';
+		const { data: centroCosto } = await supabase
+			.from('centro_costo')
+			.select('id_proveedor')
+			.eq('id_centro_costo', formValues.id_centro_costo_destino)
+			.maybeSingle();
+		if (centroCosto?.id_proveedor) {
+			const { data } = await supabase.from('proveedor').select('razon_social, ruc').eq('id_proveedor', centroCosto.id_proveedor).maybeSingle();
+			if (data) {
+				proveedorReciboNombre = data.razon_social ?? '';
+				proveedorReciboRuc = data.ruc ?? '';
+			}
+		}
+		reciboPagoProveedorModalOpen = true;
+	}
+
+	async function handleGenerarReciboPagoProveedor(datos: DatosPopupReciboPagoProveedor) {
+		generandoReciboPagoProveedor = true;
+		try {
+			let numero = numeroReciboPagoProveedor;
+			if (!numero) {
+				numero = await getSiguienteNumeroReciboPagoProveedor(supabase);
+				numeroReciboPagoProveedor = numero;
+			}
+
+			// Para Egreso, "Centro de Costo Origen" es el proyecto/fondo que paga (ver idCentroCostoProyecto
+			// más abajo) — a diferencia de Ingreso, donde el proyecto vive en el destino.
+			const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
+			const [, proyectoNombre] = separarCodigoNombre(origenLabel);
+
+			const base64 = await generarReciboPagoProveedorBase64({
+				numero,
+				fecha: formValues.fecha,
+				proveedorNombre: datos.proveedorNombre,
+				proveedorRuc: datos.proveedorRuc,
+				proyectoNombre,
+				monto: Number(formValues.monto_total) || 0,
+				concepto: datos.concepto,
+				entregoNombre: datos.entregoNombre,
+				entregoDni: datos.entregoDni,
+				firmaEntregoDataUrl: datos.firmaEntregoDataUrl,
+				recibioNombre: datos.proveedorNombre,
+				recibioDni: datos.proveedorRuc,
+				firmaRecibioDataUrl: datos.firmaRecibioDataUrl
+			});
+			await guardarArchivoBinario(base64, `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`, 'application/pdf');
+			reciboPagoProveedorModalOpen = false;
+
+			if (mode === 'edit' && transaccion) {
+				await updateTransaccion(
+					supabase,
+					transaccion.id_transaccion,
+					{ ...formValues, comprobante_url: comprobanteUrl, num_comprobante_interno: comprobanteInternoNumero, num_recibo_pago_proveedor: numero },
+					isAdmin()
+				);
+			}
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo generar el recibo de pago a proveedor:', err);
+			toast.error('No se pudo generar el recibo de pago a proveedor.');
+		} finally {
+			generandoReciboPagoProveedor = false;
+		}
+	}
+
 	async function handleGenerarReciboPago(datos: DatosPopupReciboPago) {
 		generandoReciboPago = true;
 		try {
-			let numero = numeroReciboPago;
+			// Efectivo y NO Efectivo son dos recibos diferentes (ver esEfectivo en reciboPagoEfectivo.ts) con
+			// numeración serial independiente entre sí — cada uno usa su propia columna/contador.
+			let numero = esReciboPagoEfectivo ? numeroReciboPago : numeroReciboPagoNoEfectivo;
 			if (!numero) {
-				numero = await getSiguienteNumeroReciboPago(supabase);
-				numeroReciboPago = numero;
+				numero = esReciboPagoEfectivo
+					? await getSiguienteNumeroReciboPago(supabase)
+					: await getSiguienteNumeroReciboPagoNoEfectivo(supabase);
+				if (esReciboPagoEfectivo) {
+					numeroReciboPago = numero;
+				} else {
+					numeroReciboPagoNoEfectivo = numero;
+				}
 			}
 
 			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
@@ -878,7 +963,13 @@
 				await updateTransaccion(
 					supabase,
 					transaccion.id_transaccion,
-					{ ...formValues, comprobante_url: comprobanteUrl, num_comprobante_interno: comprobanteInternoNumero, num_recibo_pago: numero },
+					{
+						...formValues,
+						comprobante_url: comprobanteUrl,
+						num_comprobante_interno: comprobanteInternoNumero,
+						num_recibo_pago: esReciboPagoEfectivo ? numero : numeroReciboPago,
+						num_recibo_pago_no_efectivo: esReciboPagoEfectivo ? numeroReciboPagoNoEfectivo : numero
+					},
 					isAdmin()
 				);
 			}
@@ -889,62 +980,6 @@
 			generandoReciboPago = false;
 		}
 	}
-	/** Convierte un texto plano en un PDF de una o más páginas (ajustando el salto de línea al ancho de
-	 * hoja) y lo devuelve en base64, listo para guardarArchivoBinario (mismo helper multiplataforma que
-	 * ya usan las exportaciones a Excel — Tauri abre el diálogo nativo "Guardar como", navegador usa la
-	 * descarga normal). */
-	function generarPdfBase64(mensaje: string): string {
-		const doc = new jsPDF();
-		const margin = 15;
-		const maxWidth = doc.internal.pageSize.getWidth() - margin * 2;
-		const pageHeight = doc.internal.pageSize.getHeight();
-		let y = 20;
-		doc.setFontSize(11);
-		for (const linea of doc.splitTextToSize(mensaje, maxWidth)) {
-			if (y > pageHeight - margin) {
-				doc.addPage();
-				y = margin;
-			}
-			doc.text(linea, margin, y);
-			y += 7;
-		}
-		return arrayBufferToBase64(doc.output('arraybuffer'));
-	}
-	async function handleEnviarR1() {
-		const nombreDestino = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
-		await guardarArchivoBinario(generarPdfBase64(armarMensajeR1(nombreDestino)), `R1-${formValues.fecha || Date.now()}.pdf`, 'application/pdf');
-	}
-	async function handleEnviarR2() {
-		const nombreDestino = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
-		await guardarArchivoBinario(generarPdfBase64(armarMensajeR2(nombreDestino)), `R2-${formValues.fecha || Date.now()}.pdf`, 'application/pdf');
-	}
-	function armarMensajeR1(nombreDestino: string): string {
-		return `Yo ${permisosState.userName || 'Usuario'}, he pagado ${formatCurrency(formValues.monto_total)} por el pago de ${labelClaseDestinoActual()} cuyo nombre es ${nombreDestino}, con fecha ${formatFecha(formValues.fecha)}.`;
-	}
-	// R2 — "Resumen 2", a pedido explícito del usuario: mismo encabezado que R1, con la fecha ACTUAL (no
-	// la fecha del pago, a diferencia de R1) y, si hay filas en "Detalle" (ver detalleCategoria más
-	// abajo), un desglose línea por línea ("S/1000 para planilla de semana 1", etc.).
-	function armarMensajeR2(nombreDestino: string): string {
-		const fechaHoy = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
-		let mensaje = `Yo ${permisosState.userName || 'Usuario'}, he pagado ${formatCurrency(formValues.monto_total)} por el pago de ${labelClaseDestinoActual()} al nombre de ${nombreDestino}, con fecha ${fechaHoy}.`;
-		// Registro por registro (a pedido explícito del usuario): cada fila de Detalle completa, no
-		// resumida — Subcategoría, Descripción (si tiene), Cantidad/Unidad/Precio unitario y Total.
-		const filasConDatos = detalleCategoria.filter((f) => f.subcategoria.trim());
-		if (filasConDatos.length > 0) {
-			const lineas = filasConDatos
-				.map((f, i) => {
-					const cantidad = Number(f.cantidad) || 0;
-					const precioUnitario = Number(f.precio_unitario) || 0;
-					const total = cantidad * precioUnitario;
-					const descripcion = f.descripcion?.trim() ? ` (${f.descripcion.trim()})` : '';
-					return `${i + 1}. ${f.subcategoria}${descripcion}: ${cantidad} ${f.unidad ?? ''} x ${formatCurrency(precioUnitario)} = ${formatCurrency(total)}`;
-				})
-				.join('\n');
-			mensaje += `\n\nDetalladamente se pagó:\n${lineas}`;
-		}
-		return mensaje;
-	}
-
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -1536,7 +1571,9 @@
 		// ninguno de los dos casos se requiere que el usuario adjunte además una foto/PDF de respaldo.
 		// Antes este chequeo era incondicional y bloqueaba el guardado sin ningún aviso visible (solo un
 		// texto rojo pequeño bajo el dropzone), lo que hacía parecer que el botón "Crear" no hacía nada.
-		const reciboPagoYaGenerado = mostrarBotonReciboPago && !!numeroReciboPago;
+		const reciboPagoYaGenerado =
+			(mostrarBotonReciboPago && (esReciboPagoEfectivo ? !!numeroReciboPago : !!numeroReciboPagoNoEfectivo)) ||
+			(mostrarBotonReciboPagoProveedor && !!numeroReciboPagoProveedor);
 		if (formValues.tipo_alcance !== 'interna' && !reciboPagoYaGenerado && !comprobanteFile && !comprobanteUrl) {
 			comprobanteError = 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.';
 			toast.error(comprobanteError);
@@ -1575,7 +1612,9 @@
 				...formValues,
 				comprobante_url: finalComprobanteUrl,
 				num_comprobante_interno: comprobanteInternoNumero,
-				num_recibo_pago: numeroReciboPago
+				num_recibo_pago: numeroReciboPago,
+				num_recibo_pago_no_efectivo: numeroReciboPagoNoEfectivo,
+				num_recibo_pago_proveedor: numeroReciboPagoProveedor
 			};
 
 			let result;
@@ -1913,7 +1952,7 @@
 								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
 									Adjuntar boucher de pago
-									{#if formValues.tipo_alcance !== 'interna' && !mostrarBotonReciboPago}<span class="text-red-500">*</span>{/if}
+									{#if formValues.tipo_alcance !== 'interna' && !mostrarBotonReciboPago && !mostrarBotonReciboPagoProveedor}<span class="text-red-500">*</span>{/if}
 								</label>
 								<label
 									for="tr-comprobante"
@@ -1955,7 +1994,7 @@
 										<p class="text-xs text-red-600">{comprobanteError}</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
-									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago}
+									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 										<p class="text-xs text-slate-400">Opcional: esta transacción ya emite su propio comprobante (ver botón abajo).</p>
 									{/if}
 								</div>
@@ -2003,6 +2042,20 @@
 											<FileText size={14} class="shrink-0" />
 										{/if}
 										Autogenerar Recibo por Pago
+									</button>
+								{:else if mostrarBotonReciboPagoProveedor}
+									<button
+										type="button"
+										onclick={abrirReciboPagoProveedor}
+										disabled={generandoReciboPagoProveedor || bloqueadaPorAprobacion}
+										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
+									>
+										{#if generandoReciboPagoProveedor}
+											<Loader2 size={14} class="animate-spin shrink-0" />
+										{:else}
+											<FileText size={14} class="shrink-0" />
+										{/if}
+										Autogenerar Recibo de Pago a Proveedor
 									</button>
 								{/if}
 								</div>
@@ -2734,22 +2787,6 @@
 				</div>
 
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
-					<button
-						type="button"
-						onclick={handleEnviarR1}
-						title="Descargar mensaje de pago en PDF"
-						class="px-3 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-					>
-						R1
-					</button>
-					<button
-						type="button"
-						onclick={handleEnviarR2}
-						title="Descargar resumen detallado en PDF"
-						class="px-3 py-2 text-sm font-medium rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-					>
-						R2
-					</button>
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
 						Cancelar
 					</button>
@@ -2795,5 +2832,15 @@
 	generando={generandoReciboPago}
 	onCancel={() => (reciboPagoModalOpen = false)}
 	onGenerar={handleGenerarReciboPago}
+/>
+
+<ReciboPagoProveedorModal
+	open={reciboPagoProveedorModalOpen}
+	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
+	proveedorNombreInicial={proveedorReciboNombre}
+	proveedorRucInicial={proveedorReciboRuc}
+	generando={generandoReciboPagoProveedor}
+	onCancel={() => (reciboPagoProveedorModalOpen = false)}
+	onGenerar={handleGenerarReciboPagoProveedor}
 />
 
