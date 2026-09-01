@@ -388,7 +388,7 @@
 
 	<!-- Filtros -->
 	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 items-end">
+		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
 			<div>
 				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
 				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
@@ -435,15 +435,13 @@
 					<option value="vencido">Vencido</option>
 				</select>
 			</div>
-			<div class="flex items-end gap-2">
-				<div class="flex-1">
-					<label for="mc-desde" class="block text-xs font-medium text-slate-500 mb-1">Fecha inicio</label>
-					<input id="mc-desde" type="date" bind:value={desde} max={hasta || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
-				</div>
-				<div class="flex-1">
-					<label for="mc-hasta" class="block text-xs font-medium text-slate-500 mb-1">Fecha fin</label>
-					<input id="mc-hasta" type="date" bind:value={hasta} min={desde || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
-				</div>
+			<div>
+				<label for="mc-desde" class="block text-xs font-medium text-slate-500 mb-1">Fecha inicio</label>
+				<input id="mc-desde" type="date" bind:value={desde} max={hasta || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+			</div>
+			<div>
+				<label for="mc-hasta" class="block text-xs font-medium text-slate-500 mb-1">Fecha fin</label>
+				<input id="mc-hasta" type="date" bind:value={hasta} min={desde || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
 			</div>
 		</div>
 		<div class="flex flex-wrap items-end gap-3 mt-3">
