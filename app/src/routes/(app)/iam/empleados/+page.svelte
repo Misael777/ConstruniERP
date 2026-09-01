@@ -103,13 +103,19 @@
 
 	/** Extraído del onMount original para poder re-consultar al togglear "Ver eliminados" (ver
 	 * toggleVerEliminados) sin recargar roles/áreas de nuevo. `estado` se agregó al select para poder
-	 * filtrar por dado-de-baja. */
+	 * filtrar por dado-de-baja.
+	 *
+	 * OJO: `dni` NO va en este select — mismo motivo que loadPermisos() en permisos.svelte.ts: si la
+	 * columna todavía no existe en un entorno donde no se corrió empleados_dni_migration.sql, el error
+	 * tira todo el query abajo y la lista completa de empleados deja de cargar ("Error al cargar
+	 * usuarios"), aunque el resto de columnas sí exista. Se carga aparte, en una consulta best-effort
+	 * separada que no puede romper esto (ver más abajo). */
 	async function fetchEmpleados() {
 		console.log("[IAM UI] Solicitando lista de empleados con roles a Supabase...");
 		let query = supabase
 			.from('empleados')
 			.select(`
-				id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
+				id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 				fecha_ingreso, salario, horas, periodo, nivel, area_id, estado,
 				roles ( nombre )
 			`)
@@ -123,6 +129,21 @@
 		}
 		empleados = formatEmpleados(empData || []);
 		console.log("[IAM UI] Empleados cargados exitosamente:", empleados);
+
+		// Best-effort, aparte de todo lo de arriba: si la columna dni no existe todavía (o cualquier otro
+		// fallo), esto NUNCA debe degradar la lista de empleados — solo el campo dni se queda vacío.
+		(async () => {
+			try {
+				const ids = empleados.map((e) => e.id);
+				if (ids.length === 0) return;
+				const { data, error } = await supabase.from('empleados').select('id, dni').in('id', ids);
+				if (error || !data) return;
+				const dniPorId = new Map(data.map((row: any) => [row.id, row.dni ?? '']));
+				empleados = empleados.map((e) => ({ ...e, dni: dniPorId.get(e.id) ?? e.dni }));
+			} catch {
+				// Best-effort — ver comentario arriba.
+			}
+		})();
 	}
 
 	function toggleVerEliminados() {
@@ -246,10 +267,11 @@
 			} else {
 				// Recargar lista por si acaso
 				console.warn("[IAM UI] El empleado no fue devuelto en la respuesta. Iniciando recarga de seguridad de la lista completa desde Supabase...");
+				// dni NO va en este select — mismo motivo que fetchEmpleados() más arriba.
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
@@ -361,11 +383,11 @@
 				const formatted = formatEmpleado(result.empleado);
 				empleados = empleados.map(emp => emp.id === editingEmpleadoId ? formatted : emp);
 			} else {
-				// Recargar lista por si acaso
+				// Recargar lista por si acaso — dni NO va en este select, mismo motivo que fetchEmpleados().
 				const { data: reloadData, error: reloadError } = await supabase
 					.from('empleados')
 					.select(`
-						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado, dni,
+						id, nombre, telefono, correo, rol_id, auth_user_id, password_configurado,
 						fecha_ingreso, salario, horas, periodo, nivel, area_id,
 						roles ( nombre )
 					`)
