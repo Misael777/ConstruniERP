@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
@@ -42,6 +43,9 @@
 		verEliminados = !verEliminados;
 		fetchProveedores();
 	}
+
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
+	onDestroy(setMobileFab(() => openModal(null), 'Nuevo Proveedor'));
 
 	onMount(() => {
 		fetchProveedores();
@@ -203,7 +207,7 @@
 				<button class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2">
 					<i class="fas fa-download"></i> Exportar
 				</button>
-				<button onclick={() => openModal(null)} class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center gap-2">
+				<button onclick={() => openModal(null)} class="hidden md:flex px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 transition-all active:scale-[0.98] items-center gap-2">
 					<i class="fas fa-plus"></i> Nuevo Proveedor
 				</button>
 			{/if}
