@@ -18,7 +18,9 @@
 		Building2,
 		Smartphone,
 		Pencil,
-		RotateCcw
+		RotateCcw,
+		TrendingUp,
+		Scale
 	} from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
@@ -36,14 +38,17 @@
 		getCentroCostoTipoMap,
 		getEmpleadoOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	// Panel de pagos 100% client-side (Supabase anon key) sobre `cuentas_pagar` — a pedido explícito
-	// del usuario, reemplaza por completo la versión anterior de esta pantalla (que reportaba sobre
-	// `transaccion` vía movimientosCaja.service.ts, todavía usado por Panoramas de Pago/Cobro, no se
-	// toca ese archivo). Mismo criterio del resto del ERP: la BD no tiene RLS real, isAdmin() es solo
-	// un guard de UI.
+	// del usuario. A pedido explícito del usuario (mensaje posterior): el panel de pagos NO se toca —
+	// se le agrega, aparte, una franja de Ingresos reales sobre `transaccion` (ver fetchIngresos/
+	// getMovimientosCaja más abajo) para que la pantalla muestre las dos caras del flujo de caja
+	// (lo que se recibe y lo que se paga), ya que `cuentas_pagar` por diseño solo representa Egresos a
+	// proveedores y no tiene ningún concepto de Ingreso. Mismo criterio del resto del ERP: la BD no
+	// tiene RLS real, isAdmin() es solo un guard de UI.
 
 	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
 	const TIPO_FILTRO_LABEL: Record<TipoFiltroCC, string> = {
@@ -123,6 +128,30 @@
 	let loadError = $state('');
 	let pageNum = $state(1);
 	const PAGE_SIZE = 10;
+
+	// Franja de Ingresos reales (ver import de getMovimientosCaja arriba) — independiente del panel de
+	// pagos de abajo, solo reacciona al rango de fechas (Proveedor/Estado/Tipo son conceptos propios de
+	// cuentas_pagar que no aplican a una transacción de Ingreso). Sin fecha elegida se trae TODO el
+	// histórico (mismo criterio "sin filtro = todo" del resto de esta pantalla).
+	let ingresosTotal = $state(0);
+	let ingresosCount = $state(0);
+	let ingresosLoading = $state(true);
+	async function fetchIngresos() {
+		ingresosLoading = true;
+		try {
+			const resultado = await getMovimientosCaja(supabase, {
+				desde: desde || '1970-01-01',
+				hasta: hasta || new Date().toISOString().slice(0, 10)
+			});
+			ingresosTotal = resultado.ingresosTotal;
+			ingresosCount = resultado.ingresosCount;
+		} catch (err: any) {
+			console.error('[MovimientosCaja] No se pudieron cargar los ingresos:', err);
+		} finally {
+			ingresosLoading = false;
+		}
+	}
+	const flujoNeto = $derived(ingresosTotal - resumen.totalPagado);
 
 	let centroCostoOptions = $state<FieldOption[]>([]);
 	let centroCostoSoloCentrosOptions = $state<FieldOption[]>([]);
@@ -213,7 +242,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
-		await fetchData();
+		await Promise.all([fetchData(), fetchIngresos()]);
 	});
 
 	$effect(() => {
@@ -225,6 +254,14 @@
 		void hasta;
 		void search;
 		fetchData();
+	});
+
+	// Franja de Ingresos: solo reacciona a fecha (ver comentario junto a fetchIngresos más arriba) —
+	// $effect aparte para no recargarla en cada cambio de Proveedor/Estado/Tipo, que no le aplican.
+	$effect(() => {
+		void desde;
+		void hasta;
+		fetchIngresos();
 	});
 
 	function onSearchInput(value: string) {
@@ -341,6 +378,39 @@
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
+
+	<!-- Ingresos reales (transaccion tipo='ingreso') — a pedido explícito del usuario, aparte del panel
+	     de pagos de abajo (que solo cubre Egresos a proveedores): muestra la otra cara del flujo de caja,
+	     lo que de verdad se recibió, y el neto contra lo ya pagado. -->
+	<div class="mb-2">
+		<h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Ingresos (Transacciones)</h2>
+	</div>
+	<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Total Ingresos</p>
+				<p class="text-2xl font-bold text-slate-800 truncate">{ingresosLoading ? '…' : formatCurrency(ingresosTotal)}</p>
+				<p class="text-[11px] text-slate-400 truncate">{ingresosCount} transacci{ingresosCount === 1 ? 'ón' : 'ones'}</p>
+			</div>
+		</div>
+		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+			<div class="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0"><CreditCard size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Pagado a proveedores</p>
+				<p class="text-2xl font-bold text-slate-800 truncate">{formatCurrency(resumen.totalPagado)}</p>
+				<p class="text-[11px] text-slate-400 truncate">Panel de pagos de abajo</p>
+			</div>
+		</div>
+		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+			<div class={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${flujoNeto >= 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}><Scale size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Flujo Neto del Período</p>
+				<p class={`text-2xl font-bold truncate ${flujoNeto >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(flujoNeto)}</p>
+				<p class="text-[11px] text-slate-400 truncate">Ingresos − Pagado a proveedores</p>
+			</div>
+		</div>
+	</div>
 
 	<!-- KPIs -->
 	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">

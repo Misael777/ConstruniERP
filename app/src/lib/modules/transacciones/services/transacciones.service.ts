@@ -464,6 +464,31 @@ export async function updateTransaccion(
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
+	// Si esta transacción es el respaldo de un pago/cobro ya confirmado (ver confirmarPagoPagado/
+	// confirmarCobroCobrado/registrarPagoDesdeTransaccion), un cambio de monto/fecha/medio de pago acá
+	// ANTES no se propagaba — la cuenta por pagar/cobrar vinculada se quedaba con el monto_pagado/
+	// monto_cobrado viejo, descuadrando "Movimientos de Caja y Financiamiento" (y el resto de paneles
+	// que suman sobre cuentas_pagar/cuentas_cobrar) frente a la transacción real ya editada. Se
+	// sincroniza el pago/cobro vinculado y se recalcula su cuenta, mismo criterio que deleteTransaccion/
+	// anularTransaccion más abajo.
+	const montoNuevo = Number(payload.monto_total);
+	const fechaNueva = payload.fecha as string;
+
+	const { data: pagoVinculado } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id).maybeSingle();
+	if (pagoVinculado) {
+		await client
+			.from('pagos')
+			.update({ monto: montoNuevo, fecha_pago: fechaNueva, medio_pago: labelPorCodigoMedioPago(payload.medio_pago as string | null) })
+			.eq('id_pago', pagoVinculado.id_pago);
+		await recalcularCuentaPagar(client, pagoVinculado.id_cuenta_pagar);
+	}
+
+	const { data: cobroVinculado } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id).maybeSingle();
+	if (cobroVinculado) {
+		await client.from('cobros').update({ monto: montoNuevo, fecha_cobro: fechaNueva }).eq('id_cobro', cobroVinculado.id_cobro);
+		await recalcularCuentaCobrar(client, cobroVinculado.id_cuenta_cobrar);
+	}
+
 	return { success: true, message: 'Transacción actualizada correctamente', data: data as Transaccion };
 }
 
