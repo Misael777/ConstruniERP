@@ -68,10 +68,12 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	// Dropdown "Filtrar por" — a pedido explícito del usuario: un solo criterio a la vez (no combinados
-	// entre sí, sí junto con el buscador). 'aprobado'/'desaprobado' filtran directo al elegirlos;
-	// 'fecha'/'estado' revelan un control secundario (fecha exacta / <select> de estado) para elegir el
-	// valor — ver onFiltroCriterioChange más abajo.
-	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'fecha' | 'estado';
+	// entre sí, sí junto con el buscador). 'aprobado'/'desaprobado'/'ingreso'/'egreso' filtran directo al
+	// elegirlos — Ingreso y Egreso son opciones DIFERENTES una de la otra (a pedido explícito del
+	// usuario), cada una su propia entrada del dropdown, mismo criterio que aprobado/desaprobado, no un
+	// sub-selector "Tipo" compartido; 'fecha'/'estado' sí revelan un control secundario (fecha exacta /
+	// <select> de estado) — ver onFiltroCriterioChange más abajo.
+	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'ingreso' | 'egreso' | 'fecha' | 'estado';
 	let filtroCriterio = $state<FiltroCriterio>('');
 	let filtroFecha = $state('');
 	let filtroEstado = $state('');
@@ -276,7 +278,8 @@
 				sortDir,
 				aprobado: filtroCriterio === 'aprobado' ? true : filtroCriterio === 'desaprobado' ? false : undefined,
 				fecha: filtroCriterio === 'fecha' ? filtroFecha || undefined : undefined,
-				estado: filtroCriterio === 'estado' ? filtroEstado || undefined : undefined
+				estado: filtroCriterio === 'estado' ? filtroEstado || undefined : undefined,
+				tipo: filtroCriterio === 'ingreso' ? 'ingreso' : filtroCriterio === 'egreso' ? 'egreso' : undefined
 			});
 			items = result.items;
 			total = result.total;
@@ -652,6 +655,8 @@
 				<option value="">Todos</option>
 				<option value="aprobado">Aprobado</option>
 				<option value="desaprobado">Desaprobado</option>
+				<option value="ingreso">Ingreso</option>
+				<option value="egreso">Egreso</option>
 				<option value="fecha">Fecha</option>
 				<option value="estado">Estado</option>
 			</select>
@@ -758,7 +763,7 @@
 								</button>
 							{/if}
 						</div>
-						<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'}</p>
+						<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'} · N° {item.id_transaccion}</p>
 						<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
 						<p class="text-[11px] text-slate-400 mt-0.5 truncate">
 							Producto: {productoProveedorLabel(item)}

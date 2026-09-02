@@ -1936,11 +1936,18 @@
 						<div class="flex items-center justify-between mb-4">
 							<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Datos de la Transacción</h3>
 							<!-- N° de transacción — a pedido explícito del usuario, arriba del área de datos de la
-							     transacción, solo lectura. En modo 'create' todavía no existe (recién se genera al
-							     guardar), así que no se muestra. -->
+							     transacción, solo lectura, visible en TODAS las circunstancias (Nueva y Editar). En
+							     modo 'create' el id real todavía no existe (recién se genera al guardar, lo asigna
+							     la BD) — mostrar un número "adivinado" de antemano sería engañoso (mismo motivo por
+							     el que esta sesión evitó los intentos de numeración secuencial "preview" para los
+							     recibos, ver getSiguienteNumeroReciboPago), así que se avisa que se asignará. -->
 							{#if mode === 'edit' && transaccion}
 								<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium" title="Número de transacción">
 									N° {transaccion.id_transaccion}
+								</span>
+							{:else}
+								<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-400 text-xs font-medium italic" title="El número se asigna automáticamente al guardar">
+									N° se asignará al guardar
 								</span>
 							{/if}
 						</div>

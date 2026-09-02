@@ -306,7 +306,7 @@
 									{/if}
 									<p class="flex items-center gap-1 font-semibold text-slate-700 truncate">
 										<span class={`w-1.5 h-1.5 rounded-full shrink-0 ${TIPO_DOT_CLASS[t.tipo ?? ''] ?? 'bg-slate-400'}`}></span>
-										{t.descripcion || t.num_documento || `#${t.id_transaccion}`}
+										{t.descripcion || t.num_documento || 'Transacción'} · N° {t.id_transaccion}
 									</p>
 									{#if vista === 'semana'}
 										<p class="text-slate-400 truncate">{TIPO_LABEL[t.tipo ?? ''] ?? t.tipo}</p>

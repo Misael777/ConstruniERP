@@ -158,6 +158,8 @@ export interface ListParams {
 	fecha?: string;
 	/** Filtra por `estado` exacto ('activo'|'anulado'|'consulta'). */
 	estado?: string;
+	/** Filtra por `tipo` exacto ('ingreso'|'egreso'|'financiamiento'|'transferencia'). */
+	tipo?: string;
 }
 
 export interface ListResult<T> {
@@ -331,6 +333,7 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 	if (params.aprobado !== undefined) query = query.eq('aprobado', params.aprobado);
 	if (params.fecha) query = query.eq('fecha', params.fecha);
 	if (params.estado) query = query.eq('estado', params.estado);
+	if (params.tipo) query = query.eq('tipo', params.tipo);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
