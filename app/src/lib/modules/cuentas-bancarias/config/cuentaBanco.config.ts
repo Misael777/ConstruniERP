@@ -20,7 +20,9 @@
  *     usuario             VARCHAR(100),
  *     fecha_autorizacion  DATE,
  *     observacion         TEXT,
- *     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ *     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ *     saldo_inicial       NUMERIC(14,2) NOT NULL DEFAULT 0, -- ver cuenta_banco_saldo_migration.sql
+ *     saldo_actual        NUMERIC(14,2) NOT NULL DEFAULT 0  -- ídem, solo lectura (ver nota abajo)
  *   );
  *
  * Notas:
@@ -30,9 +32,13 @@
  * - `estado` combina dos cosas: si la cuenta está activa/inactiva en uso, y si está autorizada o no.
  *   No hay botón dedicado de "aprobar" (a diferencia de transaccion.aprobado) — se cambia como
  *   cualquier otro campo del formulario, junto con `fecha_autorizacion` y `observacion`.
+ * - `saldo_inicial` se pide al crear Y al editar; `saldo_actual` es SIEMPRE derivado (saldo_inicial +
+ *   neto de las transacciones reales que usan esta cuenta como cuente_origen/cuente_destino, ver
+ *   recalcularSaldoCuentaBanco en cuentaBanco.service.ts) — nunca se escribe a mano.
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
+import { currencyMask } from '$lib/shared/fieldConfig';
 
 export const TABLE_NAME = 'cuenta_banco';
 export const PK_COLUMN = 'id_cuenta_banco';
@@ -130,6 +136,36 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		showInTable: false,
 		showInForm: true,
 		sortable: false
+	},
+	{
+		// A pedido explícito del usuario: se pide al crear Y al editar. `saldo_actual` (ver más abajo)
+		// siempre se deriva de este valor + el neto de las transacciones reales que usan esta cuenta como
+		// origen/destino (ver recalcularSaldoCuentaBanco en cuentaBanco.service.ts) — nunca se escribe a
+		// mano, así que editar este campo después de creada la cuenta SÍ recalcula saldo_actual, no lo
+		// pisa directo.
+		key: 'saldo_inicial',
+		label: 'Saldo Inicial',
+		tipo: 'currency',
+		min: 0,
+		mask: currencyMask,
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '0.00',
+		showInTable: true,
+		showInForm: true,
+		sortable: true
+	},
+	{
+		// Solo lectura — lo mantiene recalcularSaldoCuentaBanco (ver cuentaBanco.service.ts), nunca se
+		// escribe desde este formulario (showInForm:false lo excluye de validatePayload/
+		// buildWritablePayload automáticamente). Arranca en 0 igual que saldo_inicial si la cuenta nunca
+		// se modificó.
+		key: 'saldo_actual',
+		label: 'Saldo Actual',
+		tipo: 'currency',
+		showInTable: true,
+		showInForm: false,
+		sortable: true
 	},
 	{
 		key: 'estado',

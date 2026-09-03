@@ -96,9 +96,15 @@ function limpiarMonto(valorCrudo: string): number | null {
  *     que a veces aparece ANTES en el texto, algo común en transferencias BCP/BBVA/Interbank.
  *  2. Si no hay ninguna etiqueta reconocible (caso típico de Yape/Plin, que solo muestran "S/10" en
  *     grande sin la palabra "Monto" al lado), se toma el primer "S/ <número>" que aparezca.
- * null si no encuentra ningún monto con el símbolo de soles en ninguna de las dos pasadas. */
+ * null si no encuentra ningún monto con el símbolo de soles en ninguna de las dos pasadas.
+ * Tolerancia de 40 caracteres entre etiqueta y monto (antes 15) — a pedido explícito del usuario, con
+ * nuevos formatos de referencia (ej. constancia de operación BCP con layout de tabla "etiqueta | valor"
+ * en dos columnas): mismo motivo que el gap de 40 caracteres que ya usa extraerNumeroOperacion para
+ * "N° DE RECIBO"/"FECHA DE EMISIÓN" — Tesseract puede linealizar un layout de dos columnas metiendo
+ * texto de otro bloque entre la etiqueta y su valor. Ensanchar el gap es seguro: solo tolera más texto
+ * SIN dígitos en el medio (\D), nunca deja que el patrón salte por encima de otro número real. */
 function extraerMonto(texto: string): number | null {
-	const conEtiqueta = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,15}?${PATRON_MONTO.source}`, 'i'));
+	const conEtiqueta = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,40}?${PATRON_MONTO.source}`, 'i'));
 	const m = conEtiqueta ?? texto.match(PATRON_MONTO);
 	return m ? limpiarMonto(m[1]) : null;
 }
@@ -109,11 +115,14 @@ function extraerMonto(texto: string): number | null {
  * es OPCIONAL acá: algunas facturas solo indican la moneda una vez ("SOLES") y muestran los montos en
  * una tabla sin el símbolo en cada línea — exige 2 decimales para no confundirse con un RUC/N° de
  * documento cercano. Si una etiqueta aparece varias veces (ej. "Total" de cada ítem de una tabla), se
- * queda con la ÚLTIMA — el total general va al final, después del detalle/subtotal/IGV. */
+ * queda con la ÚLTIMA — el total general va al final, después del detalle/subtotal/IGV. Mismo gap de 40
+ * caracteres que extraerMonto (ver comentario ahí) — a pedido explícito del usuario, con formatos de
+ * referencia tipo NubeFact donde el cuadro "IMPORTE EN LETRAS" queda al lado (no debajo) de la tabla de
+ * totales, y Tesseract puede linealizar ese texto metido entre "TOTAL" y su "S/ monto". */
 function extraerMontoFactura(texto: string): number | null {
 	for (const etiqueta of ['total a pagar', 'importe total', 'total general', 'monto total', 'total']) {
 		// Separador de miles coma o espacio — mismo motivo que PATRON_MONTO arriba.
-		const regex = new RegExp(`${etiqueta}\\D{0,15}?(?:S\\/\\.?\\s*)?(\\d{1,3}(?:[,\\s]\\d{3})*\\.\\d{2}|\\d+\\.\\d{2})`, 'gi');
+		const regex = new RegExp(`${etiqueta}\\D{0,40}?(?:S\\/\\.?\\s*)?(\\d{1,3}(?:[,\\s]\\d{3})*\\.\\d{2}|\\d+\\.\\d{2})`, 'gi');
 		let ultimo: RegExpExecArray | null = null;
 		for (let m = regex.exec(texto); m !== null; m = regex.exec(texto)) ultimo = m;
 		if (ultimo) {

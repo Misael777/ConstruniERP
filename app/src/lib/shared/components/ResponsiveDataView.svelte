@@ -40,13 +40,19 @@
 
 <!-- Desktop: tabla normal -->
 <table class="hidden md:table w-full text-left text-sm whitespace-nowrap">
-	<thead class="text-xs text-slate-500 bg-slate-50/50 font-semibold border-b border-slate-100">
+	<!-- Encabezado fijo al hacer scroll (a pedido explícito del usuario, con imagen de referencia) —
+	     `sticky` en el `<th>` en vez de en `<thead>` (más compatible entre navegadores/WebViews que
+	     solo lo aplican de forma confiable a celdas, no al grupo entero) + fondo sólido (antes
+	     `bg-slate-50/50` semitransparente dejaba ver las filas debajo al quedar pegado arriba). Depende
+	     de que el contenedor scrolleable (el `div` que envuelve esta tabla en cada página) tenga
+	     `overflow-y-auto`, ya el caso en todas las tablas que usan este componente. -->
+	<thead class="text-xs text-slate-500 font-semibold border-b border-slate-100">
 		<tr>
 			{#if header}
 				{@render header()}
 			{:else}
 				{#each columns as col}
-					<th class={`px-5 py-4 ${alignClass(col.align)} ${col.class ?? ''}`}>{col.label}</th>
+					<th class={`sticky top-0 z-10 bg-slate-50 px-5 py-4 ${alignClass(col.align)} ${col.class ?? ''}`}>{col.label}</th>
 				{/each}
 			{/if}
 		</tr>

@@ -85,13 +85,20 @@
 		return new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(amount);
 	}
 
-	function getTipoColor(tipo: string) {
-		switch(tipo) {
-			case 'Residencial': return 'bg-blue-50 text-blue-600 border-blue-200';
-			case 'Comercial': return 'bg-emerald-50 text-emerald-600 border-emerald-200';
-			case 'Corporativo': return 'bg-purple-50 text-purple-600 border-purple-200';
-			case 'Industrial': return 'bg-orange-50 text-orange-600 border-orange-200';
-			default: return 'bg-slate-50 text-slate-600 border-slate-200';
+	/** Columna "Tipo proyecto" de la tabla — a pedido explícito del usuario, muestra el TIPO DE VENTA
+	 * real del proyecto (`row.tipoVenta`/`row.tipoObra`, agregados en +page.svelte), mismo criterio que
+	 * ya usa el filtro "Tipo proyecto" (ver tipoProyectoMatch), no el tipo de edificación de Consultoría
+	 * que mostraba antes (`row.tipo`). */
+	function getTipoVentaLabel(row: any) {
+		if (row.tipoVenta === 'consultoria') return 'Consultoria';
+		if (row.tipoVenta === 'obra' && row.tipoObra === 'SUP') return 'Supervision';
+		return 'Obra';
+	}
+	function getTipoVentaColor(label: string) {
+		switch (label) {
+			case 'Consultoria': return 'bg-purple-50 text-purple-600 border-purple-200';
+			case 'Supervision': return 'bg-orange-50 text-orange-600 border-orange-200';
+			default: return 'bg-blue-50 text-blue-600 border-blue-200'; // 'Obra'
 		}
 	}
 
@@ -198,8 +205,8 @@
 				</td>
 				<td class="px-5 py-4 font-semibold text-slate-700">{formatMoney(row.valor)}</td>
 				<td class="px-5 py-4">
-					<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
-						{row.tipo}
+					<span class={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoVentaColor(getTipoVentaLabel(row))}`}>
+						{getTipoVentaLabel(row)}
 					</span>
 				</td>
 				<td class="px-5 py-4 text-slate-600">{row.fecha}</td>
@@ -258,8 +265,8 @@
 						<div class="font-semibold text-slate-800 truncate">{getCodigo(row)}</div>
 						<div class="text-xs text-slate-500 truncate mt-0.5">{getCliente(row)}</div>
 						<div class="flex items-center gap-1.5 mt-1 flex-wrap">
-							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoColor(row.tipo)}`}>
-								{row.tipo}
+							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoVentaColor(getTipoVentaLabel(row))}`}>
+								{getTipoVentaLabel(row)}
 							</span>
 							<span class={`inline-block text-[10px] font-bold px-2.5 py-1 rounded-md border whitespace-nowrap ${getEstadoBadge(row.estado_proyecto)}`}>
 								{getEstadoLabel(row.estado_proyecto)}

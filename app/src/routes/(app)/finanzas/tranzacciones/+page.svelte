@@ -6,7 +6,7 @@
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
-	import { armarMensajeR2 } from '$lib/shared/mensajeR2';
+	import { armarMensajeEgreso, armarMensajeIngreso, armarMensajeIngresoEfectivo } from '$lib/shared/mensajeR2';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -27,9 +27,7 @@
 		getCentroCostoOptionsSoloCentros,
 		getCentroCostoProductoLookup,
 		getPartidaOptions,
-		getComprobantesPago,
-		getClaseCentroCosto,
-		getDetalleCategoria
+		getComprobantesPago
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -104,6 +102,10 @@
 	let centroCostoOptionsCompleto = $state<FieldOption[]>([]);
 	let detalleDynamicOptions = $state<Record<string, FieldOption[]>>({ id_partida: [] });
 	const centroCostoLookup = $derived(new Map(centroCostoOptionsCompleto.map((o) => [o.value, o.label])));
+	/** numero_cuenta -> "Titular - N° de cuenta" (ver dynamicOptions.cuenta_banco arriba) — para el
+	 * mensaje del botón "Msje" (ver mostrarMsjeDe más abajo), que referencia la cuenta de origen desde
+	 * la que se pagó. */
+	const cuentaBancoLookup = $derived(new Map((dynamicOptions.cuenta_banco ?? []).map((o) => [o.value, o.label])));
 
 	// Producto y Servicio del proveedor vinculado al centro de costo origen/destino de cada
 	// transacción (columna real proveedor.vendedor, ver getCentroCostoProductoLookup) — no toda
@@ -398,29 +400,68 @@
 		return centroCostoLookup.get(String(id)) ?? `#${id}`;
 	}
 
+	/** Solo el nombre (después del "código - ") de un centro de costo — para el placeholder "nombre de
+	 * proyecto" del mensaje de Ingreso, que pide solo el nombre, no el label completo con el código. */
+	function centroCostoNombre(id: number | null): string {
+		const label = centroCostoLabel(id);
+		const idx = label.indexOf(' - ');
+		return idx === -1 ? label : label.slice(idx + 3);
+	}
+
 	// Botón "Msje" — a pedido explícito del usuario, se sacó del modal Nueva/Editar Transacción y ahora
-	// vive junto a cada proyecto en esta lista (solo Externa + Egreso, ver template), disponible sin
-	// tener que abrir la transacción. `mensajeR2Texto` null = popup cerrado; `msjeCargandoId` muestra un
-	// spinner en el botón de la fila mientras se arma el mensaje (getClaseCentroCosto + getDetalleCategoria
-	// son consultas puntuales, no vienen precargadas — ver armarMensajeR2 en mensajeR2.ts).
+	// vive junto a cada proyecto en esta lista (Externa + Egreso o Ingreso, ver template), disponible sin
+	// tener que abrir la transacción. `mensajeR2Texto` null = popup cerrado. Tres plantillas fijas según
+	// tipo/medio_pago (ver mensajeR2.ts): Egreso, Ingreso (no efectivo) e Ingreso + Efectivo. Para
+	// Ingreso, Centro de Costo Origen = cliente y Centro de Costo Destino = proyecto (convención ya
+	// usada en el resto del módulo); la cuenta bancaria es la de destino (a la que entró el dinero), a
+	// diferencia de Egreso donde es la de origen (desde la que se pagó). Ya no hace ninguna consulta
+	// aparte (todo ya está precargado en centroCostoLookup/cuentaBancoLookup), pero se mantiene el mismo
+	// `msjeCargandoId` (spinner instantáneo) por si en el futuro vuelve a necesitar una consulta puntual.
 	let mensajeR2Texto = $state<string | null>(null);
 	let msjeCargandoId = $state<number | null>(null);
-	async function mostrarMsjeDe(item: Transaccion) {
+	function mostrarMsjeDe(item: Transaccion) {
 		msjeCargandoId = item.id_transaccion;
 		try {
-			const [clase, detalle] = await Promise.all([getClaseCentroCosto(supabase, item.id_centro_costo_destino), getDetalleCategoria(supabase, item.id_transaccion)]);
-			mensajeR2Texto = armarMensajeR2({
-				userName: permisosState.userName || 'Usuario',
-				montoTotal: item.monto_total,
-				clase,
-				nombreDestino: centroCostoLabel(item.id_centro_costo_destino),
-				detalleCategoria: detalle
-			});
+			if (item.tipo === 'ingreso') {
+				const cuentaDestino = cuentaBancoLookup.get(item.cuente_destino ?? '') ?? item.cuente_destino ?? '—';
+				if (item.medio_pago === '1') {
+					mensajeR2Texto = armarMensajeIngresoEfectivo({
+						usuario: permisosState.userName || 'Usuario',
+						monto: item.monto_total,
+						proveedor: centroCostoLabel(item.id_centro_costo_origen),
+						cuentaBancaria: cuentaDestino,
+						fecha: item.fecha
+					});
+				} else {
+					mensajeR2Texto = armarMensajeIngreso({
+						monto: item.monto_total,
+						fecha: item.fecha,
+						cliente: centroCostoLabel(item.id_centro_costo_origen),
+						cuentaBancaria: cuentaDestino,
+						nombreProyecto: centroCostoNombre(item.id_centro_costo_destino)
+					});
+				}
+			} else {
+				mensajeR2Texto = armarMensajeEgreso({
+					usuario: permisosState.userName || 'Usuario',
+					monto: item.monto_total,
+					proveedor: centroCostoLabel(item.id_centro_costo_destino),
+					cuentaBancaria: cuentaBancoLookup.get(item.cuente_origen ?? '') ?? item.cuente_origen ?? '—',
+					fecha: item.fecha
+				});
+			}
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo armar el mensaje');
 		} finally {
 			msjeCargandoId = null;
 		}
+	}
+	/** Botón "Msje": construye el mensaje y lo copia al portapapeles en un solo clic (a pedido del
+	 * usuario), y de paso abre el popup con el texto ya armado por si lo quiere revisar/editar antes de
+	 * pegarlo. */
+	async function mostrarYCopiarMsjeDe(item: Transaccion) {
+		mostrarMsjeDe(item);
+		await copiarMensajeR2();
 	}
 	async function copiarMensajeR2() {
 		if (!mensajeR2Texto) return;
@@ -715,7 +756,7 @@
 				class={`flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${selectedId === item.id_transaccion ? 'bg-blue-50 hover:bg-blue-50' : ''}`}
 				onclick={() => selectRow(item)}
 			>
-				<div class="flex items-center gap-3 min-w-0">
+				<div class="flex items-center gap-3 min-w-0 flex-1">
 					<input
 						type="checkbox"
 						checked={checkedIds.has(item.id_transaccion)}
@@ -744,23 +785,6 @@
 							</p>
 							{#if item.aprobado}
 								<ShieldCheck size={14} class="text-emerald-600 shrink-0" title={`Aprobado por ${item.aprobado_por ?? 'un administrador'}`} />
-							{/if}
-							{#if item.tipo_alcance === 'externa' && item.tipo === 'egreso'}
-								<button
-									type="button"
-									onclick={(e) => { e.stopPropagation(); mostrarMsjeDe(item); }}
-									disabled={msjeCargandoId === item.id_transaccion}
-									title="Ver mensaje del pago para copiarlo"
-									aria-label="Ver mensaje del pago para copiarlo"
-									class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 shrink-0"
-								>
-									{#if msjeCargandoId === item.id_transaccion}
-										<Loader2 size={11} class="animate-spin" />
-									{:else}
-										<MessageSquare size={11} />
-									{/if}
-									Msje
-								</button>
 							{/if}
 						</div>
 						<p class="text-xs text-slate-500 truncate">{item.num_documento || 'Sin N° documento'} · N° {item.id_transaccion}</p>
@@ -796,10 +820,28 @@
 						{/if}
 					</div>
 				</div>
-				<div class="flex items-center justify-end gap-1 sm:shrink-0 sm:ml-2">
+				<!-- Columna de acciones apilada verticalmente: Ver documentos (ojito), Msje justo debajo (a
+				     pedido del usuario) y luego Editar/Bloqueado. -->
+				<div class="flex flex-row items-center justify-end gap-1 sm:flex-col sm:shrink-0 sm:ml-2">
 					{#if item.comprobante_url || item.factura_url}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
+						</button>
+					{/if}
+					{#if item.tipo_alcance === 'externa' && (item.tipo === 'egreso' || item.tipo === 'ingreso')}
+						<button
+							type="button"
+							onclick={(e) => { e.stopPropagation(); mostrarYCopiarMsjeDe(item); }}
+							disabled={msjeCargandoId === item.id_transaccion}
+							title="Elaborar mensaje y copiarlo al portapapeles"
+							aria-label="Elaborar mensaje y copiarlo al portapapeles"
+							class="p-1.5 rounded-lg text-[#1c5f8f] hover:bg-[#e8f1f8] hover:text-[#0f3b5e] disabled:opacity-60 transition-colors"
+						>
+							{#if msjeCargandoId === item.id_transaccion}
+								<Loader2 size={16} class="animate-spin" />
+							{:else}
+								<MessageSquare size={16} />
+							{/if}
 						</button>
 					{/if}
 					{#if item.aprobado}

@@ -30,6 +30,7 @@
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		if (!cuenta && !values.estado) values.estado = 'activa';
+		if (!cuenta && !values.saldo_inicial) values.saldo_inicial = '0';
 		return values;
 	}
 

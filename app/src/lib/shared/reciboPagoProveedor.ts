@@ -1,12 +1,13 @@
 /**
- * Genera el PDF "RECIBO DE PAGO A PROVEEDOR" que se emite para un pago en Efectivo de una transacción
- * Externa de tipo Egreso — a pedido explícito del usuario, replica AL PIXEL una imagen de referencia que
- * compartió. Misma plantilla base (hoja fija 544×682px, posicionamiento absoluto, dos copias — Original
- * y "COPIA" — apiladas con separador punteado) que RECIBO DE PAGO (ver reciboPagoEfectivo.ts), pero con
- * roles invertidos: acá la EMPRESA es quien entrega el dinero y el PROVEEDOR quien lo recibe (en el otro,
- * el cliente paga y la empresa recibe). Se arma como HTML/CSS y se convierte a UNA sola imagen con
- * html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en navegador, Tauri Windows y
- * Tauri Android.
+ * Genera el PDF "RECIBO DE PAGO A PROVEEDOR" que se emite para un pago (Efectivo o no) de una
+ * transacción Externa de tipo Egreso — a pedido explícito del usuario, replica AL PIXEL una imagen de
+ * referencia que compartió. Misma plantilla base (hoja fija 544×682px, posicionamiento absoluto, dos
+ * copias — Original y "COPIA" — apiladas con separador punteado) que RECIBO DE PAGO (ver
+ * reciboPagoEfectivo.ts), pero con roles invertidos: acá la EMPRESA es quien entrega el dinero y el
+ * PROVEEDOR quien lo recibe (en el otro, el cliente paga y la empresa recibe). Igual que RECIBO DE PAGO,
+ * la sección 3 "FORMA DE PAGO" y el fondo (blanco/crema) cambian según `esEfectivo` — ver ese archivo
+ * para el criterio completo. Se arma como HTML/CSS y se convierte a UNA sola imagen con html2canvas antes
+ * de incrustarla en el PDF con jsPDF — funciona igual en navegador, Tauri Windows y Tauri Android.
  */
 import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
@@ -36,6 +37,14 @@ export interface DatosReciboPagoProveedor {
 	recibioDni: string;
 	/** PNG en base64 (data URL completa, ver SignaturePad.svelte) */
 	firmaRecibioDataUrl: string;
+	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO". false =
+	 * cualquier otro medio (Transferencia/Depósito/Yape o Plin) — muestra en cambio un recuadro con
+	 * `formaPagoTexto` tal cual lo escribió el usuario (ej. "Transferencia BCP"). Mismo criterio que
+	 * DatosReciboPago.esEfectivo en reciboPagoEfectivo.ts. */
+	esEfectivo: boolean;
+	/** Descripción libre del medio de pago no efectivo — solo se usa/requiere cuando esEfectivo es
+	 * false. */
+	formaPagoTexto?: string;
 }
 
 // Misma plantilla/proporciones que reciboPagoEfectivo.ts (ver comentario de archivo) — CSS duplicado a
@@ -56,6 +65,10 @@ const ESTILOS_RECIBO_PROVEEDOR = `
 	.rp-intro { position: absolute; left: 0; right: 0; top: 33px; border-bottom: 1px solid #777; padding-bottom: 2px; font-size: 5px; line-height: 1.15; }
 	.rp-section { position: absolute; left: 0; right: 0; border: 1px solid #777; border-radius: 2px; }
 	.rp-section-title { position: absolute; left: 0; top: -8px; font-size: 5.2px; font-weight: 700; background: #fff; display: flex; align-items: center; gap: 2px; }
+	/* Recibo NO EFECTIVO — mismo criterio que reciboPagoEfectivo.ts: fondo crema/beige para diferenciarlo
+	   de un vistazo del recibo en Efectivo (blanco, arriba). */
+	.rp-receipt-no-efectivo { background: #f4e9d2; }
+	.rp-receipt-no-efectivo .rp-section-title { background: #f4e9d2; }
 	.rp-icon { width: 6px; height: 6px; color: #0f3b5e; flex-shrink: 0; }
 	.rp-project { top: 59px; height: 22px; padding: 7px 7px 3px; }
 	.rp-project-name { font-size: 7px; font-weight: 700; }
@@ -71,6 +84,7 @@ const ESTILOS_RECIBO_PROVEEDOR = `
 	.rp-payment { top: 128px; height: 28px; padding: 7px 7px 3px; }
 	.rp-cashbox { font-size: 6px; font-weight: 700; margin-bottom: 2px; display: flex; align-items: center; gap: 3px; }
 	.rp-payment-note { font-size: 4.5px; line-height: 1.2; }
+	.rp-forma-pago-texto { border: 1.2px solid #94a3b8; border-radius: 3px; padding: 5px 7px; font-size: 6.5px; font-weight: 700; color: #1e293b; letter-spacing: .02em; margin-top: 2px; }
 	.rp-detail { top: 162px; height: 21px; }
 	.rp-detail-cell { position: absolute; top: 0; height: 100%; padding: 5px 7px 2px; }
 	.rp-detail-cell.rp-first { left: 0; width: 50%; border-right: 1px solid #777; }
@@ -101,7 +115,7 @@ function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: D
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
 	return `
-		<div class="rp-receipt ${posicionClase}">
+		<div class="rp-receipt ${posicionClase} ${datos.esEfectivo ? '' : 'rp-receipt-no-efectivo'}">
 			<img class="rp-logo" src="/logo.png" alt="${escapeHtml(EMPRESA_NOMBRE)}" />
 			<div class="rp-header-right">
 				<div class="rp-number">N° ${escapeHtml(numeroTexto)}</div>
@@ -109,7 +123,7 @@ function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: D
 				<div class="rp-meta">Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))}<br>Página: 1 de 1</div>
 			</div>
 
-			<div class="rp-intro">Por medio del presente documento, la empresa <b>${escapeHtml(EMPRESA_NOMBRE)}</b> con RUC ${escapeHtml(EMPRESA_RUC)}, hace constar la entrega en efectivo del importe detallado a continuación a favor de:</div>
+			<div class="rp-intro">Por medio del presente documento, la empresa <b>${escapeHtml(EMPRESA_NOMBRE)}</b> con RUC ${escapeHtml(EMPRESA_RUC)}, hace constar ${datos.esEfectivo ? 'la entrega en efectivo' : 'el pago'} del importe detallado a continuación a favor de:</div>
 
 			<div class="rp-section rp-project">
 				<div class="rp-section-title">${ICONO_CAMION}1&nbsp;&nbsp;PROVEEDOR / DESTINATARIO</div>
@@ -132,8 +146,12 @@ function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: D
 
 			<div class="rp-section rp-payment">
 				<div class="rp-section-title">3&nbsp;&nbsp;FORMA DE PAGO</div>
-				<div class="rp-cashbox">${ICONO_BILLETE} EFECTIVO</div>
-				<div class="rp-payment-note">EFECTIVO - Se hizo entrega del dinero en efectivo al representante del proveedor</div>
+				${
+					datos.esEfectivo
+						? `<div class="rp-cashbox">${ICONO_BILLETE} EFECTIVO</div>
+					<div class="rp-payment-note">EFECTIVO - Se hizo entrega del dinero en efectivo al representante del proveedor</div>`
+						: `<div class="rp-forma-pago-texto">${escapeHtml((datos.formaPagoTexto || '').toUpperCase())}</div>`
+				}
 			</div>
 
 			<div class="rp-section rp-detail">

@@ -2,43 +2,62 @@
  * Arma el texto del mensaje "Msje" (antes botón "R2" dentro de Nueva/Editar Transacción) — a pedido
  * explícito del usuario, se sacó del modal y ahora vive junto a cada proyecto en la lista de
  * finanzas/tranzacciones (ver +page.svelte), disponible sin necesidad de abrir la transacción para
- * editarla. Función pura extraída tal cual del modal (mismo formato de mensaje, sin cambios) para que
- * ambos lugares — si en algún momento se necesitara de nuevo desde el modal — arme exactamente el mismo
- * texto.
+ * editarla. Tres plantillas distintas, cada una su propia función (en vez de una sola con banderas) —
+ * más fácil de leer/ajustar una por separado sin arriesgar romper las otras dos:
+ *   - Egreso: armarMensajeEgreso.
+ *   - Ingreso (cualquier medio de pago que no sea Efectivo): armarMensajeIngreso.
+ *   - Ingreso + Efectivo: armarMensajeIngresoEfectivo (a diferencia de las otras dos, no hay una cuenta
+ *     bancaria real de por medio — ver +page.svelte, ese campo queda vacío/"—" en ese caso).
+ * Todas son funciones puras — el llamador (+page.svelte) resuelve los labels de cliente/proveedor/
+ * cuenta bancaria/proyecto antes de pasarlos acá.
  */
 import { formatCurrency } from './fieldConfig';
-import type { DetalleCategoria } from '$lib/modules/transacciones/services/transacciones.service';
+import { formatearFechaCorta } from './pdfFormatoUtil';
 
-export interface DatosMensajeR2 {
-	userName: string;
-	montoTotal: number;
-	/** "Proveedor"/"Subcontratista"/"Empleado"/"Cliente"/"Centro de costo destino" — ver
-	 * getClaseCentroCosto en transacciones.service.ts. */
-	clase: string;
-	nombreDestino: string;
-	detalleCategoria: DetalleCategoria[];
+export interface DatosMensajeEgreso {
+	usuario: string;
+	monto: number;
+	proveedor: string;
+	/** Label de la cuenta bancaria de origen (ej. "BCP SOLES - 192 4713256045"). */
+	cuentaBancaria: string;
+	/** 'YYYY-MM-DD' — la fecha de la propia transacción (no la fecha en que se genera el mensaje). */
+	fecha: string;
 }
 
-/** Con la fecha ACTUAL (no la fecha del pago) y, si hay filas en "Detalle", un desglose línea por línea
- * ("S/1000 para planilla de semana 1", etc.) — a pedido explícito del usuario. */
-export function armarMensajeR2(datos: DatosMensajeR2): string {
-	const fechaHoy = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
-	let mensaje = `Yo ${datos.userName || 'Usuario'}, he pagado ${formatCurrency(datos.montoTotal)} por el pago de ${datos.clase} al nombre de ${datos.nombreDestino}, con fecha ${fechaHoy}.`;
+/** Pago a proveedor por transferencia/depósito bancario (no efectivo), con la cuenta de origen desde
+ * la que se pagó. */
+export function armarMensajeEgreso(datos: DatosMensajeEgreso): string {
+	return `Yo, ${datos.usuario}, he registrado el pago de ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado a la cuenta de ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}. (no es efectivo)`;
+}
 
-	// Registro por registro (a pedido explícito del usuario): cada fila de Detalle completa, no
-	// resumida — Subcategoría, Descripción (si tiene), Cantidad/Unidad/Precio unitario y Total.
-	const filasConDatos = datos.detalleCategoria.filter((f) => f.subcategoria.trim());
-	if (filasConDatos.length > 0) {
-		const lineas = filasConDatos
-			.map((f, i) => {
-				const cantidad = Number(f.cantidad) || 0;
-				const precioUnitario = Number(f.precio_unitario) || 0;
-				const total = cantidad * precioUnitario;
-				const descripcion = f.descripcion?.trim() ? ` (${f.descripcion.trim()})` : '';
-				return `${i + 1}. ${f.subcategoria}${descripcion}: ${cantidad} ${f.unidad ?? ''} x ${formatCurrency(precioUnitario)} = ${formatCurrency(total)}`;
-			})
-			.join('\n');
-		mensaje += `\n\nDetalladamente se pagó:\n${lineas}`;
-	}
-	return mensaje;
+export interface DatosMensajeIngreso {
+	monto: number;
+	/** 'YYYY-MM-DD'. */
+	fecha: string;
+	cliente: string;
+	/** Label de la cuenta bancaria de destino (a la que entró el dinero). */
+	cuentaBancaria: string;
+	nombreProyecto: string;
+}
+
+/** Ingreso recibido por transferencia/depósito bancario (no efectivo) — a nombre de qué cuenta propia
+ * entró el dinero, de qué cliente, y a qué proyecto corresponde. */
+export function armarMensajeIngreso(datos: DatosMensajeIngreso): string {
+	return `Se ha registrado un ingreso de ${formatCurrency(datos.monto)}, el día ${formatearFechaCorta(datos.fecha)} del cliente ${datos.cliente}, a la cuenta a nombre de ${datos.cuentaBancaria}, por el proyecto ${datos.nombreProyecto}`;
+}
+
+export interface DatosMensajeIngresoEfectivo {
+	usuario: string;
+	monto: number;
+	proveedor: string;
+	/** Label de la cuenta bancaria de destino — normalmente vacío/"—" en Efectivo (no hay cuenta real de
+	 * por medio), se muestra igual tal cual llegue. */
+	cuentaBancaria: string;
+	/** 'YYYY-MM-DD'. */
+	fecha: string;
+}
+
+/** Ingreso recibido en efectivo, por quien tiene la sesión abierta. */
+export function armarMensajeIngresoEfectivo(datos: DatosMensajeIngresoEfectivo): string {
+	return `Yo, ${datos.usuario}, he registrado el pago de ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado en efectivo y recibido por ${datos.usuario}, ósea ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}`;
 }

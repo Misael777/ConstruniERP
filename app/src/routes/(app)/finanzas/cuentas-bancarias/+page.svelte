@@ -8,7 +8,7 @@
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { Landmark, Plus, Pencil, Trash2, Trash, RotateCcw, ChevronLeft, Search, ChevronUp, ChevronDown, X } from '@lucide/svelte';
-	import { getOptionLabel } from '$lib/shared/fieldConfig';
+	import { getOptionLabel, formatCurrency } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-bancarias/config/cuentaBanco.config';
 	import {
 		getCuentasBanco,
@@ -322,7 +322,10 @@
 					<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 						{getOptionLabel(estadoField, item.estado)}
 					</span>
-					<p class="text-[11px] text-slate-400 mt-1">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
+					<p class={`text-sm font-bold mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatCurrency(item.saldo_inicial)}">
+						{formatCurrency(item.saldo_actual)}
+					</p>
+					<p class="text-[11px] text-slate-400">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
 				</div>
 				<div class="flex items-center gap-1 shrink-0 ml-2">
 					{#if verEliminados}

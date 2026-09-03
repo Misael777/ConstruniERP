@@ -28,6 +28,7 @@ import {
 // funciones DENTRO de otras funciones (nunca en el top-level), ver deleteTransaccion más abajo.
 import { recalcularCuentaCobrar } from '../../cuentas-cobrar/services/cuentasCobrar.service';
 import { recalcularCuentaPagar } from '../../cuentas-pagar/services/cuentasPagar.service';
+import { recalcularSaldoCuentaBanco } from '../../cuentas-bancarias/services/cuentaBanco.service';
 import { getOrCrearCentroCostoParaEntidad } from '../../centro-costos/services/centroCostos.service';
 import { generarCodigoProyecto, type ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
 
@@ -249,6 +250,48 @@ async function saldoDisponibleCentroCosto(client: SupabaseClient, idCentroCosto:
 	}, 0);
 }
 
+/** Mapa id_centro_costo (texto) -> saldo disponible de TODOS los centros de costo de un tirón (una sola
+ * consulta) — misma fórmula que saldoDisponibleCentroCosto, para mostrar "Monto actual" junto al
+ * selector de Centro de Costo Origen/Destino en TransaccionModal.svelte, sin una consulta por opción
+ * (a pedido explícito del usuario). */
+export async function getSaldosCentroCosto(client: SupabaseClient): Promise<Record<string, number>> {
+	const { data, error } = await client.from(TABLE_NAME).select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total').eq('estado', 'activo');
+	if (error) throw error;
+
+	const saldos: Record<string, number> = {};
+	for (const t of (data ?? []) as any[]) {
+		const monto = Number(t.monto_total);
+		if (t.id_centro_costo_origen != null && (t.tipo === 'egreso' || t.tipo === 'transferencia')) {
+			const key = String(t.id_centro_costo_origen);
+			saldos[key] = (saldos[key] ?? 0) - monto;
+		}
+		if (t.id_centro_costo_destino != null && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) {
+			const key = String(t.id_centro_costo_destino);
+			saldos[key] = (saldos[key] ?? 0) + monto;
+		}
+	}
+	return saldos;
+}
+
+/** Números de cuenta bancaria (cuente_destino) que recibieron algún Ingreso activo a favor de este
+ * Centro de Costo — a pedido explícito del usuario: en Egreso, "Cuenta origen" debe ofrecer primero las
+ * cuentas donde de verdad entró dinero de ESE centro de costo (para no pagar desde una cuenta ajena al
+ * proyecto), y solo si ninguna cuenta recibió nunca un Ingreso de ese centro (lista vacía), el llamador
+ * cae de vuelta a mostrar TODAS las cuentas registradas (ver optionsFor en TransaccionModal.svelte). Sin
+ * duplicados (Set) — un mismo centro de costo puede haber recibido varios ingresos a la misma cuenta. */
+export async function getCuentasBancoUsadasEnIngresos(client: SupabaseClient, idCentroCosto: number | null): Promise<string[]> {
+	if (!idCentroCosto) return [];
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('cuente_destino')
+		.eq('estado', 'activo')
+		.eq('tipo', 'ingreso')
+		.eq('id_centro_costo_destino', idCentroCosto)
+		.not('cuente_destino', 'is', null);
+	if (error) throw error;
+	return [...new Set((data ?? []).map((t: any) => t.cuente_destino as string))];
+}
+
 /** Mismo criterio que saldoDisponibleCentroCosto, pero para una cuenta bancaria registrada — suma por
  * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo. */
 async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: string, excluirIdTransaccion?: number): Promise<number> {
@@ -428,6 +471,13 @@ export async function createTransaccion(
 		return { success: false, message: `No se pudo crear la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 	}
 
+	// Si cuente_origen/cuente_destino corresponden a una cuenta bancaria propia registrada, su
+	// saldo_actual se recalcula acá — a pedido explícito del usuario: Ingreso con esta cuenta como
+	// destino la incrementa, cualquier tipo con esta cuenta como origen la debita (ver
+	// recalcularSaldoCuentaBanco, mismo criterio que saldoDisponibleCuentaBanco de arriba). Best-effort,
+	// nunca rompe la creación ya confirmada de la transacción.
+	await Promise.all([recalcularSaldoCuentaBanco(client, (data as Transaccion).cuente_origen), recalcularSaldoCuentaBanco(client, (data as Transaccion).cuente_destino)]);
+
 	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
 }
 
@@ -445,7 +495,7 @@ export async function updateTransaccion(
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
-	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado').eq(PK_COLUMN, id).single();
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado && !esAdmin) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
@@ -492,6 +542,14 @@ export async function updateTransaccion(
 		await recalcularCuentaCobrar(client, cobroVinculado.id_cuenta_cobrar);
 	}
 
+	// Recalcula el saldo de toda cuenta bancaria involucrada, antes O después de este cambio (ej. si
+	// cambió de qué cuenta salía el dinero, la vieja también debe quedar sin ese egreso) — ver
+	// recalcularSaldoCuentaBanco. Set para no recalcular dos veces la misma cuenta si no cambió.
+	const cuentasBancoAfectadas = new Set(
+		[actual?.cuente_origen, actual?.cuente_destino, updateData.cuente_origen, updateData.cuente_destino].filter((c): c is string => !!c)
+	);
+	await Promise.all([...cuentasBancoAfectadas].map((numeroCuenta) => recalcularSaldoCuentaBanco(client, numeroCuenta)));
+
 	return { success: true, message: 'Transacción actualizada correctamente', data: data as Transaccion };
 }
 
@@ -502,7 +560,7 @@ export async function updateTransaccion(
  * pendiente, ya que ahora le falta esa transacción (ver recalcularCuentaCobrar/recalcularCuentaPagar).
  */
 export async function deleteTransaccion(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
-	const { data: actual } = await client.from(TABLE_NAME).select('aprobado').eq(PK_COLUMN, id).single();
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado && !esAdmin) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
@@ -532,6 +590,9 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 		console.error('[transacciones.service] deleteTransaccion: 0 filas afectadas para id', id);
 		return { success: false, message: `No se pudo eliminar la transacción #${id}: no se afectó ninguna fila (verifica permisos o que aún exista).` };
 	}
+
+	await Promise.all([recalcularSaldoCuentaBanco(client, actual?.cuente_origen), recalcularSaldoCuentaBanco(client, actual?.cuente_destino)]);
+
 	return { success: true, message: 'Transacción eliminada correctamente' };
 }
 
@@ -593,6 +654,12 @@ export async function anularTransaccion(client: SupabaseClient, id: number, esAd
 
 	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'anulado' }).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo anular la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	// Una transacción anulada deja de contar (estado != 'activo') en recalcularSaldoCuentaBanco/
+	// saldoDisponibleCuentaBanco — recalcula para que el saldo de la cuenta bancaria vuelva a reflejar
+	// que este movimiento "no ocurrió realmente" (mismo criterio que el resto del ERP).
+	await Promise.all([recalcularSaldoCuentaBanco(client, (data as any)?.cuente_origen), recalcularSaldoCuentaBanco(client, (data as any)?.cuente_destino)]);
+
 	return { success: true, message: 'Transacción anulada', data: data as Transaccion };
 }
 
@@ -604,6 +671,10 @@ export async function reactivarTransaccion(client: SupabaseClient, id: number, e
 
 	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'activo' }).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo reactivar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+
+	// Vuelve a contar para el saldo de la cuenta bancaria — mismo criterio que anularTransaccion arriba.
+	await Promise.all([recalcularSaldoCuentaBanco(client, (data as any)?.cuente_origen), recalcularSaldoCuentaBanco(client, (data as any)?.cuente_destino)]);
+
 	return { success: true, message: 'Transacción reactivada', data: data as Transaccion };
 }
 

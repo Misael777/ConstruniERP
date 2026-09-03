@@ -813,6 +813,14 @@ async function copiarCodigoGenerado() {
 	// (mientras la venta sigue abierta, se puede seguir ajustando la pestaña con normalidad).
 	let tabsBloqueadosPorCierre = $derived(mode === 'edit' && ventaFinalizada);
 
+	// A pedido explícito del usuario: en Nueva venta Y Editar venta, apenas se elige un Tipo de
+	// Proyecto (Consultoría u Obra) la OTRA opción queda bloqueada de inmediato — ya no hace falta
+	// esperar a que la venta se cierre (tabsBloqueadosPorCierre, que sigue aplicando además una vez
+	// cerrada, mismo criterio "no se puede cambiar"). Evita que alguien arranque cargando datos de
+	// Obra y después cambie a Consultoría (o al revés) a mitad de camino, dejando campos de la otra
+	// pestaña sueltos en la BD sin sentido para el tipo final elegido.
+	let otroTipoBloqueado = $derived(caracteristicasTab !== null);
+
 	// A pedido del usuario: cerrar una venta ya NO exige tener el contrato adjunto (antes sí) — solo
 	// necesita el Adelanto inicial completo (monto + comprobante, ya sea recién adjuntado o ya
 	// registrado antes) además de la proforma final y el monto final ya confirmados. El contrato se
@@ -1472,8 +1480,8 @@ async function copiarCodigoGenerado() {
 								     de esa sección — cambiar cualquiera de los dos actualiza el otro. -->
 								<select
 									value={caracteristicasTab ?? ''}
-									disabled={tabsBloqueadosPorCierre}
-									title={tabsBloqueadosPorCierre ? 'La venta ya está cerrada — el tipo de proyecto ya no se puede cambiar.' : ''}
+									disabled={otroTipoBloqueado}
+									title={tabsBloqueadosPorCierre ? 'La venta ya está cerrada — el tipo de proyecto ya no se puede cambiar.' : otroTipoBloqueado ? 'Ya elegiste el Tipo de Proyecto — no se puede cambiar.' : ''}
 									onchange={(e) => {
 										const value = (e.currentTarget as HTMLSelectElement).value;
 										caracteristicasTab = value === 'obra' || value === 'consultoria' ? value : null;
@@ -1818,26 +1826,40 @@ async function copiarCodigoGenerado() {
 							<button
 								type="button"
 								onclick={() => (caracteristicasTab = 'consultoria')}
-								disabled={tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria'}
-								title={tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria' ? 'La venta ya está cerrada como Obra — no se puede cambiar a Consultoría' : ''}
-								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'consultoria' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
+								disabled={otroTipoBloqueado && caracteristicasTab !== 'consultoria'}
+								title={
+									tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria'
+										? 'La venta ya está cerrada como Obra — no se puede cambiar a Consultoría'
+										: otroTipoBloqueado && caracteristicasTab !== 'consultoria'
+											? 'Ya elegiste Obra como Tipo de Proyecto — Consultoría queda bloqueada'
+											: ''
+								}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'consultoria' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${otroTipoBloqueado && caracteristicasTab !== 'consultoria' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
 							>
 								Consultoría
-								{#if tabsBloqueadosPorCierre && caracteristicasTab !== 'consultoria'}<i class="fas fa-lock text-[10px]"></i>{/if}
+								{#if otroTipoBloqueado && caracteristicasTab !== 'consultoria'}<i class="fas fa-lock text-[10px]"></i>{/if}
 							</button>
 							<button
 								type="button"
 								onclick={() => { caracteristicasTab = 'obra'; if (distrito && distritoNumero === null) actualizarNumeroDistrito(); }}
-								disabled={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'}
-								title={tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'La venta ya está cerrada como Consultoría — no se puede cambiar a Obra' : ''}
-								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${tabsBloqueadosPorCierre && caracteristicasTab !== 'obra' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
+								disabled={otroTipoBloqueado && caracteristicasTab !== 'obra'}
+								title={
+									tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'
+										? 'La venta ya está cerrada como Consultoría — no se puede cambiar a Obra'
+										: otroTipoBloqueado && caracteristicasTab !== 'obra'
+											? 'Ya elegiste Consultoría como Tipo de Proyecto — Obra queda bloqueada'
+											: ''
+								}
+								class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${caracteristicasTab === 'obra' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'} ${otroTipoBloqueado && caracteristicasTab !== 'obra' ? 'opacity-50 cursor-not-allowed hover:text-slate-500' : ''}`}
 							>
 								Obra
-								{#if tabsBloqueadosPorCierre && caracteristicasTab !== 'obra'}<i class="fas fa-lock text-[10px]"></i>{/if}
+								{#if otroTipoBloqueado && caracteristicasTab !== 'obra'}<i class="fas fa-lock text-[10px]"></i>{/if}
 							</button>
 						</div>
 						{#if tabsBloqueadosPorCierre}
 							<p class="text-[11px] text-slate-400 mb-3">La venta ya está cerrada — el tipo de proyecto ({caracteristicasTab === 'obra' ? 'Obra' : 'Consultoría'}) ya no se puede cambiar.</p>
+						{:else if otroTipoBloqueado}
+							<p class="text-[11px] text-slate-400 mb-3">Tipo de Proyecto elegido: {caracteristicasTab === 'obra' ? 'Obra' : 'Consultoría'} — la otra pestaña queda bloqueada.</p>
 						{:else}
 							<div class="mb-3"></div>
 						{/if}

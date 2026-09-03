@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
@@ -30,8 +30,11 @@
 		getSiguienteNumeroComprobanteInterno,
 		getSiguienteNumeroReciboPago,
 		getSiguienteNumeroReciboPagoNoEfectivo,
-		getSiguienteNumeroReciboPagoProveedor
+		getSiguienteNumeroReciboPagoProveedor,
+		getSaldosCentroCosto,
+		getCuentasBancoUsadasEnIngresos
 	} from '$lib/modules/transacciones/services/transacciones.service';
+	import { getSaldosCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { generarComprobanteTransferenciaInternaBase64 } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64 } from '$lib/shared/reciboPagoEfectivo';
 	import { generarReciboPagoProveedorBase64 } from '$lib/shared/reciboPagoProveedor';
@@ -44,6 +47,7 @@
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import { reconocerComprobante, reconocerComprobantePago, type ReconocerComprobanteResult } from '$lib/shared/ocrComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -730,6 +734,16 @@
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
 	}
 
+	/** A diferencia de formatFecha (fuerza UTC porque lee campos 'YYYY-MM-DD' sin hora, ver comentario
+	 * arriba), `created_at` SÍ es un timestamp real con hora — se muestra en hora local tal cual ocurrió,
+	 * para el pie "Transacción registrada por" (a pedido explícito del usuario). */
+	function formatFechaHora(value: string | null | undefined): string {
+		if (!value) return '—';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '—';
+		return date.toLocaleString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+	}
+
 	/** Los labels de Origen/Destino vienen como "código - nombre" (ver centroCostoOptionLabel en
 	 * transacciones.service.ts) — separa las dos partes para el comprobante de transferencia interna
 	 * (ver comprobanteTransferenciaInterna.ts), que las muestra en líneas distintas. */
@@ -812,9 +826,10 @@
 	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
 	// Botón "Autogenerar Recibo de Pago a Proveedor" (ver reciboPagoProveedor.ts) — a pedido explícito del
 	// usuario, con imagen de referencia: mismo caso que mostrarBotonReciboPago pero para Egreso en vez de
-	// Ingreso (acá la empresa entrega el dinero) y SOLO Efectivo (a diferencia de "Recibo por Pago", que
-	// aplica a cualquier medio — el usuario no pidió una variante no-efectivo para este caso).
-	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso' && formValues.medio_pago === '1');
+	// Ingreso (acá la empresa entrega el dinero). A pedido explícito del usuario, disponible de forma
+	// permanente para CUALQUIER medio de pago (no solo Efectivo) — mismo criterio que mostrarBotonReciboPago:
+	// la sección "FORMA DE PAGO" del PDF se adapta según esReciboPagoEfectivo (ver reciboPagoProveedor.ts).
+	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso');
 	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG)
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
@@ -895,19 +910,18 @@
 				firmaEntregoDataUrl: datos.firmaEntregoDataUrl,
 				recibioNombre: datos.proveedorNombre,
 				recibioDni: datos.proveedorRuc,
-				firmaRecibioDataUrl: datos.firmaRecibioDataUrl
+				firmaRecibioDataUrl: datos.firmaRecibioDataUrl,
+				esEfectivo: esReciboPagoEfectivo,
+				formaPagoTexto: datos.formaPagoTexto
 			});
-			await guardarArchivoBinario(base64, `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`, 'application/pdf');
+			const nombreArchivo = `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`;
+			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
 			reciboPagoProveedorModalOpen = false;
 
-			if (mode === 'edit' && transaccion) {
-				await updateTransaccion(
-					supabase,
-					transaccion.id_transaccion,
-					{ ...formValues, comprobante_url: comprobanteUrl, num_comprobante_interno: comprobanteInternoNumero, num_recibo_pago_proveedor: numero },
-					isAdmin()
-				);
-			}
+			// A pedido explícito del usuario: no se guarda de una vez — mismo criterio que
+			// handleGenerarReciboPago, ver comentario ahí.
+			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+			comprobanteError = '';
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el recibo de pago a proveedor:', err);
 			toast.error('No se pudo generar el recibo de pago a proveedor.');
@@ -952,27 +966,17 @@
 				esEfectivo: esReciboPagoEfectivo,
 				formaPagoTexto: datos.formaPagoTexto
 			});
-			await guardarArchivoBinario(base64, `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`, 'application/pdf');
+			const nombreArchivo = `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`;
+			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
 			reciboPagoModalOpen = false;
 
-			// Si ya existe la fila (edición), se persiste el correlativo de una vez para que quede
-			// consistente con el número impreso — igual que handleGenerarBoucherTransferencia con
-			// comprobanteInternoNumero. En 'create' (todavía sin guardar) el número viaja en el payload
-			// principal cuando el usuario presione "Crear" (ver handleSubmit).
-			if (mode === 'edit' && transaccion) {
-				await updateTransaccion(
-					supabase,
-					transaccion.id_transaccion,
-					{
-						...formValues,
-						comprobante_url: comprobanteUrl,
-						num_comprobante_interno: comprobanteInternoNumero,
-						num_recibo_pago: esReciboPagoEfectivo ? numero : numeroReciboPago,
-						num_recibo_pago_no_efectivo: esReciboPagoEfectivo ? numeroReciboPagoNoEfectivo : numero
-					},
-					isAdmin()
-				);
-			}
+			// A pedido explícito del usuario: el recibo NO se guarda de una vez (ni sube a Drive ni se
+			// persiste el correlativo en la BD) — recién queda como el comprobante adjunto pendiente (mismo
+			// campo "Adjuntar boucher de pago" de siempre) para que el usuario lo vea antes de decidir
+			// guardar la transacción. Mismo criterio que handleGenerarBoucherTransferencia: todo se
+			// persiste junto cuando presione "Crear"/"Actualizar" (ver handleSubmit).
+			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+			comprobanteError = '';
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el recibo de pago:', err);
 			toast.error('No se pudo generar el recibo de pago.');
@@ -1002,6 +1006,11 @@
 		// en "Centro de Costo Origen" (ver optionsFor/centroCostoClienteIdMap) — si Origen cambia, el
 		// Destino ya elegido puede pertenecer a otro cliente, así que se limpia.
 		if (key === 'id_centro_costo_origen' && formValues.tipo === 'ingreso') formValues.id_centro_costo_destino = '';
+		// En Egreso Y en Transacción Interna, "Cuenta origen" se filtra en cascada a las cuentas que
+		// recibieron un Ingreso de este Centro de Costo Origen (ver cuentasBancoIngresosOrigen/
+		// optionsFor) — si Origen cambia, la cuenta ya elegida puede no calzar con el nuevo centro, así
+		// que se limpia (mismo criterio que Destino arriba en Ingreso).
+		if (key === 'id_centro_costo_origen' && (formValues.tipo === 'egreso' || formValues.tipo_alcance === 'interna')) formValues.cuente_origen = '';
 		// "Clase" (Proveedores/Empleados/Cliente) solo aplica en Egreso — si Tipo cambia a otra cosa, se
 		// limpia junto con el Destino (que ya no calzaría con la lista filtrada por esa Clase).
 		if (key === 'tipo' && masked !== 'egreso') {
@@ -1189,6 +1198,54 @@
 	let centroCostoSocioBanca = $state<FieldOption | null>(null);
 	let centroCostoCorporativoIngreso = $state<FieldOption | null>(null);
 	let centroCostoClientesCargado = $state(false);
+
+	// "Saldo actual"/"Monto actual" junto a Cuenta Origen/Destino y Centro de Costo Origen/Destino — a
+	// pedido explícito del usuario, solo estético/informativo (no valida ni bloquea nada, ver
+	// fieldBlock más abajo). Mapas cargados de un tirón (una sola consulta cada uno, ver
+	// getSaldosCuentaBanco/getSaldosCentroCosto) en vez de una consulta por opción del <select>.
+	let saldosCuentaBanco = $state<Record<string, number>>({});
+	let saldosCentroCosto = $state<Record<string, number>>({});
+	async function cargarSaldos() {
+		try {
+			const [cuentas, centros] = await Promise.all([getSaldosCuentaBanco(supabase), getSaldosCentroCosto(supabase)]);
+			saldosCuentaBanco = cuentas;
+			saldosCentroCosto = centros;
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudieron cargar los saldos de cuentas/centros de costo:', err);
+		}
+	}
+	// A diferencia de centroCostoClientesCargado (listas relativamente estáticas, se cargan una sola vez
+	// por vida del componente), los saldos cambian con cada transacción — se recarga en CADA apertura
+	// del modal (no solo la primera), para no mostrar un número desactualizado tras guardar algo en la
+	// apertura anterior.
+	let saldosAbiertoAnterior = false;
+	$effect(() => {
+		if (open && !saldosAbiertoAnterior) cargarSaldos();
+		saldosAbiertoAnterior = open;
+	});
+
+	// En Egreso Y en Transacción Interna, a pedido explícito del usuario: "Cuenta origen" prioriza las
+	// cuentas bancarias que alguna vez RECIBIERON un Ingreso a favor de este mismo Centro de Costo
+	// Origen — pagar/transferir desde donde de verdad entró el dinero de ese proyecto, no desde
+	// cualquier cuenta de la empresa. Si esa lista sale vacía (el centro nunca recibió ningún Ingreso
+	// todavía), optionsFor cae de vuelta a mostrar TODAS las cuentas registradas (ver más abajo) —
+	// nunca deja el campo sin ninguna opción.
+	let cuentasBancoIngresosOrigen = $state<string[]>([]);
+	$effect(() => {
+		const aplica = formValues.tipo === 'egreso' || bloqueadoPorInterna;
+		const idCentroCosto = aplica && formValues.id_centro_costo_origen ? Number(formValues.id_centro_costo_origen) : null;
+		if (!open || !idCentroCosto) {
+			cuentasBancoIngresosOrigen = [];
+			return;
+		}
+		getCuentasBancoUsadasEnIngresos(supabase, idCentroCosto)
+			.then((cuentas) => (cuentasBancoIngresosOrigen = cuentas))
+			.catch((err) => {
+				console.error('[TransaccionModal] No se pudieron cargar las cuentas usadas en ingresos del centro de costo:', err);
+				cuentasBancoIngresosOrigen = [];
+			});
+	});
+
 	$effect(() => {
 		if (open && !centroCostoClientesCargado) {
 			centroCostoClientesCargado = true;
@@ -1532,7 +1589,18 @@
 			return soloNombreCentro(dynamicOptions[key] || []);
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) return dynamicOptions.cuenta_banco || [];
-		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) return dynamicOptions.cuenta_banco || [];
+		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
+			const todas = dynamicOptions.cuenta_banco || [];
+			// Egreso Y Transacción Interna: prioriza las cuentas que recibieron algún Ingreso de este
+			// Centro de Costo Origen (ver cuentasBancoIngresosOrigen) — si esa lista sale vacía (el centro
+			// nunca recibió ningún Ingreso), cae de vuelta a TODAS las cuentas registradas, para no dejar
+			// el campo sin opciones.
+			if ((formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0) {
+				const filtradas = todas.filter((o) => cuentasBancoIngresosOrigen.includes(o.value));
+				if (filtradas.length > 0) return filtradas;
+			}
+			return todas;
+		}
 		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
@@ -1540,6 +1608,34 @@
 		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'egreso') return CATEGORIA_CORPORATIVO_EGRESO;
 		if (field.optionsWhen) return field.optionsWhen(formValues);
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+	}
+
+	/** true para los 4 campos que muestran su saldo/monto actual pegado al lado derecho DENTRO del
+	 * dropdown — a pedido explícito del usuario, con imagen de referencia: Centro de Costo Origen/
+	 * Destino y Cuenta Origen/Destino (esta última solo cuando es una cuenta bancaria registrada, ver
+	 * cuentaOrigenEsBancaria/cuentaDestinoEsBancaria). Un <option> nativo no puede alinear nada a la
+	 * derecha (es texto plano), así que estos 4 campos usan SelectConSaldo.svelte en vez del <select>
+	 * nativo que sigue usando el resto del formulario (ver fieldBlock más abajo). */
+	function esCampoConSaldo(field: (typeof formFields)[number]): boolean {
+		return (
+			field.key === 'id_centro_costo_origen' ||
+			field.key === 'id_centro_costo_destino' ||
+			(field.key === 'cuente_destino' && cuentaDestinoEsBancaria) ||
+			(field.key === 'cuente_origen' && cuentaOrigenEsBancaria)
+		);
+	}
+
+	/** Saldo/monto actual de una opción puntual, para SelectConSaldo — ver getSaldosCentroCosto/
+	 * getSaldosCuentaBanco. undefined = sin saldo conocido todavía (los mapas siguen cargando), el
+	 * componente simplemente no muestra nada al costado en vez de un "S/ 0.00" engañoso. */
+	function saldoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): number | undefined {
+		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
+			return opt.value in saldosCentroCosto ? saldosCentroCosto[opt.value] : undefined;
+		}
+		if ((field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)) {
+			return opt.value in saldosCuentaBanco ? saldosCuentaBanco[opt.value] : undefined;
+		}
+		return undefined;
 	}
 
 	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo Origen/Destino en Ingreso+Externa:
@@ -1784,7 +1880,16 @@
 			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
 		</label>
 
-		{#if field.tipo === 'select' || field.options || (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
+		{#if esCampoConSaldo(field)}
+			<SelectConSaldo
+				id={`tr-${field.key}`}
+				value={formValues[field.key]}
+				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt) }))}
+				disabled={isDisabled}
+				hasError={!!fieldErrors[field.key]}
+				onchange={(v) => handleInput(field.key, v)}
+			/>
+		{:else if field.tipo === 'select' || field.options}
 			<div class="relative">
 				<select
 					id={`tr-${field.key}`}
@@ -1833,6 +1938,8 @@
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
+		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
+			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
 			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
 		{:else if field.helpText}
@@ -2452,7 +2559,7 @@
 									</div>
 								</div>
 
-								<p class="text-xs text-slate-400 flex items-center gap-1.5">
+								<p class="mt-3 text-xs text-slate-400 flex items-center gap-1.5">
 									<Info size={12} class="shrink-0" />
 									Estos campos son opcionales. Otra área de la empresa se encargará de completarlos.
 								</p>
@@ -2793,6 +2900,27 @@
 					</p>
 				</div>
 
+				<!-- Pie "Transacción registrada por" — a pedido explícito del usuario, con imagen de
+				     referencia. Solo aplica en Editar: en Nueva Transacción `usuario_registro`/`created_at`
+				     todavía no existen (recién los asigna la BD al guardar). Contenido normal del formulario
+				     (no sticky, a diferencia de los botones de abajo) — pertenece a la ventana, no queda
+				     flotando pegado aparte. -->
+				{#if mode === 'edit' && transaccion}
+					<div class="flex items-center gap-3 px-6 py-3 bg-blue-50 border-t border-blue-100">
+						<div class="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+							<User size={16} />
+						</div>
+						<div class="text-xs leading-snug">
+							<p class="font-semibold text-slate-700">Transacción registrada por</p>
+							<p class="text-slate-500">
+								Usuario: {transaccion.usuario_registro ?? '—'}
+								<span class="mx-1.5 text-slate-300">|</span>
+								Fecha y hora: {formatFechaHora(transaccion.created_at)}
+							</p>
+						</div>
+					</div>
+				{/if}
+
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
 						Cancelar
@@ -2846,6 +2974,8 @@
 	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
 	proveedorNombreInicial={proveedorReciboNombre}
 	proveedorRucInicial={proveedorReciboRuc}
+	esEfectivo={esReciboPagoEfectivo}
+	formaPagoInicial={formValues.medio_pago ? getOptionLabel(medioPagoField, formValues.medio_pago) : ''}
 	generando={generandoReciboPagoProveedor}
 	onCancel={() => (reciboPagoProveedorModalOpen = false)}
 	onGenerar={handleGenerarReciboPagoProveedor}

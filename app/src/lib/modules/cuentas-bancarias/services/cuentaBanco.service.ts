@@ -28,6 +28,12 @@ export interface CuentaBanco {
 	 * autorización propio) — ver entidades_activo_migration.sql. false = dada de baja, solo visible en
 	 * la sección "Eliminados" (solo-admin). */
 	activo: boolean;
+	/** Ver cuenta_banco_saldo_migration.sql. Se pide al crear/editar; saldo_actual (abajo) SIEMPRE se
+	 * deriva de este valor, nunca se escribe directo — ver recalcularSaldoCuentaBanco. */
+	saldo_inicial: number;
+	/** Solo lectura — saldo_inicial + neto de las transacciones reales que usan esta cuenta como
+	 * cuente_origen (resta)/cuente_destino (suma), ver recalcularSaldoCuentaBanco. */
+	saldo_actual: number;
 }
 
 export interface ListParams {
@@ -107,7 +113,14 @@ export async function createCuentaBanco(
 	const insertData = { ...buildWritablePayload(FIELDS_CONFIG, payload), usuario };
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta bancaria: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-	return { success: true, message: 'Cuenta bancaria creada correctamente', data: data as CuentaBanco };
+
+	// saldo_actual = saldo_inicial recién ingresado (una cuenta nueva no puede tener transacciones
+	// previas bajo su propio numero_cuenta, salvo el caso raro de que ya se haya usado ese número a
+	// mano antes de registrar la cuenta — recalcularSaldoCuentaBanco lo cubre igual, no asume 0).
+	await recalcularSaldoCuentaBanco(client, (data as CuentaBanco).numero_cuenta);
+	const { data: actualizada } = await client.from(TABLE_NAME).select('*').eq(PK_COLUMN, (data as CuentaBanco).id_cuenta_banco).single();
+
+	return { success: true, message: 'Cuenta bancaria creada correctamente', data: (actualizada ?? data) as CuentaBanco };
 }
 
 export async function updateCuentaBanco(
@@ -123,7 +136,60 @@ export async function updateCuentaBanco(
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la cuenta bancaria: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-	return { success: true, message: 'Cuenta bancaria actualizada correctamente', data: data as CuentaBanco };
+
+	// Si saldo_inicial cambió, saldo_actual se recalcula (nunca se pisa directo) — mismo criterio que
+	// arriba, ver comentario en createCuentaBanco.
+	await recalcularSaldoCuentaBanco(client, (data as CuentaBanco).numero_cuenta);
+	const { data: actualizada } = await client.from(TABLE_NAME).select('*').eq(PK_COLUMN, id).single();
+
+	return { success: true, message: 'Cuenta bancaria actualizada correctamente', data: (actualizada ?? data) as CuentaBanco };
+}
+
+/** Recalcula `saldo_actual` desde cero: saldo_inicial + todo lo que entró (transaccion.cuente_destino =
+ * esta cuenta) - todo lo que salió (cuente_origen = esta cuenta), entre las transacciones activas.
+ * Mismo criterio "recompute completo" que recalcularCuentaPagar/recalcularCuentaCobrar (evita depender
+ * de incrementos/decrementos sueltos que podrían desincronizarse si algo falla a mitad de camino) — se
+ * llama después de crear/editar esta misma cuenta (ver arriba) y después de crear/editar/eliminar/
+ * anular/reactivar cualquier transacción que use esta cuenta como origen o destino (ver
+ * transacciones.service.ts). Best-effort: si la cuenta no existe (numeroCuenta no registrado) o la
+ * consulta falla, no lanza — nunca debe romper el flujo principal que la llamó. */
+export async function recalcularSaldoCuentaBanco(client: SupabaseClient, numeroCuenta: string | null | undefined): Promise<void> {
+	if (!numeroCuenta) return;
+	try {
+		const { data: cuenta } = await client.from(TABLE_NAME).select('id_cuenta_banco, saldo_inicial').eq('numero_cuenta', numeroCuenta).maybeSingle();
+		if (!cuenta) return;
+
+		const { data: movimientos, error } = await client
+			.from('transaccion')
+			.select('cuente_origen, cuente_destino, monto_total')
+			.eq('estado', 'activo')
+			.or(`cuente_origen.eq.${numeroCuenta},cuente_destino.eq.${numeroCuenta}`);
+		if (error) throw error;
+
+		const neto = (movimientos ?? []).reduce((saldo: number, t: any) => {
+			const monto = Number(t.monto_total);
+			if (t.cuente_origen === numeroCuenta) saldo -= monto;
+			if (t.cuente_destino === numeroCuenta) saldo += monto;
+			return saldo;
+		}, 0);
+
+		await client
+			.from(TABLE_NAME)
+			.update({ saldo_actual: Number(cuenta.saldo_inicial) + neto })
+			.eq('id_cuenta_banco', cuenta.id_cuenta_banco);
+	} catch (err) {
+		console.error('[cuentaBanco.service] No se pudo recalcular el saldo de la cuenta:', numeroCuenta, err);
+	}
+}
+
+/** Mapa numero_cuenta -> saldo_actual de todas las cuentas activas — para mostrar "Saldo actual" junto
+ * al selector de Cuenta Origen/Destino en TransaccionModal.svelte, sin una consulta por opción. */
+export async function getSaldosCuentaBanco(client: SupabaseClient): Promise<Record<string, number>> {
+	const { data, error } = await client.from(TABLE_NAME).select('numero_cuenta, saldo_actual').eq('activo', true);
+	if (error) throw error;
+	const saldos: Record<string, number> = {};
+	for (const c of (data ?? []) as any[]) saldos[c.numero_cuenta] = Number(c.saldo_actual);
+	return saldos;
 }
 
 export async function deleteCuentaBanco(client: SupabaseClient, id: number): Promise<ServiceResult> {
