@@ -16,7 +16,7 @@ import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaLarga, formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
-import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, escapeHtml } from './pdfVoucherEstilos';
+import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 
 const ANCHO_PLANTILLA_PX = 750;
 const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
@@ -118,6 +118,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 				<div>Usuario: ${escapeHtml(datos.usuario)}</div>
 				<div>Fecha y hora: ${escapeHtml(new Date().toLocaleString('es-PE'))}</div>
 			</div>
+			${marcaAguaBorrador(56)}
 		</div>
 	`;
 }
@@ -125,6 +126,16 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 async function renderVoucherComoImagen(esCopia: boolean, datos: DatosComprobanteInterno) {
 	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
 	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
+}
+
+/** Arma el recibo como HTML autocontenido (Original + Copia, mismo contenido que el PDF) SIN pasar por
+ * html2canvas/jsPDF — a pedido explícito del usuario: todo recibo autogenerado debe quedar en HTML
+ * mientras la transacción sigue siendo un borrador (más liviano, nada que convertir todavía); recién se
+ * convierte a PDF de verdad al guardar/cerrar la transacción (ver generarComprobanteTransferenciaInternaBase64,
+ * que se sigue usando pero ahora se llama recién en ese momento — ver handleSubmit en
+ * TransaccionModal.svelte). Pensado para abrirse en una pestaña nueva vía Blob URL. */
+export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO - TRANSFERENCIA INTERNA (borrador)</title><style>body{background:#e2e8f0;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
 }
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para

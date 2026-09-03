@@ -5,8 +5,33 @@
  * puede sumar sus propias clases extra (ver ESTILOS_FIRMA en reciboPagoEfectivo.ts) sin chocar con
  * estas, porque cada render se monta en un contenedor aislado y descartable (ver pdfHtmlRender.ts).
  */
+/**
+ * Sello de agua "BORRADOR" — a pedido explícito del usuario: TODO recibo que se autogenera (Recibo de
+ * Pago, Recibo de Pago a Proveedor, Boucher de Transferencia Interna) queda marcado como borrador hasta
+ * que la transacción se guarda de verdad (crea/edita) y recién ahí ese mismo archivo (con el sello ya
+ * incluido, no se genera una segunda versión "limpia") se sube a Drive como el comprobante real — mismo
+ * criterio ya establecido de "no se guarda de una vez" (ver handleGenerarReciboPago/
+ * handleGenerarReciboPagoProveedor/handleGenerarBoucherTransferencia en TransaccionModal.svelte). Se
+ * exporta la función (no solo la clase CSS) porque reciboPagoEfectivo.ts NO usa ESTILOS_VOUCHER_BASE
+ * (diseño propio de posicionamiento absoluto, escala de fuente muy distinta) y necesita un tamaño de
+ * letra distinto para el mismo sello — `fontSizePx` deja que cada plantilla lo ajuste a su propia
+ * escala en vez de imponer un tamaño fijo.
+ */
+export const CSS_MARCA_AGUA = `
+	.v-marca-agua { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none; z-index: 999; }
+	.v-marca-agua span { display: block; font-weight: 800; color: rgba(100, 116, 139, 0.24); letter-spacing: 0.15em; text-transform: uppercase; white-space: nowrap; transform: rotate(-28deg); user-select: none; }
+`;
+
+/** HTML del sello — insertar como último hijo del contenedor de CADA copia (para que quede encima de
+ * su propio contenido, no una sola vez sobre toda la hoja), con el tamaño de letra que le calce a esa
+ * plantilla. */
+export function marcaAguaBorrador(fontSizePx: number): string {
+	return `<div class="v-marca-agua"><span style="font-size:${fontSizePx}px">BORRADOR</span></div>`;
+}
+
 export const ESTILOS_VOUCHER_BASE = `
-	.voucher-copia { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; padding: 22px 26px; box-sizing: border-box; border: 1.5px solid #64748b; border-radius: 14px; }
+	.voucher-copia { position: relative; font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; padding: 22px 26px; box-sizing: border-box; border: 1.5px solid #64748b; border-radius: 14px; }
+	${CSS_MARCA_AGUA}
 	.v-header { display: flex; align-items: flex-start; justify-content: space-between; border-bottom: 1px solid #dbe3ec; padding-bottom: 14px; margin-bottom: 16px; }
 	.v-empresa { display: flex; align-items: center; gap: 10px; }
 	/* Círculo blanco con borde navy (calcado del comprobante físico de referencia) en vez del círculo

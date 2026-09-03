@@ -74,6 +74,11 @@ export interface PagoPendienteItem {
 	 * (la fecha contractual). Es lo que posiciona/reprograma el calendario de Panoramas de Pago. */
 	fechaProgramada: string | null;
 	idProyecto: number | null;
+	/** id_centro_costo propio de la cuenta — a diferencia de idProyecto (que llega indirecto vía
+	 * presupuesto.proyecto), esta es la misma columna que usa el filtro "Tipo" (Consultoria/Obra/
+	 * Corporativo/Otros) del resto del ERP (ver idsParaTipoFiltro/centroCostoTipoMap en +page.svelte),
+	 * para poder filtrar la Bandeja igual que ya se filtra Cuentas por Pagar. */
+	idCentroCosto: number | null;
 	panoramaId: number | null;
 	panoramaOrden: number | null;
 	prioridad: Prioridad;
@@ -102,6 +107,11 @@ export type BandejaSortBy = 'fechaVencimiento' | 'monto' | 'nombre' | 'prioridad
 
 export interface BandejaParams {
 	idProyecto?: number | null;
+	/** Filtro "Tipo" (Consultoria/Obra/Corporativo/Otros) — mismo criterio que cuentas-pagar/+page.svelte:
+	 * lista de id_centro_costo ya resuelta client-side (ver idsParaTipoFiltro), no el tipo en sí. */
+	idsCentroCosto?: number[];
+	/** Solo junto con idsCentroCosto — "Otros" también incluye cuentas SIN centro de costo asignado. */
+	incluirSinCentroCosto?: boolean;
 	prioridad?: string | null;
 	estado?: 'pendiente' | 'vencido' | null;
 	/** Búsqueda libre por título/proveedor (pagos) o título/cliente/proyecto (cobros), sin distinguir
@@ -216,6 +226,7 @@ function mapRow(row: any, fracciones: FraccionPanorama[]): PagoPendienteItem {
 		fechaVencimiento: row.fecha_vencimiento,
 		fechaProgramada: row.fecha_pago_programada,
 		idProyecto: row.presupuesto?.id_proyecto ?? null,
+		idCentroCosto: row.id_centro_costo ?? null,
 		panoramaId: row.panorama_id,
 		panoramaOrden: row.panorama_orden,
 		prioridad: (row.prioridad as Prioridad) || computePrioridad(row.fecha_vencimiento),
@@ -304,6 +315,10 @@ export async function getPagosPendientes(client: SupabaseClient, params: Bandeja
 	}
 
 	if (params.idProyecto) items = items.filter((i) => i.idProyecto === params.idProyecto);
+	if (params.idsCentroCosto) {
+		const idsSet = new Set(params.idsCentroCosto);
+		items = items.filter((i) => (i.idCentroCosto !== null && idsSet.has(i.idCentroCosto)) || (params.incluirSinCentroCosto && i.idCentroCosto === null));
+	}
 	if (params.prioridad) items = items.filter((i) => i.prioridad === params.prioridad);
 	if (params.estado) items = items.filter((i) => (params.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
 

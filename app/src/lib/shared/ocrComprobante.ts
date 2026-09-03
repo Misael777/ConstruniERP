@@ -158,22 +158,39 @@ function extraerNumeroConEtiquetaBancaria(texto: string): string | null {
 	return soloDigitos.length >= 6 ? soloDigitos : null;
 }
 
+/** Busca un N° suelto en la PARTE SUPERIOR del documento (ej. "N° 0001" en
+ * comprobanteTransferenciaInterna.ts, "N° 0000117" en reciboPagoEfectivo.ts/reciboPagoProveedor.ts) —
+ * confirmado corriendo OCR real contra los 3 formatos de recibo que este ERP autogenera. 4 a 10
+ * dígitos: la Transferencia Interna usa un correlativo de solo 4 dígitos ("N° 0001", ver
+ * comprobanteTransferenciaInterna.ts) que un rango de 6-10 dejaba fuera — confirmado que ese formato
+ * además NO tiene ninguna sección "N° DE RECIBO" (a diferencia de los otros dos), así que sin este
+ * intento su N° no se reconocía de NINGUNA forma al volver a adjuntarlo. Acotado a los primeros ~120
+ * caracteres para no confundirlo con cualquier otro "N°" que aparezca más adelante en el documento. */
+function extraerNumeroEncabezado(texto: string): string | null {
+	const inicio = texto.slice(0, 120);
+	const m = inicio.match(new RegExp(`${PREFIJO_NUMERO}\\s*(\\d{4,10})\\b`, 'i'));
+	return m ? m[1] : null;
+}
+
 /** Busca el número/código de operación para "Fecha (reconocida)"/"Monto (reconocido)"/"N° de Operación
- * (reconocido)" del área 1 (ver reconocerComprobante). Primero prueba la etiqueta bancaria (ver
- * extraerNumeroConEtiquetaBancaria); si no encuentra nada así, prueba "N° DE RECIBO" — el propio "RECIBO
- * DE PAGO"/"RECIBO - TRANSFERENCIA INTERNA" autogenerados de este ERP (ver
- * reciboPagoEfectivo.ts/comprobanteTransferenciaInterna.ts), cuando alguno de esos PDF se vuelve a
- * adjuntar como boucher. A diferencia de los bancos, ahí la etiqueta vive en un encabezado de DOS
+ * (reconocido)" del área 1 (ver reconocerComprobante). Tres intentos: (1) etiqueta bancaria, ver
+ * extraerNumeroConEtiquetaBancaria; (2) "N° DE RECIBO" — el propio "RECIBO DE PAGO"/"RECIBO DE PAGO A
+ * PROVEEDOR" autogenerados de este ERP (ver reciboPagoEfectivo.ts/reciboPagoProveedor.ts), cuando
+ * alguno de esos PDF se vuelve a adjuntar como boucher: ahí la etiqueta vive en un encabezado de DOS
  * COLUMNAS junto a "FECHA DE EMISIÓN" — confirmado con OCR real, Tesseract linealiza las dos etiquetas
  * juntas ANTES que los dos valores ("N° DE RECIBO FECHA DE EMISIÓN" en una línea, "0000117 21/08/2025"
- * en la siguiente) — por eso este segundo intento tolera hasta 40 caracteres que no sean dígitos entre
- * la etiqueta y el número, a diferencia del primero. */
+ * en la siguiente), por eso tolera hasta 40 caracteres que no sean dígitos entre la etiqueta y el
+ * número; (3) el N° suelto del encabezado (ver extraerNumeroEncabezado) — único respaldo que sí cubre
+ * el "RECIBO - TRANSFERENCIA INTERNA" (comprobanteTransferenciaInterna.ts), que no tiene sección "N° DE
+ * RECIBO". */
 function extraerNumeroOperacion(texto: string): string | null {
 	const conEtiquetaBancaria = extraerNumeroConEtiquetaBancaria(texto);
 	if (conEtiquetaBancaria) return conEtiquetaBancaria;
 
 	const conEtiquetaRecibo = texto.match(new RegExp(`${PREFIJO_NUMERO}\\s*(?:de\\s*)?recibo\\D{0,40}?(\\d{6,10})`, 'i'));
-	return conEtiquetaRecibo ? conEtiquetaRecibo[1] : null;
+	if (conEtiquetaRecibo) return conEtiquetaRecibo[1];
+
+	return extraerNumeroEncabezado(texto);
 }
 
 function calcularConfianza(fecha: string | null, monto: number | null, numOperacion: string | null): 'alta' | 'media' | 'baja' {
@@ -210,16 +227,16 @@ function extraerTipoDocumento(texto: string): string | null {
  *    claramente su N° de operación — ahora también se reconoce acá, igual que ya hacía
  *    extraerNumeroOperacion para el boucher principal del área 1.
  *
- * 3. El N° suelto que aparece en la PARTE SUPERIOR del documento (ej. "N° 0000117" en el encabezado del
- *    "RECIBO DE PAGO"/"RECIBO - TRANSFERENCIA INTERNA" autogenerados — ver
- *    reciboPagoEfectivo.ts/comprobanteTransferenciaInterna.ts) — más confiable que "N° DE RECIBO" (el
+ * 3. El N° suelto del encabezado (ver extraerNumeroEncabezado) — más confiable que "N° DE RECIBO" (el
  *    intento 4) porque no depende de que el OCR linealice bien un encabezado de dos columnas, solo de
- *    leer un número grande y aislado casi al inicio del texto. Acotado a los primeros ~120 caracteres
- *    para no confundirlo con cualquier otro "N°" que aparezca más adelante en el documento.
+ *    leer un número grande y aislado casi al inicio del texto. Único de los cuatro que sí cubre el
+ *    "RECIBO - TRANSFERENCIA INTERNA" (ver comprobanteTransferenciaInterna.ts), que no tiene sección
+ *    "N° DE RECIBO" como los otros dos recibos autogenerados.
  *
- * 4. "N° DE RECIBO" (sección 4 de esos mismos recibos autogenerados) como último respaldo — mismo
- *    patrón tolerante a encabezados de dos columnas y a cómo Tesseract lee mal "°" que ya usa
- *    extraerNumeroOperacion (ver PREFIJO_NUMERO). */
+ * 4. "N° DE RECIBO" (sección 4 de "RECIBO DE PAGO"/"RECIBO DE PAGO A PROVEEDOR" autogenerados, ver
+ *    reciboPagoEfectivo.ts/reciboPagoProveedor.ts) como último respaldo — mismo patrón tolerante a
+ *    encabezados de dos columnas y a cómo Tesseract lee mal "°" que ya usa extraerNumeroOperacion (ver
+ *    PREFIJO_NUMERO). */
 function extraerNumeroDocumento(texto: string): string | null {
 	const m = texto.match(/\b([A-Z]{1,3}\d{2,3})[\s-]+(\d{1,8})\b/);
 	if (m) return `${m[1]}-${m[2]}`;
@@ -227,9 +244,8 @@ function extraerNumeroDocumento(texto: string): string | null {
 	const conEtiquetaBancaria = extraerNumeroConEtiquetaBancaria(texto);
 	if (conEtiquetaBancaria) return conEtiquetaBancaria;
 
-	const inicio = texto.slice(0, 120);
-	const mEncabezado = inicio.match(new RegExp(`${PREFIJO_NUMERO}\\s*(\\d{6,10})\\b`, 'i'));
-	if (mEncabezado) return mEncabezado[1];
+	const mEncabezado = extraerNumeroEncabezado(texto);
+	if (mEncabezado) return mEncabezado;
 
 	const mRecibo = texto.match(new RegExp(`${PREFIJO_NUMERO}\\s*(?:de\\s*)?recibo\\D{0,40}?(\\d{6,10})`, 'i'));
 	return mRecibo ? mRecibo[1] : null;

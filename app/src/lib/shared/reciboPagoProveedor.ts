@@ -16,7 +16,7 @@ import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
-import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, escapeHtml } from './pdfVoucherEstilos';
+import { ESTILOS_VOUCHER_BASE, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 
 const ANCHO_PLANTILLA_PX = 750;
 const ANCHO_PAGINA_MM = 190;
@@ -151,6 +151,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor)
 					<div class="v-firma-info">DNI: ${escapeHtml(datos.recibioDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
 			</div>
+			${marcaAguaBorrador(48)}
 		</div>
 	`;
 }
@@ -158,6 +159,14 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor)
 async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPagoProveedor) {
 	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
 	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
+}
+
+/** Arma el recibo como HTML autocontenido, sin pasar por html2canvas/jsPDF — mismo criterio que
+ * construirHtmlCompleto en comprobanteTransferenciaInterna.ts: mientras la transacción sigue siendo un
+ * borrador, el recibo queda en HTML; recién se convierte a PDF de verdad al guardar/cerrar (ver
+ * handleSubmit en TransaccionModal.svelte). */
+export function construirHtmlCompleto(datos: DatosReciboPagoProveedor): string {
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO DE PAGO A PROVEEDOR (borrador)</title><style>body{background:#e2e8f0;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
 }
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para

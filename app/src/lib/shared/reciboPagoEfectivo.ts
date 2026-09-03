@@ -1,14 +1,17 @@
 /**
- * Genera el PDF "RECIBO DE PAGO" que se emite para un pago en Efectivo de una transacción Externa de
- * tipo Ingreso — a pedido explícito del usuario, replica AL PIXEL un HTML de referencia que compartió
- * (posicionamiento absoluto dentro de una hoja fija de 544×682px, con las dos copias — Original y
- * "COPIA" — ya dispuestas una debajo de la otra separadas por una línea punteada). El CSS de acá es
- * prácticamente un calco de esa referencia; solo se cambia el logo embebido en base64 por el logo real
- * de la empresa (/logo.png, mismo que usa el resto del ERP) y se reemplazan los valores de ejemplo por
- * los datos reales de la transacción. Las firmas manuscritas (ver SignaturePad.svelte/
- * ReciboPagoModal.svelte) se incrustan como imagen. Arma la hoja completa como HTML/CSS y la convierte a
- * UNA sola imagen con html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en
- * navegador, Tauri Windows y Tauri Android.
+ * Genera el PDF "RECIBO DE PAGO" que se emite para un pago (Efectivo o no) de una transacción Externa
+ * de tipo Ingreso — a pedido explícito del usuario, con imagen de referencia: mismo lenguaje visual v-*
+ * (header con logo/N°, cajas redondeadas, círculos numerados) que comprobanteTransferenciaInterna.ts/
+ * reciboPagoProveedor.ts, en vez del layout anterior de posicionamiento absoluto con fuentes diminutas
+ * (544×682px, dos copias en una sola hoja fija). Acá el CLIENTE es quien paga y la EMPRESA quien recibe
+ * (en RECIBO DE PAGO A PROVEEDOR de reciboPagoProveedor.ts es al revés). La sección 3 "FORMA DE PAGO"
+ * cambia según `esEfectivo` — a pedido explícito del usuario, con imagen de referencia: NO Efectivo ya
+ * no es un solo texto libre ("Yape a Willy Melchor"), son 3 datos por separado: el medio elegido en el
+ * formulario principal (ícono + label), el N° de Operación (ya reconocido/ingresado ahí mismo, no se
+ * vuelve a pedir) y el nombre de quien figura como titular de la cuenta origen (esto sí se pide en
+ * ReciboPagoModal.svelte, es el único dato nuevo). Se arma como HTML/CSS y se convierte a imagen con
+ * html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en navegador, Tauri Windows y
+ * Tauri Android.
  */
 import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
@@ -16,10 +19,10 @@ import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
-import { escapeHtml } from './pdfVoucherEstilos';
+import { ESTILOS_VOUCHER_BASE, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 
-const ANCHO_PLANTILLA_PX = 544; // ancho fijo de la hoja de referencia (.page)
-const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
+const ANCHO_PLANTILLA_PX = 750;
+const ANCHO_PAGINA_MM = 190;
 const MARGEN_PAGINA_MM = 10;
 
 export interface DatosReciboPago {
@@ -37,179 +40,182 @@ export interface DatosReciboPago {
 	receptorDni: string;
 	/** PNG en base64 (data URL completa, ver SignaturePad.svelte) */
 	firmaReceptorDataUrl: string;
-	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO" con su
-	 * descripción de siempre. false = cualquier otro medio (Transferencia/Depósito/Yape o Plin, ver
-	 * FIELDS_CONFIG) — la sección 3 muestra en cambio un recuadro simple con `formaPagoTexto` tal cual lo
-	 * escribió el usuario (ej. "Yape a Willy Melchor") — a pedido explícito del usuario, con imagen de
-	 * referencia. */
+	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO". false =
+	 * cualquier otro medio (Transferencia/Depósito/Yape o Plin) — muestra en cambio el medio elegido +
+	 * N° de Operación + Nombre Titular de la Cuenta (ver medioPagoLabel/numeroOperacion/
+	 * nombreTitularCuenta). */
 	esEfectivo: boolean;
-	/** Descripción libre del medio de pago no efectivo (ej. "Yape a Willy Melchor", "Transferencia BCP a
-	 * Juan Pérez") — solo se usa/requiere cuando esEfectivo es false. */
-	formaPagoTexto?: string;
+	/** Label del Medio de Pago ya elegido en el formulario principal (ej. "Transferencia bancaria",
+	 * "Yape o Plin") — solo cuando esEfectivo es false. */
+	medioPagoLabel?: string;
+	/** N° de Operación ya reconocido/ingresado en el formulario principal de la transacción
+	 * (formValues.num_operacion) — solo cuando esEfectivo es false. */
+	numeroOperacion?: string;
+	/** Nombre de quien figura como titular de la cuenta desde la que se hizo la transferencia/Yape/
+	 * depósito — solo cuando esEfectivo es false, único dato de esta sección que sí se pide en
+	 * ReciboPagoModal.svelte (los otros dos ya existen en el formulario principal). */
+	nombreTitularCuenta?: string;
 }
 
-// CSS calcado de la referencia del usuario (posiciones/tamaños en px tal cual) — ver comentario de
-// archivo arriba. No usa las clases "v-*" de pdfVoucherEstilos.ts porque este diseño es un
-// posicionamiento absoluto propio, distinto del layout flexbox del comprobante de transferencia interna.
-const ESTILOS_RECIBO_PAGO = `
-	* { box-sizing: border-box; }
-	.rp-page { position: relative; width: 544px; height: 682px; background: #fff; overflow: hidden; font-family: Arial, Helvetica, sans-serif; color: #111; }
-	.rp-receipt { position: absolute; left: 87px; width: 369px; height: 251px; font-size: 5.2px; line-height: 1.05; background: #fff; }
-	.rp-r1 { top: 74px; }
-	.rp-r2 { top: 383px; }
-	.rp-separador { position: absolute; left: 87px; top: 358px; width: 369px; border-top: 1px dotted #777; }
-	.rp-logo { position: absolute; left: 0; top: 0; width: 151px; height: 30px; object-fit: contain; object-position: left center; }
-	.rp-header-right { position: absolute; right: 0; top: 0; width: 92px; text-align: center; }
-	.rp-number { font-size: 8px; font-weight: 700; margin-bottom: 2px; }
-	.rp-badge { display: inline-block; border: 1px solid #111; border-radius: 2px; padding: 1px 5px; font-size: 6px; font-weight: 700; letter-spacing: .1px; }
-	.rp-meta { font-size: 4.8px; margin-top: 2px; line-height: 1.15; }
-	.rp-intro { position: absolute; left: 0; right: 0; top: 33px; border-bottom: 1px solid #777; padding-bottom: 2px; font-size: 5px; line-height: 1.15; }
-	.rp-section { position: absolute; left: 0; right: 0; border: 1px solid #777; border-radius: 2px; }
-	.rp-section-title { position: absolute; left: 0; top: -8px; font-size: 5.2px; font-weight: 700; background: #fff; }
-	/* Recibo NO EFECTIVO — a pedido explícito del usuario, con imagen de referencia: fondo crema/beige
-	   para diferenciarlo de un vistazo del recibo en Efectivo (blanco, arriba). Las etiquetas numeradas
-	   de cada sección ("1 POR CONCEPTO DE", etc.) tienen su propio fondo blanco fijo para "recortar" la
-	   línea del borde — acá también cambian a crema para no quedar como un rectángulo blanco flotando. */
-	.rp-receipt-no-efectivo { background: #f4e9d2; }
-	.rp-receipt-no-efectivo .rp-section-title { background: #f4e9d2; }
-	.rp-project { top: 59px; height: 22px; padding: 7px 7px 3px; }
-	.rp-project-name { font-size: 7px; font-weight: 700; }
-	.rp-project-sub { font-size: 5px; margin-top: 1px; }
-	.rp-amount { top: 88px; height: 33px; }
-	.rp-amount-left { position: absolute; left: 0; top: 0; width: 142px; height: 100%; border-right: 1px solid #777; text-align: center; }
-	.rp-amount-right { position: absolute; left: 142px; right: 0; top: 0; height: 100%; padding: 8px 7px; }
-	.rp-amount-head { font-size: 4.5px; font-weight: 700; margin-top: 2px; }
-	.rp-amount-value { font-size: 9px; font-weight: 700; margin-top: 5px; }
-	.rp-amount-words { font-size: 4.4px; margin-top: 1px; }
-	.rp-concept-head { font-size: 4.5px; font-weight: 700; text-align: center; }
-	.rp-concept { font-size: 4.6px; line-height: 1.15; margin-top: 6px; }
-	.rp-document { font-size: 7px; margin-right: 4px; }
-	.rp-payment { top: 128px; height: 28px; padding: 7px 7px 3px; }
-	.rp-cashbox { font-size: 6px; font-weight: 700; margin-bottom: 2px; }
-	.rp-cashbox::before { content: ""; display: inline-block; width: 7px; height: 7px; border: 1px solid #777; border-radius: 1px; vertical-align: -2px; margin-right: 6px; }
-	.rp-payment-note { font-size: 4.5px; line-height: 1.2; }
-	.rp-forma-pago-texto { border: 1.2px solid #94a3b8; border-radius: 3px; padding: 5px 7px; font-size: 6.5px; font-weight: 700; color: #1e293b; letter-spacing: .02em; margin-top: 2px; }
-	.rp-detail { top: 162px; height: 21px; }
-	.rp-detail-cell { position: absolute; top: 0; height: 100%; padding: 5px 7px 2px; }
-	.rp-detail-cell.rp-first { left: 0; width: 50%; border-right: 1px solid #777; }
-	.rp-detail-cell.rp-last { left: 50%; width: 50%; }
-	.rp-detail-head { font-size: 4.5px; text-align: center; }
-	.rp-detail-value { font-size: 6px; font-weight: 700; text-align: center; margin-top: 2px; }
-	.rp-signatures { position: absolute; left: 0; right: 0; top: 187px; height: 61px; border-top: 1px dotted #777; }
-	.rp-sig { position: absolute; top: 6px; width: 130px; text-align: center; }
-	.rp-sig.rp-left { left: 14px; }
-	.rp-sig.rp-right { right: 14px; }
-	.rp-sig-title { font-size: 4.5px; font-weight: 700; margin-bottom: 2px; }
-	.rp-sig-title .rp-normal { font-weight: normal; }
-	.rp-firma-img-wrap { height: 10px; display: flex; align-items: flex-end; justify-content: center; }
-	.rp-firma-img { max-height: 10px; max-width: 120px; object-fit: contain; }
-	.rp-line { border-top: 1px solid #777; width: 130px; margin: 1px auto 0; }
-	.rp-sig-name { font-size: 5.1px; font-weight: 700; margin-top: 3px; }
-	.rp-sig-info { font-size: 4.5px; line-height: 1.15; margin-top: 1px; }
-`;
+// Iconos SVG inline (calcados de Lucide "Banknote"/"Smartphone"/"Landmark") — a propósito, NO emojis:
+// un emoji depende de la fuente del sistema operativo y puede verse distinto (o no verse) entre
+// navegador, Tauri Windows y Tauri Android, violando el requisito multiplataforma.
+const ICONO_BILLETE_LOGO = `<svg class="v-logo-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>`;
+const ICONO_BILLETE = `<svg class="v-icono-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>`;
+const ICONO_TELEFONO = `<svg class="v-icono-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>`;
+const ICONO_BANCO = `<svg class="v-icono-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>`;
 
-/** Un bloque de recibo (Original o Copia) — misma estructura para r1/r2, la referencia solo agrega la
- * etiqueta "COPIA" arriba a la derecha en la segunda. */
-function construirBloqueRecibo(posicionClase: string, esCopia: boolean, datos: DatosReciboPago): string {
-	const numeroTexto = String(datos.numero).padStart(7, '0');
+/** Yape/Plin son pagos desde el celular -> ícono de teléfono; Transferencia/Depósito bancario ->
+ * ícono de banco. Por texto del label (no un código aparte) para no depender de que quien llame le
+ * pase un campo extra solo para esto. */
+function iconoMedioPago(label: string): string {
+	return /yape|plin/i.test(label) ? ICONO_TELEFONO : ICONO_BANCO;
+}
+
+function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago): string {
+	const numeroTexto = `N° ${String(datos.numero).padStart(7, '0')}`;
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
 	return `
-		<div class="rp-receipt ${posicionClase} ${datos.esEfectivo ? '' : 'rp-receipt-no-efectivo'}">
-			<img class="rp-logo" src="/logo.png" alt="${escapeHtml(EMPRESA_NOMBRE)}" />
-			<div class="rp-header-right">
-				<div class="rp-number">N° ${escapeHtml(numeroTexto)}</div>
-				<div class="rp-badge">${esCopia ? 'COPIA - ' : ''}RECIBO DE PAGO</div>
-				<div class="rp-meta">Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))}<br>Página: 1 de 1</div>
-			</div>
-
-			<div class="rp-intro">Yo, ${escapeHtml(datos.clienteNombre)}, identificado con RUC/DNI ${escapeHtml(datos.clienteDni)}, <b>dejo constancia de haber pagado a favor de ${escapeHtml(EMPRESA_NOMBRE)}</b>, identificado con RUC ${escapeHtml(EMPRESA_RUC)}, el importe que se detalla a continuación:</div>
-
-			<div class="rp-section rp-project">
-				<div class="rp-section-title">1&nbsp;&nbsp;POR CONCEPTO DE</div>
-				<div class="rp-project-name">${escapeHtml(datos.proyectoNombre)}</div>
-				<div class="rp-project-sub">Código: ${escapeHtml(datos.proyectoCodigo)}</div>
-			</div>
-
-			<div class="rp-section rp-amount">
-				<div class="rp-section-title">2&nbsp;&nbsp;IMPORTE Y CONCEPTO</div>
-				<div class="rp-amount-left">
-					<div class="rp-amount-head">IMPORTE (S/)</div>
-					<div class="rp-amount-value">${escapeHtml(formatearMonto(datos.monto))}</div>
-					<div class="rp-amount-words">(${escapeHtml(montoEnLetras(datos.monto))})</div>
-				</div>
-				<div class="rp-amount-right">
-					<div class="rp-concept-head"><span class="rp-document">▧</span> CONCEPTO</div>
-					<div class="rp-concept">${escapeHtml(datos.concepto)}</div>
-				</div>
-			</div>
-
-			<div class="rp-section rp-payment">
-				<div class="rp-section-title">3&nbsp;&nbsp;FORMA DE PAGO</div>
-				${
-					datos.esEfectivo
-						? `<div class="rp-cashbox">EFECTIVO</div>
-					<div class="rp-payment-note">El pago se realizó en efectivo por la suma indicada en el presente recibo.</div>`
-						: `<div class="rp-forma-pago-texto">${escapeHtml((datos.formaPagoTexto || '').toUpperCase())}</div>`
-				}
-			</div>
-
-			<div class="rp-section rp-detail">
-				<div class="rp-section-title">4&nbsp;&nbsp;DETALLE DEL RECIBO</div>
-				<div class="rp-detail-cell rp-first">
-					<div class="rp-detail-head">N° DE RECIBO</div>
-					<div class="rp-detail-value">${escapeHtml(numeroTexto)}</div>
-				</div>
-				<div class="rp-detail-cell rp-last">
-					<div class="rp-detail-head">FECHA DE EMISIÓN</div>
-					<div class="rp-detail-value">${escapeHtml(formatearFechaCorta(datos.fecha))}</div>
-				</div>
-			</div>
-
-			<div class="rp-signatures">
-				<div class="rp-sig rp-left">
-					<div class="rp-sig-title">FIRMA DIGITAL DEL CLIENTE<br><span class="rp-normal">(Firma manuscrita)</span></div>
-					<div class="rp-firma-img-wrap">
-						${datos.firmaClienteDataUrl ? `<img class="rp-firma-img" src="${datos.firmaClienteDataUrl}" />` : ''}
+		<div class="voucher-copia ${datos.esEfectivo ? '' : 'v-no-efectivo'}">
+			<div class="v-header">
+				<div class="v-empresa">
+					<div class="v-logo">${ICONO_BILLETE_LOGO}</div>
+					<div>
+						<div class="v-empresa-nombre">${escapeHtml(EMPRESA_NOMBRE)}</div>
+						<div class="v-empresa-ruc">RUC: ${escapeHtml(EMPRESA_RUC)}</div>
 					</div>
-					<div class="rp-line"></div>
-					<div class="rp-sig-name">${escapeHtml(datos.clienteNombre)}</div>
-					<div class="rp-sig-info">RUC/DNI: ${escapeHtml(datos.clienteDni)}<br>Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
-				<div class="rp-sig rp-right">
-					<div class="rp-sig-title">FIRMA DE QUIEN RECIBE</div>
-					<div class="rp-firma-img-wrap">
-						${datos.firmaReceptorDataUrl ? `<img class="rp-firma-img" src="${datos.firmaReceptorDataUrl}" />` : ''}
+				<div class="v-header-right">
+					<div class="v-numero-badge">${escapeHtml(numeroTexto)}</div>
+					<div class="v-header-meta">
+						<div class="v-titulo">${esCopia ? 'COPIA - ' : ''}RECIBO DE PAGO</div>
+						<div>Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))}</div>
+						<div>Página: 1 de 1</div>
 					</div>
-					<div class="rp-line"></div>
-					<div class="rp-sig-name">NOMBRE: ${escapeHtml(datos.receptorNombre)}</div>
-					<div class="rp-sig-info">DNI: ${escapeHtml(datos.receptorDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
 			</div>
+
+			<div class="v-intro">Yo, ${escapeHtml(datos.clienteNombre)}, identificado con RUC/DNI ${escapeHtml(datos.clienteDni)}, <b>dejo constancia de haber pagado a favor de ${escapeHtml(EMPRESA_NOMBRE)}</b>, identificado con RUC ${escapeHtml(EMPRESA_RUC)}, el importe que se detalla a continuación:</div>
+
+			<div class="v-seccion">
+				<div class="v-seccion-titulo"><span class="v-num-circulo">1</span> POR CONCEPTO DE</div>
+				<div class="v-caja v-caja-1col">
+					<div class="v-col-nombre" style="font-size:13px;font-weight:700;color:#1e293b;">${escapeHtml(datos.proyectoNombre)}</div>
+					<div class="v-col-nombre">Código: ${escapeHtml(datos.proyectoCodigo)}</div>
+				</div>
+			</div>
+
+			<div class="v-seccion">
+				<div class="v-seccion-titulo"><span class="v-num-circulo">2</span> IMPORTE Y CONCEPTO</div>
+				<div class="v-caja v-caja-2col">
+					<div class="v-col">
+						<div class="v-col-label">Importe (S/)</div>
+						<div class="v-importe">${escapeHtml(formatearMonto(datos.monto))}</div>
+						<div class="v-importe-letras">(${escapeHtml(montoEnLetras(datos.monto))})</div>
+					</div>
+					<div class="v-col">
+						<div class="v-col-label">Concepto</div>
+						<div class="v-texto">${escapeHtml(datos.concepto)}</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="v-seccion">
+				<div class="v-seccion-titulo"><span class="v-num-circulo">3</span> FORMA DE PAGO</div>
+				<div class="v-caja v-caja-1col">
+					${
+						datos.esEfectivo
+							? `<div class="v-cashbox-row">${ICONO_BILLETE} EFECTIVO</div>
+					<div class="v-col-nombre">El pago se realizó en efectivo por la suma indicada en el presente recibo.</div>`
+							: `<div class="v-cashbox-row">${iconoMedioPago(datos.medioPagoLabel || '')} ${escapeHtml((datos.medioPagoLabel || '').toUpperCase())}</div>
+					<div style="display:flex;gap:16px;margin-top:8px;">
+						<div style="flex:1;min-width:0;">
+							<div class="v-col-label">N° de Operación</div>
+							<div class="v-col-codigo">${escapeHtml(datos.numeroOperacion || '—')}</div>
+						</div>
+						<div style="flex:1;min-width:0;">
+							<div class="v-col-label">Nombre Titular de la Cuenta</div>
+							<div class="v-col-codigo">${escapeHtml(datos.nombreTitularCuenta || '—')}</div>
+						</div>
+					</div>`
+					}
+				</div>
+			</div>
+
+			<div class="v-seccion">
+				<div class="v-seccion-titulo"><span class="v-num-circulo">4</span> DETALLE DEL RECIBO</div>
+				<div class="v-caja v-caja-2col">
+					<div class="v-col">
+						<div class="v-col-label">N° de recibo</div>
+						<div class="v-col-codigo">${escapeHtml(numeroTexto)}</div>
+					</div>
+					<div class="v-col">
+						<div class="v-col-label">Fecha de emisión</div>
+						<div class="v-col-codigo">${escapeHtml(formatearFechaCorta(datos.fecha))}</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="v-firmas">
+				<div class="v-firma">
+					<div class="v-firma-titulo">Firma digital del cliente<br>(Firma manuscrita)</div>
+					<div class="v-firma-img-wrap">
+						${datos.firmaClienteDataUrl ? `<img class="v-firma-img" src="${datos.firmaClienteDataUrl}" />` : ''}
+					</div>
+					<div class="v-firma-linea"></div>
+					<div class="v-firma-nombre">${escapeHtml(datos.clienteNombre)}</div>
+					<div class="v-firma-info">RUC/DNI: ${escapeHtml(datos.clienteDni)}<br>Fecha: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
+				</div>
+				<div class="v-firma">
+					<div class="v-firma-titulo">Firma de quien recibe</div>
+					<div class="v-firma-img-wrap">
+						${datos.firmaReceptorDataUrl ? `<img class="v-firma-img" src="${datos.firmaReceptorDataUrl}" />` : ''}
+					</div>
+					<div class="v-firma-linea"></div>
+					<div class="v-firma-nombre">${escapeHtml(datos.receptorNombre)}</div>
+					<div class="v-firma-info">DNI: ${escapeHtml(datos.receptorDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
+				</div>
+			</div>
+			${marcaAguaBorrador(48)}
 		</div>
 	`;
 }
 
-function construirPaginaHtml(datos: DatosReciboPago): string {
-	return `
-		<div class="rp-page">
-			${construirBloqueRecibo('rp-r1', false, datos)}
-			<div class="rp-separador"></div>
-			${construirBloqueRecibo('rp-r2', true, datos)}
-		</div>
-	`;
+async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPago) {
+	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
+	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 }
 
-/** Arma el PDF completo (Original + Copia ya dispuestas en una sola hoja de 544×682px, ver referencia
- * del usuario) y lo devuelve en base64, listo para guardarArchivoBinario. Se renderiza UNA sola vez —
- * ambas copias ya están posicionadas dentro de la misma plantilla. */
+/** Arma el recibo como HTML autocontenido, sin pasar por html2canvas/jsPDF — mismo criterio que
+ * construirHtmlCompleto en comprobanteTransferenciaInterna.ts/reciboPagoProveedor.ts: mientras la
+ * transacción sigue siendo un borrador, el recibo queda en HTML; recién se convierte a PDF de verdad al
+ * guardar/cerrar (ver handleSubmit en TransaccionModal.svelte). */
+export function construirHtmlCompleto(datos: DatosReciboPago): string {
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO DE PAGO (borrador)</title><style>body{background:#e2e8f0;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
+}
+
+/** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
+ * guardarArchivoBinario — mismo criterio que comprobanteTransferenciaInterna.ts/
+ * reciboPagoProveedor.ts. */
 export async function generarReciboPagoBase64(datos: DatosReciboPago): Promise<string> {
-	const html = `<style>${ESTILOS_RECIBO_PAGO}</style>${construirPaginaHtml(datos)}`;
-	const pagina = await renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
+	const [original, copia] = await Promise.all([renderVoucherComoImagen(false, datos), renderVoucherComoImagen(true, datos)]);
 
 	const doc = new jsPDF();
-	const alturaMm = (pagina.heightPx / pagina.widthPx) * ANCHO_PAGINA_MM;
-	doc.addImage(pagina.dataUrl, 'PNG', MARGEN_PAGINA_MM, MARGEN_PAGINA_MM, ANCHO_PAGINA_MM, alturaMm);
+	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;
+	const alturaCopiaMm = (copia.heightPx / copia.widthPx) * ANCHO_PAGINA_MM;
+
+	let y = MARGEN_PAGINA_MM;
+	doc.addImage(original.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaOriginalMm);
+	y += alturaOriginalMm + 4;
+
+	doc.setDrawColor(150);
+	doc.setLineDashPattern([1.5, 1.5], 0);
+	doc.line(MARGEN_PAGINA_MM, y, MARGEN_PAGINA_MM + ANCHO_PAGINA_MM, y);
+	doc.setLineDashPattern([], 0);
+	y += 4;
+
+	doc.addImage(copia.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaCopiaMm);
 
 	return arrayBufferToBase64(doc.output('arraybuffer'));
 }

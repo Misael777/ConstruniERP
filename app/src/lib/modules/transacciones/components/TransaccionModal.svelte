@@ -35,9 +35,9 @@
 		getCuentasBancoUsadasEnIngresos
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getSaldosCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
-	import { generarComprobanteTransferenciaInternaBase64 } from '$lib/shared/comprobanteTransferenciaInterna';
-	import { generarReciboPagoBase64 } from '$lib/shared/reciboPagoEfectivo';
-	import { generarReciboPagoProveedorBase64 } from '$lib/shared/reciboPagoProveedor';
+	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
+	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
+	import { generarReciboPagoProveedorBase64, construirHtmlCompleto as construirHtmlReciboProveedor, type DatosReciboPagoProveedor } from '$lib/shared/reciboPagoProveedor';
 	import ReciboPagoModal, { type DatosPopupReciboPago } from '$lib/modules/transacciones/components/ReciboPagoModal.svelte';
 	import ReciboPagoProveedorModal, { type DatosPopupReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
@@ -763,15 +763,123 @@
 		return idx === -1 ? [label, ''] : [label.slice(0, idx), label.slice(idx + 3)];
 	}
 
+	/** Datos ya armados de un recibo autogenerado (Boucher Interna/Recibo por Pago/Recibo a Proveedor)
+	 * TODAVÍA sin convertir a PDF — a pedido explícito del usuario: "todos los recibos que se
+	 * autogeneren deben estar en HTML y no en PDF, solo cuando se guarde o se cierre la transacción
+	 * entonces se hará el PDF". Mientras la transacción sigue siendo un borrador, el botón
+	 * "Autogenerar..." solo arma el HTML (ver abrirPreviewHtml, se abre en una pestaña nueva) — nada de
+	 * html2canvas/jsPDF todavía, eso es lo caro. Recién al presionar Crear/Actualizar se convierte de
+	 * verdad a PDF (ver generarPdfDeReciboPendiente, llamado desde handleSubmit) y se adjunta como
+	 * comprobante. Como mucho uno a la vez: los 3 botones son mutuamente excluyentes según
+	 * Tipo/Alcance/medio_pago, así que no hace falta guardar más de uno en paralelo. */
+	type ReciboPendiente =
+		| { tipo: 'interna'; numero: number; nombreArchivo: string; datos: DatosComprobanteInterno }
+		| { tipo: 'ingreso'; numero: number; nombreArchivo: string; datos: DatosReciboPago }
+		| { tipo: 'proveedor'; numero: number; nombreArchivo: string; datos: DatosReciboPagoProveedor };
+	let reciboPendiente = $state<ReciboPendiente | null>(null);
+
+	/** HTML del borrador pendiente, para mostrarlo dentro del recuadro "Adjuntar boucher de pago" (vía
+	 * iframe, ver más abajo) — a pedido explícito del usuario: la vista previa del recibo generado debe
+	 * verse ahí mismo, no solo en la pestaña nueva que abre abrirPreviewHtml. */
+	const reciboPendienteHtml = $derived.by(() => {
+		if (!reciboPendiente) return null;
+		if (reciboPendiente.tipo === 'interna') return construirHtmlInterna(reciboPendiente.datos);
+		if (reciboPendiente.tipo === 'ingreso') return construirHtmlReciboPago(reciboPendiente.datos);
+		return construirHtmlReciboProveedor(reciboPendiente.datos);
+	});
+
+	/** Abre el HTML del recibo (borrador, ver reciboPendiente) en una pestaña nueva vía Blob URL — sin
+	 * generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los 30s, así que
+	 * revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
+	function abrirPreviewHtml(html: string) {
+		const blob = new Blob([html], { type: 'text/html' });
+		const url = URL.createObjectURL(blob);
+		window.open(url, '_blank');
+		setTimeout(() => URL.revokeObjectURL(url), 30000);
+	}
+
+	/** Convierte reciboPendiente a PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) y lo
+	 * deja como comprobante adjunto — mismo comportamiento que antes tenían los 3 botones
+	 * "Autogenerar..." al presionarlos (comprobanteFile, comprobantesPago para Interna, descarga local),
+	 * solo que ahora ocurre al guardar (ver handleSubmit), no al generar. No hace nada si no hay ningún
+	 * recibo pendiente (el usuario adjuntó su propio comprobante a mano, o no usó "Autogenerar..."). */
+	async function generarPdfDeReciboPendiente() {
+		if (!reciboPendiente) return;
+		const pendiente = reciboPendiente;
+		let base64: string;
+		if (pendiente.tipo === 'interna') base64 = await generarComprobanteTransferenciaInternaBase64(pendiente.datos);
+		else if (pendiente.tipo === 'ingreso') base64 = await generarReciboPagoBase64(pendiente.datos);
+		else base64 = await generarReciboPagoProveedorBase64(pendiente.datos);
+
+		comprobanteFile = new File([base64ToUint8Array(base64)], pendiente.nombreArchivo, { type: 'application/pdf' });
+		comprobanteError = '';
+
+		if (pendiente.tipo === 'interna') {
+			// '8' = Boucher, único Tipo de Documento (junto con Talonario) válido para Alcance=Interna.
+			comprobantesPagoKeySeq += 1;
+			comprobantesPago = [
+				...comprobantesPago.filter((f) => !f.nombre_archivo?.startsWith('RECIBO-TRANSFERENCIA-INTERNA-')),
+				{
+					_key: comprobantesPagoKeySeq,
+					tipo_documento: '8',
+					num_documento: String(pendiente.numero).padStart(4, '0'),
+					monto: Number(formValues.monto_total) || 0,
+					url: '',
+					nombre_archivo: pendiente.nombreArchivo,
+					file: comprobanteFile
+				}
+			];
+		}
+
+		await guardarArchivoBinario(base64, pendiente.nombreArchivo, 'application/pdf');
+		reciboPendiente = null;
+	}
+
 	// Botón "Autogenerar Boucher de Transferencia" (a pedido explícito del usuario, con imagen de
-	// referencia) — solo para Alcance=Interna, en el área 1 junto al comprobante. A diferencia del
-	// diseño anterior (se emitía SOLO al guardar), ahora el PDF se genera y descarga EN EL MOMENTO que
-	// se presiona el botón, esté o no guardada todavía la transacción. El N° de comprobante se pide una
-	// sola vez (la primera vez que se presiona para esta transacción) y se reusa en cualquier descarga
-	// posterior — recién se persiste en la BD al guardar (ver payload en handleSubmit), para no gastar
-	// un correlativo si el usuario nunca llega a guardar.
+	// referencia) — solo para Alcance=Interna, en el área 1 junto al comprobante. A pedido explícito
+	// del usuario: ya NO genera el PDF al presionarlo — arma el HTML (borrador) y lo abre en una
+	// pestaña nueva (ver abrirPreviewHtml/reciboPendiente arriba); el PDF de verdad recién se arma al
+	// guardar/actualizar (ver generarPdfDeReciboPendiente en handleSubmit). El N° de comprobante se
+	// pide una sola vez (la primera vez que se presiona para esta transacción) y se reusa en cualquier
+	// regeneración posterior — recién se persiste en la BD al guardar (ver payload en handleSubmit),
+	// para no gastar un correlativo si el usuario nunca llega a guardar.
 	let comprobanteInternoNumero = $state<number | null>(null);
 	let generandoComprobanteInterno = $state(false);
+
+	/** Arma los datos del Boucher de Transferencia Interna a partir del formulario — separado de
+	 * handleGenerarBoucherTransferencia para poder reusarlo también en el fallback de handleSubmit (ver
+	 * más abajo: "al crear una transacción interna se genera el comprobante automáticamente aunque
+	 * nunca se haya presionado el botón manual"), que necesita los mismos datos pero generando el PDF
+	 * de una directo (ya no hay "borrador pendiente" que convertir en ese punto, la transacción ya se
+	 * guardó). */
+	function construirDatosBoucherInterna(numero: number): DatosComprobanteInterno {
+		const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
+		const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+		const [origenCodigo, origenNombre] = separarCodigoNombre(origenLabel);
+		const [destinoCodigo, destinoNombre] = separarCodigoNombre(destinoLabel);
+		// A pedido explícito del usuario, con imagen de referencia: la sección "Cuentas Bancarias" del
+		// recibo debe mostrar la cuenta bancaria REAL usada en la transacción (misma fuente que los
+		// campos Cuenta Origen/Destino del formulario, ambos bancarios en Interna — ver
+		// cuentaOrigenEsBancaria/cuentaDestinoEsBancaria), no un código contable fijo inventado.
+		const cuentaBancariaOrigen = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_origen)?.label ?? formValues.cuente_origen ?? '—';
+		const cuentaBancariaDestino = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_destino)?.label ?? formValues.cuente_destino ?? '—';
+		return {
+			numero,
+			fecha: formValues.fecha,
+			origenCodigo,
+			origenNombre,
+			destinoCodigo,
+			destinoNombre,
+			monto: Number(formValues.monto_total) || 0,
+			// A pedido explícito del usuario: el concepto del recibo siempre es "Transferencia Interna"
+			// (no la Descripción del formulario, que puede estar vacía o hablar de otra cosa).
+			concepto: 'Transferencia Interna',
+			usuario: permisosState.userName || 'Usuario',
+			cuentaBancariaOrigen,
+			cuentaBancariaDestino
+		};
+	}
+
 	async function handleGenerarBoucherTransferencia() {
 		generandoComprobanteInterno = true;
 		try {
@@ -781,69 +889,19 @@
 				comprobanteInternoNumero = numero;
 			}
 
-			const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
-			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
-			const [origenCodigo, origenNombre] = separarCodigoNombre(origenLabel);
-			const [destinoCodigo, destinoNombre] = separarCodigoNombre(destinoLabel);
-			// A pedido explícito del usuario, con imagen de referencia: la sección "Cuentas Bancarias" del
-			// recibo debe mostrar la cuenta bancaria REAL usada en la transacción (misma fuente que los
-			// campos Cuenta Origen/Destino del formulario, ambos bancarios en Interna — ver
-			// cuentaOrigenEsBancaria/cuentaDestinoEsBancaria), no un código contable fijo inventado.
-			const cuentaBancariaOrigen = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_origen)?.label ?? formValues.cuente_origen ?? '—';
-			const cuentaBancariaDestino = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_destino)?.label ?? formValues.cuente_destino ?? '—';
-
 			// Fecha y Monto salen de los campos "reconocidos" del área 1 (formValues.fecha/monto_total) —
 			// a pedido explícito del usuario. N° de Operación no aplica de verdad en una transferencia
 			// interna (no hay banco externo de por medio), así que en vez de dejar lo que haya reconocido
 			// el OCR del boucher adjunto, se sobrescribe con el propio N° del recibo recién generado —
 			// mismo formato con el que se imprime en el PDF ("N° 0000").
+			const datos = construirDatosBoucherInterna(numero);
 			const numeroTexto = String(numero).padStart(4, '0');
-			const base64 = await generarComprobanteTransferenciaInternaBase64({
-				numero,
-				fecha: formValues.fecha,
-				origenCodigo,
-				origenNombre,
-				destinoCodigo,
-				destinoNombre,
-				monto: Number(formValues.monto_total) || 0,
-				// A pedido explícito del usuario: el concepto del recibo siempre es "Transferencia Interna"
-				// (no la Descripción del formulario, que puede estar vacía o hablar de otra cosa).
-				concepto: 'Transferencia Interna',
-				usuario: permisosState.userName || 'Usuario',
-				cuentaBancariaOrigen,
-				cuentaBancariaDestino
-			});
 			formValues = { ...formValues, num_operacion: numeroTexto };
 			numOperacionLocked = false;
 
-			// A pedido explícito del usuario: una vez generado, el recibo también queda como el
-			// comprobante adjunto de la transacción (mismo campo de "Adjuntar boucher de pago") — no solo
-			// se descarga. Al ser un File PDF, el efecto que genera la vista previa (ver arriba,
-			// comprobantePdfPreviewToken) lo detecta solo y muestra la miniatura de su primera página.
-			const nombreArchivo = `RECIBO-TRANSFERENCIA-INTERNA-${numeroTexto}.pdf`;
-			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
-			comprobanteError = '';
-
-			// A pedido explícito del usuario, con imagen de referencia: el recibo también debe verse en
-			// "Comprobantes de pago" (no solo en "Adjuntar boucher de pago" de arriba). '8' = Boucher, el
-			// único Tipo de Documento (junto con Talonario) válido para Alcance=Interna (ver
-			// transaccion.config.ts). Si ya había una fila de un recibo generado antes para esta misma
-			// transacción, se reemplaza en vez de duplicarla (puede volver a presionarse el botón).
-			comprobantesPagoKeySeq += 1;
-			comprobantesPago = [
-				...comprobantesPago.filter((f) => !f.nombre_archivo?.startsWith('RECIBO-TRANSFERENCIA-INTERNA-')),
-				{
-					_key: comprobantesPagoKeySeq,
-					tipo_documento: '8',
-					num_documento: numeroTexto,
-					monto: Number(formValues.monto_total) || 0,
-					url: '',
-					nombre_archivo: nombreArchivo,
-					file: comprobanteFile
-				}
-			];
-
-			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
+			reciboPendiente = { tipo: 'interna', numero, nombreArchivo: `RECIBO-TRANSFERENCIA-INTERNA-${numeroTexto}.pdf`, datos };
+			abrirPreviewHtml(construirHtmlInterna(datos));
+			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el boucher de transferencia:', err);
 			toast.error('No se pudo generar el boucher de transferencia.');
@@ -921,7 +979,7 @@
 		reciboPagoProveedorModalOpen = true;
 	}
 
-	async function handleGenerarReciboPagoProveedor(datos: DatosPopupReciboPagoProveedor) {
+	async function handleGenerarReciboPagoProveedor(popup: DatosPopupReciboPagoProveedor) {
 		generandoReciboPagoProveedor = true;
 		try {
 			let numero = numeroReciboPagoProveedor;
@@ -935,31 +993,31 @@
 			const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
 			const [, proyectoNombre] = separarCodigoNombre(origenLabel);
 
-			const base64 = await generarReciboPagoProveedorBase64({
+			const datos: DatosReciboPagoProveedor = {
 				numero,
 				fecha: formValues.fecha,
-				proveedorNombre: datos.proveedorNombre,
-				proveedorRuc: datos.proveedorRuc,
+				proveedorNombre: popup.proveedorNombre,
+				proveedorRuc: popup.proveedorRuc,
 				proyectoNombre,
 				monto: Number(formValues.monto_total) || 0,
-				concepto: datos.concepto,
-				entregoNombre: datos.entregoNombre,
-				entregoDni: datos.entregoDni,
-				firmaEntregoDataUrl: datos.firmaEntregoDataUrl,
-				recibioNombre: datos.proveedorNombre,
-				recibioDni: datos.proveedorRuc,
-				firmaRecibioDataUrl: datos.firmaRecibioDataUrl,
+				concepto: popup.concepto,
+				entregoNombre: popup.entregoNombre,
+				entregoDni: popup.entregoDni,
+				firmaEntregoDataUrl: popup.firmaEntregoDataUrl,
+				recibioNombre: popup.proveedorNombre,
+				recibioDni: popup.proveedorRuc,
+				firmaRecibioDataUrl: popup.firmaRecibioDataUrl,
 				esEfectivo: esReciboPagoEfectivo,
-				formaPagoTexto: datos.formaPagoTexto
-			});
-			const nombreArchivo = `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`;
-			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
+				formaPagoTexto: popup.formaPagoTexto
+			};
 			reciboPagoProveedorModalOpen = false;
 
-			// A pedido explícito del usuario: no se guarda de una vez — mismo criterio que
-			// handleGenerarReciboPago, ver comentario ahí.
-			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
-			comprobanteError = '';
+			// A pedido explícito del usuario: ya NO se genera el PDF acá — arma el HTML (borrador) y lo
+			// abre en una pestaña nueva; el PDF de verdad recién se arma al guardar/actualizar (ver
+			// generarPdfDeReciboPendiente en handleSubmit).
+			reciboPendiente = { tipo: 'proveedor', numero, nombreArchivo: `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`, datos };
+			abrirPreviewHtml(construirHtmlReciboProveedor(datos));
+			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el recibo de pago a proveedor:', err);
 			toast.error('No se pudo generar el recibo de pago a proveedor.');
@@ -968,7 +1026,7 @@
 		}
 	}
 
-	async function handleGenerarReciboPago(datos: DatosPopupReciboPago) {
+	async function handleGenerarReciboPago(popup: DatosPopupReciboPago) {
 		generandoReciboPago = true;
 		try {
 			// Efectivo y NO Efectivo son dos recibos diferentes (ver esEfectivo en reciboPagoEfectivo.ts) con
@@ -988,33 +1046,34 @@
 			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
 			const [proyectoCodigo, proyectoNombre] = separarCodigoNombre(destinoLabel);
 
-			const base64 = await generarReciboPagoBase64({
+			const datos: DatosReciboPago = {
 				numero,
 				fecha: formValues.fecha,
 				proyectoCodigo,
 				proyectoNombre,
 				monto: Number(formValues.monto_total) || 0,
-				concepto: datos.concepto,
-				clienteNombre: datos.clienteNombre,
-				clienteDni: datos.clienteDni,
-				firmaClienteDataUrl: datos.firmaClienteDataUrl,
-				receptorNombre: datos.receptorNombre,
-				receptorDni: datos.receptorDni,
-				firmaReceptorDataUrl: datos.firmaReceptorDataUrl,
+				concepto: popup.concepto,
+				clienteNombre: popup.clienteNombre,
+				clienteDni: popup.clienteDni,
+				firmaClienteDataUrl: popup.firmaClienteDataUrl,
+				receptorNombre: popup.receptorNombre,
+				receptorDni: popup.receptorDni,
+				firmaReceptorDataUrl: popup.firmaReceptorDataUrl,
 				esEfectivo: esReciboPagoEfectivo,
-				formaPagoTexto: datos.formaPagoTexto
-			});
-			const nombreArchivo = `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`;
-			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
+				medioPagoLabel: esReciboPagoEfectivo ? undefined : getOptionLabel(medioPagoField, formValues.medio_pago),
+				numeroOperacion: esReciboPagoEfectivo ? undefined : formValues.num_operacion,
+				nombreTitularCuenta: popup.nombreTitularCuenta
+			};
 			reciboPagoModalOpen = false;
 
-			// A pedido explícito del usuario: el recibo NO se guarda de una vez (ni sube a Drive ni se
-			// persiste el correlativo en la BD) — recién queda como el comprobante adjunto pendiente (mismo
-			// campo "Adjuntar boucher de pago" de siempre) para que el usuario lo vea antes de decidir
-			// guardar la transacción. Mismo criterio que handleGenerarBoucherTransferencia: todo se
-			// persiste junto cuando presione "Crear"/"Actualizar" (ver handleSubmit).
-			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
-			comprobanteError = '';
+			// A pedido explícito del usuario: ya NO se genera el PDF acá (ni se sube a Drive ni se
+			// descarga) — arma el HTML (borrador) y lo abre en una pestaña nueva; el PDF de verdad recién
+			// se arma al guardar/actualizar la transacción (ver generarPdfDeReciboPendiente en
+			// handleSubmit), mismo criterio que handleGenerarBoucherTransferencia/
+			// handleGenerarReciboPagoProveedor.
+			reciboPendiente = { tipo: 'ingreso', numero, nombreArchivo: `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`, datos };
+			abrirPreviewHtml(construirHtmlReciboPago(datos));
+			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo generar el recibo de pago:', err);
 			toast.error('No se pudo generar el recibo de pago.');
@@ -1717,6 +1776,12 @@
 
 		submitting = true;
 		try {
+			// A pedido explícito del usuario: todo recibo autogenerado (Boucher Interna/Recibo por Pago/
+			// Recibo a Proveedor) se queda en HTML mientras la transacción sigue siendo un borrador — el
+			// PDF de verdad (html2canvas/jsPDF) recién se arma acá, justo antes de guardar/actualizar. Si
+			// no se presionó ningún botón "Autogenerar..." (reciboPendiente sigue null), no hace nada.
+			await generarPdfDeReciboPendiente();
+
 			let finalComprobanteUrl = comprobanteUrl;
 			let uploadedFileId: string | null = null;
 			let oldFileIdToDelete: string | null = null;
@@ -1860,19 +1925,27 @@
 				// A pedido explícito del usuario: "cuando cree la transferencia, tengo que poder descargar el
 				// boucher de transferencia autogenerado" — al crear (no al editar) una transacción interna se
 				// genera y descarga el comprobante automáticamente, se haya presionado o no el botón manual
-				// "Autogenerar Boucher de Transferencia" (que sigue disponible para volver a descargarlo
-				// después). Si el botón nunca se presionó, el correlativo recién se asigna acá — se persiste
-				// en la fila ya creada para que quede consistente con el número impreso en el PDF descargado.
-				if (mode === 'create' && formValues.tipo_alcance === 'interna') {
+				// "Autogenerar Boucher de Transferencia". Si SÍ se presionó antes de guardar, generarPdfDeReciboPendiente()
+				// (ver arriba, al inicio de este handleSubmit) ya generó/descargó/adjuntó el PDF real y ya
+				// viajó en el payload de la creación — no hay nada más que hacer acá (guard !comprobanteInternoNumero).
+				// Si nunca se presionó, el correlativo recién se asigna acá y el PDF se genera directo (ya no
+				// hay "borrador pendiente" que convertir, la fila ya se guardó) — se persiste en la fila ya
+				// creada para que quede consistente con el número impreso en el PDF descargado.
+				if (mode === 'create' && formValues.tipo_alcance === 'interna' && !comprobanteInternoNumero) {
 					try {
 						const idParaVoucher = (result.data as any)?.id_transaccion;
-						await handleGenerarBoucherTransferencia();
+						const numero = await getSiguienteNumeroComprobanteInterno(supabase);
+						comprobanteInternoNumero = numero;
+						const datosVoucher = construirDatosBoucherInterna(numero);
+						const base64 = await generarComprobanteTransferenciaInternaBase64(datosVoucher);
+						const nombreArchivoVoucher = `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`;
+						await guardarArchivoBinario(base64, nombreArchivoVoucher, 'application/pdf');
 						// OJO: updateTransaccion valida TODOS los campos obligatorios del payload que recibe (ver
 						// validatePayload en fieldConfig.ts) — pasar solo { num_comprobante_interno } fallaba la
 						// validación de todos los demás campos obligatorios y no actualizaba nada (el error quedaba
 						// silenciado por el catch de abajo). Se reusa el `payload` completo ya armado arriba.
-						if (idParaVoucher && comprobanteInternoNumero) {
-							await updateTransaccion(supabase, idParaVoucher, { ...payload, num_comprobante_interno: comprobanteInternoNumero }, isAdmin());
+						if (idParaVoucher) {
+							await updateTransaccion(supabase, idParaVoucher, { ...payload, num_comprobante_interno: numero }, isAdmin());
 						}
 					} catch (voucherErr) {
 						console.warn('[TransaccionModal] No se pudo autogenerar el boucher de transferencia interna:', voucherErr);
@@ -2128,6 +2201,22 @@
 										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
 											<CloudUpload size={12} class="shrink-0" /> Haz clic o arrastra para reemplazar
 										</div>
+									{:else if reciboPendienteHtml}
+										<!-- Recibo generado como borrador (ver reciboPendiente) — todavía no es un PDF real
+										     (eso recién ocurre al guardar, ver generarPdfDeReciboPendiente), así que se
+										     previsualiza el HTML tal cual en un iframe en miniatura, sin pagar el costo de
+										     html2canvas antes de tiempo. Escala fija asumiendo el ancho angosto de esta
+										     columna (md:w-56 ≈ 224px) — en pantallas más anchas simplemente se ve un poco
+										     más chico dentro del recuadro, no se distorsiona. -->
+										<iframe
+											title="Vista previa del recibo (borrador)"
+											srcdoc={reciboPendienteHtml}
+											class="absolute top-0 left-0 border-0 pointer-events-none bg-white"
+											style="width:780px; height:1300px; transform: scale(0.29); transform-origin: top left;"
+										></iframe>
+										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
+											<FileText size={12} class="shrink-0" /> Borrador generado — clic para reemplazar
+										</div>
 									{:else if comprobanteFile}
 										<CloudUpload size={28} class="text-blue-400" />
 										<span class="text-xs font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
@@ -2142,9 +2231,15 @@
 										<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
 											Ver comprobante actual
 										</button>
+									{:else if reciboPendienteHtml}
+										<button type="button" onclick={() => abrirPreviewHtml(reciboPendienteHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Ver borrador completo
+										</button>
 									{/if}
 									{#if comprobanteError}
 										<p class="text-xs text-red-600">{comprobanteError}</p>
+									{:else if reciboPendienteHtml}
+										<p class="text-xs text-slate-400">Borrador en HTML — se convertirá a PDF y se adjuntará al guardar.</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
 									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
@@ -3016,7 +3111,6 @@
 	clienteNombreInicial={clienteReciboNombre}
 	clienteDniInicial={clienteReciboDni}
 	esEfectivo={esReciboPagoEfectivo}
-	formaPagoInicial={formValues.medio_pago ? getOptionLabel(medioPagoField, formValues.medio_pago) : ''}
 	generando={generandoReciboPago}
 	onCancel={() => (reciboPagoModalOpen = false)}
 	onGenerar={handleGenerarReciboPago}

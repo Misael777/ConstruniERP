@@ -6,7 +6,7 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
+	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import {
 		getPagosPendientes,
 		getPanoramaItems,
@@ -29,7 +29,7 @@
 	} from '$lib/modules/panoramas/services/panoramas.service';
 	import { getProveedorOptions, getPagos, sincronizarCuotasProgramadas } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { getClienteOptions } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
@@ -119,6 +119,34 @@
 	let filtroObra = $state('');
 	let filtroPrioridad = $state<'' | Prioridad>('');
 	let filtroEstado = $state<'' | 'pendiente' | 'vencido'>('');
+
+	// Filtro "Tipo" (Consultoria/Obra/Corporativo/Otros) — a pedido explícito del usuario, con imagen de
+	// referencia: mismo criterio/estilo de píldoras ya usado en finanzas/cuentas-pagar/+page.svelte,
+	// reusado acá para filtrar la Bandeja de Pagos Pendientes por el TIPO real del centro de costo de
+	// cada cuenta (independiente de qué obras ofrezca "Filtros → Obra"). "Otros" es el catch-all
+	// (cualquier otro tipo, MÁS las cuentas sin centro de costo asignado) — ver idsParaTipoFiltro.
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
+	let tipoFilter = $state<TipoFiltroCC | null>(null);
+	let centroCostoTipoMap = $state<Record<string, string>>({});
+	const TIPOS_CONOCIDOS = ['proyecto', 'consultoria', 'bolsa general'];
+
+	function idsParaTipoFiltro(tipo: TipoFiltroCC): { ids: number[]; incluirSinCentroCosto: boolean } {
+		if (tipo === 'otros') {
+			const ids = Object.entries(centroCostoTipoMap)
+				.filter(([, t]) => !TIPOS_CONOCIDOS.includes(t))
+				.map(([id]) => Number(id));
+			return { ids, incluirSinCentroCosto: true };
+		}
+		const ids = Object.entries(centroCostoTipoMap)
+			.filter(([, t]) => t === tipo)
+			.map(([id]) => Number(id));
+		return { ids, incluirSinCentroCosto: false };
+	}
+
+	function toggleTipoFilter(tipo: TipoFiltroCC) {
+		tipoFilter = tipoFilter === tipo ? null : tipo;
+		refetchOnFilterChange();
+	}
 	let bandejaSearch = $state('');
 	let bandejaSearchInput = $state('');
 	let bandejaSortBy = $state<BandejaSortBy>('fechaVencimiento');
@@ -156,8 +184,11 @@
 	async function fetchBandeja() {
 		loading = true;
 		try {
+			const filtroTipo = tipoFilter ? idsParaTipoFiltro(tipoFilter) : null;
 			const result = await getPagosPendientes(supabase, {
 				idProyecto: filtroObra ? Number(filtroObra) : null,
+				idsCentroCosto: filtroTipo?.ids,
+				incluirSinCentroCosto: filtroTipo?.incluirSinCentroCosto,
 				prioridad: filtroPrioridad || null,
 				estado: filtroEstado || null,
 				search: bandejaSearch,
@@ -315,12 +346,15 @@
 			return;
 		}
 		try {
-			[proyectoOptions, proveedorOptions, clienteOptions, centroCostoOptions] = await Promise.all([
+			let tipoMap: Record<string, string>;
+			[proyectoOptions, proveedorOptions, clienteOptions, centroCostoOptions, tipoMap] = await Promise.all([
 				getProyectoOptions(supabase),
 				getProveedorOptions(supabase),
 				getClienteOptions(supabase),
-				getCentroCostoOptions(supabase)
+				getCentroCostoOptions(supabase),
+				getCentroCostoTipoMap(supabase)
 			]);
+			centroCostoTipoMap = tipoMap;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar obras/proveedores');
 		}
@@ -660,6 +694,55 @@
 
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
+	{/if}
+
+	{#if vistaActiva === 'tablero'}
+		<!-- Filtro "Tipo" — a pedido explícito del usuario, con imagen de referencia: mismas píldoras
+		     compactas ya usadas en finanzas/cuentas-pagar/+page.svelte, filtran la Bandeja de Pagos
+		     Pendientes (ver toggleTipoFilter/fetchBandeja). Solo tiene sentido en Tablero: Calendario no
+		     muestra la Bandeja. -->
+		<div class="flex flex-wrap gap-3 mb-4">
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('consultoria')}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+					<Briefcase size={14} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('proyecto')}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+					<HardHat size={14} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Obra</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('bolsa general')}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+					<Building2 size={14} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
+			</button>
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter('otros')}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
+					<Ellipsis size={14} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">Otros</span>
+			</button>
+		</div>
 	{/if}
 
 	{#if vistaActiva === 'calendario'}

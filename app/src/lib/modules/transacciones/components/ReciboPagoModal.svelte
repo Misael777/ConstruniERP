@@ -4,10 +4,15 @@
 	 * pedido explícito del usuario, con imagen de referencia. Pide los datos que el "RECIBO DE PAGO" (ver
 	 * reciboPagoEfectivo.ts) necesita y que NO están en el formulario principal de la transacción: datos
 	 * del cliente que paga (prellenados desde el Centro de Costo Origen de la transacción — ver
-	 * clienteNombreInicial/clienteDniInicial), la descripción del medio de pago cuando NO es Efectivo (ver
-	 * esEfectivo/formaPagoTexto — a pedido explícito del usuario, con imagen de referencia: ej. "Yape a
-	 * Willy Melchor"), y ambas firmas manuscritas (ver SignaturePad.svelte). "Quien recibe" ya NO se
-	 * elige de una lista — a pedido explícito del usuario, siempre es quien tiene la sesión abierta
+	 * clienteNombreInicial/clienteDniInicial), ambas firmas manuscritas (ver SignaturePad.svelte), y —
+	 * solo cuando NO es Efectivo — el nombre de quien figura como titular de la cuenta desde la que se
+	 * hizo la transferencia/Yape/depósito (ver nombreTitularCuenta). A pedido explícito del usuario, con
+	 * imagen de referencia: el Medio de Pago (ícono + label) y el N° de Operación YA NO se piden acá —
+	 * ambos ya existen en el formulario principal de la transacción (formValues.medio_pago/
+	 * num_operacion), se resuelven solos en TransaccionModal.svelte antes de llamar a
+	 * generarReciboPagoBase64. Antes (ver historial) pedía un solo texto libre "Forma de Pago"
+	 * (formaPagoTexto, ej. "Yape a Willy Melchor") que mezclaba los tres datos en uno. "Quien recibe" ya
+	 * NO se elige de una lista — a pedido explícito del usuario, siempre es quien tiene la sesión abierta
 	 * (permisosState), así que Persona/Cargo se muestran fijos y solo el DNI queda editable (se prellena
 	 * si el empleado ya lo tiene cargado en IAM → Empleados). El PDF en sí lo arma y descarga quien abre
 	 * este modal (TransaccionModal.svelte, ver onGenerar) — este componente solo captura y valida los
@@ -28,7 +33,7 @@
 		cargoRelacion: string;
 		firmaReceptorDataUrl: string;
 		/** Solo cuando esEfectivo es false — ver TransaccionModal.svelte/reciboPagoEfectivo.ts. */
-		formaPagoTexto?: string;
+		nombreTitularCuenta?: string;
 	}
 
 	let {
@@ -37,7 +42,6 @@
 		clienteNombreInicial = '',
 		clienteDniInicial = '',
 		esEfectivo = true,
-		formaPagoInicial = '',
 		generando = false,
 		onCancel,
 		onGenerar
@@ -47,13 +51,8 @@
 		clienteNombreInicial?: string;
 		clienteDniInicial?: string;
 		/** true = medio_pago Efectivo, false = Transferencia/Depósito/Yape o Plin — determina si se pide
-		 * "Forma de Pago" (ver formaPagoTexto) o no. */
+		 * "Nombre del titular de la cuenta" (ver nombreTitularCuenta) o no. */
 		esEfectivo?: boolean;
-		/** Label del Medio de Pago ya elegido en el formulario principal (ej. "Transferencia bancaria",
-		 * "Yape o Plin") — a pedido explícito del usuario, precarga "Forma de Pago" con eso en vez de
-		 * arrancar vacío, ya que ese dato ya se eligió antes de abrir este popup; el usuario solo completa
-		 * el resto (ej. a quién/con qué cuenta). Solo se usa cuando esEfectivo es false. */
-		formaPagoInicial?: string;
 		generando?: boolean;
 		onCancel: () => void;
 		onGenerar: (datos: DatosPopupReciboPago) => void | Promise<void>;
@@ -65,7 +64,7 @@
 	let receptorDni = $state('');
 	let clienteNombre = $state('');
 	let clienteDni = $state('');
-	let formaPagoTexto = $state('');
+	let nombreTitularCuenta = $state('');
 	let firmaClienteDataUrl = $state('');
 	let firmaReceptorDataUrl = $state('');
 	let errores = $state<Record<string, string>>({});
@@ -80,7 +79,7 @@
 			concepto = conceptoInicial;
 			clienteNombre = clienteNombreInicial;
 			clienteDni = clienteDniInicial;
-			formaPagoTexto = formaPagoInicial;
+			nombreTitularCuenta = '';
 			receptorDni = permisosState.dni || '';
 			firmaClienteDataUrl = '';
 			firmaReceptorDataUrl = '';
@@ -94,7 +93,7 @@
 		if (!concepto.trim()) errs.concepto = 'Ingresa la descripción del pago.';
 		if (!clienteNombre.trim()) errs.clienteNombre = 'Requerido.';
 		if (!clienteDni.trim()) errs.clienteDni = 'Requerido.';
-		if (!esEfectivo && !formaPagoTexto.trim()) errs.formaPagoTexto = 'Describe el medio de pago (ej. Yape a Willy Melchor).';
+		if (!esEfectivo && !nombreTitularCuenta.trim()) errs.nombreTitularCuenta = 'Ingresa el nombre del titular de la cuenta de origen.';
 		if (!receptorDni.trim()) errs.receptorDni = 'Requerido.';
 		if (!firmaClienteDataUrl) errs.firmaCliente = 'Falta la firma del pagador.';
 		if (!firmaReceptorDataUrl) errs.firmaReceptor = 'Falta la firma de quien recibe.';
@@ -116,7 +115,7 @@
 			receptorDni: receptorDni.trim(),
 			cargoRelacion,
 			firmaReceptorDataUrl,
-			formaPagoTexto: esEfectivo ? undefined : formaPagoTexto.trim()
+			nombreTitularCuenta: esEfectivo ? undefined : nombreTitularCuenta.trim()
 		});
 	}
 </script>
@@ -152,17 +151,18 @@
 
 				{#if !esEfectivo}
 					<div>
-						<label class="block text-sm font-bold text-[#0f3b5e] mb-1" for="rp-forma-pago">
-							Forma de Pago <span class="text-red-500">*</span>
+						<label class="block text-sm font-bold text-[#0f3b5e] mb-1" for="rp-titular-cuenta">
+							Nombre del titular de la cuenta <span class="text-red-500">*</span>
 						</label>
 						<input
-							id="rp-forma-pago"
+							id="rp-titular-cuenta"
 							type="text"
-							bind:value={formaPagoTexto}
-							placeholder="Ej: Yape a Willy Melchor, Transferencia BCP, Depósito Interbank"
-							class={`w-full rounded-lg border px-3 py-2 text-sm ${errores.formaPagoTexto ? 'border-red-400' : 'border-slate-300'}`}
+							bind:value={nombreTitularCuenta}
+							placeholder="Nombre de quien figura como titular de la cuenta de origen"
+							class={`w-full rounded-lg border px-3 py-2 text-sm ${errores.nombreTitularCuenta ? 'border-red-400' : 'border-slate-300'}`}
 						/>
-						{#if errores.formaPagoTexto}<p class="text-xs text-red-600 mt-1">{errores.formaPagoTexto}</p>{/if}
+						{#if errores.nombreTitularCuenta}<p class="text-xs text-red-600 mt-1">{errores.nombreTitularCuenta}</p>{/if}
+						<p class="text-xs text-slate-400 mt-1">El medio de pago y el N° de Operación ya elegidos en la transacción se agregan solos al recibo.</p>
 					</div>
 				{/if}
 

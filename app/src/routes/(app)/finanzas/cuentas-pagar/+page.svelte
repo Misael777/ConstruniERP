@@ -588,44 +588,47 @@
 
 <div class="max-w-6xl mx-auto">
 	{#if !verEliminados}
-		<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+		<!-- A pedido explícito del usuario, con imagen de referencia: filtros compactos en forma de
+		     píldora (una sola fila, ícono circular chico) en vez de las tarjetas grandes cuadradas de
+		     antes — misma lógica de toggleTipoFilter/tipoFilter, solo cambia la presentación. -->
+		<div class="flex flex-wrap gap-3 mb-6">
 			<button
 				type="button"
 				onclick={() => toggleTipoFilter('consultoria')}
-				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
 			>
-				<div class="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
-					<Briefcase size={18} />
+				<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+					<Briefcase size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
 			</button>
 			<button
 				type="button"
 				onclick={() => toggleTipoFilter('proyecto')}
-				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
 			>
-				<div class="w-10 h-10 rounded-lg bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
-					<HardHat size={18} />
+				<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+					<HardHat size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Obra</span>
 			</button>
 			<button
 				type="button"
 				onclick={() => toggleTipoFilter('bolsa general')}
-				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
 			>
-				<div class="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-					<Building2 size={18} />
+				<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+					<Building2 size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
 			</button>
 			<button
 				type="button"
 				onclick={() => toggleTipoFilter('otros')}
-				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
 			>
-				<div class="w-10 h-10 rounded-full bg-slate-600 text-white flex items-center justify-center shrink-0">
-					<Ellipsis size={18} />
+				<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
+					<Ellipsis size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Otros</span>
 			</button>
