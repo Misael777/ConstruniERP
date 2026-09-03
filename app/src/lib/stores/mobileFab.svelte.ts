@@ -10,8 +10,17 @@
 // vivían como dos botones de header — el segundo terminaba desbordando la pantalla en móvil) — con una
 // sola acción el FAB dispara directo al tocarlo (mismo comportamiento de siempre); con dos o más, se
 // despliega un mini-menú (speed dial) al tocarlo.
+//
+// A pedido explícito del usuario (el FAB de Transacciones aparecía en TODOS los módulos, no solo en su
+// propia página): además del cleanup por onDestroy de abajo (que ya protege contra pisar el FAB de la
+// página nueva), se guarda la RUTA en la que se registraron las acciones — el layout (ver
+// (app)/+layout.svelte) solo renderiza el FAB si esa ruta coincide con `page.url.pathname` ACTUAL. Esto
+// hace que un remanente nunca se pueda ver, sin importar el orden exacto en que SvelteKit monte/desmonte
+// los componentes de página al navegar — la verificación es contra la ruta real de ahora, no contra un
+// estado que dependa de esa coreografía de lifecycle.
 import type { Component } from 'svelte';
 import { Plus } from '@lucide/svelte';
+import { page } from '$app/state';
 
 export interface MobileFabAction {
 	label: string;
@@ -19,17 +28,21 @@ export interface MobileFabAction {
 	onclick: () => void;
 }
 
-export const mobileFabState = $state<{ actions: MobileFabAction[] }>({ actions: [] });
+export const mobileFabState = $state<{ actions: MobileFabAction[]; path: string | null }>({ actions: [], path: null });
 
 /** API general — una o más acciones. Devuelve la función de limpieza para pasarle a onDestroy. */
 export function setMobileFabActions(actions: MobileFabAction[]): () => void {
+	const path = page.url.pathname;
 	mobileFabState.actions = actions;
+	mobileFabState.path = path;
 	return () => {
 		// Solo limpia si nadie más lo pisó mientras tanto (ej. navegación rápida entre dos páginas que
 		// ambas lo usan) — comparar por referencia evita que el onDestroy tardío de la página vieja
-		// borre el FAB que la página nueva ya dejó puesto.
+		// borre el FAB que la página nueva ya dejó puesto. El guard de ruta en el layout es la protección
+		// principal; esto es higiene adicional para no dejar referencias colgando innecesariamente.
 		if (mobileFabState.actions === actions) {
 			mobileFabState.actions = [];
+			mobileFabState.path = null;
 		}
 	};
 }

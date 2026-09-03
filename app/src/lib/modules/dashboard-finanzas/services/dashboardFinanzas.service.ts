@@ -1,34 +1,44 @@
 /**
- * Servicio de agregación para el tab "Finanzas" del Dashboard — rendimiento por Centro de Costo (CdC).
- * 100% client-side (Supabase anon key), igual que el resto de módulos de finanzas, para funcionar
- * también en el build de Tauri (adapter-static, sin +server.ts). No hay una capa de agregación en BD
- * (PostgREST no da GROUP BY arbitrario), así que se trae todo lo necesario en pocas queries masivas y
- * se agrega en JS — mismo criterio que recalcularCuentaCobrar/recalcularCuentaPagar.
+ * Servicio de agregación para el Dashboard financiero unificado — rendimiento por Centro de Costo
+ * (CdC), grafo de flujo de dinero entre centros, serie mensual de flujo de caja y proyección futura
+ * a partir de Cuentas por Pagar/Cobrar pendientes. 100% client-side (Supabase anon key), igual que el
+ * resto de módulos de finanzas, para funcionar también en el build de Tauri (adapter-static, sin
+ * +server.ts — un +page.server.ts en este proyecto solo corre en tiempo de PRERENDER/build, nunca en
+ * tiempo real dentro del empaquetado de escritorio/Android, así que cualquier dato que dependiera de
+ * uno quedaría congelado). No hay una capa de agregación en BD (PostgREST no da GROUP BY arbitrario),
+ * así que se trae todo lo necesario en pocas queries masivas y se agrega en JS — mismo criterio que
+ * recalcularCuentaCobrar/recalcularCuentaPagar.
  *
  * SUPUESTOS DE MODELO DE DATOS (documentados porque no hay una fuente única de verdad en el schema):
- * - "Centro de Costo de un proyecto" = fila de `centro_costo` con tipo='proyecto' e `id_proyecto`
- *   apuntando a `proyecto.id_proyecto` (FK real, ver centro_costo_vinculacion_migration.sql — antes
- *   se intentaba con una columna "id_referencia" que nunca existió de verdad en la BD). Se resuelve
- *   igual con una segunda query y join en JS en vez de embed de PostgREST, para no depender de que
- *   el embed esté habilitado.
- * - Se excluyen los centros de costo de clientes/proveedores (tipo='cliente'/'proveedor', o los
- *   antiguos placeholders "EXT-PROV"/"EXT-CLI" que puedan quedar de antes de esta migración) — no
- *   son proyectos reales, así que no aportan al rendimiento por CdC de proyecto.
- * - No existe una columna de "código de proyecto" en `proyecto` (el código que arma NuevaVentaModal.svelte
- *   es un string calculado solo para mostrar en el formulario, nunca se guarda) — el filtro "código de
- *   proyecto" de este dashboard usa `centro_costo.codigo` (ej. "PROY-42"), que sí es el identificador
- *   corto real y persistido de cada proyecto.
+ * - `centro_costo.tipo` cubre: 'obra' | 'consultoria' | 'bolsa general' | 'area' | 'otro' (creados a
+ *   mano) y 'proyecto' | 'cliente' | 'proveedor' | 'empleado' | 'subcontratista' (auto-creados 1:1 con
+ *   una entidad, ver getOrCrearCentroCostoParaEntidad en centroCostos.service.ts). El dashboard cubre
+ *   TODOS estos tipos — a pedido del usuario: "no son solo obras sino por cada centro de costo donde
+ *   hayan transacciones".
+ * - Se excluyen los centros de costo dados de baja (`estado = 'baja'`) y los antiguos placeholders
+ *   "EXT-PROV"/"EXT-CLI" que puedan quedar de antes de la migración de vinculación real por FK.
  * - Ingresos de un CdC = transacciones tipo='ingreso' donde ese CdC es el destino (dinero que entra).
  *   Egresos de un CdC = transacciones tipo='egreso' donde ese CdC es el origen (dinero que sale).
- *   Coincide con cómo construirPayloadTransaccionPorCobro/Pago arman origen/destino.
+ *   Mismo criterio que getSaldosPorCentroCosto en centroCostos.service.ts.
  * - "Presupuesto asignado" de un CdC de proyecto = suma de presupuesto_detalle.total de TODOS los
- *   presupuestos de ese proyecto (presupuesto no tiene columna de monto total propia).
+ *   presupuestos de ese proyecto (presupuesto no tiene columna de monto total propia). Para CdC que no
+ *   son de proyecto (cliente/proveedor/empleado/etc.) el presupuesto queda en 0 — no aplica el
+ *   concepto, la UI ya maneja ese caso como "Sin presupuesto asignado".
  * - "Gastos fijos corporativos globales" (para Margen de Contribución) = egresos de centros de costo
- *   que NO son de proyecto (tipo IN obra/consultoria/area/otro, reales, sin contar EXT-*) — se asume
- *   que esos representan la operación/estructura fija de la empresa, no un proyecto específico.
+ *   que NO son de proyecto/cliente/proveedor — se asume que esos representan la operación/estructura
+ *   fija de la empresa, no un proyecto ni una cuenta con una entidad externa específica.
  * - Categoría de gasto (para "Concentración de Salidas de Caja") no vive en `transaccion`, solo en
  *   `cuentas_pagar.categoria_gasto` (catálogo PCGE clase 6) — se resuelve vía `pagos` (que sí tiene
  *   FK real a ambas: id_transaccion y id_cuenta_pagar).
+ * - `transaccion.fecha` es DATE (sin hora) — se parsea manualmente por componentes (parseFechaLocal)
+ *   en vez de `new Date(str)` directo, porque este último interpreta la fecha como medianoche UTC y
+ *   con offsets negativos (ej. Perú, UTC-5) el .getMonth()/.getFullYear() en hora LOCAL puede devolver
+ *   el mes anterior — un corrimiento de un día que rompe el agrupado mensual.
+ * - Proyección futura = saldo_pendiente de cuentas_cobrar/cuentas_pagar con estado IN
+ *   ('pendiente','vencido') y activo=true, agrupado por mes de su fecha esperada de movimiento
+ *   (fecha_vencimiento para cobrar; fecha_pago_programada ?? fecha_vencimiento para pagar, mismo
+ *   fallback que usa computeEstadoCuentaPagar). Las cuentas ya vencidas (fecha en el pasado) se
+ *   proyectan en el mes ACTUAL, no se pierden — están vencidas, no dejan de deberse.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -44,9 +54,10 @@ export interface CentroCostoRendimiento {
 	id_centro_costo: number;
 	codigo: string;
 	nombre: string;
+	tipo: string;
 	id_proyecto: number | null;
 	nombre_proyecto: string | null;
-	tip_proyecto: string | null; // 'O' = Obra, 'M' = Mantenimiento
+	tip_proyecto: string | null; // 'O' = Obra, 'M' = Mantenimiento — solo aplica si tipo === 'proyecto'
 	estado_proyecto: string | null;
 	fecha_inicio_plan: string | null;
 	fecha_fin_plan: string | null;
@@ -76,16 +87,28 @@ export interface CentroCostoRendimiento {
 }
 
 export interface FiltrosFinanzas {
-	/** 'O' | 'M' | undefined (todos) */
-	tipoProyecto?: string;
+	/** Uno de los valores reales de centro_costo.tipo (ver TIPO_CENTRO_COSTO_OPTIONS), o undefined = todos. */
+	tipo?: string;
 	/** id_centro_costo puntual (el selector de "código de proyecto") */
 	idCentroCosto?: number | null;
 }
 
-export const TIPO_PROYECTO_OPTIONS: FieldOption[] = [
-	{ value: 'O', label: 'Obra' },
-	{ value: 'M', label: 'Mantenimiento' }
+export const TIPO_CENTRO_COSTO_OPTIONS: FieldOption[] = [
+	{ value: 'obra', label: 'Obra' },
+	{ value: 'consultoria', label: 'Consultoría' },
+	{ value: 'bolsa general', label: 'Bolsa General' },
+	{ value: 'area', label: 'Área' },
+	{ value: 'otro', label: 'Otro' },
+	{ value: 'proyecto', label: 'Proyecto' },
+	{ value: 'cliente', label: 'Cliente' },
+	{ value: 'proveedor', label: 'Proveedor' },
+	{ value: 'empleado', label: 'Empleado' },
+	{ value: 'subcontratista', label: 'Subcontratista' }
 ];
+
+export const TIPO_CENTRO_COSTO_LABELS: Record<string, string> = Object.fromEntries(
+	TIPO_CENTRO_COSTO_OPTIONS.map((o) => [o.value, o.label])
+);
 
 /** Catálogo PCGE clase 6 — mismo que cuentaPagar.config.ts (categoria_gasto). */
 const CATEGORIA_GASTO_LABELS: Record<string, string> = {
@@ -107,12 +130,29 @@ function mesesEntre(inicio: Date, fin: Date): number {
 	return Math.max(1, (fin.getFullYear() - inicio.getFullYear()) * 12 + (fin.getMonth() - inicio.getMonth()) + 1);
 }
 
-/** Opciones para el selector "Código de Proyecto" (en realidad, código de Centro de Costo). */
-export async function getCentrosCostoProyectoOptions(client: SupabaseClient): Promise<FieldOption[]> {
+/** Parsea una fecha 'YYYY-MM-DD' por componentes, en hora LOCAL — ver nota de cabecera del archivo. */
+function parseFechaLocal(fechaStr: string): Date {
+	const [y, m, d] = fechaStr.split('-').map(Number);
+	return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+function claveAnioMes(d: Date): string {
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function etiquetaAnioMes(clave: string): string {
+	const [anio, mes] = clave.split('-');
+	return `${MESES_CORTOS[Number(mes) - 1]} ${anio.slice(2)}`;
+}
+
+/** Opciones para el selector "Código de Proyecto / Centro de Costo" — cualquier tipo, no solo proyecto. */
+export async function getCentrosCostoOptions(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
 		.select('id_centro_costo, codigo, nombre')
-		.eq('tipo', 'proyecto')
+		.eq('estado', 'activo')
 		.order('codigo');
 	if (error) throw error;
 	return (data ?? [])
@@ -121,40 +161,37 @@ export async function getCentrosCostoProyectoOptions(client: SupabaseClient): Pr
 }
 
 /**
- * Trae y agrega todo el rendimiento por Centro de Costo (uno por proyecto), aplicando los filtros.
+ * Trae y agrega todo el rendimiento por Centro de Costo (de cualquier tipo), aplicando los filtros.
  * Ver notas de modelo de datos arriba del archivo para las definiciones exactas de cada métrica.
  */
 export async function getRendimientoPorCentroCosto(
 	client: SupabaseClient,
 	filtros: FiltrosFinanzas = {}
 ): Promise<CentroCostoRendimiento[]> {
-	// 1. Centros de costo de proyecto (+ filtro directo por CdC puntual si aplica)
-	let ccQuery = client.from('centro_costo').select('id_centro_costo, codigo, nombre, id_proyecto').eq('tipo', 'proyecto');
+	// 1. Centros de costo (cualquier tipo) + filtros directos por CdC puntual y/o tipo
+	let ccQuery = client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre, tipo, id_proyecto')
+		.eq('estado', 'activo');
 	if (filtros.idCentroCosto) ccQuery = ccQuery.eq('id_centro_costo', filtros.idCentroCosto);
+	if (filtros.tipo) ccQuery = ccQuery.eq('tipo', filtros.tipo);
 	const { data: centrosRaw, error: ccError } = await ccQuery;
 	if (ccError) throw ccError;
-	const centros = (centrosRaw ?? []).filter((c: any) => !esCentroExterno(c.codigo));
-	if (centros.length === 0) return [];
+	const centrosFinal = (centrosRaw ?? []).filter((c: any) => !esCentroExterno(c.codigo));
+	if (centrosFinal.length === 0) return [];
 
 	// 2. Proyectos vinculados (join en JS por simplicidad/consistencia, aunque id_proyecto ya es FK real)
-	const idsProyecto = centros.map((c: any) => c.id_proyecto).filter((v: unknown): v is number => v !== null);
+	const idsProyectoFinal = centrosFinal.map((c: any) => c.id_proyecto).filter((v: unknown): v is number => v !== null);
 	const { data: proyectos } =
-		idsProyecto.length > 0
+		idsProyectoFinal.length > 0
 			? await client
 					.from('proyecto')
 					.select('id_proyecto, nombre_proyecto, tip_proyecto, estado_proyecto, fecha_inicio_plan, fecha_fin_plan')
-					.in('id_proyecto', idsProyecto)
+					.in('id_proyecto', idsProyectoFinal)
 			: { data: [] as any[] };
 	const proyectoPorId = new Map((proyectos ?? []).map((p: any) => [p.id_proyecto, p]));
 
-	// Filtro por tipo de proyecto — se aplica recién ahora, ya con tip_proyecto resuelto.
-	const centrosFinal = filtros.tipoProyecto
-		? centros.filter((c: any) => proyectoPorId.get(c.id_proyecto)?.tip_proyecto === filtros.tipoProyecto)
-		: centros;
-	if (centrosFinal.length === 0) return [];
-
 	const idsCentroFinal = centrosFinal.map((c: any) => c.id_centro_costo);
-	const idsProyectoFinal = centrosFinal.map((c: any) => c.id_proyecto).filter((v: unknown): v is number => v !== null);
 
 	// 3. Transacciones activas vinculadas a estos CdC (como origen o como destino)
 	const cols = 'id_transaccion, id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha, estado';
@@ -242,6 +279,7 @@ export async function getRendimientoPorCentroCosto(
 			id_centro_costo: c.id_centro_costo,
 			codigo: c.codigo,
 			nombre: c.nombre,
+			tipo: c.tipo,
 			id_proyecto: c.id_proyecto,
 			nombre_proyecto: proyecto?.nombre_proyecto ?? null,
 			tip_proyecto: proyecto?.tip_proyecto ?? null,
@@ -265,9 +303,10 @@ export async function getRendimientoPorCentroCosto(
 }
 
 /**
- * Egresos activos de centros de costo "de estructura" (obra/consultoria/area/otro — ni de proyecto,
- * ni de cliente/proveedor) — la base contra la que se mide el Margen de Contribución Financiera:
- * cuánto de lo que aportan los CdC de proyecto alcanza para cubrir esta estructura fija corporativa.
+ * Egresos activos de centros de costo "de estructura" (obra/consultoria/area/otro/bolsa general — ni
+ * de proyecto, ni de cliente/proveedor) — la base contra la que se mide el Margen de Contribución
+ * Financiera: cuánto de lo que aportan los CdC de proyecto alcanza para cubrir esta estructura fija
+ * corporativa.
  */
 export async function getGastosCorporativosGlobales(client: SupabaseClient): Promise<number> {
 	const { data: centros } = await client
@@ -283,4 +322,227 @@ export async function getGastosCorporativosGlobales(client: SupabaseClient): Pro
 		.eq('tipo', 'egreso')
 		.eq('estado', 'activo');
 	return (trans ?? []).reduce((s: number, t: any) => s + Number(t.monto_total), 0);
+}
+
+export interface NodoFlujo {
+	id: number;
+	codigo: string;
+	nombre: string;
+	tipo: string;
+	saldo: number;
+}
+
+export interface AristaFlujo {
+	origen: number;
+	destino: number;
+	monto: number;
+	cantidad: number;
+}
+
+export interface FlujoDeNodos {
+	nodos: NodoFlujo[];
+	aristas: AristaFlujo[];
+}
+
+/**
+ * Grafo de flujo de dinero entre TODOS los centros de costo activos con movimiento — nodos con saldo
+ * (ingresos - egresos, mismo criterio que getSaldosPorCentroCosto) y aristas agregadas por par
+ * origen->destino (varias transacciones entre el mismo par se colapsan en una sola arista, sumando
+ * monto). Solo incluye centros que realmente tuvieron al menos una transacción activa — a pedido del
+ * usuario: "por cada centro de costo donde hayan transacciones".
+ */
+export async function getFlujoDeNodos(client: SupabaseClient): Promise<FlujoDeNodos> {
+	const { data: centrosRaw, error: ccError } = await client
+		.from('centro_costo')
+		.select('id_centro_costo, codigo, nombre, tipo')
+		.eq('estado', 'activo');
+	if (ccError) throw ccError;
+	const centros = (centrosRaw ?? []).filter((c: any) => !esCentroExterno(c.codigo));
+	if (centros.length === 0) return { nodos: [], aristas: [] };
+	const ids = centros.map((c: any) => c.id_centro_costo);
+	const idsSet = new Set(ids);
+
+	const { data: trans, error: tError } = await client
+		.from('transaccion')
+		.select('id_centro_costo_origen, id_centro_costo_destino, monto_total')
+		.eq('estado', 'activo')
+		.or(`id_centro_costo_origen.in.(${ids.join(',')}),id_centro_costo_destino.in.(${ids.join(',')})`);
+	if (tError) throw tError;
+
+	const saldos = new Map<number, number>(ids.map((id: number) => [id, 0]));
+	const aristaMap = new Map<string, AristaFlujo>();
+	const nodosConMovimiento = new Set<number>();
+
+	for (const t of (trans ?? []) as any[]) {
+		const monto = Number(t.monto_total) || 0;
+		const origen = t.id_centro_costo_origen;
+		const destino = t.id_centro_costo_destino;
+		if (idsSet.has(destino)) {
+			saldos.set(destino, (saldos.get(destino) ?? 0) + monto);
+			nodosConMovimiento.add(destino);
+		}
+		if (idsSet.has(origen)) {
+			saldos.set(origen, (saldos.get(origen) ?? 0) - monto);
+			nodosConMovimiento.add(origen);
+		}
+		if (idsSet.has(origen) && idsSet.has(destino) && origen !== destino) {
+			const key = `${origen}->${destino}`;
+			const existente = aristaMap.get(key);
+			if (existente) {
+				existente.monto += monto;
+				existente.cantidad += 1;
+			} else {
+				aristaMap.set(key, { origen, destino, monto, cantidad: 1 });
+			}
+		}
+	}
+
+	const nodos: NodoFlujo[] = centros
+		.filter((c: any) => nodosConMovimiento.has(c.id_centro_costo))
+		.map((c: any) => ({
+			id: c.id_centro_costo,
+			codigo: c.codigo,
+			nombre: c.nombre,
+			tipo: c.tipo,
+			saldo: saldos.get(c.id_centro_costo) ?? 0
+		}));
+
+	return { nodos, aristas: [...aristaMap.values()] };
+}
+
+export interface ResumenGeneralDashboard {
+	totalIngresos: number;
+	totalEgresos: number;
+	saldoNeto: number;
+	centrosConMovimiento: number;
+	empleadosActivos: number;
+	centrosPorTipo: Record<string, number>;
+}
+
+/** KPIs generales del dashboard, 100% desde `transaccion`/`centro_costo`/`empleados` reales — reemplaza
+ * los que antes venían de las tablas legacy `ventas`/`gastos`/`obras`/`consultorias`. */
+export async function getResumenGeneral(client: SupabaseClient): Promise<ResumenGeneralDashboard> {
+	const [{ data: trans, error: tError }, { count: empleadosActivos }, { data: centrosData, error: cError }] = await Promise.all([
+		client.from('transaccion').select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total').eq('estado', 'activo'),
+		client.from('empleados').select('id', { count: 'exact', head: true }).neq('estado', 'baja'),
+		client.from('centro_costo').select('id_centro_costo, codigo, tipo').eq('estado', 'activo')
+	]);
+	if (tError) throw tError;
+	if (cError) throw cError;
+
+	const totalIngresos = (trans ?? []).filter((t: any) => t.tipo === 'ingreso').reduce((s: number, t: any) => s + Number(t.monto_total), 0);
+	const totalEgresos = (trans ?? []).filter((t: any) => t.tipo === 'egreso').reduce((s: number, t: any) => s + Number(t.monto_total), 0);
+
+	const centrosValidos = (centrosData ?? []).filter((c: any) => !esCentroExterno(c.codigo));
+	const idsValidos = new Set(centrosValidos.map((c: any) => c.id_centro_costo));
+	const centrosPorTipo: Record<string, number> = {};
+	for (const c of centrosValidos) centrosPorTipo[c.tipo] = (centrosPorTipo[c.tipo] ?? 0) + 1;
+
+	const idsConMovimiento = new Set<number>();
+	for (const t of (trans ?? []) as any[]) {
+		if (idsValidos.has(t.id_centro_costo_origen)) idsConMovimiento.add(t.id_centro_costo_origen);
+		if (idsValidos.has(t.id_centro_costo_destino)) idsConMovimiento.add(t.id_centro_costo_destino);
+	}
+
+	return {
+		totalIngresos,
+		totalEgresos,
+		saldoNeto: totalIngresos - totalEgresos,
+		centrosConMovimiento: idsConMovimiento.size,
+		empleadosActivos: empleadosActivos ?? 0,
+		centrosPorTipo
+	};
+}
+
+export interface SerieMensualFlujoCaja {
+	labels: string[];
+	ingresos: number[];
+	egresos: number[];
+}
+
+/** Serie histórica de ingresos/egresos activos, agrupada por mes calendario, últimos `meses` meses
+ * (incluyendo el actual). Reemplaza el ventasPorMes/gastosPorMes legacy del antiguo tab General. */
+export async function getSerieMensualFlujoCaja(client: SupabaseClient, meses = 12): Promise<SerieMensualFlujoCaja> {
+	const hoy = new Date();
+	const inicio = new Date(hoy.getFullYear(), hoy.getMonth() - (meses - 1), 1);
+	const inicioIso = `${inicio.getFullYear()}-${String(inicio.getMonth() + 1).padStart(2, '0')}-01`;
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('fecha, tipo, monto_total')
+		.eq('estado', 'activo')
+		.in('tipo', ['ingreso', 'egreso'])
+		.gte('fecha', inicioIso);
+	if (error) throw error;
+
+	const claves: string[] = [];
+	for (let i = 0; i < meses; i++) claves.push(claveAnioMes(new Date(hoy.getFullYear(), hoy.getMonth() - (meses - 1) + i, 1)));
+	const clavesSet = new Set(claves);
+	const ingresosPorMes = new Map(claves.map((c) => [c, 0]));
+	const egresosPorMes = new Map(claves.map((c) => [c, 0]));
+
+	for (const t of (data ?? []) as any[]) {
+		if (!t.fecha) continue;
+		const clave = claveAnioMes(parseFechaLocal(t.fecha));
+		if (!clavesSet.has(clave)) continue;
+		const monto = Number(t.monto_total) || 0;
+		if (t.tipo === 'ingreso') ingresosPorMes.set(clave, (ingresosPorMes.get(clave) ?? 0) + monto);
+		if (t.tipo === 'egreso') egresosPorMes.set(clave, (egresosPorMes.get(clave) ?? 0) + monto);
+	}
+
+	return {
+		labels: claves.map(etiquetaAnioMes),
+		ingresos: claves.map((c) => ingresosPorMes.get(c) ?? 0),
+		egresos: claves.map((c) => egresosPorMes.get(c) ?? 0)
+	};
+}
+
+export interface ProyeccionFutura {
+	labels: string[];
+	ingresosProyectados: number[];
+	egresosProyectados: number[];
+}
+
+/** Proyección de flujo de caja futuro, a partir de Cuentas por Cobrar/Pagar pendientes o vencidas
+ * (activo=true, estado IN pendiente/vencido), agrupada por mes de su fecha esperada. Las ya vencidas
+ * se proyectan en el mes ACTUAL (siguen debiéndose, no desaparecen del panorama). */
+export async function getProyeccionFutura(client: SupabaseClient, meses = 6): Promise<ProyeccionFutura> {
+	const hoy = new Date();
+	const inicioActual = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+
+	const [{ data: cobrar, error: cobrarError }, { data: pagar, error: pagarError }] = await Promise.all([
+		client.from('cuentas_cobrar').select('saldo_pendiente, fecha_vencimiento').eq('activo', true).in('estado', ['pendiente', 'vencido']),
+		client.from('cuentas_pagar').select('saldo_pendiente, fecha_vencimiento, fecha_pago_programada').eq('activo', true).in('estado', ['pendiente', 'vencido'])
+	]);
+	if (cobrarError) throw cobrarError;
+	if (pagarError) throw pagarError;
+
+	const claves: string[] = [];
+	for (let i = 0; i < meses; i++) claves.push(claveAnioMes(new Date(hoy.getFullYear(), hoy.getMonth() + i, 1)));
+	const clavesSet = new Set(claves);
+	const ingresosPorMes = new Map(claves.map((c) => [c, 0]));
+	const egresosPorMes = new Map(claves.map((c) => [c, 0]));
+
+	const clavePeriodo = (fechaStr: string) => {
+		const fecha = parseFechaLocal(fechaStr);
+		return claveAnioMes(fecha < inicioActual ? inicioActual : fecha);
+	};
+
+	for (const c of (cobrar ?? []) as any[]) {
+		if (!c.fecha_vencimiento) continue;
+		const clave = clavePeriodo(c.fecha_vencimiento);
+		if (clavesSet.has(clave)) ingresosPorMes.set(clave, (ingresosPorMes.get(clave) ?? 0) + Number(c.saldo_pendiente || 0));
+	}
+	for (const p of (pagar ?? []) as any[]) {
+		const fecha = p.fecha_pago_programada ?? p.fecha_vencimiento;
+		if (!fecha) continue;
+		const clave = clavePeriodo(fecha);
+		if (clavesSet.has(clave)) egresosPorMes.set(clave, (egresosPorMes.get(clave) ?? 0) + Number(p.saldo_pendiente || 0));
+	}
+
+	return {
+		labels: claves.map(etiquetaAnioMes),
+		ingresosProyectados: claves.map((c) => ingresosPorMes.get(c) ?? 0),
+		egresosProyectados: claves.map((c) => egresosPorMes.get(c) ?? 0)
+	};
 }

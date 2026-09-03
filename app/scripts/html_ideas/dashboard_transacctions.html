@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador Visual · Tiempo + Nodos + Animación</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #f0f4f8;
+      color: #1e293b;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .app { max-width: 1540px; margin: 0 auto; }
+
+    .header {
+      background: linear-gradient(135deg, #1e3a5f 0%, #0f2744 100%);
+      color: white;
+      padding: 18px 24px;
+      border-radius: 16px;
+      margin-bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header h1 { font-size: 20px; font-weight: 700; }
+    .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    .btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: #10b981; color: white; }
+    .btn-success:hover { background: #059669; }
+    .btn-warning { background: #f59e0b; color: white; }
+    .btn-warning:hover { background: #d97706; }
+    .btn-secondary { background: #e2e8f0; color: #334155; }
+    .btn-secondary:hover { background: #cbd5e1; }
+    .btn-danger { background: #fecaca; color: #b91c1c; }
+    .btn-sm { padding: 7px 14px; font-size: 12px; }
+
+    .secuencia {
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border: 1px solid #fcd34d;
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 18px;
+    }
+    .secuencia h3 { font-size: 15px; color: #92400e; margin-bottom: 6px; }
+    .secuencia p { font-size: 13px; color: #78350f; margin-bottom: 12px; line-height: 1.45; }
+    .seq-bar-bg { height: 8px; background: #fde68a; border-radius: 99px; overflow: hidden; margin: 10px 0; }
+    .seq-bar { height: 100%; background: linear-gradient(90deg, #f59e0b, #d97706); border-radius: 99px; transition: width 0.4s ease; width: 0%; }
+    .seq-status { font-size: 13px; font-weight: 600; color: #92400e; }
+
+    .card {
+      background: white;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+    .card-header {
+      padding: 14px 18px;
+      font-size: 14px;
+      font-weight: 700;
+      border-bottom: 1px solid #f1f5f9;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #fafbfc;
+    }
+    .card-body { padding: 16px 18px; }
+
+    .dash-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 12px;
+    }
+    .cc-card {
+      border-radius: 12px;
+      padding: 14px;
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      transition: all 0.25s;
+    }
+    .cc-card.admin { border-left: 4px solid #f59e0b; }
+    .cc-card.negativo-card { border-left: 4px solid #dc2626; background: #fef2f2; }
+    .cc-card .name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .cc-card .saldo { font-size: 20px; font-weight: 800; margin-bottom: 10px; }
+    .positivo { color: #059669; }
+    .negativo { color: #dc2626; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px; }
+    .stats > div { background: #f8fafc; padding: 5px 7px; border-radius: 6px; }
+    .stats span { display: block; color: #94a3b8; font-size: 10px; }
+    .badge { font-size: 9px; padding: 2px 6px; border-radius: 99px; background: #fef3c7; color: #92400e; font-weight: 700; }
+    .badge-neg { background: #fee2e2; color: #991b1b; }
+
+    .charts-row {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    @media (max-width: 1000px) { .charts-row { grid-template-columns: 1fr; } }
+    .chart-box {
+      background: white;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+    }
+    .chart-box h4 { font-size: 13px; font-weight: 700; color: #334155; margin-bottom: 12px; }
+    .chart-container { position: relative; height: 260px; }
+
+    #network-graph {
+      width: 100%;
+      height: 400px;
+      border-radius: 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* Time controls */
+    .time-controls {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .time-controls label { font-size: 12px; font-weight: 600; color: #475569; display: block; margin-bottom: 6px; }
+    .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    input[type="range"] { flex: 1; }
+    .time-labels { display: flex; justify-content: space-between; font-size: 11px; color: #64748b; margin-top: 4px; }
+    .range-inputs { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+    .range-inputs > div { flex: 1; min-width: 140px; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 18px;
+    }
+    @media (max-width: 1100px) { .main-grid { grid-template-columns: 1fr; } }
+
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .form-row.full { grid-template-columns: 1fr; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 11px; font-weight: 600; color: #64748b; }
+    select, input[type="text"], input[type="number"], input[type="date"] {
+      padding: 8px 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 13px;
+      background: #f8fafc;
+    }
+    .radio-group { display: flex; gap: 8px; margin-bottom: 12px; }
+    .radio-option {
+      flex: 1; padding: 9px; border: 2px solid #e2e8f0; border-radius: 8px;
+      text-align: center; cursor: pointer; font-size: 12px; font-weight: 600;
+    }
+    .radio-option.active { border-color: #3b82f6; background: #eff6ff; color: #1d4ed8; }
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #f1f5f9; }
+
+    .historial { max-height: 360px; overflow-y: auto; }
+    .tx-item { padding: 11px 14px; border-bottom: 1px solid #f1f5f9; font-size: 12px; }
+    .tx-header { display: flex; justify-content: space-between; margin-bottom: 3px; align-items: center; }
+    .tx-tipo { font-size: 9px; padding: 2px 7px; border-radius: 99px; font-weight: 700; }
+    .tx-tipo.ingreso { background: #d1fae5; color: #065f46; }
+    .tx-tipo.egreso { background: #fee2e2; color: #991b1b; }
+    .tx-tipo.interna { background: #e0e7ff; color: #3730a3; }
+    .tx-detalle { color: #64748b; font-size: 11px; line-height: 1.4; }
+
+    .bank-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 9px 11px; background: #f8fafc; border-radius: 8px;
+      margin-bottom: 5px; font-size: 12px;
+    }
+
+    .anim-status {
+      font-size: 12px;
+      color: #1d4ed8;
+      font-weight: 600;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <h1>Simulador · Tiempo + Nodos Animados + Saldo vs Tiempo</h1>
+      <div class="header-actions">
+        <button class="btn btn-success" onclick="ejecutarCasoCompleto()">▶ Caso Completo</button>
+        <button class="btn btn-warning" onclick="ejecutarPasoAPaso()">⏭ Siguiente Paso</button>
+        <button class="btn btn-secondary" onclick="resetSimulador()">↺ Reset</button>
+      </div>
+    </div>
+
+    <div class="secuencia">
+      <h3>Caso Real · Constructora Andina – Marzo 2026</h3>
+      <p>
+        Obra 2 cae en negativo y es rescatada con transacciones internas.
+        Ahora puedes <strong>viajar en el tiempo</strong>, ver el historial completo y animar cualquier rango.
+      </p>
+      <div class="seq-bar-bg"><div class="seq-bar" id="seq-bar"></div></div>
+      <div class="seq-status" id="seq-status">Listo · Paso 0 / 15</div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div class="card">
+      <div class="card-header">Dashboard por Centro de Costo <span style="font-size:12px;font-weight:500;color:#94a3b8" id="current-time-label">Tiempo actual: Inicio</span></div>
+      <div class="card-body"><div class="dash-grid" id="dashboard"></div></div>
+    </div>
+
+    <!-- CONTROL DE TIEMPO -->
+    <div class="card">
+      <div class="card-header">Control de Tiempo & Animación</div>
+      <div class="card-body">
+        <div class="time-controls">
+          <label>Posición actual en el tiempo (arrastra para viajar)</label>
+          <div class="slider-row">
+            <input type="range" id="time-slider" min="0" max="0" value="0" step="1" oninput="scrubToTime(this.value)">
+          </div>
+          <div class="time-labels">
+            <span>Inicio</span>
+            <span id="slider-label">Paso 0</span>
+            <span>Final</span>
+          </div>
+
+          <div class="range-inputs">
+            <div>
+              <label>Desde (paso)</label>
+              <input type="number" id="range-from" min="0" value="0" style="width:100%">
+            </div>
+            <div>
+              <label>Hasta (paso)</label>
+              <input type="number" id="range-to" min="0" value="0" style="width:100%">
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:8px;">
+              <button class="btn btn-primary btn-sm" onclick="startAnimation()">▶ Animar rango en bucle</button>
+              <button class="btn btn-danger btn-sm" onclick="stopAnimation()">⏹ Detener</button>
+            </div>
+          </div>
+          <div class="anim-status" id="anim-status"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SALDO VS TIEMPO -->
+    <div class="card">
+      <div class="card-header">
+        Saldo vs Tiempo (una traza por Centro de Costo)
+        <span style="font-size:12px;font-weight:500;color:#94a3b8">Haz zoom / pan con el mouse</span>
+      </div>
+      <div class="card-body">
+        <div class="chart-container" style="height:320px">
+          <canvas id="chartTiempo"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- NODOS -->
+    <div class="card">
+      <div class="card-header">
+        Flujo de Dinero entre Nodos
+        <span style="font-size:12px;font-weight:500;color:#94a3b8">El tamaño del nodo crece con el saldo</span>
+      </div>
+      <div class="card-body">
+        <div id="network-graph"></div>
+      </div>
+    </div>
+
+    <!-- CHARTS SECUNDARIOS -->
+    <div class="charts-row">
+      <div class="chart-box">
+        <h4>Saldo actual por Centro de Costo</h4>
+        <div class="chart-container"><canvas id="chartSaldos"></canvas></div>
+      </div>
+      <div class="chart-box">
+        <h4>Ingresos vs Egresos (Totales)</h4>
+        <div class="chart-container"><canvas id="chartIngresosEgresos"></canvas></div>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <div class="card">
+        <div class="card-header">Nueva Transacción Manual</div>
+        <div class="card-body">
+          <div class="radio-group">
+            <div class="radio-option" id="opt-interna" onclick="setAlcance('interna')">Interna (Virtual)</div>
+            <div class="radio-option active" id="opt-externa" onclick="setAlcance('externa')">Externa (Bancaria)</div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Centro de costo origen</label>
+              <select id="cc-origen"></select>
+            </div>
+            <div class="form-group">
+              <label>Centro de costo destino</label>
+              <select id="cc-destino"></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Tipo</label>
+              <select id="tipo">
+                <option value="Egreso">Egreso</option>
+                <option value="Ingreso">Ingreso</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Fecha</label>
+              <input type="date" id="fecha">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Cuenta bancaria</label>
+              <select id="cuenta-origen"></select>
+            </div>
+            <div class="form-group">
+              <label>Monto</label>
+              <input type="number" id="monto" step="0.01" min="0" placeholder="0.00">
+            </div>
+          </div>
+          <div class="form-row full">
+            <div class="form-group">
+              <label>Concepto</label>
+              <input type="text" id="concepto" placeholder="Descripción">
+            </div>
+          </div>
+          <div class="form-row full" id="prorrateo-box" style="display:none">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" id="prorratear"> Prorratear gasto de Administración
+            </label>
+          </div>
+          <div class="actions">
+            <button class="btn btn-secondary btn-sm" onclick="limpiarFormulario()">Limpiar</button>
+            <button class="btn btn-primary btn-sm" onclick="crearTransaccion()">Crear</button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="card-header">Cuentas Bancarias</div>
+          <div class="card-body" style="padding:12px" id="lista-bancos"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">Historial <span id="tx-count" style="font-size:11px;font-weight:500;color:#94a3b8">0</span></div>
+          <div class="historial" id="historial">
+            <div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">Sin movimientos</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ================== DATA ==================
+    const centrosCosto = [
+      { id: 'admin', nombre: 'Administración', saldo: 0, ingresos: 0, egresos: 0, esAdmin: true },
+      { id: 'obra1', nombre: 'Obra 1 · Edificio Norte', saldo: 0, ingresos: 0, egresos: 0 },
+      { id: 'obra2', nombre: 'Obra 2 · Torre Centro', saldo: 0, ingresos: 0, egresos: 0 },
+      { id: 'obra3', nombre: 'Obra 3 · Residencial Sur', saldo: 0, ingresos: 0, egresos: 0 },
+    ];
+
+    const cuentasBancarias = [
+      { id: 'b1', nombre: 'BCP · Principal', saldo: 180000 },
+      { id: 'b2', nombre: 'BBVA · Operativa', saldo: 95000 },
+      { id: 'b3', nombre: 'Interbank', saldo: 42000 },
+    ];
+
+    let transacciones = [];
+    let historialEstados = [];          // snapshots para viajar en el tiempo
+    let flujosInternos = {};
+    let alcanceActual = 'externa';
+    let pasoActual = 0;
+    let currentTimeIndex = 0;
+
+    let chartSaldos, chartIE, chartTiempo;
+    let network = null;
+    let animInterval = null;
+    let isAnimating = false;
+
+    const colores = {
+      admin: '#f59e0b',
+      obra1: '#3b82f6',
+      obra2: '#10b981',
+      obra3: '#8b5cf6'
+    };
+
+    const casoReal = [
+      { alcance: 'externa', tipo: 'Ingreso', ccOrigen: 'obra1', cuenta: 'b1', monto: 92000, concepto: 'Cobro avance - Edificio Norte', fecha: '2026-03-03' },
+      { alcance: 'externa', tipo: 'Ingreso', ccOrigen: 'obra2', cuenta: 'b1', monto: 28000, concepto: 'Cobro parcial - Torre Centro', fecha: '2026-03-05' },
+      { alcance: 'externa', tipo: 'Ingreso', ccOrigen: 'obra3', cuenta: 'b3', monto: 45000, concepto: 'Anticipo - Residencial Sur', fecha: '2026-03-06' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra2', cuenta: 'b2', monto: 19500, concepto: 'Subcontrato encofrados', fecha: '2026-03-07' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra2', cuenta: 'b2', monto: 16800, concepto: 'Acero y cemento', fecha: '2026-03-09' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra2', cuenta: 'b1', monto: 12400, concepto: 'Planilla + equipos Obra 2', fecha: '2026-03-11' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra1', cuenta: 'b1', monto: 22000, concepto: 'Fierro y cemento', fecha: '2026-03-12' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'admin', cuenta: 'b1', monto: 7800,  concepto: 'Arriendo oficina', fecha: '2026-03-13', prorratear: true },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra3', cuenta: 'b3', monto: 11200, concepto: 'Materiales eléctricos', fecha: '2026-03-14' },
+      { alcance: 'interna', tipo: 'Egreso', ccOrigen: 'obra1', ccDestino: 'obra2', monto: 25000, concepto: '★ APOYO: Obra 1 salva a Obra 2', fecha: '2026-03-15' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'admin', cuenta: 'b2', monto: 6100, concepto: 'Sueldos admin', fecha: '2026-03-18', prorratear: true },
+      { alcance: 'externa', tipo: 'Ingreso', ccOrigen: 'obra2', cuenta: 'b2', monto: 38000, concepto: 'Cobro importante Torre Centro', fecha: '2026-03-22' },
+      { alcance: 'externa', tipo: 'Egreso', ccOrigen: 'obra1', cuenta: 'b1', monto: 14500, concepto: 'Planilla Obra 1', fecha: '2026-03-23' },
+      { alcance: 'interna', tipo: 'Egreso', ccOrigen: 'obra2', ccDestino: 'obra1', monto: 15000, concepto: 'Devolución parcial apoyo', fecha: '2026-03-26' },
+      { alcance: 'interna', tipo: 'Egreso', ccOrigen: 'obra3', ccDestino: 'obra2', monto: 8000,  concepto: 'Apoyo adicional Obra 3 → 2', fecha: '2026-03-27' },
+    ];
+
+    // ================== INIT ==================
+    function init() {
+      document.getElementById('fecha').valueAsDate = new Date();
+      const selO = document.getElementById('cc-origen');
+      const selD = document.getElementById('cc-destino');
+      const selC = document.getElementById('cuenta-origen');
+
+      centrosCosto.forEach(cc => {
+        selO.innerHTML += `<option value="${cc.id}">${cc.nombre}</option>`;
+        selD.innerHTML += `<option value="${cc.id}">${cc.nombre}</option>`;
+      });
+      cuentasBancarias.forEach(c => {
+        selC.innerHTML += `<option value="${c.id}">${c.nombre}</option>`;
+      });
+
+      selO.addEventListener('change', () => {
+        document.getElementById('prorrateo-box').style.display = selO.value === 'admin' ? 'block' : 'none';
+      });
+
+      // Snapshot inicial
+      guardarEstado(0, 'Inicio');
+
+      initCharts();
+      initNetwork();
+      renderTodo();
+    }
+
+    function guardarEstado(paso, fecha) {
+      const snapshot = {
+        paso,
+        fecha,
+        centros: centrosCosto.map(c => ({
+          id: c.id,
+          saldo: c.saldo,
+          ingresos: c.ingresos,
+          egresos: c.egresos
+        })),
+        bancos: cuentasBancarias.map(b => ({ id: b.id, saldo: b.saldo })),
+        flujos: JSON.parse(JSON.stringify(flujosInternos))
+      };
+      historialEstados.push(snapshot);
+    }
+
+    // ================== CHARTS ==================
+    function initCharts() {
+      // Barras
+      chartSaldos = new Chart(document.getElementById('chartSaldos'), {
+        type: 'bar',
+        data: {
+          labels: centrosCosto.map(c => c.nombre.split('·')[0].trim()),
+          datasets: [{
+            data: centrosCosto.map(c => c.saldo),
+            backgroundColor: centrosCosto.map(c => c.esAdmin ? '#f59e0b' : '#3b82f6'),
+            borderRadius: 8
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: false, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } }
+        }
+      });
+
+      // Dona
+      chartIE = new Chart(document.getElementById('chartIngresosEgresos'), {
+        type: 'doughnut',
+        data: {
+          labels: ['Ingresos', 'Egresos'],
+          datasets: [{ data: [0, 0], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          cutout: '65%'
+        }
+      });
+
+      // Saldo vs Tiempo (multi-trace)
+      chartTiempo = new Chart(document.getElementById('chartTiempo'), {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: centrosCosto.map(cc => ({
+            label: cc.nombre.split('·')[0].trim(),
+            data: [],
+            borderColor: colores[cc.id],
+            backgroundColor: colores[cc.id] + '33',
+            tension: 0.3,
+            fill: false,
+            pointRadius: 3,
+            pointHoverRadius: 6
+          }))
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top' },
+            tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: S/ ${ctx.parsed.y.toLocaleString('es-PE')}` } }
+          },
+          scales: {
+            y: { title: { display: true, text: 'Saldo (S/)' }, grid: { color: '#f1f5f9' } },
+            x: { title: { display: true, text: 'Tiempo (pasos)' }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    function updateChartsFromState(state) {
+      if (!state) return;
+
+      // Barras
+      chartSaldos.data.datasets[0].data = state.centros.map(c => c.saldo);
+      chartSaldos.data.datasets[0].backgroundColor = state.centros.map(c => {
+        const original = centrosCosto.find(x => x.id === c.id);
+        if (original.esAdmin) return '#f59e0b';
+        return c.saldo < 0 ? '#ef4444' : '#3b82f6';
+      });
+      chartSaldos.update('none');
+
+      // Dona
+      const totalIng = state.centros.reduce((s, c) => s + c.ingresos, 0);
+      const totalEgr = state.centros.reduce((s, c) => s + c.egresos, 0);
+      chartIE.data.datasets[0].data = [totalIng, totalEgr];
+      chartIE.update('none');
+    }
+
+    function updateTimeChart() {
+      const labels = historialEstados.map(s => s.paso);
+      chartTiempo.data.labels = labels;
+
+      centrosCosto.forEach((cc, idx) => {
+        chartTiempo.data.datasets[idx].data = historialEstados.map(s => {
+          const found = s.centros.find(c => c.id === cc.id);
+          return found ? found.saldo : 0;
+        });
+      });
+      chartTiempo.update('none');
+    }
+
+    // ================== NETWORK ==================
+    function initNetwork() {
+      const container = document.getElementById('network-graph');
+      network = new vis.Network(container, { nodes: new vis.DataSet([]), edges: new vis.DataSet([]) }, {
+        nodes: {
+          shape: 'dot',
+          font: { size: 14, face: 'Segoe UI', color: '#1e293b' },
+          borderWidth: 2,
+          shadow: true
+        },
+        edges: {
+          arrows: { to: { enabled: true, scaleFactor: 0.7 } },
+          font: { size: 12, align: 'middle', strokeWidth: 3, strokeColor: '#fff' },
+          smooth: { type: 'curvedCW', roundness: 0.25 },
+          shadow: true
+        },
+        physics: { barnesHut: { gravitationalConstant: -2800, springLength: 160 } },
+        interaction: { hover: true }
+      });
+    }
+
+    function updateNetworkFromState(state) {
+      if (!network || !state) return;
+
+      const maxAbs = Math.max(...state.centros.map(c => Math.abs(c.saldo)), 1);
+
+      const nodes = state.centros.map(c => {
+        const original = centrosCosto.find(x => x.id === c.id);
+        let bg = '#dbeafe', border = '#3b82f6';
+        if (original.esAdmin) { bg = '#fef3c7'; border = '#f59e0b'; }
+        if (c.saldo < 0) { bg = '#fee2e2'; border = '#ef4444'; }
+
+        // Tamaño proporcional al saldo (mínimo 18, máximo 55)
+        const size = 18 + (Math.abs(c.saldo) / maxAbs) * 37;
+
+        return {
+          id: c.id,
+          label: `${original.nombre.split('·')[0].trim()}\nS/ ${c.saldo.toLocaleString('es-PE')}`,
+          color: { background: bg, border },
+          size,
+          font: { color: c.saldo < 0 ? '#991b1b' : '#1e293b' }
+        };
+      });
+
+      const edges = [];
+      Object.entries(state.flujos || {}).forEach(([key, monto]) => {
+        if (monto > 0) {
+          const [from, to] = key.split('->');
+          edges.push({
+            id: key,
+            from, to,
+            label: `S/ ${monto.toLocaleString('es-PE')}`,
+            color: { color: '#6366f1' },
+            width: Math.min(7, 2 + monto / 9000)
+          });
+        }
+      });
+
+      network.setData({
+        nodes: new vis.DataSet(nodes),
+        edges: new vis.DataSet(edges)
+      });
+    }
+
+    // ================== RENDER ==================
+    function renderTodo() {
+      // Usar el estado actual (último o el del slider)
+      const state = historialEstados[currentTimeIndex] || historialEstados[historialEstados.length - 1];
+      if (!state) return;
+
+      // Sincronizar centrosCosto visualmente
+      state.centros.forEach(sc => {
+        const c = centrosCosto.find(x => x.id === sc.id);
+        if (c) {
+          c.saldo = sc.saldo;
+          c.ingresos = sc.ingresos;
+          c.egresos = sc.egresos;
+        }
+      });
+      state.bancos.forEach(sb => {
+        const b = cuentasBancarias.find(x => x.id === sb.id);
+        if (b) b.saldo = sb.saldo;
+      });
+      flujosInternos = JSON.parse(JSON.stringify(state.flujos || {}));
+
+      renderDashboard();
+      renderBancos();
+      renderHistorial();
+      updateChartsFromState(state);
+      updateNetworkFromState(state);
+      updateTimeChart();
+
+      // Slider
+      const slider = document.getElementById('time-slider');
+      slider.max = Math.max(0, historialEstados.length - 1);
+      slider.value = currentTimeIndex;
+      document.getElementById('slider-label').textContent = `Paso ${currentTimeIndex}`;
+      document.getElementById('current-time-label').textContent = `Tiempo: Paso ${currentTimeIndex} (${state.fecha})`;
+
+      document.getElementById('range-from').max = slider.max;
+      document.getElementById('range-to').max = slider.max;
+      document.getElementById('range-to').value = slider.max;
+
+      // Barra de progreso del caso
+      const pct = (pasoActual / casoReal.length) * 100;
+      document.getElementById('seq-bar').style.width = pct + '%';
+      document.getElementById('seq-status').textContent =
+        pasoActual === 0 ? 'Listo · Paso 0 / 15' :
+        pasoActual >= casoReal.length ? 'Caso terminado · 15 / 15' :
+        `Paso ${pasoActual} / 15`;
+    }
+
+    function renderDashboard() {
+      document.getElementById('dashboard').innerHTML = centrosCosto.map(cc => {
+        const clase = cc.saldo >= 0 ? 'positivo' : 'negativo';
+        const cardClass = cc.saldo < 0 ? 'negativo-card' : (cc.esAdmin ? 'admin' : '');
+        const badge = cc.esAdmin ? '<span class="badge">ADMIN</span>' :
+                      (cc.saldo < 0 ? '<span class="badge badge-neg">EN NEGATIVO</span>' : '');
+        return `<div class="cc-card ${cardClass}">
+          <div class="name">${cc.nombre} ${badge}</div>
+          <div class="saldo ${clase}">S/ ${cc.saldo.toLocaleString('es-PE')}</div>
+          <div class="stats">
+            <div><span>Ingresos</span><strong class="positivo">${cc.ingresos.toLocaleString('es-PE')}</strong></div>
+            <div><span>Egresos</span><strong class="negativo">${cc.egresos.toLocaleString('es-PE')}</strong></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function renderBancos() {
+      document.getElementById('lista-bancos').innerHTML = cuentasBancarias.map(c => {
+        const clase = c.saldo >= 0 ? 'positivo' : 'negativo';
+        return `<div class="bank-item"><span>${c.nombre}</span><strong class="${clase}">S/ ${c.saldo.toLocaleString('es-PE')}</strong></div>`;
+      }).join('');
+    }
+
+    function renderHistorial() {
+      const hist = document.getElementById('historial');
+      document.getElementById('tx-count').textContent = transacciones.length;
+      if (!transacciones.length) {
+        hist.innerHTML = `<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px">Sin movimientos</div>`;
+        return;
+      }
+      hist.innerHTML = transacciones.slice().reverse().map(tx => {
+        let tipoClase = tx.tipo === 'Ingreso' ? 'ingreso' : 'egreso';
+        if (tx.alcance === 'interna') tipoClase = 'interna';
+        return `<div class="tx-item">
+          <div class="tx-header">
+            <span><span class="tx-tipo ${tipoClase}">${tx.alcance === 'interna' ? 'INTERNA' : tx.tipo}</span>
+            <strong> S/ ${tx.monto.toLocaleString('es-PE')}</strong></span>
+            <span style="color:#94a3b8;font-size:10px">${tx.fecha}</span>
+          </div>
+          <div class="tx-detalle">${tx.concepto}<br>
+            <strong>${tx.ccOrigenNombre}</strong>${tx.ccDestinoNombre ? ' → ' + tx.ccDestinoNombre : ''}
+            ${tx.cuentaNombre ? ' · ' + tx.cuentaNombre : ''}
+            ${tx.prorrateado ? '<br><em style="color:#b45309">Prorrateado</em>' : ''}
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ================== LÓGICA ==================
+    function aplicarTransaccion(data) {
+      const ccOrigen = centrosCosto.find(c => c.id === data.ccOrigen);
+      const ccDestino = data.ccDestino ? centrosCosto.find(c => c.id === data.ccDestino) : null;
+      const cuenta = data.cuenta ? cuentasBancarias.find(c => c.id === data.cuenta) : null;
+
+      if (data.alcance === 'externa') {
+        if (data.tipo === 'Egreso') {
+          if (cuenta) cuenta.saldo -= data.monto;
+          if (data.prorratear && ccOrigen.esAdmin) {
+            const obras = centrosCosto.filter(c => !c.esAdmin);
+            const porObra = data.monto / obras.length;
+            obras.forEach(o => { o.saldo -= porObra; o.egresos += porObra; });
+          } else {
+            ccOrigen.saldo -= data.monto;
+            ccOrigen.egresos += data.monto;
+          }
+        } else {
+          if (cuenta) cuenta.saldo += data.monto;
+          ccOrigen.saldo += data.monto;
+          ccOrigen.ingresos += data.monto;
+        }
+      } else {
+        ccOrigen.saldo -= data.monto;
+        ccOrigen.egresos += data.monto;
+        if (ccDestino) {
+          ccDestino.saldo += data.monto;
+          ccDestino.ingresos += data.monto;
+          const key = `${data.ccOrigen}->${data.ccDestino}`;
+          flujosInternos[key] = (flujosInternos[key] || 0) + data.monto;
+        }
+      }
+
+      transacciones.push({
+        alcance: data.alcance, tipo: data.tipo, fecha: data.fecha, monto: data.monto,
+        concepto: data.concepto,
+        ccOrigenNombre: ccOrigen.nombre,
+        ccDestinoNombre: ccDestino ? ccDestino.nombre : null,
+        cuentaNombre: cuenta ? cuenta.nombre : null,
+        prorrateado: !!data.prorratear
+      });
+
+      // Guardar snapshot
+      const nuevoPaso = historialEstados.length;
+      guardarEstado(nuevoPaso, data.fecha);
+      currentTimeIndex = nuevoPaso;
+    }
+
+    function crearTransaccion() {
+      const monto = parseFloat(document.getElementById('monto').value);
+      if (!monto || monto <= 0) return alert('Ingresa un monto válido');
+      aplicarTransaccion({
+        alcance: alcanceActual,
+        tipo: document.getElementById('tipo').value,
+        ccOrigen: document.getElementById('cc-origen').value,
+        ccDestino: document.getElementById('cc-destino').value,
+        cuenta: document.getElementById('cuenta-origen').value,
+        monto,
+        concepto: document.getElementById('concepto').value || 'Sin concepto',
+        fecha: document.getElementById('fecha').value,
+        prorratear: document.getElementById('prorratear').checked
+      });
+      pasoActual = Math.max(pasoActual, historialEstados.length - 1);
+      renderTodo();
+      limpiarFormulario();
+    }
+
+    function limpiarFormulario() {
+      document.getElementById('monto').value = '';
+      document.getElementById('concepto').value = '';
+      document.getElementById('prorratear').checked = false;
+    }
+
+    function setAlcance(tipo) {
+      alcanceActual = tipo;
+      document.getElementById('opt-interna').classList.toggle('active', tipo === 'interna');
+      document.getElementById('opt-externa').classList.toggle('active', tipo === 'externa');
+    }
+
+    // ================== TIEMPO & ANIMACIÓN ==================
+    function scrubToTime(idx) {
+      if (isAnimating) stopAnimation();
+      currentTimeIndex = parseInt(idx);
+      renderTodo();
+    }
+
+    function startAnimation() {
+      stopAnimation();
+      const from = parseInt(document.getElementById('range-from').value) || 0;
+      const to = parseInt(document.getElementById('range-to').value) || (historialEstados.length - 1);
+      if (from >= to || historialEstados.length < 2) {
+        alert('Selecciona un rango válido (Desde < Hasta)');
+        return;
+      }
+
+      isAnimating = true;
+      let i = from;
+      document.getElementById('anim-status').textContent = `Animando en bucle: pasos ${from} → ${to}`;
+
+      animInterval = setInterval(() => {
+        currentTimeIndex = i;
+        renderTodo();
+        i++;
+        if (i > to) i = from; // loop
+      }, 700); // velocidad de la animación
+    }
+
+    function stopAnimation() {
+      if (animInterval) clearInterval(animInterval);
+      animInterval = null;
+      isAnimating = false;
+      document.getElementById('anim-status').textContent = '';
+    }
+
+    // ================== CASO & RESET ==================
+    function ejecutarPasoAPaso() {
+      if (pasoActual >= casoReal.length) return alert('Caso terminado');
+      aplicarTransaccion(casoReal[pasoActual]);
+      pasoActual++;
+      renderTodo();
+    }
+
+    function ejecutarCasoCompleto() {
+      stopAnimation();
+      // Reset total
+      centrosCosto.forEach(c => { c.saldo = 0; c.ingresos = 0; c.egresos = 0; });
+      cuentasBancarias.forEach((c, i) => c.saldo = [180000, 95000, 42000][i]);
+      transacciones = [];
+      flujosInternos = {};
+      historialEstados = [];
+      pasoActual = 0;
+      currentTimeIndex = 0;
+      guardarEstado(0, 'Inicio');
+
+      casoReal.forEach(tx => aplicarTransaccion(tx));
+      pasoActual = casoReal.length;
+      currentTimeIndex = historialEstados.length - 1;
+      renderTodo();
+    }
+
+    function resetSimulador() {
+      stopAnimation();
+      centrosCosto.forEach(c => { c.saldo = 0; c.ingresos = 0; c.egresos = 0; });
+      cuentasBancarias.forEach((c, i) => c.saldo = [180000, 95000, 42000][i]);
+      transacciones = [];
+      flujosInternos = {};
+      historialEstados = [];
+      pasoActual = 0;
+      currentTimeIndex = 0;
+      guardarEstado(0, 'Inicio');
+      renderTodo();
+    }
+
+    init();
+  </script>
+</body>
+</html>

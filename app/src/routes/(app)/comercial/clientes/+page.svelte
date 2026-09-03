@@ -3,7 +3,8 @@
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
+	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
+	import { Plus, Download } from '@lucide/svelte';
 	import { crearSolicitud, darDeBajaCliente, restaurarCliente, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { exportarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 	import { toast } from '$lib/stores/toast';
@@ -55,7 +56,15 @@
 	let realtimeChannel: RealtimeChannel | null = null;
 
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
-	onDestroy(setMobileFab(() => openModal(null), 'Nuevo Cliente'));
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz) — reemplaza
+	// a los dos botones "Nuevo Cliente"/"Exportar" del header, que en pantallas angostas se ocultan (ver
+	// hidden md:flex): el segundo desbordaba la pantalla al no caber en la fila.
+	onDestroy(
+		setMobileFabActions([
+			{ label: 'Nuevo Cliente', icon: Plus, onclick: () => openModal(null) },
+			{ label: 'Exportar', icon: Download, onclick: handleExportar }
+		])
+	);
 
 	onMount(() => {
 		fetchClientes();
@@ -266,7 +275,7 @@
 				</button>
 			{/if}
 			{#if !verEliminados}
-				<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				<button onclick={handleExportar} disabled={isExporting} class="hidden md:flex px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
 					{#if isExporting}
 						<i class="fas fa-spinner fa-spin"></i>
 					{:else}
