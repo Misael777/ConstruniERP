@@ -246,16 +246,19 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		// "Centros de Costos" — todos los creados a mano desde "Nuevo Centro de Costo" (los 3 tipos de
 		// formOptions: obra/consultoría/bolsa general — antes solo se dejaba pasar 'bolsa general' por
 		// error, dejando fuera obra/consultoría pese a que el propio formulario los ofrece como opción)
-		// MÁS los vinculados a un proyecto que YA es una venta cerrada (estado_proyecto='venta_cerrada',
-		// a pedido del usuario: un proyecto todavía en negociación no cuenta como centro de costo activo
-		// todavía). PostgREST no permite mezclar en un solo .or() una condición de columna propia (tipo)
-		// con una del embed (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se
-		// traen los ids de proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo manual.
+		// MÁS 'otro' (a pedido explícito del usuario: filas históricas con ese tipo, ver `options` en
+		// centroCostos.config.ts — sigue sin poder elegirse a mano en el formulario, `formOptions` no
+		// cambia, pero las que ya existen deben verse en la lista) MÁS los vinculados a un proyecto que YA
+		// es una venta cerrada (estado_proyecto='venta_cerrada', a pedido del usuario: un proyecto todavía
+		// en negociación no cuenta como centro de costo activo todavía). PostgREST no permite mezclar en
+		// un solo .or() una condición de columna propia (tipo) con una del embed
+		// (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se traen los ids de
+		// proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo manual.
 		const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
 		if (errorCerrados) throw errorCerrados;
 		const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
 		const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
-		query = query.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`);
+		query = query.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,${idProyectoFilter}`);
 		query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	}
 

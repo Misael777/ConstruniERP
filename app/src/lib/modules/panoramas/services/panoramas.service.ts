@@ -33,6 +33,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
+import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { computeEstadoCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 export const PANORAMA_IDS = [1, 2] as const;
 export type PanoramaId = (typeof PANORAMA_IDS)[number];
@@ -771,17 +773,66 @@ export interface ResumenCobros {
 	clientesConVentas: number;
 }
 
-/** Agregados para la tarjeta "Resumen general" del tablero de cobro — sobre TODAS las cuentas
- * pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas. */
+/**
+ * Agregados para la tarjeta "Resumen general" del tablero de cobro — sobre TODAS las cuentas
+ * pendientes/vencidas, sin importar en qué panorama (o bandeja) estén ubicadas.
+ *
+ * Dos correcciones sobre la versión anterior, encontradas al contrastar contra datos reales (el
+ * usuario reportó S/ 70,000 cuando solo debían ser S/ 34,000 con sus 2 ventas activas):
+ *
+ * 1. FALTABA `.eq('activo', true)`. `cuentas_cobrar` tiene su propio soft-delete (columna `activo`,
+ *    ver getCuentasCobrar/darDeBajaVenta) — cuando una venta se da de baja, su `cuenta_cobrar` queda
+ *    con `activo=false` pero SIGUE con `estado='pendiente'` (darDeBajaVenta nunca toca `estado`, solo
+ *    `proyecto.estado_proyecto` y el `centro_costo` vinculado). Sin este filtro, cuentas de ventas YA
+ *    CANCELADAS se seguían sumando acá como si fueran pendientes reales — la causa exacta del caso
+ *    reportado (2 de las 4 filas 'pendiente' en BD eran de ventas dadas de baja).
+ * 2. `saldo_pendiente`/`estado` guardados en la fila solo se autocorrigen cuando esa cuenta se ve en
+ *    el listado paginado de Cuentas por Cobrar (ver autoCorregirEstadosCobrar en
+ *    cuentasCobrar.service.ts) — una cuenta ACTIVA ya cobrada de verdad (transacción de ingreso real
+ *    recibida en su centro de costo) pero que nadie volvió a abrir podía seguir guardada como
+ *    'pendiente' con su saldo viejo. Acá se recalcula el saldo REAL de cada cuenta (mismo criterio que
+ *    calcularMontoCobradoYEstado) antes de sumarlo, en vez de confiar ciegamente en la columna
+ *    guardada — y de paso se corrigen en la BD las filas que hayan quedado desactualizadas (mismo
+ *    patrón best-effort de autoCorregirEstadosCobrar), para que la próxima vez ya estén al día.
+ */
 export async function getResumenCobros(client: SupabaseClient): Promise<ResumenCobros> {
-	const { data, error } = await client.from('cuentas_cobrar').select('saldo_pendiente, estado, id_cliente').in('estado', ['pendiente', 'vencido']);
+	const { data, error } = await client
+		.from('cuentas_cobrar')
+		.select('id_cuenta_cobrar, monto, saldo_pendiente, monto_cobrado, estado, fecha_vencimiento, id_cliente, id_centro_costo')
+		.eq('activo', true)
+		.in('estado', ['pendiente', 'vencido']);
 	if (error) throw error;
 
 	const rows = (data ?? []) as any[];
-	const totalPendiente = rows.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
-	const vencidos = rows.filter((r) => r.estado === 'vencido');
-	const vencidoTotal = vencidos.reduce((sum, r) => sum + Number(r.saldo_pendiente), 0);
-	const clientesConVentas = new Set(rows.map((r) => r.id_cliente)).size;
+	const idsCentro = [...new Set(rows.filter((r) => r.id_centro_costo != null).map((r) => r.id_centro_costo as number))];
+	const montoRecibidoMap = idsCentro.length > 0 ? await getMontoRecibidoPorCentroCosto(client, idsCentro) : {};
+
+	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
+	const recalculadas = rows
+		.map((r) => {
+			const recibido = r.id_centro_costo != null ? montoRecibidoMap[r.id_centro_costo] ?? 0 : Number(r.monto_cobrado ?? 0);
+			const saldo = r.id_centro_costo != null ? Math.max(Number(r.monto) - recibido, 0) : Number(r.saldo_pendiente);
+			const estado = computeEstadoCuentaCobrar(saldo, r.fecha_vencimiento);
+			const sinCambios = estado === r.estado && Math.abs(saldo - Number(r.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(r.monto_cobrado ?? 0)) < 0.01;
+			if (!sinCambios) actualizaciones.push({ id: r.id_cuenta_cobrar, estado, saldo, recibido });
+			return { id_cliente: r.id_cliente, saldo, estado };
+		})
+		// Ya cobrada de verdad (recalculado en 0) -> no cuenta como pendiente, aunque la fila todavía diga
+		// 'pendiente'/'vencido' en la BD.
+		.filter((r) => r.saldo > 0);
+
+	if (actualizaciones.length > 0) {
+		Promise.all(
+			actualizaciones.map((u) =>
+				client.from('cuentas_cobrar').update({ estado: u.estado, saldo_pendiente: u.saldo, monto_cobrado: u.recibido }).eq('id_cuenta_cobrar', u.id)
+			)
+		).catch((err) => console.error('[panoramas.service] No se pudieron autocorregir cuentas por cobrar desactualizadas:', err));
+	}
+
+	const totalPendiente = recalculadas.reduce((sum, r) => sum + r.saldo, 0);
+	const vencidos = recalculadas.filter((r) => r.estado === 'vencido');
+	const vencidoTotal = vencidos.reduce((sum, r) => sum + r.saldo, 0);
+	const clientesConVentas = new Set(recalculadas.map((r) => r.id_cliente)).size;
 
 	return { totalPendiente, vencidoTotal, vencidoCount: vencidos.length, clientesConVentas };
 }

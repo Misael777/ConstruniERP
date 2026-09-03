@@ -378,6 +378,25 @@
 		modalOpen = false;
 	}
 
+	/** Al crear un centro de costo nuevo, se ve en el tope de la lista (orden por defecto: created_at
+	 * desc) SOLO si estás en la página 1, sin una búsqueda activa que no lo matchee, y en la pestaña
+	 * "Centros de Costos" (todo centro creado a mano cae ahí, nunca en "Cuentas Internas") — si te
+	 * quedaste en la página 2 o con un texto de búsqueda de antes, `fetchList()` solo (el onSaved de
+	 * siempre) lo recién creado no aparecía aunque sí se había guardado bien. Se resetean página y
+	 * búsqueda para garantizar que el recién creado quede visible. */
+	async function handleCentroCostoCreado() {
+		activeTab = 'centros';
+		verEliminados = false;
+		if (sortBy === 'producto') {
+			sortBy = DEFAULT_SORT_FIELD;
+			sortDir = DEFAULT_SORT_DIR;
+		}
+		pageNum = 1;
+		search = '';
+		searchInput = '';
+		await fetchList();
+	}
+
 	let emptyMessage = $derived(
 		loading
 			? 'Cargando...'
@@ -647,7 +666,7 @@
 	</div>
 </div>
 
-<CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={fetchList} />
+<CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={handleCentroCostoCreado} />
 <CentroCostoDetalleModal open={detalleOpen} centro={detalleCentro} onClose={closeDetalle} />
 
 <ConfirmModal

@@ -279,9 +279,12 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 const CAMPO_MONTO = FIELDS_CONFIG.find((f) => f.tipo === 'currency' && f.showInTable)!.key;
 
 /**
- * Suma `monto` de TODAS las cuentas que matchean el buscador + filtros de columna actuales (no solo
- * la página visible) — para el KPI "Total de Filtrado" del listado. Ver nota equivalente en
- * cuentasPagar.service.ts (getMontoFiltrado), mismo patrón.
+ * Suma `monto` de TODAS las cuentas ACTIVAS que matchean el buscador + filtros de columna actuales (no
+ * solo la página visible) — para el KPI "Total de Filtrado" del listado. `.eq('activo', true)` (mismo
+ * criterio que getCuentasCobrar/getResumenCobros): sin este filtro se sumaban también cuentas de ventas
+ * ya dadas de baja (activo=false, ver darDeBajaVenta en aprobaciones.service.ts), que nunca deben
+ * contar en un total de cartera vigente. Ver nota equivalente en cuentasPagar.service.ts
+ * (getMontoFiltrado), mismo patrón.
  */
 export async function getMontoFiltrado(
 	client: SupabaseClient,
@@ -290,7 +293,7 @@ export async function getMontoFiltrado(
 	idsCentroCosto?: number[],
 	incluirSinCentroCosto?: boolean
 ): Promise<number> {
-	let query = client.from(TABLE_NAME).select(CAMPO_MONTO);
+	let query = client.from(TABLE_NAME).select(CAMPO_MONTO).eq('activo', true);
 
 	const trimmed = search.trim();
 	if (trimmed) {

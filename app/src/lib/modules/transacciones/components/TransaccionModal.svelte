@@ -361,6 +361,17 @@
 		}
 	}
 
+	// A pedido explícito del usuario: si el proyecto/cliente elegido YA tiene una cuenta por
+	// pagar/cobrar con saldo pendiente, debe verse reflejada acá — antes la búsqueda recién corría
+	// cuando el usuario hacía foco manual en el campo de texto (ver onCuentaVinculadaFocus), así que si
+	// nunca llegaba a hacer clic ahí (por ejemplo, tras elegir el Centro de Costo, dar por hecho que ya
+	// no había nada que vincular) la cuenta existente quedaba sin mostrarse pese a que sí existía.
+	// Precarga los resultados apenas hay un Centro de Costo válido, sin esperar el foco.
+	$effect(() => {
+		if (!idCentroCostoParaVinculo) return;
+		ejecutarBusquedaCuentaVinculada('');
+	});
+
 	function onCuentaVinculadaFocus() {
 		cuentaVinculadaAbierta = true;
 		if (!idCentroCostoParaVinculo) return;
@@ -774,6 +785,12 @@
 			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
 			const [origenCodigo, origenNombre] = separarCodigoNombre(origenLabel);
 			const [destinoCodigo, destinoNombre] = separarCodigoNombre(destinoLabel);
+			// A pedido explícito del usuario, con imagen de referencia: la sección "Cuentas Bancarias" del
+			// recibo debe mostrar la cuenta bancaria REAL usada en la transacción (misma fuente que los
+			// campos Cuenta Origen/Destino del formulario, ambos bancarios en Interna — ver
+			// cuentaOrigenEsBancaria/cuentaDestinoEsBancaria), no un código contable fijo inventado.
+			const cuentaBancariaOrigen = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_origen)?.label ?? formValues.cuente_origen ?? '—';
+			const cuentaBancariaDestino = (dynamicOptions.cuenta_banco || []).find((o) => o.value === formValues.cuente_destino)?.label ?? formValues.cuente_destino ?? '—';
 
 			// Fecha y Monto salen de los campos "reconocidos" del área 1 (formValues.fecha/monto_total) —
 			// a pedido explícito del usuario. N° de Operación no aplica de verdad en una transferencia
@@ -792,7 +809,9 @@
 				// A pedido explícito del usuario: el concepto del recibo siempre es "Transferencia Interna"
 				// (no la Descripción del formulario, que puede estar vacía o hablar de otra cosa).
 				concepto: 'Transferencia Interna',
-				usuario: permisosState.userName || 'Usuario'
+				usuario: permisosState.userName || 'Usuario',
+				cuentaBancariaOrigen,
+				cuentaBancariaDestino
 			});
 			formValues = { ...formValues, num_operacion: numeroTexto };
 			numOperacionLocked = false;
@@ -804,6 +823,25 @@
 			const nombreArchivo = `RECIBO-TRANSFERENCIA-INTERNA-${numeroTexto}.pdf`;
 			comprobanteFile = new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
 			comprobanteError = '';
+
+			// A pedido explícito del usuario, con imagen de referencia: el recibo también debe verse en
+			// "Comprobantes de pago" (no solo en "Adjuntar boucher de pago" de arriba). '8' = Boucher, el
+			// único Tipo de Documento (junto con Talonario) válido para Alcance=Interna (ver
+			// transaccion.config.ts). Si ya había una fila de un recibo generado antes para esta misma
+			// transacción, se reemplaza en vez de duplicarla (puede volver a presionarse el botón).
+			comprobantesPagoKeySeq += 1;
+			comprobantesPago = [
+				...comprobantesPago.filter((f) => !f.nombre_archivo?.startsWith('RECIBO-TRANSFERENCIA-INTERNA-')),
+				{
+					_key: comprobantesPagoKeySeq,
+					tipo_documento: '8',
+					num_documento: numeroTexto,
+					monto: Number(formValues.monto_total) || 0,
+					url: '',
+					nombre_archivo: nombreArchivo,
+					file: comprobanteFile
+				}
+			];
 
 			await guardarArchivoBinario(base64, nombreArchivo, 'application/pdf');
 		} catch (err) {
@@ -1376,9 +1414,10 @@
 				'Inspección de Obra',
 				'Alquiler de Herramientas',
 				'Demolición',
-				'Oficial',
-				'Peón',
+				'Operario',
 				'Ayudante',
+				'Oficial',
+				'Vigilante',
 				'Eléctrico',
 				'Otras Subcontratos'
 			]
@@ -2475,10 +2514,21 @@
 														{/if}
 													</div>
 												{/if}
-												<p class="mt-1 text-xs text-slate-400">
-													{idCentroCostoParaVinculo
-														? 'Opcional — registra un pago/cobro real contra esa cuenta.'
-														: `Solo se muestran cuentas del centro de costo ${formValues.tipo === 'egreso' ? 'origen' : 'destino'} elegido arriba.`}
+												<!-- A pedido explícito del usuario: si el centro de costo elegido YA tiene cuenta(s)
+												     con saldo pendiente (ver el $effect junto a ejecutarBusquedaCuentaVinculada, que
+												     las precarga apenas hay un centro de costo válido), debe notarse SIN que el
+												     usuario tenga que hacer clic para abrir el desplegable — antes esta pista era el
+												     mismo texto genérico sin importar si había algo encontrado o no. -->
+												<p class={`mt-1 text-xs ${idCentroCostoParaVinculo && !cuentaVinculadaBuscando && cuentaVinculadaResultados.length > 0 ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+													{#if !idCentroCostoParaVinculo}
+														Solo se muestran cuentas del centro de costo {formValues.tipo === 'egreso' ? 'origen' : 'destino'} elegido arriba.
+													{:else if cuentaVinculadaBuscando}
+														Buscando cuentas de este centro de costo…
+													{:else if cuentaVinculadaResultados.length > 0}
+														✓ {cuentaVinculadaResultados.length} cuenta{cuentaVinculadaResultados.length === 1 ? '' : 's'} con saldo pendiente encontrada{cuentaVinculadaResultados.length === 1 ? '' : 's'} — haz clic para elegirla.
+													{:else}
+														Opcional — registra un pago/cobro real contra esa cuenta.
+													{/if}
 												</p>
 											{/if}
 										</div>
@@ -2677,13 +2727,16 @@
 										{#each detalleCategoria as fila (fila._key)}
 											<tr class="border-t border-slate-100">
 												<td class="px-2 py-1.5">
-													<input
-														type="text"
-														bind:value={fila.subcategoria}
-														disabled={bloqueadaPorAprobacion}
-														placeholder="Ej. Cemento"
-														class="w-full rounded-md border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
-													/>
+													<!-- Solo lectura — a pedido explícito del usuario: la Subcategoría ya quedó fijada
+													     al agregar la fila (Categoría→Subcategoría, o "Agregar subcategoría" a mano, ver
+													     agregarFilaDetalleCategoria más arriba); dejarla como texto libre editable acá
+													     permitía escribir cualquier cosa después, desconectado del catálogo elegido. -->
+													<p
+														class="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm text-slate-700 truncate"
+														title={fila.subcategoria}
+													>
+														{fila.subcategoria || '—'}
+													</p>
 												</td>
 												<td class="px-2 py-1.5">
 													<input

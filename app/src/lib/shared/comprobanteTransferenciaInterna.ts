@@ -16,12 +16,7 @@ import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaLarga, formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
-import { ESTILOS_VOUCHER_BASE, escapeHtml } from './pdfVoucherEstilos';
-
-// A pedido explícito del usuario: Cuenta Origen/Destino son fijas para TODA transferencia interna, no
-// dependen del Centro de Costo — no hay ningún catálogo contable real en el sistema todavía.
-const CUENTA_ORIGEN = { codigo: '9102.01', nombre: 'Costos Indirectos de Obra' };
-const CUENTA_DESTINO = { codigo: '9102.02', nombre: 'Costos Directos de Obra' };
+import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, escapeHtml } from './pdfVoucherEstilos';
 
 const ANCHO_PLANTILLA_PX = 750;
 const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
@@ -37,6 +32,13 @@ export interface DatosComprobanteInterno {
 	monto: number;
 	concepto: string;
 	usuario: string;
+	/** Cuenta bancaria propia desde la que sale el dinero (label, ej. "BCP SOLES - 192 4713256045") —
+	 * a pedido explícito del usuario, con imagen de referencia: reemplaza la sección "Cuentas
+	 * Contables" (antes códigos contables fijos "9102.01"/"9102.02" sin relación real con la
+	 * transacción) por la cuenta bancaria real usada, misma fuente que Cuenta Origen del formulario. */
+	cuentaBancariaOrigen: string;
+	/** Cuenta bancaria propia a la que entra el dinero — mismo criterio que cuentaBancariaOrigen. */
+	cuentaBancariaDestino: string;
 }
 
 function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno): string {
@@ -47,7 +49,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 		<div class="voucher-copia">
 			<div class="v-header">
 				<div class="v-empresa">
-					<div class="v-logo"><img class="v-logo-img" src="/logo.png" alt="${escapeHtml(EMPRESA_NOMBRE)}" /></div>
+					<div class="v-logo">${ICONO_BRUJULA}</div>
 					<div>
 						<div class="v-empresa-nombre">${escapeHtml(EMPRESA_NOMBRE)}</div>
 						<div class="v-empresa-ruc">RUC: ${escapeHtml(EMPRESA_RUC)}</div>
@@ -84,7 +86,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 
 			<div class="v-seccion">
 				<div class="v-seccion-titulo"><span class="v-num-circulo">2</span> IMPORTE Y CONCEPTO</div>
-				<div class="v-caja v-caja-vertical">
+				<div class="v-caja v-caja-2col">
 					<div class="v-col">
 						<div class="v-col-label">Importe (S/)</div>
 						<div class="v-importe">${escapeHtml(formatearMonto(datos.monto))}</div>
@@ -98,15 +100,15 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 			</div>
 
 			<div class="v-seccion">
-				<div class="v-seccion-titulo"><span class="v-num-circulo">3</span> CUENTAS CONTABLES</div>
+				<div class="v-seccion-titulo"><span class="v-num-circulo">3</span> CUENTAS BANCARIAS</div>
 				<div class="v-caja v-caja-2col">
 					<div class="v-col">
 						<div class="v-col-label">Cuenta origen</div>
-						<div><span class="v-cuenta-codigo">${escapeHtml(CUENTA_ORIGEN.codigo)}</span><span class="v-cuenta-nombre">${escapeHtml(CUENTA_ORIGEN.nombre)}</span></div>
+						<div class="v-col-nombre">${escapeHtml(datos.cuentaBancariaOrigen)}</div>
 					</div>
 					<div class="v-col">
 						<div class="v-col-label">Cuenta destino</div>
-						<div><span class="v-cuenta-codigo">${escapeHtml(CUENTA_DESTINO.codigo)}</span><span class="v-cuenta-nombre">${escapeHtml(CUENTA_DESTINO.nombre)}</span></div>
+						<div class="v-col-nombre">${escapeHtml(datos.cuentaBancariaDestino)}</div>
 					</div>
 				</div>
 			</div>
