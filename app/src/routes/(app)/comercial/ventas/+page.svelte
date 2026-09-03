@@ -243,6 +243,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			created_at: hoy,
 			comprobante_url: null,
 			factura_url: null,
+			comprobante_autogenerado_url: null,
 			aprobado: false,
 			aprobado_por: null,
 			aprobado_en: null,

@@ -166,6 +166,15 @@
 	let localPreviewUrl = $state<string | null>(null);
 	let showComprobantePreview = $state(false);
 
+	/** Comprobante autogenerado por el ERP (Boucher Interna/Recibo por Pago/Recibo a Proveedor) YA
+	 * guardado en Drive — a pedido explícito del usuario, vive en su propio campo/espacio, separado de
+	 * comprobanteFile/comprobanteUrl ("Adjuntar boucher de pago", que sube el usuario a mano) y de
+	 * comprobantesPago ("Comprobantes de pago", documentos de terceros). Ver
+	 * transaccion_comprobante_autogenerado_migration.sql y generarPdfDeReciboPendiente/handleSubmit. */
+	let comprobanteAutogeneradoUrl = $state<string | null>(null);
+	let showComprobanteAutogeneradoPreview = $state(false);
+	let uploadingComprobanteAutogenerado = $state(false);
+
 	// Comprobantes de pago — cuarta sección, a pedido explícito del usuario: reemplaza el antiguo campo
 	// único "Adjuntar factura o boleta de venta" por VARIOS adjuntos, cada uno con su propio Tipo de
 	// Documento/N° de Documento/Monto (ver transaccion_comprobante_pago_migration.sql). Para Egreso son
@@ -411,6 +420,7 @@
 			comprobanteFile = null;
 			comprobanteUrl = transaccion?.comprobante_url ?? null;
 			comprobanteError = '';
+			comprobanteAutogeneradoUrl = transaccion?.comprobante_autogenerado_url ?? null;
 			comprobantesPago = [];
 			comprobantesPagoOriginales = [];
 			comprobantesPagoCargadoParaId = null;
@@ -798,41 +808,25 @@
 		setTimeout(() => URL.revokeObjectURL(url), 30000);
 	}
 
-	/** Convierte reciboPendiente a PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) y lo
-	 * deja como comprobante adjunto — mismo comportamiento que antes tenían los 3 botones
-	 * "Autogenerar..." al presionarlos (comprobanteFile, comprobantesPago para Interna, descarga local),
-	 * solo que ahora ocurre al guardar (ver handleSubmit), no al generar. No hace nada si no hay ningún
-	 * recibo pendiente (el usuario adjuntó su propio comprobante a mano, o no usó "Autogenerar..."). */
-	async function generarPdfDeReciboPendiente() {
-		if (!reciboPendiente) return;
+	/** Convierte reciboPendiente a PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) y
+	 * devuelve el archivo — a pedido explícito del usuario, este comprobante autogenerado por el ERP NO
+	 * se guarda como "Adjuntar boucher de pago" (comprobanteFile) ni como "Comprobantes de pago"
+	 * (comprobantesPago): antes lo hacía y eso pisaba/borraba el boucher que el usuario había subido a
+	 * mano ahí. Tiene su propio campo independiente (comprobanteAutogeneradoUrl), subido a Drive aparte
+	 * en handleSubmit (ver ahí). Descarga local igual que antes. Devuelve null si no hay ningún recibo
+	 * pendiente (el usuario no usó "Autogenerar..."). */
+	async function generarPdfDeReciboPendiente(): Promise<File | null> {
+		if (!reciboPendiente) return null;
 		const pendiente = reciboPendiente;
 		let base64: string;
 		if (pendiente.tipo === 'interna') base64 = await generarComprobanteTransferenciaInternaBase64(pendiente.datos);
 		else if (pendiente.tipo === 'ingreso') base64 = await generarReciboPagoBase64(pendiente.datos);
 		else base64 = await generarReciboPagoProveedorBase64(pendiente.datos);
 
-		comprobanteFile = new File([base64ToUint8Array(base64)], pendiente.nombreArchivo, { type: 'application/pdf' });
-		comprobanteError = '';
-
-		if (pendiente.tipo === 'interna') {
-			// '8' = Boucher, único Tipo de Documento (junto con Talonario) válido para Alcance=Interna.
-			comprobantesPagoKeySeq += 1;
-			comprobantesPago = [
-				...comprobantesPago.filter((f) => !f.nombre_archivo?.startsWith('RECIBO-TRANSFERENCIA-INTERNA-')),
-				{
-					_key: comprobantesPagoKeySeq,
-					tipo_documento: '8',
-					num_documento: String(pendiente.numero).padStart(4, '0'),
-					monto: Number(formValues.monto_total) || 0,
-					url: '',
-					nombre_archivo: pendiente.nombreArchivo,
-					file: comprobanteFile
-				}
-			];
-		}
-
+		const archivo = new File([base64ToUint8Array(base64)], pendiente.nombreArchivo, { type: 'application/pdf' });
 		await guardarArchivoBinario(base64, pendiente.nombreArchivo, 'application/pdf');
 		reciboPendiente = null;
+		return archivo;
 	}
 
 	// Botón "Autogenerar Boucher de Transferencia" (a pedido explícito del usuario, con imagen de
@@ -1779,8 +1773,8 @@
 			// A pedido explícito del usuario: todo recibo autogenerado (Boucher Interna/Recibo por Pago/
 			// Recibo a Proveedor) se queda en HTML mientras la transacción sigue siendo un borrador — el
 			// PDF de verdad (html2canvas/jsPDF) recién se arma acá, justo antes de guardar/actualizar. Si
-			// no se presionó ningún botón "Autogenerar..." (reciboPendiente sigue null), no hace nada.
-			await generarPdfDeReciboPendiente();
+			// no se presionó ningún botón "Autogenerar..." (reciboPendiente sigue null), devuelve null.
+			const reciboGeneradoFile = await generarPdfDeReciboPendiente();
 
 			let finalComprobanteUrl = comprobanteUrl;
 			let uploadedFileId: string | null = null;
@@ -1805,12 +1799,38 @@
 				}
 			}
 
+			// Comprobante autogenerado por el ERP — a pedido explícito del usuario, sube y se guarda en su
+			// PROPIO campo (comprobanteAutogeneradoUrl), separado del comprobante que el usuario adjunta a
+			// mano arriba (comprobanteFile/comprobanteUrl): antes reusaba ese mismo campo y le pisaba/
+			// borraba el boucher que el usuario ya había subido.
+			let finalComprobanteAutogeneradoUrl = comprobanteAutogeneradoUrl;
+			let uploadedAutoFileId: string | null = null;
+			if (reciboGeneradoFile) {
+				uploadingComprobanteAutogenerado = true;
+				try {
+					const baseNameAuto =
+						mode === 'edit' && transaccion
+							? `comprobante-autogenerado-${transaccion.id_transaccion}`
+							: `comprobante-autogenerado-temp-${Date.now()}`;
+					const uploadedAuto = await subirArchivo(reciboGeneradoFile, baseNameAuto);
+					finalComprobanteAutogeneradoUrl = uploadedAuto.url;
+					uploadedAutoFileId = uploadedAuto.fileId;
+					if (mode === 'edit' && transaccion?.comprobante_autogenerado_url) {
+						const oldAutoFileId = extractDriveFileId(transaccion.comprobante_autogenerado_url);
+						if (oldAutoFileId && oldAutoFileId !== uploadedAuto.fileId) await borrarArchivo(oldAutoFileId).catch(() => {});
+					}
+				} finally {
+					uploadingComprobanteAutogenerado = false;
+				}
+			}
+
 			// num_comprobante_interno: solo viaja si el botón "Autogenerar Boucher de Transferencia" ya
 			// se presionó al menos una vez (ver comprobanteInternoNumero/handleGenerarBoucherTransferencia
 			// más arriba) — si nunca se presionó, se guarda null (no se emitió ningún comprobante).
 			const payload = {
 				...formValues,
 				comprobante_url: finalComprobanteUrl,
+				comprobante_autogenerado_url: finalComprobanteAutogeneradoUrl,
 				num_comprobante_interno: comprobanteInternoNumero,
 				num_recibo_pago: numeroReciboPago,
 				num_recibo_pago_no_efectivo: numeroReciboPagoNoEfectivo,
@@ -1856,9 +1876,13 @@
 					if (oldFileIdToDelete && oldFileIdToDelete !== uploadedFileId) {
 						await borrarArchivo(oldFileIdToDelete);
 					}
+					if (uploadedAutoFileId && mode !== 'edit' && idNuevo) {
+						await renombrarArchivo(uploadedAutoFileId, `comprobante-autogenerado-${idNuevo}${fileExt(reciboGeneradoFile!.name)}`);
+					}
 				} catch (housekeepingErr) {
 					console.warn('[TransaccionModal] No se pudo renombrar/limpiar los archivos en Drive:', housekeepingErr);
 				}
+				comprobanteAutogeneradoUrl = finalComprobanteAutogeneradoUrl;
 
 				// "Detalle de la categoría" (ver detalleCategoria más arriba) — se guarda TODO junto recién
 				// acá, ya con el id_transaccion real (en 'create' no existía hasta este punto). Mejor
@@ -1940,12 +1964,24 @@
 						const base64 = await generarComprobanteTransferenciaInternaBase64(datosVoucher);
 						const nombreArchivoVoucher = `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`;
 						await guardarArchivoBinario(base64, nombreArchivoVoucher, 'application/pdf');
+						// Igual que en el flujo normal (ver arriba): el boucher autogenerado se sube a Drive en su
+						// PROPIO campo (comprobante_autogenerado_url), separado del comprobante que suba el usuario
+						// a mano — nunca a comprobante_url.
+						const archivoVoucher = new File([base64ToUint8Array(base64)], nombreArchivoVoucher, { type: 'application/pdf' });
+						const baseNameAuto = idParaVoucher ? `comprobante-autogenerado-${idParaVoucher}` : `comprobante-autogenerado-temp-${Date.now()}`;
+						const uploadedAuto = await subirArchivo(archivoVoucher, baseNameAuto);
+						comprobanteAutogeneradoUrl = uploadedAuto.url;
 						// OJO: updateTransaccion valida TODOS los campos obligatorios del payload que recibe (ver
 						// validatePayload en fieldConfig.ts) — pasar solo { num_comprobante_interno } fallaba la
 						// validación de todos los demás campos obligatorios y no actualizaba nada (el error quedaba
 						// silenciado por el catch de abajo). Se reusa el `payload` completo ya armado arriba.
 						if (idParaVoucher) {
-							await updateTransaccion(supabase, idParaVoucher, { ...payload, num_comprobante_interno: numero }, isAdmin());
+							await updateTransaccion(
+								supabase,
+								idParaVoucher,
+								{ ...payload, num_comprobante_interno: numero, comprobante_autogenerado_url: uploadedAuto.url },
+								isAdmin()
+							);
 						}
 					} catch (voucherErr) {
 						console.warn('[TransaccionModal] No se pudo autogenerar el boucher de transferencia interna:', voucherErr);
@@ -2201,22 +2237,6 @@
 										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
 											<CloudUpload size={12} class="shrink-0" /> Haz clic o arrastra para reemplazar
 										</div>
-									{:else if reciboPendienteHtml}
-										<!-- Recibo generado como borrador (ver reciboPendiente) — todavía no es un PDF real
-										     (eso recién ocurre al guardar, ver generarPdfDeReciboPendiente), así que se
-										     previsualiza el HTML tal cual en un iframe en miniatura, sin pagar el costo de
-										     html2canvas antes de tiempo. Escala fija asumiendo el ancho angosto de esta
-										     columna (md:w-56 ≈ 224px) — en pantallas más anchas simplemente se ve un poco
-										     más chico dentro del recuadro, no se distorsiona. -->
-										<iframe
-											title="Vista previa del recibo (borrador)"
-											srcdoc={reciboPendienteHtml}
-											class="absolute top-0 left-0 border-0 pointer-events-none bg-white"
-											style="width:780px; height:1300px; transform: scale(0.29); transform-origin: top left;"
-										></iframe>
-										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
-											<FileText size={12} class="shrink-0" /> Borrador generado — clic para reemplazar
-										</div>
 									{:else if comprobanteFile}
 										<CloudUpload size={28} class="text-blue-400" />
 										<span class="text-xs font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
@@ -2231,15 +2251,9 @@
 										<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
 											Ver comprobante actual
 										</button>
-									{:else if reciboPendienteHtml}
-										<button type="button" onclick={() => abrirPreviewHtml(reciboPendienteHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Ver borrador completo
-										</button>
 									{/if}
 									{#if comprobanteError}
 										<p class="text-xs text-red-600">{comprobanteError}</p>
-									{:else if reciboPendienteHtml}
-										<p class="text-xs text-slate-400">Borrador en HTML — se convertirá a PDF y se adjuntará al guardar.</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
 									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
@@ -2255,57 +2269,6 @@
 									disabled={bloqueadaPorAprobacion}
 									onchange={onComprobanteChange}
 								/>
-
-								<!-- Botón "Autogenerar Boucher de Transferencia" — a pedido explícito del usuario,
-								     según su imagen de referencia. Dos casos, con comportamiento distinto al
-								     presionarlo: Interna genera y descarga el PDF "RECIBO - TRANSFERENCIA INTERNA" EN
-								     EL MOMENTO (no hace falta guardar primero, ver handleGenerarBoucherTransferencia
-								     más arriba); Externa+Ingreso+Efectivo abre un popup a pedir los datos que le faltan
-								     (cliente, quien recibe, firmas — ver ReciboPagoModal.svelte) antes de generar el
-								     "RECIBO DE PAGO". -->
-								{#if formValues.tipo_alcance === 'interna'}
-									<button
-										type="button"
-										onclick={handleGenerarBoucherTransferencia}
-										disabled={generandoComprobanteInterno || bloqueadaPorAprobacion}
-										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
-									>
-										{#if generandoComprobanteInterno}
-											<Loader2 size={14} class="animate-spin shrink-0" />
-										{:else}
-											<FileText size={14} class="shrink-0" />
-										{/if}
-										Autogenerar Boucher de Transferencia
-									</button>
-								{:else if mostrarBotonReciboPago}
-									<button
-										type="button"
-										onclick={abrirReciboPago}
-										disabled={generandoReciboPago || bloqueadaPorAprobacion}
-										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
-									>
-										{#if generandoReciboPago}
-											<Loader2 size={14} class="animate-spin shrink-0" />
-										{:else}
-											<FileText size={14} class="shrink-0" />
-										{/if}
-										Autogenerar Recibo por Pago
-									</button>
-								{:else if mostrarBotonReciboPagoProveedor}
-									<button
-										type="button"
-										onclick={abrirReciboPagoProveedor}
-										disabled={generandoReciboPagoProveedor || bloqueadaPorAprobacion}
-										class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50"
-									>
-										{#if generandoReciboPagoProveedor}
-											<Loader2 size={14} class="animate-spin shrink-0" />
-										{:else}
-											<FileText size={14} class="shrink-0" />
-										{/if}
-										Autogenerar Recibo de Pago a Proveedor
-									</button>
-								{/if}
 								</div>
 							</div>
 
@@ -2452,6 +2415,94 @@
 							</div>
 						</div>
 					</div>
+
+					<!-- Comprobante autogenerado por el ERP — a pedido explícito del usuario: el recibo que
+					     emite el propio sistema (Boucher de Transferencia Interna / Recibo por Pago / Recibo a
+					     Proveedor) NO es lo mismo que "Adjuntar boucher de pago" (comprobante externo que sube
+					     el usuario a mano) ni "Comprobantes de pago" (documentos de terceros, más abajo) — por
+					     eso tiene su propia sección, separada de ambas. -->
+					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
+						<div class="rounded-2xl border border-slate-200 p-5">
+							<span class="block text-sm font-bold text-[#0f3b5e] mb-4">Comprobante autogenerado por el ERP</span>
+							<div class="flex flex-col sm:flex-row gap-5">
+								<div class="flex-1 flex flex-col gap-2 min-w-0">
+									<p class="text-xs text-slate-500">
+										Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en
+										"Adjuntar boucher de pago" ni en "Comprobantes de pago".
+									</p>
+									{#if formValues.tipo_alcance === 'interna'}
+										<button
+											type="button"
+											onclick={handleGenerarBoucherTransferencia}
+											disabled={generandoComprobanteInterno || bloqueadaPorAprobacion}
+											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
+										>
+											{#if generandoComprobanteInterno}
+												<Loader2 size={14} class="animate-spin shrink-0" />
+											{:else}
+												<FileText size={14} class="shrink-0" />
+											{/if}
+											Autogenerar Boucher de Transferencia
+										</button>
+									{:else if mostrarBotonReciboPago}
+										<button
+											type="button"
+											onclick={abrirReciboPago}
+											disabled={generandoReciboPago || bloqueadaPorAprobacion}
+											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
+										>
+											{#if generandoReciboPago}
+												<Loader2 size={14} class="animate-spin shrink-0" />
+											{:else}
+												<FileText size={14} class="shrink-0" />
+											{/if}
+											Autogenerar Recibo por Pago
+										</button>
+									{:else if mostrarBotonReciboPagoProveedor}
+										<button
+											type="button"
+											onclick={abrirReciboPagoProveedor}
+											disabled={generandoReciboPagoProveedor || bloqueadaPorAprobacion}
+											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
+										>
+											{#if generandoReciboPagoProveedor}
+												<Loader2 size={14} class="animate-spin shrink-0" />
+											{:else}
+												<FileText size={14} class="shrink-0" />
+											{/if}
+											Autogenerar Recibo de Pago a Proveedor
+										</button>
+									{/if}
+									{#if reciboPendienteHtml}
+										<button type="button" onclick={() => abrirPreviewHtml(reciboPendienteHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Ver borrador completo
+										</button>
+										<p class="text-xs text-slate-400">Borrador en HTML — se convertirá a PDF y se adjuntará automáticamente al guardar.</p>
+									{:else if comprobanteAutogeneradoUrl}
+										<button type="button" onclick={() => (showComprobanteAutogeneradoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Ver comprobante generado
+										</button>
+										<p class="text-xs text-emerald-600">✓ Comprobante generado y guardado.</p>
+									{:else if comprobanteInternoNumero || numeroReciboPago || numeroReciboPagoNoEfectivo || numeroReciboPagoProveedor}
+										<p class="text-xs text-emerald-600">✓ Comprobante generado y adjuntado.</p>
+									{/if}
+								</div>
+								{#if reciboPendienteHtml}
+									<!-- Todavía no es un PDF real (eso recién ocurre al guardar, ver
+									     generarPdfDeReciboPendiente) — se previsualiza el HTML tal cual en un iframe en
+									     miniatura, sin pagar el costo de html2canvas antes de tiempo. -->
+									<div class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white">
+										<iframe
+											title="Vista previa del recibo (borrador)"
+											srcdoc={reciboPendienteHtml}
+											class="absolute top-0 left-0 border-0 pointer-events-none bg-white"
+											style="width:780px; height:1300px; transform: scale(0.245); transform-origin: top left;"
+										></iframe>
+									</div>
+								{/if}
+							</div>
+						</div>
+					{/if}
 
 					<!-- Otros campos (opcionales) -->
 					<div class="rounded-2xl border border-slate-200 p-5">
@@ -3096,6 +3147,13 @@
 	url={comprobanteUrl}
 	title="Comprobante"
 	onClose={() => (showComprobantePreview = false)}
+/>
+
+<DocumentPreviewModal
+	open={showComprobanteAutogeneradoPreview}
+	url={comprobanteAutogeneradoUrl}
+	title="Comprobante autogenerado por el ERP"
+	onClose={() => (showComprobanteAutogeneradoPreview = false)}
 />
 
 <DocumentPreviewModal

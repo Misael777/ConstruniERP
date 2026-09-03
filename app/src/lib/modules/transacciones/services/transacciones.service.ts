@@ -118,6 +118,12 @@ export interface Transaccion {
 	/** Factura o boleta de venta — adjunto SEPARADO y OPCIONAL del comprobante de pago, ver
 	 * transaccion_factura_migration.sql. A diferencia de comprobante_url, nunca es obligatorio. */
 	factura_url: string | null;
+	/** PDF del comprobante que el propio ERP autogenera (Boucher Transferencia Interna / Recibo de Pago /
+	 * Recibo de Pago a Proveedor), subido a Google Drive — a pedido explícito del usuario, es un espacio
+	 * SEPARADO de comprobante_url (que sube el usuario a mano) y de la tabla de comprobantes_pago
+	 * (documentos de terceros): antes reusaba comprobante_url y eso pisaba/borraba el boucher que el
+	 * usuario había subido. Ver transaccion_comprobante_autogenerado_migration.sql. */
+	comprobante_autogenerado_url: string | null;
 	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, ni esta
 	 * transacción ni la cuenta por pagar/cobrar ni el cobro/pago vinculados se pueden editar/eliminar
 	 * salvo por un administrador — ver updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION
@@ -461,6 +467,9 @@ export async function createTransaccion(
 		// N° del PDF "RECIBO DE PAGO A PROVEEDOR" (ver reciboPagoProveedor.ts) — correlativo independiente,
 		// ver comentario en la interfaz Transaccion más arriba.
 		num_recibo_pago_proveedor: (payload.num_recibo_pago_proveedor as number | null) ?? null,
+		// URL del comprobante autogenerado por el ERP (ver comentario en la interfaz Transaccion más
+		// arriba) — tampoco vive en FIELDS_CONFIG; null si nunca se generó ninguno para esta transacción.
+		comprobante_autogenerado_url: (payload.comprobante_autogenerado_url as string | null) ?? null,
 		// estado tampoco vive en FIELDS_CONFIG (showInForm:false) — ver resolveEstadoTransaccion.
 		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
 	};
@@ -512,6 +521,7 @@ export async function updateTransaccion(
 	updateData.num_recibo_pago = (payload.num_recibo_pago as number | null) ?? null;
 	updateData.num_recibo_pago_no_efectivo = (payload.num_recibo_pago_no_efectivo as number | null) ?? null;
 	updateData.num_recibo_pago_proveedor = (payload.num_recibo_pago_proveedor as number | null) ?? null;
+	updateData.comprobante_autogenerado_url = (payload.comprobante_autogenerado_url as string | null) ?? null;
 	updateData.estado = resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), actual?.estado);
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
