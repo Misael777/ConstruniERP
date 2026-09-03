@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
+	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
@@ -232,7 +232,15 @@
 	}
 
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
-	onDestroy(setMobileFab(openCreate, 'Nueva Cuenta por Pagar'));
+	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz) — reemplaza
+	// a los dos botones "Nueva Cuenta"/"Ver Panoramas de Pago" del header, que en pantallas angostas se
+	// ocultan (ver hidden md:flex): el segundo desbordaba la pantalla al no caber en la fila.
+	onDestroy(
+		setMobileFabActions([
+			{ label: 'Nueva Cuenta por Pagar', icon: Plus, onclick: openCreate },
+			{ label: 'Ver Panoramas de Pago', icon: LayoutGrid, onclick: () => goto('/finanzas/cuentas-pagar/panoramas') }
+		])
+	);
 
 	onMount(async () => {
 		if (!isAdmin()) {
@@ -655,7 +663,7 @@
 				</button>
 			{/if}
 			{#if !verEliminados}
-				<button type="button" onclick={() => goto('/finanzas/cuentas-pagar/panoramas')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
+				<button type="button" onclick={() => goto('/finanzas/cuentas-pagar/panoramas')} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg border border-[#0f3b5e] text-[#0f3b5e] text-sm font-medium hover:bg-slate-50">
 					<LayoutGrid size={16} /> Ver Panoramas de Pago
 				</button>
 				<button type="button" onclick={openCreate} class="hidden md:flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">

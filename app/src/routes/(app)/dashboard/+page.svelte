@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import {
 		Chart as ChartJS,
 		Title,
@@ -9,66 +10,204 @@
 		LinearScale,
 		PointElement,
 		LineElement,
-		BarElement,
+		BarElement
 	} from 'chart.js';
-	import { Doughnut, Line, Bar } from 'svelte-chartjs';
-	import FinanzasCdcDashboard from '$lib/components/dashboard/FinanzasCdcDashboard.svelte';
+	import { Line, Bar, Doughnut } from 'svelte-chartjs';
+	import { supabase } from '$lib/supabaseClient';
+	import { toast } from '$lib/stores/toast';
+	import { formatCurrency } from '$lib/shared/fieldConfig';
+	import NodeGraph from '$lib/components/dashboard/NodeGraph.svelte';
+	import {
+		getCentrosCostoOptions,
+		getRendimientoPorCentroCosto,
+		getGastosCorporativosGlobales,
+		getFlujoDeNodos,
+		getResumenGeneral,
+		getSerieMensualFlujoCaja,
+		getProyeccionFutura,
+		TIPO_CENTRO_COSTO_OPTIONS,
+		TIPO_CENTRO_COSTO_LABELS,
+		type CentroCostoRendimiento,
+		type FlujoDeNodos,
+		type ResumenGeneralDashboard,
+		type SerieMensualFlujoCaja,
+		type ProyeccionFutura
+	} from '$lib/modules/dashboard-finanzas/services/dashboardFinanzas.service';
+	import { TrendingUp, TrendingDown, Percent, Wallet, Target, Gauge, ChartPie, ChevronUp, ChevronDown, RefreshCw, Building2, Waypoints, Users, LineChart as LineChartIcon } from '@lucide/svelte';
 
-	ChartJS.register(
-		Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement
-	);
+	ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement);
 
-	let { data } = $props();
+	let loading = $state(true);
+	let loadError = $state('');
 
-	let activeTab = $state<'general' | 'finanzas'>('general');
+	let resumen = $state<ResumenGeneralDashboard | null>(null);
+	let flujoNodos = $state<FlujoDeNodos>({ nodos: [], aristas: [] });
+	let serieHistorica = $state<SerieMensualFlujoCaja>({ labels: [], ingresos: [], egresos: [] });
+	let proyeccion = $state<ProyeccionFutura>({ labels: [], ingresosProyectados: [], egresosProyectados: [] });
 
-	const { kpis, charts, recientes } = $derived(data);
+	let centrosOptions = $state<{ value: string; label: string }[]>([]);
+	let filtroTipo = $state('');
+	let filtroCentro = $state('');
+	let items = $state<CentroCostoRendimiento[]>([]);
+	let gastosCorporativos = $state(0);
+	let sortBy = $state<keyof CentroCostoRendimiento>('flujoCajaNeto');
+	let sortDir = $state<'asc' | 'desc'>('desc');
 
-	// Configuración del gráfico de Línea (Ingresos vs Egresos)
-	const lineData = $derived({
-		labels: charts.labels,
+	async function loadAll() {
+		loading = true;
+		loadError = '';
+		try {
+			const [resumenData, nodosData, historicaData, proyeccionData, opciones, rendimiento, gastosCorp] = await Promise.all([
+				getResumenGeneral(supabase),
+				getFlujoDeNodos(supabase),
+				getSerieMensualFlujoCaja(supabase, 12),
+				getProyeccionFutura(supabase, 6),
+				getCentrosCostoOptions(supabase),
+				getRendimientoPorCentroCosto(supabase, {
+					tipo: filtroTipo || undefined,
+					idCentroCosto: filtroCentro ? Number(filtroCentro) : null
+				}),
+				getGastosCorporativosGlobales(supabase)
+			]);
+			resumen = resumenData;
+			flujoNodos = nodosData;
+			serieHistorica = historicaData;
+			proyeccion = proyeccionData;
+			centrosOptions = opciones;
+			items = rendimiento;
+			gastosCorporativos = gastosCorp;
+		} catch (err: any) {
+			loadError = err?.message ?? 'No se pudo cargar el dashboard';
+			toast.error(loadError);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function reloadRendimiento() {
+		try {
+			items = await getRendimientoPorCentroCosto(supabase, {
+				tipo: filtroTipo || undefined,
+				idCentroCosto: filtroCentro ? Number(filtroCentro) : null
+			});
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo filtrar el rendimiento por centro de costo');
+		}
+	}
+
+	onMount(loadAll);
+
+	function pct(v: number | null): string {
+		return v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+	}
+
+	// ── Flujo de Caja en el Tiempo: histórico (sólido) + proyección (punteado) ─────────────────────
+	// El último punto histórico se repite como primer punto proyectado para que la línea punteada
+	// arranque exactamente donde termina la sólida, en vez de verse cortada.
+	const flujoCajaChartData = $derived.by(() => {
+		const labels = [...serieHistorica.labels, ...proyeccion.labels];
+		const nHist = serieHistorica.labels.length;
+		const ultimoIngreso = serieHistorica.ingresos[nHist - 1] ?? 0;
+		const ultimoEgreso = serieHistorica.egresos[nHist - 1] ?? 0;
+
+		const ingresosHist = [...serieHistorica.ingresos, ultimoIngreso, ...Array(Math.max(proyeccion.labels.length - 1, 0)).fill(null)];
+		const ingresosProy = [...Array(nHist).fill(null), ultimoIngreso, ...proyeccion.ingresosProyectados.slice(1)];
+		const egresosHist = [...serieHistorica.egresos, ultimoEgreso, ...Array(Math.max(proyeccion.labels.length - 1, 0)).fill(null)];
+		const egresosProy = [...Array(nHist).fill(null), ultimoEgreso, ...proyeccion.egresosProyectados.slice(1)];
+
+		return {
+			labels,
+			datasets: [
+				{ label: 'Ingresos', data: ingresosHist, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)', tension: 0.35, fill: true, spanGaps: false },
+				{ label: 'Ingresos (proyectado)', data: ingresosProy, borderColor: '#10b981', borderDash: [6, 4], backgroundColor: 'transparent', tension: 0.35, fill: false, spanGaps: false, pointStyle: 'circle' },
+				{ label: 'Egresos', data: egresosHist, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.08)', tension: 0.35, fill: true, spanGaps: false },
+				{ label: 'Egresos (proyectado)', data: egresosProy, borderColor: '#ef4444', borderDash: [6, 4], backgroundColor: 'transparent', tension: 0.35, fill: false, spanGaps: false, pointStyle: 'circle' }
+			]
+		};
+	});
+
+	// ── Totales agregados sobre el set filtrado ─────────────────────────────
+	const totales = $derived.by(() => {
+		const ingresos = items.reduce((s, i) => s + i.ingresos, 0);
+		const egresos = items.reduce((s, i) => s + i.egresos, 0);
+		const presupuesto = items.reduce((s, i) => s + i.presupuesto, 0);
+		const flujoCajaNeto = ingresos - egresos;
+		const autosuficiencia = egresos > 0 ? (ingresos / egresos) * 100 : null;
+		const desviacion = egresos - presupuesto;
+		const desviacionPct = presupuesto > 0 ? (desviacion / presupuesto) * 100 : null;
+		const burnRate = items.reduce((s, i) => s + i.burnRate, 0);
+		const burnRatePct = presupuesto > 0 ? (burnRate / presupuesto) * 100 : null;
+		const roc = presupuesto > 0 ? (flujoCajaNeto / presupuesto) * 100 : null;
+		const margenPositivo = items.filter((i) => i.flujoCajaNeto > 0).reduce((s, i) => s + i.flujoCajaNeto, 0);
+		const coberturaCorporativa = gastosCorporativos > 0 ? (margenPositivo / gastosCorporativos) * 100 : null;
+		return { ingresos, egresos, presupuesto, flujoCajaNeto, autosuficiencia, desviacion, desviacionPct, burnRate, burnRatePct, roc, margenPositivo, coberturaCorporativa };
+	});
+
+	const concentracionGlobal = $derived.by(() => {
+		const map = new Map<string, number>();
+		for (const item of items) {
+			for (const c of item.concentracion) {
+				map.set(c.categoria, (map.get(c.categoria) ?? 0) + c.monto);
+			}
+		}
+		const total = [...map.values()].reduce((s, v) => s + v, 0);
+		return [...map.entries()]
+			.map(([categoria, monto]) => ({ categoria, monto, pct: total > 0 ? (monto / total) * 100 : 0 }))
+			.sort((a, b) => b.monto - a.monto);
+	});
+
+	function toggleSort(field: keyof CentroCostoRendimiento) {
+		if (sortBy === field) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortBy = field;
+			sortDir = 'desc';
+		}
+	}
+
+	const itemsOrdenados = $derived.by(() => {
+		const factor = sortDir === 'asc' ? 1 : -1;
+		return [...items].sort((a, b) => {
+			const av = a[sortBy] as any;
+			const bv = b[sortBy] as any;
+			if (av === null && bv === null) return 0;
+			if (av === null) return 1;
+			if (bv === null) return -1;
+			return av > bv ? factor : av < bv ? -factor : 0;
+		});
+	});
+
+	const topFlujo = $derived([...items].sort((a, b) => Math.abs(b.flujoCajaNeto) - Math.abs(a.flujoCajaNeto)).slice(0, 10));
+	const flujoChartData = $derived({
+		labels: topFlujo.map((i) => i.codigo),
 		datasets: [
 			{
-				label: 'Ingresos (Ventas)',
-				data: charts.ventas,
-				borderColor: '#10b981',
-				backgroundColor: 'rgba(16, 185, 129, 0.1)',
-				tension: 0.4,
-				fill: true
-			},
+				label: 'Flujo de Caja Neto',
+				data: topFlujo.map((i) => i.flujoCajaNeto),
+				backgroundColor: topFlujo.map((i) => (i.flujoCajaNeto >= 0 ? '#10b981' : '#ef4444')),
+				borderRadius: 6
+			}
+		]
+	});
+	const concentracionChartData = $derived({
+		labels: concentracionGlobal.map((c) => c.categoria),
+		datasets: [
 			{
-				label: 'Egresos (Gastos)',
-				data: charts.gastos,
-				borderColor: '#ef4444',
-				backgroundColor: 'rgba(239, 68, 68, 0.1)',
-				tension: 0.4,
-				fill: true
+				data: concentracionGlobal.map((c) => c.monto),
+				backgroundColor: ['#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#10b981', '#64748b', '#ec4899', '#14b8a6', '#f97316', '#6366f1'],
+				borderWidth: 0
 			}
 		]
 	});
 
-	// Configuración del gráfico de Doughnut (Distribución por Tipo)
-	const doughnutData = $derived({
-		labels: charts.tiposProyectoLabels,
-		datasets: [{
-			data: charts.tiposProyectoData,
-			backgroundColor: ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#64748b'],
-			borderWidth: 0,
-		}]
-	});
-
-	// Configuración del gráfico de Barras (Utilidad Mensual)
-	const barData = $derived({
-		labels: charts.labels,
-		datasets: [
-			{
-				label: 'Ganancia / Margen',
-				data: charts.ventas.map((v, i) => v - charts.gastos[i]),
-				backgroundColor: '#3b82f6',
-				borderRadius: 8,
-			}
-		]
-	});
+	const COL_LABELS: Record<string, string> = {
+		flujoCajaNeto: 'Flujo Neto',
+		autosuficiencia: 'Autosuficiencia',
+		presupuesto: 'Presupuesto',
+		desviacionPct: 'Desviación',
+		burnRatePct: 'Burn Rate',
+		roc: 'ROC'
+	};
 </script>
 
 <svelte:head>
@@ -79,12 +218,14 @@
 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
 	<div>
 		<h1 class="text-2xl font-bold text-brand-marine flex items-center gap-2">
-			<i class="fas fa-chart-line text-blue-600"></i> Panel de Control General
+			<i class="fas fa-chart-line text-blue-600"></i> Panel de Control Financiero
 		</h1>
-		<p class="text-sm text-slate-500 mt-1">Resumen del estado operativo, financiero y comercial de Construni.</p>
+		<p class="text-sm text-slate-500 mt-1">Flujo de dinero entre centros de costo, en vivo desde Supabase — histórico y proyectado.</p>
 	</div>
-	
 	<div class="flex items-center gap-3">
+		<button type="button" onclick={loadAll} disabled={loading} class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+			<RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Actualizar
+		</button>
 		<span class="text-xs bg-blue-50 text-blue-700 px-3 py-1.5 rounded-full font-bold border border-blue-100 flex items-center gap-1.5">
 			<span class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
 			Sincronizado con Supabase
@@ -92,232 +233,226 @@
 	</div>
 </div>
 
-<!-- Tabs -->
-<div class="flex rounded-xl border border-slate-200 overflow-hidden mb-6 w-fit bg-white shadow-sm">
-	<button
-		type="button"
-		class="px-4 py-2 text-sm font-semibold transition-colors {activeTab === 'general' ? 'bg-brand-marine text-white' : 'text-slate-600 hover:bg-slate-50'}"
-		onclick={() => (activeTab = 'general')}
-	><i class="fas fa-gauge-high mr-1.5"></i>General</button>
-	<button
-		type="button"
-		class="px-4 py-2 text-sm font-semibold transition-colors {activeTab === 'finanzas' ? 'bg-brand-marine text-white' : 'text-slate-600 hover:bg-slate-50'}"
-		onclick={() => (activeTab = 'finanzas')}
-	><i class="fas fa-wallet mr-1.5"></i>Finanzas</button>
-</div>
+{#if loadError}
+	<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
+{/if}
 
-{#if activeTab === 'finanzas'}
-	<FinanzasCdcDashboard />
+{#if loading}
+	<div class="flex items-center justify-center py-24 text-slate-400">
+		<RefreshCw size={28} class="animate-spin" />
+	</div>
 {:else}
-
-<!-- KPIs Grid -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
-	<!-- KPI 1: Facturación -->
-	<a href="/ventas" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
-		<div class="absolute -right-4 -bottom-4 text-blue-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
-			<i class="fas fa-file-invoice-dollar"></i>
+	<!-- ── KPIs GENERALES ───────────────────────────────────────────────────── -->
+	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+		<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+			<div class="absolute -right-4 -bottom-4 text-emerald-500/10 text-7xl"><TrendingUp size={64} /></div>
+			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Ingresos Totales</span>
+			<div class="text-2xl font-black text-emerald-600 tracking-tight mt-1 mb-1">{formatCurrency(resumen?.totalIngresos ?? 0)}</div>
+			<div class="text-[11px] text-slate-400 font-medium">Suma de transacciones activas tipo ingreso</div>
 		</div>
-		<div class="flex justify-between items-start mb-2">
-			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Facturación Total</span>
-			<span class="px-2.5 py-1 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-lg">{kpis.ventasCount} Ventas</span>
-		</div>
-		<div class="text-2xl font-black text-brand-marine tracking-tight mb-1">
-			S/ {kpis.totalVentasValor.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-		</div>
-		<div class="text-[11px] text-slate-400 font-medium">
-			Valor total acumulado en contratos
-		</div>
-	</a>
-
-	<!-- KPI 2: Cobros -->
-	<a href="/finanzas/cuentas-por-cobrar" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
-		<div class="absolute -right-4 -bottom-4 text-emerald-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
-			<i class="fas fa-hand-holding-dollar"></i>
-		</div>
-		<div class="flex justify-between items-start mb-2">
-			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Monto Cobrado</span>
-			<span class="px-2.5 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-bold rounded-lg">
-				{((kpis.totalVentasCobradas / (kpis.totalVentasValor || 1)) * 100).toFixed(0)}% Efectivo
-			</span>
-		</div>
-		<div class="text-2xl font-black text-emerald-600 tracking-tight mb-1">
-			S/ {kpis.totalVentasCobradas.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-		</div>
-		<div class="text-[11px] text-slate-400 font-medium flex justify-between">
-			<span>Pendiente: S/ {kpis.cuentasPorCobrar.toLocaleString('es-PE')}</span>
-		</div>
-	</a>
-
-	<!-- KPI 3: Egresos -->
-	<a href="/finanzas/cuentas-por-pagar" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
-		<div class="absolute -right-4 -bottom-4 text-red-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
-			<i class="fas fa-receipt"></i>
-		</div>
-		<div class="flex justify-between items-start mb-2">
+		<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+			<div class="absolute -right-4 -bottom-4 text-red-500/10 text-7xl"><TrendingDown size={64} /></div>
 			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Egresos Totales</span>
-			<span class="px-2.5 py-1 bg-red-50 text-red-600 text-[10px] font-bold rounded-lg">Gastos Registrados</span>
+			<div class="text-2xl font-black text-red-600 tracking-tight mt-1 mb-1">{formatCurrency(resumen?.totalEgresos ?? 0)}</div>
+			<div class="text-[11px] text-slate-400 font-medium">Suma de transacciones activas tipo egreso</div>
 		</div>
-		<div class="text-2xl font-black text-brand-marine tracking-tight mb-1">
-			S/ {kpis.totalGastosValor.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+		<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+			<div class="absolute -right-4 -bottom-4 text-blue-500/10 text-7xl"><Wallet size={64} /></div>
+			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Saldo Neto</span>
+			<div class={`text-2xl font-black tracking-tight mt-1 mb-1 ${(resumen?.saldoNeto ?? 0) >= 0 ? 'text-brand-marine' : 'text-red-600'}`}>{formatCurrency(resumen?.saldoNeto ?? 0)}</div>
+			<div class="text-[11px] text-slate-400 font-medium">Ingresos − Egresos, histórico completo</div>
 		</div>
-		<div class="text-[11px] text-slate-400 font-medium flex justify-between">
-			<span>Pagado: S/ {kpis.totalGastosPagados.toLocaleString('es-PE')}</span>
-			<span class="text-red-500 font-bold">Por pagar: S/ {kpis.cuentasPorPagar.toLocaleString('es-PE')}</span>
+		<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+			<div class="absolute -right-4 -bottom-4 text-purple-500/10 text-7xl"><Waypoints size={64} /></div>
+			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Centros con Movimiento</span>
+			<div class="text-2xl font-black text-purple-600 tracking-tight mt-1 mb-1">{resumen?.centrosConMovimiento ?? 0}</div>
+			<div class="text-[11px] text-slate-400 font-medium flex items-center gap-1"><Users size={11} /> {resumen?.empleadosActivos ?? 0} empleados activos</div>
 		</div>
-	</a>
+	</div>
 
-	<!-- KPI 4: Utilidad Estimada -->
-	<a href="/finanzas/reportes" class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition duration-300 block">
-		<div class="absolute -right-4 -bottom-4 text-orange-500/10 text-7xl transition-transform duration-300 group-hover:scale-110">
-			<i class="fas fa-piggy-bank"></i>
+	<!-- ── GRAFO DE NODOS ───────────────────────────────────────────────────── -->
+	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm mb-8">
+		<div class="flex items-center gap-2 mb-1">
+			<Waypoints size={16} class="text-slate-400" />
+			<h3 class="font-bold text-brand-marine text-sm">Flujo de Dinero entre Centros de Costo</h3>
 		</div>
-		<div class="flex justify-between items-start mb-2">
-			<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Utilidad Neta</span>
-			<span class="px-2.5 py-1 bg-orange-50 text-orange-600 text-[10px] font-bold rounded-lg">Margen Bruto</span>
+		<p class="text-[11px] text-slate-400 mb-4">Cada nodo es un centro de costo con movimiento; tamaño ∝ magnitud del saldo, verde = superávit, rojo = déficit. Arrastra, haz zoom y pasa el cursor para ver detalle.</p>
+		<div class="h-[460px]">
+			<NodeGraph nodos={flujoNodos.nodos} aristas={flujoNodos.aristas} />
 		</div>
-		<div class="text-2xl font-black text-orange-600 tracking-tight mb-1">
-			S/ {kpis.gananciaNeta.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-		</div>
-		<div class="text-[11px] text-slate-400 font-medium">
-			Diferencia entre contratos facturados y costos
-		</div>
-	</a>
-</div>
+	</div>
 
-<!-- Secondary Metrics Bar -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-	<a href="/iam" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
-		<span class="text-xs font-semibold text-slate-600">Personal Activo:</span>
-		<span class="text-sm font-bold text-brand-marine">{kpis.empleadosCount} empleados</span>
-	</a>
-	<a href="/proyectos/obras" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
-		<span class="text-xs font-semibold text-slate-600">Obras en Catálogo:</span>
-		<span class="text-sm font-bold text-brand-marine">{kpis.obrasCount} registradas</span>
-	</a>
-	<a href="/proyectos/consultorias" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
-		<span class="text-xs font-semibold text-slate-600">Servicios Consultoría:</span>
-		<span class="text-sm font-bold text-brand-marine">{kpis.consultoriasCount} activos</span>
-	</a>
-	<a href="/ventas" class="bg-slate-100 p-4 rounded-xl flex items-center justify-between border border-slate-200/50 hover:bg-slate-200/60 transition block">
-		<span class="text-xs font-semibold text-slate-600">Proyectos Activos:</span>
-		<span class="text-sm font-bold text-blue-600">{kpis.ventasCount} en ejecución</span>
-	</a>
-</div>
-
-<!-- Charts Section -->
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-	<!-- Flujo de Caja (Ingresos vs Egresos) -->
-	<div class="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col">
-		<div class="flex justify-between items-center mb-4">
-			<div>
-				<h3 class="font-bold text-brand-marine">Flujo de Caja Mensual</h3>
-				<p class="text-xs text-slate-500">Comparativa mensual de ingresos (ventas) frente a egresos (gastos).</p>
+	<!-- ── FLUJO DE CAJA EN EL TIEMPO (histórico + proyección) ─────────────── -->
+	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col mb-8">
+		<div class="flex justify-between items-center mb-1">
+			<div class="flex items-center gap-2">
+				<LineChartIcon size={16} class="text-slate-400" />
+				<h3 class="font-bold text-brand-marine text-sm">Flujo de Caja en el Tiempo</h3>
 			</div>
 		</div>
+		<p class="text-[11px] text-slate-400 mb-3">Últimos 12 meses reales (línea sólida) + 6 meses proyectados (línea punteada) a partir de Cuentas por Pagar/Cobrar pendientes o vencidas.</p>
 		<div class="flex-1 min-h-0">
-			<Line data={lineData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11, weight: 'bold' } } } } }} />
+			<Line data={flujoCajaChartData} options={{ responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10, weight: 'bold' } } } }, scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } } }} />
 		</div>
 	</div>
 
-	<!-- Distribución de Proyectos -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col">
-		<div>
-			<h3 class="font-bold text-brand-marine">Tipos de Proyectos</h3>
-			<p class="text-xs text-slate-500 mb-4">Distribución del número de obras o consultorías por categoría.</p>
+	<!-- ── FILTROS (viabilidad por CdC) ────────────────────────────────────── -->
+	<div class="flex flex-wrap items-end gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+		<div class="flex flex-col gap-1">
+			<label for="ff-tipo" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tipo de Centro de Costo</label>
+			<select id="ff-tipo" bind:value={filtroTipo} onchange={reloadRendimiento} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[170px]">
+				<option value="">Todos</option>
+				{#each TIPO_CENTRO_COSTO_OPTIONS as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
 		</div>
-		<div class="flex-1 min-h-0 flex justify-center items-center">
-			<Doughnut data={doughnutData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }} />
+		<div class="flex flex-col gap-1">
+			<label for="ff-centro" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Centro de Costo</label>
+			<select id="ff-centro" bind:value={filtroCentro} onchange={reloadRendimiento} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[260px]">
+				<option value="">Todos los centros de costo</option>
+				{#each centrosOptions as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
 		</div>
-	</div>
-</div>
-
-<!-- Bottom Row: Tables and Shortcuts -->
-<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-	<!-- Recent Sales Table -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm xl:col-span-2">
-		<div class="flex justify-between items-center mb-4">
-			<div>
-				<h3 class="font-bold text-brand-marine">Últimas Ventas y Proyectos</h3>
-				<p class="text-xs text-slate-500">Últimos contratos firmados registrados en la base de datos.</p>
-			</div>
-			<a href="/ventas" class="text-xs text-blue-600 font-bold hover:underline">Ver todo</a>
-		</div>
-
-		<div class="overflow-x-auto">
-			<table class="w-full text-xs text-left">
-				<thead class="text-slate-500 font-semibold border-b border-slate-100">
-					<tr>
-						<th class="pb-2 px-2">Concepto</th>
-						<th class="pb-2 px-2">Tipo</th>
-						<th class="pb-2 px-2">Fecha</th>
-						<th class="pb-2 px-2 text-right">Valor Venta</th>
-						<th class="pb-2 px-2 text-center">Estado</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-50">
-					{#each recientes.ventas as venta}
-						<tr class="hover:bg-slate-50 transition">
-							<td class="py-3 px-2 font-semibold text-brand-marine">{venta.concepto || 'Venta General'}</td>
-							<td class="py-3 px-2">
-								<span class="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-md font-medium text-[10px]">
-									{venta.tipo_proyecto || 'N/A'}
-								</span>
-							</td>
-							<td class="py-3 px-2 text-slate-500">{venta.fecha_venta || 'Reciente'}</td>
-							<td class="py-3 px-2 text-right font-bold text-slate-800">
-								S/ {(venta.precio_final || 0).toLocaleString()}
-							</td>
-							<td class="py-3 px-2 text-center">
-								<span class="px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded-full font-bold text-[10px]">
-									Activo
-								</span>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		<span class="text-xs text-slate-400 ml-auto">{items.length} centro{items.length === 1 ? '' : 's'} de costo en el filtro actual</span>
 	</div>
 
-	<!-- Quick Actions & Access -->
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-		<div>
-			<h3 class="font-bold text-brand-marine mb-1">Accesos Rápidos</h3>
-			<p class="text-xs text-slate-500 mb-6">Atajos directos para gestionar y registrar en los módulos.</p>
-			
-			<div class="grid grid-cols-2 gap-3">
-				<a href="/ventas" class="p-3 bg-blue-50 text-blue-700 rounded-xl hover:bg-blue-100 transition text-center flex flex-col items-center justify-center gap-2 group">
-					<i class="fas fa-shopping-cart text-lg group-hover:scale-110 transition"></i>
-					<span class="text-xs font-bold">Módulo Ventas</span>
-				</a>
-				
-				<a href="/finanzas" class="p-3 bg-emerald-50 text-emerald-700 rounded-xl hover:bg-emerald-100 transition text-center flex flex-col items-center justify-center gap-2 group">
-					<i class="fas fa-wallet text-lg group-hover:scale-110 transition"></i>
-					<span class="text-xs font-bold">Módulo Finanzas</span>
-				</a>
-				
-				<a href="/iam" class="p-3 bg-purple-50 text-purple-700 rounded-xl hover:bg-purple-100 transition text-center flex flex-col items-center justify-center gap-2 group">
-					<i class="fas fa-users-cog text-lg group-hover:scale-110 transition"></i>
-					<span class="text-xs font-bold">Control Accesos</span>
-				</a>
-				
-				<a href="/proyectos" class="p-3 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition text-center flex flex-col items-center justify-center gap-2 group cursor-pointer">
-					<i class="fas fa-city text-lg group-hover:scale-110 transition"></i>
-					<span class="text-xs font-bold">Proyectos (Catálogos)</span>
-				</a>
-			</div>
+	{#if items.length === 0}
+		<div class="text-center py-20 text-slate-400 bg-white rounded-2xl border border-slate-100 shadow-sm">
+			<Building2 size={40} class="mx-auto mb-3 text-slate-300" />
+			Sin centros de costo para este filtro.
 		</div>
-
-		<div class="mt-6 pt-4 border-t border-slate-100">
-			<div class="bg-slate-50 p-3 rounded-xl flex items-center justify-between text-xs">
-				<div class="flex items-center gap-2 text-slate-600">
-					<i class="fas fa-info-circle text-blue-500"></i>
-					<span>¿Necesitas reportes avanzados?</span>
+	{:else}
+		<!-- ── KPIs DE VIABILIDAD ─────────────────────────────────────────────── -->
+		<h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Viabilidad por Centro de Costo</h2>
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-6">
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+				<div class="absolute -right-4 -bottom-4 text-blue-500/10 text-7xl"><Wallet size={64} /></div>
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Flujo de Caja Neto</span>
+				<div class={`text-2xl font-black tracking-tight mt-1 mb-1 ${totales.flujoCajaNeto >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+					{formatCurrency(totales.flujoCajaNeto)}
 				</div>
-				<a href="/finanzas/reportes" class="text-blue-600 font-bold hover:underline">Ir a Reportes</a>
+				<div class="text-[11px] text-slate-400">Ingresos {formatCurrency(totales.ingresos)} − Egresos {formatCurrency(totales.egresos)}</div>
+			</div>
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+				<div class="absolute -right-4 -bottom-4 text-purple-500/10 text-7xl"><Percent size={64} /></div>
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Autosuficiencia Financiera</span>
+				<div class="text-2xl font-black tracking-tight mt-1 mb-1 text-purple-600">{pct(totales.autosuficiencia)}</div>
+				<div class="text-[11px] text-slate-400">% de gastos cubiertos con ingresos propios</div>
+			</div>
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+				<div class="absolute -right-4 -bottom-4 text-orange-500/10 text-7xl"><Target size={64} /></div>
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Margen de Contribución</span>
+				<div class="text-2xl font-black tracking-tight mt-1 mb-1 text-orange-600">{formatCurrency(totales.margenPositivo)}</div>
+				<div class="text-[11px] text-slate-400">
+					{totales.coberturaCorporativa === null ? 'Sin gastos corporativos registrados' : `Cubre ${pct(totales.coberturaCorporativa)} de los gastos fijos corporativos (${formatCurrency(gastosCorporativos)})`}
+				</div>
 			</div>
 		</div>
-	</div>
-</div>
 
+		<!-- ── KPIs DE CONTROL PRESUPUESTARIO ─────────────────────────────────── -->
+		<h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Control Presupuestario</h2>
+		<div class="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-6">
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+				<div class="absolute -right-4 -bottom-4 text-red-500/10 text-7xl">
+					{#if totales.desviacion > 0}<TrendingUp size={64} />{:else}<TrendingDown size={64} />{/if}
+				</div>
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Desviación de Flujo de Caja</span>
+				<div class={`text-2xl font-black tracking-tight mt-1 mb-1 ${totales.desviacion > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+					{formatCurrency(totales.desviacion)} <span class="text-sm font-bold">({pct(totales.desviacionPct)})</span>
+				</div>
+				<div class="text-[11px] text-slate-400">Egresos reales {formatCurrency(totales.egresos)} vs. Presupuesto {formatCurrency(totales.presupuesto)}</div>
+			</div>
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden">
+				<div class="absolute -right-4 -bottom-4 text-amber-500/10 text-7xl"><Gauge size={64} /></div>
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tasa de Consumo (Burn Rate)</span>
+				<div class="text-2xl font-black tracking-tight mt-1 mb-1 text-amber-600">{formatCurrency(totales.burnRate)}<span class="text-sm font-bold text-slate-400"> /mes</span></div>
+				<div class="text-[11px] text-slate-400">{totales.burnRatePct === null ? 'Sin presupuesto asignado' : `${pct(totales.burnRatePct)} del presupuesto total, por mes`}</div>
+			</div>
+		</div>
+
+		<!-- ── KPIs DE EFICIENCIA OPERATIVA ────────────────────────────────────── -->
+		<h2 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Eficiencia Operativa de Transacciones</h2>
+		<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+			<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Retorno de Efectivo (ROC)</span>
+				<div class={`text-2xl font-black tracking-tight mt-1 mb-3 ${(totales.roc ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{pct(totales.roc)}</div>
+				<p class="text-[11px] text-slate-400">Flujo de Caja Neto ÷ Presupuesto asignado. Mide cuánto efectivo genera cada sol invertido en el centro de costo.</p>
+			</div>
+			<div class="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-72 flex flex-col">
+				<div class="flex items-center gap-2 mb-2">
+					<ChartPie size={16} class="text-slate-400" />
+					<h3 class="font-bold text-brand-marine text-sm">Concentración de Salidas de Caja</h3>
+				</div>
+				<p class="text-[11px] text-slate-400 mb-2">Categoría de gasto (PCGE) con mayor peso en los egresos del filtro actual.</p>
+				<div class="flex-1 min-h-0 flex justify-center items-center">
+					{#if concentracionGlobal.length === 0}
+						<p class="text-xs text-slate-300">Sin egresos categorizados todavía.</p>
+					{:else}
+						<Doughnut data={concentracionChartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 10 } } } } }} />
+					{/if}
+				</div>
+			</div>
+		</div>
+
+		<!-- ── GRÁFICO: FLUJO DE CAJA NETO POR CdC ─────────────────────────────── -->
+		<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-80 flex flex-col mb-8">
+			<h3 class="font-bold text-brand-marine text-sm mb-1">Flujo de Caja Neto por Centro de Costo</h3>
+			<p class="text-[11px] text-slate-400 mb-3">Top {topFlujo.length} centros de costo por magnitud (positivo = superávit, negativo = déficit).</p>
+			<div class="flex-1 min-h-0">
+				<Bar data={flujoChartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }} />
+			</div>
+		</div>
+
+		<!-- ── TABLA COMPARATIVA POR CENTRO DE COSTO ───────────────────────────── -->
+		<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+			<div class="p-4 border-b border-slate-100">
+				<h3 class="font-bold text-brand-marine text-sm">Rendimiento por Centro de Costo</h3>
+				<p class="text-[11px] text-slate-400">Haz clic en una columna para ordenar.</p>
+			</div>
+			<div class="overflow-x-auto">
+				<table class="w-full text-xs text-left whitespace-nowrap">
+					<thead class="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide text-[10px]">
+						<tr>
+							<th class="px-3 py-2.5">Centro de Costo</th>
+							<th class="px-3 py-2.5">Tipo</th>
+							{#each Object.entries(COL_LABELS) as [key, label]}
+								<th class="px-3 py-2.5 text-right cursor-pointer select-none hover:text-slate-700" onclick={() => toggleSort(key as keyof CentroCostoRendimiento)}>
+									<span class="inline-flex items-center gap-1">
+										{label}
+										{#if sortBy === key}
+											{#if sortDir === 'asc'}<ChevronUp size={11} />{:else}<ChevronDown size={11} />{/if}
+										{/if}
+									</span>
+								</th>
+							{/each}
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-slate-100">
+						{#each itemsOrdenados as item (item.id_centro_costo)}
+							<tr class="hover:bg-slate-50/70">
+								<td class="px-3 py-2">
+									<div class="font-semibold text-slate-700">{item.codigo}</div>
+									<div class="text-slate-400 text-[10px] truncate max-w-[180px]">{item.nombre_proyecto ?? item.nombre}</div>
+								</td>
+								<td class="px-3 py-2">
+									<span class="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-medium">
+										{TIPO_CENTRO_COSTO_LABELS[item.tipo] ?? item.tipo}{item.tipo === 'proyecto' && item.tip_proyecto ? ` · ${item.tip_proyecto === 'O' ? 'Obra' : 'Mantenimiento'}` : ''}
+									</span>
+								</td>
+								<td class={`px-3 py-2 text-right font-bold ${item.flujoCajaNeto >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(item.flujoCajaNeto)}</td>
+								<td class="px-3 py-2 text-right text-slate-600">{pct(item.autosuficiencia)}</td>
+								<td class="px-3 py-2 text-right text-slate-600">{formatCurrency(item.presupuesto)}</td>
+								<td class={`px-3 py-2 text-right font-medium ${item.desviacion > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{pct(item.desviacionPct)}</td>
+								<td class="px-3 py-2 text-right text-slate-600">{pct(item.burnRatePct)}</td>
+								<td class={`px-3 py-2 text-right font-medium ${(item.roc ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{pct(item.roc)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	{/if}
 {/if}

@@ -225,8 +225,11 @@
 
 	<!-- Botón flotante de "+" para la acción de alta de la página actual (ver mobileFabState) — mismo
 	     motivo que el botón del menú de arriba para vivir acá y no dentro de cada página: un ancestro
-	     overflow-hidden recorta position:fixed en algunos WebView de Android. -->
-	{#if mobileFabState.actions.length > 0}
+	     overflow-hidden recorta position:fixed en algunos WebView de Android. Se exige que
+	     mobileFabState.path coincida con la ruta ACTUAL — sin esto, un remanente de la página anterior
+	     (ej. si su onDestroy corre después de que esta ya montó) se podía ver en cualquier otro módulo,
+	     no solo en el dueño real de esas acciones. -->
+	{#if mobileFabState.actions.length > 0 && mobileFabState.path === page.url.pathname}
 		<MobileFab actions={mobileFabState.actions} />
 	{/if}
 

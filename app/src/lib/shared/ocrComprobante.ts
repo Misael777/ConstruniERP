@@ -90,13 +90,33 @@ function limpiarMonto(valorCrudo: string): number | null {
 	return Number.isFinite(valor) ? valor : null;
 }
 
-/** Busca el monto pagado. Dos pasadas, en orden de prioridad:
+/** Último respaldo de extraerMonto, SOLO cuando ni la etiqueta ni el "S/ <número>" genérico encontraron
+ * nada — boucher tipo Yape/Plin/BCP con el banner "¡Operación exitosa!" y el monto justo debajo en letra
+ * grande y estilizada (confirmado con un boucher BCP real: Tesseract no reconoció el símbolo "S/" de ese
+ * monto grande, aunque sí leyó bien el resto del texto — sin este respaldo, extraerMonto devolvía null
+ * en ese caso). Se ancla a esa frase EXACTA (tolerante solo a la tilde de "operación", nunca a un texto
+ * genérico) y busca el primer número con forma de monto (2 decimales, "S/" opcional) en una ventana
+ * corta después — acotado a este contexto puntual para no "malograr" ninguna otra búsqueda: un número
+ * suelto en cualquier otra parte del comprobante nunca se toma como monto por esta vía, solo el que
+ * aparece pegado a esta frase bien reconocible y específica de un pago/transferencia ya confirmado. */
+function extraerMontoOperacionExitosa(texto: string): number | null {
+	const idx = texto.search(/operaci[oó]n\s+exitosa/i);
+	if (idx === -1) return null;
+	const ventana = texto.slice(idx, idx + 60);
+	const m = ventana.match(/(?:S\/\.?\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{2}|\d+\.\d{2})/);
+	return m ? limpiarMonto(m[1]) : null;
+}
+
+/** Busca el monto pagado. Tres pasadas, en orden de prioridad:
  *  1. Junto a una etiqueta explícita ("Monto"/"Importe"/"Total"/"Pagaste"/"Enviaste"/"Pagado") — evita
  *     confundirlo con otro monto secundario del comprobante (comisión, ITF, saldo disponible, etc.)
  *     que a veces aparece ANTES en el texto, algo común en transferencias BCP/BBVA/Interbank.
  *  2. Si no hay ninguna etiqueta reconocible (caso típico de Yape/Plin, que solo muestran "S/10" en
  *     grande sin la palabra "Monto" al lado), se toma el primer "S/ <número>" que aparezca.
- * null si no encuentra ningún monto con el símbolo de soles en ninguna de las dos pasadas.
+ *  3. Si tampoco hay ningún "S/" reconocible en todo el texto (Tesseract a veces no lee ese símbolo
+ *     cuando el monto está en letra muy grande/estilizada — ver extraerMontoOperacionExitosa), se
+ *     intenta ese último respaldo, acotado a boucher con el banner "¡Operación exitosa!".
+ * null si ninguna de las tres pasadas encuentra nada.
  * Tolerancia de 40 caracteres entre etiqueta y monto (antes 15) — a pedido explícito del usuario, con
  * nuevos formatos de referencia (ej. constancia de operación BCP con layout de tabla "etiqueta | valor"
  * en dos columnas): mismo motivo que el gap de 40 caracteres que ya usa extraerNumeroOperacion para
@@ -105,8 +125,12 @@ function limpiarMonto(valorCrudo: string): number | null {
  * SIN dígitos en el medio (\D), nunca deja que el patrón salte por encima de otro número real. */
 function extraerMonto(texto: string): number | null {
 	const conEtiqueta = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,40}?${PATRON_MONTO.source}`, 'i'));
-	const m = conEtiqueta ?? texto.match(PATRON_MONTO);
-	return m ? limpiarMonto(m[1]) : null;
+	if (conEtiqueta) return limpiarMonto(conEtiqueta[1]);
+
+	const generico = texto.match(PATRON_MONTO);
+	if (generico) return limpiarMonto(generico[1]);
+
+	return extraerMontoOperacionExitosa(texto);
 }
 
 /** Monto de una factura/boleta (a diferencia de extraerMonto, pensada para un boucher de pago) — prueba

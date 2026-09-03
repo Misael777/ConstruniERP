@@ -3,7 +3,8 @@ import { onMount, onDestroy } from 'svelte';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '$lib/supabaseClient';
 import { isAdmin } from '$lib/stores/permisos.svelte';
-import { setMobileFab } from '$lib/stores/mobileFab.svelte';
+import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
+import { Plus, Download } from '@lucide/svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
 import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
@@ -520,7 +521,12 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	}
 
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
-	onDestroy(setMobileFab(openModal, 'Nueva venta'));
+	onDestroy(
+		setMobileFabActions([
+			{ label: 'Nueva venta', icon: Plus, onclick: openModal },
+			{ label: 'Exportar', icon: Download, onclick: handleExportar }
+		])
+	);
 
 	onMount(() => {
 		fetchVentas();
@@ -829,7 +835,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 				</button>
 			{/if}
 			{#if !verEliminados}
-				<button onclick={handleExportar} disabled={isExporting} class="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				<button onclick={handleExportar} disabled={isExporting} class="hidden md:flex px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm transition-colors shadow-sm items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
 					{#if isExporting}
 						<i class="fas fa-spinner fa-spin"></i> Exportando...
 					{:else}
