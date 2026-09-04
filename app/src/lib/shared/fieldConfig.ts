@@ -95,6 +95,15 @@ export interface FieldConfig {
 	 */
 	requiredWhen?: (payload: Record<string, unknown>) => boolean;
 	/**
+	 * Validación cruzada adicional (además de required/regex/maxLength de un solo campo), evaluada
+	 * contra el payload completo — para una regla que depende del valor de OTRO campo y no encaja como
+	 * `regex` (que solo ve el propio valor). Devuelve el mensaje de error, o null/undefined si no
+	 * aplica. Ej.: cuentaBanco.numero_cuenta.validateWhen = (v) => v.tipo_cuenta === 'efectivo' &&
+	 * !/efectivo/i.test(String(v.numero_cuenta)) ? 'mensaje' : null. No se evalúa si el campo está
+	 * bloqueado por disabledWhen (mismo criterio que requiredWhen) ni si ya falló validateField.
+	 */
+	validateWhen?: (payload: Record<string, unknown>) => string | null | undefined;
+	/**
 	 * Color (hex) por opción de un select, para dar contexto visual inmediato (ej. Prioridad:
 	 * Alto=rojo, Medio=ámbar, Bajo=verde). El motor lo usa para pintar un punto de color junto al
 	 * <select> según el valor elegido y el texto de cada <option> en el desplegable.
@@ -154,6 +163,11 @@ export function validatePayload(fields: FieldConfig[], payload: Record<string, u
 		}
 		if (field.requiredWhen?.(payload) && String(payload[field.key] ?? '').trim() === '') {
 			errors[field.key] = `${field.label} es obligatorio`;
+			continue;
+		}
+		const crossFieldMessage = field.validateWhen?.(payload);
+		if (crossFieldMessage) {
+			errors[field.key] = crossFieldMessage;
 		}
 	}
 	return errors;

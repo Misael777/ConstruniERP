@@ -1,67 +1,51 @@
 <script lang="ts">
 	/**
-	 * Popup "Autogenerar Recibo de Pago a Proveedor" para el caso Externa + Egreso (cualquier medio de
-	 * pago) — a pedido explícito del usuario, con imagen de referencia. Mismo patrón que
-	 * ReciboPagoModal.svelte pero con los roles invertidos: acá la EMPRESA es quien entrega el dinero
-	 * (siempre quien tiene la sesión abierta, ver permisosState — Persona/Cargo fijos, solo el DNI
-	 * editable) y el PROVEEDOR quien lo recibe (datos prellenados desde el Centro de Costo Destino de la
-	 * transacción — ver proveedorNombreInicial/proveedorRucInicial). Igual que ReciboPagoModal.svelte,
-	 * cuando el medio de pago NO es Efectivo se pide además una descripción libre (ver
-	 * esEfectivo/formaPagoTexto). Ambas firmas manuscritas (ver SignaturePad.svelte). El PDF en sí lo arma
-	 * y descarga quien abre este modal (TransaccionModal.svelte, ver onGenerar) — este componente solo
-	 * captura y valida los datos.
+	 * Popup "Firmar Comprobante" del Recibo de Pago a Proveedor (Externa+Egreso) — a pedido explícito del
+	 * usuario: el Recibo a Proveedor siempre se autogenera solo, en vivo, con Concepto y datos del
+	 * proveedor editables directo en el formulario principal (ver conceptoRecibo/proveedorReciboNombre/
+	 * proveedorReciboRuc en TransaccionModal.svelte) — este popup ya NO pide esos datos, solo captura las
+	 * DOS firmas manuscritas (ver SignaturePad.svelte), disponibles para CUALQUIER medio de pago, no solo
+	 * Efectivo. Firmar es opcional: si el usuario nunca abre este popup, el comprobante se genera igual,
+	 * sin firma. Mismo patrón que ReciboPagoModal.svelte pero con los roles invertidos: acá la EMPRESA es
+	 * quien entrega el dinero (siempre quien tiene la sesión abierta, ver permisosState — Persona/Cargo
+	 * fijos, solo el DNI editable) y el PROVEEDOR quien lo recibe. El PDF en sí lo arma y descarga quien
+	 * abre este modal (TransaccionModal.svelte, ver onGenerar) — este componente solo captura y valida
+	 * las firmas.
 	 */
 	import { X, Loader2 } from '@lucide/svelte';
 	import SignaturePad from '$lib/shared/components/SignaturePad.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { permisosState } from '$lib/stores/permisos.svelte';
 
-	export interface DatosPopupReciboPagoProveedor {
-		concepto: string;
-		proveedorNombre: string;
-		proveedorRuc: string;
-		firmaRecibioDataUrl: string;
-		entregoNombre: string;
+	export interface DatosFirmaReciboPagoProveedor {
 		entregoDni: string;
-		cargoRelacion: string;
 		firmaEntregoDataUrl: string;
-		/** Solo cuando esEfectivo es false — ver TransaccionModal.svelte/reciboPagoProveedor.ts. */
-		formaPagoTexto?: string;
+		firmaRecibioDataUrl: string;
 	}
 
 	let {
 		open = false,
-		conceptoInicial = '',
-		proveedorNombreInicial = '',
-		proveedorRucInicial = '',
-		esEfectivo = true,
-		formaPagoInicial = '',
+		proveedorNombre = '',
+		entregoDniInicial = '',
+		firmaEntregoInicial = '',
+		firmaRecibioInicial = '',
 		generando = false,
 		onCancel,
 		onGenerar
 	}: {
 		open?: boolean;
-		conceptoInicial?: string;
-		proveedorNombreInicial?: string;
-		proveedorRucInicial?: string;
-		/** true = medio_pago Efectivo, false = Transferencia/Depósito/Yape o Plin — determina si se pide
-		 * "Forma de Pago" (ver formaPagoTexto) o no. */
-		esEfectivo?: boolean;
-		/** Label del Medio de Pago ya elegido en el formulario principal — precarga "Forma de Pago" con
-		 * eso, mismo criterio que ReciboPagoModal.svelte. Solo se usa cuando esEfectivo es false. */
-		formaPagoInicial?: string;
+		/** Razón social del proveedor que recibe — solo para mostrar bajo su firma, ya se edita en el
+		 * formulario principal (ver proveedorReciboNombre en TransaccionModal.svelte). */
+		proveedorNombre?: string;
+		entregoDniInicial?: string;
+		firmaEntregoInicial?: string;
+		firmaRecibioInicial?: string;
 		generando?: boolean;
 		onCancel: () => void;
-		onGenerar: (datos: DatosPopupReciboPagoProveedor) => void | Promise<void>;
+		onGenerar: (datos: DatosFirmaReciboPagoProveedor) => void | Promise<void>;
 	} = $props();
 
-	const MAX_CONCEPTO = 500;
-
-	let concepto = $state('');
 	let entregoDni = $state('');
-	let proveedorNombre = $state('');
-	let proveedorRuc = $state('');
-	let formaPagoTexto = $state('');
 	let firmaEntregoDataUrl = $state('');
 	let firmaRecibioDataUrl = $state('');
 	let errores = $state<Record<string, string>>({});
@@ -74,13 +58,9 @@
 	let abiertoAnterior = false;
 	$effect(() => {
 		if (open && !abiertoAnterior) {
-			concepto = conceptoInicial;
-			proveedorNombre = proveedorNombreInicial;
-			proveedorRuc = proveedorRucInicial;
-			formaPagoTexto = formaPagoInicial;
-			entregoDni = permisosState.dni || '';
-			firmaEntregoDataUrl = '';
-			firmaRecibioDataUrl = '';
+			entregoDni = entregoDniInicial || permisosState.dni || '';
+			firmaEntregoDataUrl = firmaEntregoInicial;
+			firmaRecibioDataUrl = firmaRecibioInicial;
 			errores = {};
 		}
 		abiertoAnterior = open;
@@ -88,10 +68,6 @@
 
 	function validar(): boolean {
 		const errs: Record<string, string> = {};
-		if (!concepto.trim()) errs.concepto = 'Ingresa la descripción del pago.';
-		if (!proveedorNombre.trim()) errs.proveedorNombre = 'Requerido.';
-		if (!proveedorRuc.trim()) errs.proveedorRuc = 'Requerido.';
-		if (!esEfectivo && !formaPagoTexto.trim()) errs.formaPagoTexto = 'Describe el medio de pago (ej. Transferencia BCP).';
 		if (!entregoDni.trim()) errs.entregoDni = 'Requerido.';
 		if (!firmaEntregoDataUrl) errs.firmaEntrego = 'Falta la firma de quien entrega.';
 		if (!firmaRecibioDataUrl) errs.firmaRecibio = 'Falta la firma del proveedor.';
@@ -101,19 +77,13 @@
 
 	async function handleGenerar() {
 		if (!validar()) {
-			toast.error('Completa todos los campos requeridos, incluidas ambas firmas.');
+			toast.error('Completa ambas firmas antes de continuar.');
 			return;
 		}
 		await onGenerar({
-			concepto: concepto.trim(),
-			proveedorNombre: proveedorNombre.trim(),
-			proveedorRuc: proveedorRuc.trim(),
-			firmaRecibioDataUrl,
-			entregoNombre,
 			entregoDni: entregoDni.trim(),
-			cargoRelacion,
 			firmaEntregoDataUrl,
-			formaPagoTexto: esEfectivo ? undefined : formaPagoTexto.trim()
+			firmaRecibioDataUrl
 		});
 	}
 </script>
@@ -122,79 +92,13 @@
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
 			<div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 shrink-0">
-				<h2 class="text-base font-bold text-[#0f3b5e]">Autogenerar Recibo de Pago a Proveedor</h2>
+				<h2 class="text-base font-bold text-[#0f3b5e]">Firmar Comprobante</h2>
 				<button type="button" onclick={onCancel} class="text-slate-400 hover:text-slate-600" aria-label="Cerrar">
 					<X size={20} />
 				</button>
 			</div>
 
 			<div class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
-				<div>
-					<label class="block text-sm font-bold text-[#0f3b5e] mb-1" for="rpp-concepto">
-						Descripción <span class="text-red-500">*</span>
-					</label>
-					<textarea
-						id="rpp-concepto"
-						rows="2"
-						maxlength={MAX_CONCEPTO}
-						bind:value={concepto}
-						placeholder="Ingresa la descripción del pago..."
-						class={`w-full rounded-lg border px-3 py-2 text-sm resize-none ${errores.concepto ? 'border-red-400' : 'border-slate-300'}`}
-					></textarea>
-					<div class="flex items-center justify-between mt-1">
-						{#if errores.concepto}<p class="text-xs text-red-600">{errores.concepto}</p>{:else}<span></span>{/if}
-						<span class="text-xs text-slate-400">{concepto.length}/{MAX_CONCEPTO}</span>
-					</div>
-				</div>
-
-				{#if !esEfectivo}
-					<div>
-						<label class="block text-sm font-bold text-[#0f3b5e] mb-1" for="rpp-forma-pago">
-							Forma de Pago <span class="text-red-500">*</span>
-						</label>
-						<input
-							id="rpp-forma-pago"
-							type="text"
-							bind:value={formaPagoTexto}
-							placeholder="Ej: Transferencia BCP, Depósito Interbank, Yape a Willy Melchor"
-							class={`w-full rounded-lg border px-3 py-2 text-sm ${errores.formaPagoTexto ? 'border-red-400' : 'border-slate-300'}`}
-						/>
-						{#if errores.formaPagoTexto}<p class="text-xs text-red-600 mt-1">{errores.formaPagoTexto}</p>{/if}
-					</div>
-				{/if}
-
-				<div>
-					<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Datos del proveedor que recibe</h3>
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1" for="rpp-proveedor-nombre">
-								Razón social <span class="text-red-500">*</span>
-							</label>
-							<input
-								id="rpp-proveedor-nombre"
-								type="text"
-								bind:value={proveedorNombre}
-								placeholder="Ingresa razón social del proveedor"
-								class={`w-full rounded-lg border px-3 py-2 text-sm ${errores.proveedorNombre ? 'border-red-400' : 'border-slate-300'}`}
-							/>
-							{#if errores.proveedorNombre}<p class="text-xs text-red-600 mt-1">{errores.proveedorNombre}</p>{/if}
-						</div>
-						<div>
-							<label class="block text-xs font-semibold text-slate-600 mb-1" for="rpp-proveedor-ruc">
-								RUC / DNI <span class="text-red-500">*</span>
-							</label>
-							<input
-								id="rpp-proveedor-ruc"
-								type="text"
-								bind:value={proveedorRuc}
-								placeholder="Ingresa RUC o DNI"
-								class={`w-full rounded-lg border px-3 py-2 text-sm ${errores.proveedorRuc ? 'border-red-400' : 'border-slate-300'}`}
-							/>
-							{#if errores.proveedorRuc}<p class="text-xs text-red-600 mt-1">{errores.proveedorRuc}</p>{/if}
-						</div>
-					</div>
-				</div>
-
 				<div>
 					<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Datos de quien entrega</h3>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -273,7 +177,7 @@
 					class="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
 				>
 					{#if generando}<Loader2 size={16} class="animate-spin" />{/if}
-					Generar Recibo
+					Guardar firma
 				</button>
 			</div>
 		</div>

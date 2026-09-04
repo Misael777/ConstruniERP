@@ -14,7 +14,7 @@
 	const modulesConfig = [
 		{
 			id: 'dashboard', name: 'Dashboard', icon: 'fas fa-home', colorClass: 'text-purple-600 bg-purple-50 border-purple-100',
-			submodules: [{ key: 'ver_dashboard', label: 'Panel Principal' }]
+			submodules: [{ key: 'ver_dashboard', label: 'Landing / Anuncios Corporativos' }]
 		},
 		{
 			id: 'comercial', name: 'Comercial', icon: 'fas fa-shopping-cart', colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-100',
@@ -37,6 +37,7 @@
 			id: 'finanzas', name: 'Finanzas', icon: 'fas fa-dollar-sign', colorClass: 'text-blue-600 bg-blue-50 border-blue-100',
 			submodules: [
 				{ key: 'ver_finanzas', label: 'General Finanzas' },
+				{ key: 'ver_finanzas_dashboard', label: 'Dashboard Finanzas' },
 				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
 				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
 				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' },

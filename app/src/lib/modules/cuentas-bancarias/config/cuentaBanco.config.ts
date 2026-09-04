@@ -12,7 +12,9 @@
  *     numero_cuenta       VARCHAR(30) NOT NULL,
  *     titular_cuenta      VARCHAR(150) NOT NULL,
  *     nombre_banco        VARCHAR(100) NOT NULL,
- *     tipo_cuenta         VARCHAR(20) NOT NULL CHECK (tipo_cuenta IN ('corriente','ahorros','plazo_fijo','mancomunada','sueldo')),
+ *     tipo_cuenta         VARCHAR(20) NOT NULL CHECK (tipo_cuenta IN ('corriente','ahorros','plazo_fijo','mancomunada','sueldo','efectivo')),
+ *       -- 'efectivo' agregado por cuenta_banco_tipo_cuenta_efectivo_migration.sql — caja chica/fondo de
+ *       -- efectivo en vez de una cuenta bancaria real (ver notas de numero_cuenta/nombre_banco abajo).
  *     tipo_moneda         VARCHAR(10) NOT NULL CHECK (tipo_moneda IN ('soles','dolares','otro')),
  *     cci_cuenta          VARCHAR(20),
  *     numero_tarjeta      VARCHAR(20),
@@ -35,6 +37,13 @@
  * - `saldo_inicial` se pide al crear Y al editar; `saldo_actual` es SIEMPRE derivado (saldo_inicial +
  *   neto de las transacciones reales que usan esta cuenta como cuente_origen/cuente_destino, ver
  *   recalcularSaldoCuentaBanco en cuentaBanco.service.ts) — nunca se escribe a mano.
+ * - `tipo_cuenta = 'efectivo'` ("Cuenta Efectivo") — a pedido explícito del usuario: modela una caja
+ *   chica/fondo de efectivo (no una cuenta bancaria real) dentro de la misma tabla, para que
+ *   TransaccionModal.svelte pueda seguir tratándola como "una cuenta más" al elegir Cuenta Origen/
+ *   Destino cuando el Medio de Pago es Efectivo (ver filtrarCuentasEfectivo en TransaccionModal.svelte,
+ *   que filtra estas cuentas por la palabra "efectivo" en el label). Dos reglas ligadas a este tipo:
+ *   `numero_cuenta` debe contener la palabra "efectivo" (o `titular_cuenta`, ver validateWhen abajo) y
+ *   `nombre_banco` se bloquea forzado a "EFECTIVO" (no hay banco real de por medio).
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
@@ -57,7 +66,17 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		placeholder: 'N° de cuenta',
 		showInTable: true,
 		showInForm: true,
-		sortable: true
+		sortable: true,
+		// A pedido explícito del usuario: si Tipo de Cuenta = "Cuenta Efectivo", el Número de Cuenta (o
+		// el Titular, ver abajo) debe dejar constancia de que es una cuenta de efectivo — mismo criterio
+		// que ya usa TransaccionModal.svelte para filtrar estas cuentas (busca "efectivo" en el label).
+		validateWhen: (v) => {
+			if (v.tipo_cuenta !== 'efectivo') return null;
+			const numero = String(v.numero_cuenta ?? '');
+			const titular = String(v.titular_cuenta ?? '');
+			if (/efectivo/i.test(numero) || /efectivo/i.test(titular)) return null;
+			return 'Si el Tipo de Cuenta es "Cuenta Efectivo", el Número de Cuenta o el Titular de la Cuenta debe contener la palabra "efectivo".';
+		}
 	},
 	{
 		key: 'titular_cuenta',
@@ -79,7 +98,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		placeholder: 'Nombre del banco',
 		showInTable: true,
 		showInForm: true,
-		sortable: true
+		sortable: true,
+		// A pedido explícito del usuario: una "Cuenta Efectivo" no tiene un banco real de por medio —
+		// se bloquea y se fuerza a "EFECTIVO" en vez de dejarlo en blanco o a lo que hubiera antes.
+		disabledWhen: (v) => v.tipo_cuenta === 'efectivo',
+		disabledValue: 'EFECTIVO'
 	},
 	{
 		key: 'tipo_cuenta',
@@ -91,7 +114,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'ahorros', label: 'Cuenta Ahorros' },
 			{ value: 'plazo_fijo', label: 'Cuenta a Plazo Fijo' },
 			{ value: 'mancomunada', label: 'Cuenta Mancomunada' },
-			{ value: 'sueldo', label: 'Cuenta Sueldo' }
+			{ value: 'sueldo', label: 'Cuenta Sueldo' },
+			{ value: 'efectivo', label: 'Cuenta Efectivo' }
 		],
 		showInTable: true,
 		showInForm: true,

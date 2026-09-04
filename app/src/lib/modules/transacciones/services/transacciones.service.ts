@@ -869,11 +869,12 @@ export async function getCentroCostoProductoLookup(client: SupabaseClient): Prom
 
 /** Para "Destino de Transacción" en Externa + Egreso (a pedido del usuario) — misma definición
  * EXACTA de "Centro de Costos" (a diferencia de "Cuentas Internas") que ya usa el submódulo
- * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los 3 tipos creados a
- * mano (obra/consultoría/bolsa general) MÁS los vinculados a un proyecto que YA es una venta
- * cerrada. Excluye "Cuentas Internas" (cliente/proveedor/empleado), proyectos aún en negociación, y
- * — a pedido explícito del usuario — cualquier centro dado de baja (estado != 'activo', ver
- * darDeBajaCentroCostoDeEntidad en centroCostos.service.ts). */
+ * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los 4 tipos creados a
+ * mano (obra/consultoría/bolsa general/otro, ver formOptions en centroCostos.config.ts) MÁS los
+ * vinculados a un proyecto que YA es una venta cerrada. Excluye "Cuentas Internas" (cliente/
+ * proveedor/empleado), proyectos aún en negociación, y — a pedido explícito del usuario — cualquier
+ * centro dado de baja (estado != 'activo', ver darDeBajaCentroCostoDeEntidad en
+ * centroCostos.service.ts). */
 export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
 	if (errorCerrados) throw errorCerrados;
@@ -884,7 +885,7 @@ export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): 
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.eq('estado', 'activo')
-		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,${idProyectoFilter}`)
+		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,${idProyectoFilter}`)
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));

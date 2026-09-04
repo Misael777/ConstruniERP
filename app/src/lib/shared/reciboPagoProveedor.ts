@@ -40,11 +40,11 @@ export interface DatosReciboPagoProveedor {
 	firmaRecibioDataUrl: string;
 	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO". false =
 	 * cualquier otro medio (Transferencia/Depósito/Yape o Plin) — muestra en cambio un recuadro con
-	 * `formaPagoTexto` tal cual lo escribió el usuario (ej. "Transferencia BCP"). Mismo criterio que
-	 * DatosReciboPago.esEfectivo en reciboPagoEfectivo.ts. */
+	 * `formaPagoTexto`. Mismo criterio que DatosReciboPago.esEfectivo en reciboPagoEfectivo.ts. Las
+	 * firmas (v-firmas) YA NO dependen de este campo — son opcionales para cualquier medio de pago. */
 	esEfectivo: boolean;
-	/** Descripción libre del medio de pago no efectivo — solo se usa/requiere cuando esEfectivo es
-	 * false. */
+	/** Label del Medio de Pago ya elegido en el formulario principal (ver TransaccionModal.svelte) — solo
+	 * se usa/muestra cuando esEfectivo es false. */
 	formaPagoTexto?: string;
 }
 
@@ -56,7 +56,7 @@ export interface DatosReciboPagoProveedor {
 const ICONO_CAMION_LOGO = `<svg class="v-logo-icono" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14v10"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>`;
 const ICONO_BILLETE = `<svg class="v-icono-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>`;
 
-function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor): string {
+function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor, sinMarcaAgua = false): string {
 	const numeroTexto = `N° ${String(datos.numero).padStart(7, '0')}`;
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
@@ -151,13 +151,13 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor)
 					<div class="v-firma-info">DNI: ${escapeHtml(datos.recibioDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
 			</div>
-			${marcaAguaBorrador(48)}
+			${sinMarcaAgua ? '' : marcaAguaBorrador(48)}
 		</div>
 	`;
 }
 
-async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPagoProveedor) {
-	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
+async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPagoProveedor, sinMarcaAgua = false) {
+	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos, sinMarcaAgua)}`;
 	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 }
 
@@ -171,8 +171,11 @@ export function construirHtmlCompleto(datos: DatosReciboPagoProveedor): string {
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
  * guardarArchivoBinario — mismo criterio que comprobanteTransferenciaInterna.ts. */
-export async function generarReciboPagoProveedorBase64(datos: DatosReciboPagoProveedor): Promise<string> {
-	const [original, copia] = await Promise.all([renderVoucherComoImagen(false, datos), renderVoucherComoImagen(true, datos)]);
+export async function generarReciboPagoProveedorBase64(datos: DatosReciboPagoProveedor, sinMarcaAgua = false): Promise<string> {
+	const [original, copia] = await Promise.all([
+		renderVoucherComoImagen(false, datos, sinMarcaAgua),
+		renderVoucherComoImagen(true, datos, sinMarcaAgua)
+	]);
 
 	const doc = new jsPDF();
 	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;

@@ -3,7 +3,6 @@
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
-	import { guardarArchivoBinario } from '$lib/shared/saveFile';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
@@ -38,8 +37,8 @@
 	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
 	import { generarReciboPagoProveedorBase64, construirHtmlCompleto as construirHtmlReciboProveedor, type DatosReciboPagoProveedor } from '$lib/shared/reciboPagoProveedor';
-	import ReciboPagoModal, { type DatosPopupReciboPago } from '$lib/modules/transacciones/components/ReciboPagoModal.svelte';
-	import ReciboPagoProveedorModal, { type DatosPopupReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
+	import ReciboPagoModal, { type DatosFirmaReciboPago } from '$lib/modules/transacciones/components/ReciboPagoModal.svelte';
+	import ReciboPagoProveedorModal, { type DatosFirmaReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
@@ -170,9 +169,8 @@
 	 * guardado en Drive — a pedido explícito del usuario, vive en su propio campo/espacio, separado de
 	 * comprobanteFile/comprobanteUrl ("Adjuntar boucher de pago", que sube el usuario a mano) y de
 	 * comprobantesPago ("Comprobantes de pago", documentos de terceros). Ver
-	 * transaccion_comprobante_autogenerado_migration.sql y generarPdfDeReciboPendiente/handleSubmit. */
+	 * transaccion_comprobante_autogenerado_migration.sql y generarComprobanteAutogenerado/handleSubmit. */
 	let comprobanteAutogeneradoUrl = $state<string | null>(null);
-	let showComprobanteAutogeneradoPreview = $state(false);
 	let uploadingComprobanteAutogenerado = $state(false);
 
 	// Comprobantes de pago — cuarta sección, a pedido explícito del usuario: reemplaza el antiguo campo
@@ -437,6 +435,7 @@
 			detalleCategoria = [];
 			detalleCategoriaAbierto = false;
 			detalleCategoriaCargadoParaId = null;
+			detallePageNum = 1;
 			categoriaObraGrupo = '';
 			categoriaCorpGrupo = '';
 			categoriaConsultoriaGrupo = '';
@@ -773,34 +772,9 @@
 		return idx === -1 ? [label, ''] : [label.slice(0, idx), label.slice(idx + 3)];
 	}
 
-	/** Datos ya armados de un recibo autogenerado (Boucher Interna/Recibo por Pago/Recibo a Proveedor)
-	 * TODAVÍA sin convertir a PDF — a pedido explícito del usuario: "todos los recibos que se
-	 * autogeneren deben estar en HTML y no en PDF, solo cuando se guarde o se cierre la transacción
-	 * entonces se hará el PDF". Mientras la transacción sigue siendo un borrador, el botón
-	 * "Autogenerar..." solo arma el HTML (ver abrirPreviewHtml, se abre en una pestaña nueva) — nada de
-	 * html2canvas/jsPDF todavía, eso es lo caro. Recién al presionar Crear/Actualizar se convierte de
-	 * verdad a PDF (ver generarPdfDeReciboPendiente, llamado desde handleSubmit) y se adjunta como
-	 * comprobante. Como mucho uno a la vez: los 3 botones son mutuamente excluyentes según
-	 * Tipo/Alcance/medio_pago, así que no hace falta guardar más de uno en paralelo. */
-	type ReciboPendiente =
-		| { tipo: 'interna'; numero: number; nombreArchivo: string; datos: DatosComprobanteInterno }
-		| { tipo: 'ingreso'; numero: number; nombreArchivo: string; datos: DatosReciboPago }
-		| { tipo: 'proveedor'; numero: number; nombreArchivo: string; datos: DatosReciboPagoProveedor };
-	let reciboPendiente = $state<ReciboPendiente | null>(null);
-
-	/** HTML del borrador pendiente, para mostrarlo dentro del recuadro "Adjuntar boucher de pago" (vía
-	 * iframe, ver más abajo) — a pedido explícito del usuario: la vista previa del recibo generado debe
-	 * verse ahí mismo, no solo en la pestaña nueva que abre abrirPreviewHtml. */
-	const reciboPendienteHtml = $derived.by(() => {
-		if (!reciboPendiente) return null;
-		if (reciboPendiente.tipo === 'interna') return construirHtmlInterna(reciboPendiente.datos);
-		if (reciboPendiente.tipo === 'ingreso') return construirHtmlReciboPago(reciboPendiente.datos);
-		return construirHtmlReciboProveedor(reciboPendiente.datos);
-	});
-
-	/** Abre el HTML del recibo (borrador, ver reciboPendiente) en una pestaña nueva vía Blob URL — sin
-	 * generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los 30s, así que
-	 * revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
+	/** Abre el HTML del recibo (vista previa en vivo, ver reciboAutoHtml) en una pestaña nueva vía Blob
+	 * URL — sin generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los
+	 * 30s, así que revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
 	function abrirPreviewHtml(html: string) {
 		const blob = new Blob([html], { type: 'text/html' });
 		const url = URL.createObjectURL(blob);
@@ -808,44 +782,71 @@
 		setTimeout(() => URL.revokeObjectURL(url), 30000);
 	}
 
-	/** Convierte reciboPendiente a PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) y
-	 * devuelve el archivo — a pedido explícito del usuario, este comprobante autogenerado por el ERP NO
-	 * se guarda como "Adjuntar boucher de pago" (comprobanteFile) ni como "Comprobantes de pago"
-	 * (comprobantesPago): antes lo hacía y eso pisaba/borraba el boucher que el usuario había subido a
-	 * mano ahí. Tiene su propio campo independiente (comprobanteAutogeneradoUrl), subido a Drive aparte
-	 * en handleSubmit (ver ahí). Descarga local igual que antes. Devuelve null si no hay ningún recibo
-	 * pendiente (el usuario no usó "Autogenerar..."). */
-	async function generarPdfDeReciboPendiente(): Promise<File | null> {
-		if (!reciboPendiente) return null;
-		const pendiente = reciboPendiente;
-		let base64: string;
-		if (pendiente.tipo === 'interna') base64 = await generarComprobanteTransferenciaInternaBase64(pendiente.datos);
-		else if (pendiente.tipo === 'ingreso') base64 = await generarReciboPagoBase64(pendiente.datos);
-		else base64 = await generarReciboPagoProveedorBase64(pendiente.datos);
+	/** Genera el PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) del comprobante
+	 * autogenerado que aplique — a pedido explícito del usuario, este comprobante NO se guarda como
+	 * "Adjuntar boucher de pago" (comprobanteFile) ni como "Comprobantes de pago" (comprobantesPago):
+	 * tiene su propio campo independiente (comprobanteAutogeneradoUrl), subido a Drive aparte en
+	 * handleSubmit (ver ahí). Cubre los 3 tipos de comprobante (Boucher Interna / Recibo de Pago / Recibo
+	 * de Pago a Proveedor) — todos se arman directo del formulario actual, sin popup obligatorio: la
+	 * firma (ver firmaClienteDataUrl/etc. y el botón "Firmar Comprobante") es opcional y aplica para
+	 * cualquier medio de pago, no bloquea la generación si falta. La marca de agua "BORRADOR" es solo de
+	 * la vista previa en HTML (reciboAutoHtml) — el PDF que de verdad se guarda/sube nunca la lleva
+	 * (sinMarcaAgua=true). Devuelve null solo si ningún tipo de comprobante autogenerado aplica a esta
+	 * transacción. Si el correlativo todavía no se resolvió (el $effect que lo asigna no llegó a tiempo),
+	 * se resuelve acá mismo antes de generar. A pedido explícito del usuario: el PDF generado acá NUNCA
+	 * se descarga/guarda localmente (ni diálogo nativo en Tauri ni descarga de navegador) — sube directo
+	 * a Drive (ver handleSubmit) y de ahí en más solo se descarga si el usuario presiona el botón
+	 * "Descargar" explícito en DocumentPreviewModal.svelte (vista previa/"ojo" de la lista). */
+	async function generarComprobanteAutogenerado(): Promise<File | null> {
+		if (formValues.tipo_alcance === 'interna') {
+			let numero = comprobanteInternoNumero;
+			if (!numero) {
+				numero = await getSiguienteNumeroComprobanteInterno(supabase);
+				comprobanteInternoNumero = numero;
+			}
+			const datos = construirDatosBoucherInterna(numero);
+			const nombreArchivo = `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`;
+			const base64 = await generarComprobanteTransferenciaInternaBase64(datos, true);
+			return new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+		}
+		if (mostrarBotonReciboPago) {
+			let numero = esReciboPagoEfectivo ? numeroReciboPago : numeroReciboPagoNoEfectivo;
+			if (!numero) {
+				numero = esReciboPagoEfectivo
+					? await getSiguienteNumeroReciboPago(supabase)
+					: await getSiguienteNumeroReciboPagoNoEfectivo(supabase);
+				if (esReciboPagoEfectivo) numeroReciboPago = numero;
+				else numeroReciboPagoNoEfectivo = numero;
+			}
+			const datos = construirDatosReciboPagoAuto(numero);
+			const nombreArchivo = `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`;
+			const base64 = await generarReciboPagoBase64(datos, true);
+			return new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+		}
+		if (mostrarBotonReciboPagoProveedor) {
+			let numero = numeroReciboPagoProveedor;
+			if (!numero) {
+				numero = await getSiguienteNumeroReciboPagoProveedor(supabase);
+				numeroReciboPagoProveedor = numero;
+			}
+			const datos = construirDatosReciboPagoProveedorAuto(numero);
+			const nombreArchivo = `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`;
+			const base64 = await generarReciboPagoProveedorBase64(datos, true);
+			return new File([base64ToUint8Array(base64)], nombreArchivo, { type: 'application/pdf' });
+		}
 
-		const archivo = new File([base64ToUint8Array(base64)], pendiente.nombreArchivo, { type: 'application/pdf' });
-		await guardarArchivoBinario(base64, pendiente.nombreArchivo, 'application/pdf');
-		reciboPendiente = null;
-		return archivo;
+		return null;
 	}
 
-	// Botón "Autogenerar Boucher de Transferencia" (a pedido explícito del usuario, con imagen de
-	// referencia) — solo para Alcance=Interna, en el área 1 junto al comprobante. A pedido explícito
-	// del usuario: ya NO genera el PDF al presionarlo — arma el HTML (borrador) y lo abre en una
-	// pestaña nueva (ver abrirPreviewHtml/reciboPendiente arriba); el PDF de verdad recién se arma al
-	// guardar/actualizar (ver generarPdfDeReciboPendiente en handleSubmit). El N° de comprobante se
-	// pide una sola vez (la primera vez que se presiona para esta transacción) y se reusa en cualquier
-	// regeneración posterior — recién se persiste en la BD al guardar (ver payload en handleSubmit),
-	// para no gastar un correlativo si el usuario nunca llega a guardar.
+	// Boucher de Transferencia Interna — a pedido explícito del usuario, ya NO hay botón "Autogenerar":
+	// se genera solo, en vivo, apenas Alcance=Interna (ver reciboAutoHtml más abajo, y
+	// generarComprobanteAutogenerado en handleSubmit para la conversión real a PDF al guardar). El N° de
+	// comprobante se pide una sola vez, apenas aplica la condición (ver $effect debajo), y se reusa en
+	// cualquier regeneración posterior — recién se persiste en la BD al guardar.
 	let comprobanteInternoNumero = $state<number | null>(null);
-	let generandoComprobanteInterno = $state(false);
 
-	/** Arma los datos del Boucher de Transferencia Interna a partir del formulario — separado de
-	 * handleGenerarBoucherTransferencia para poder reusarlo también en el fallback de handleSubmit (ver
-	 * más abajo: "al crear una transacción interna se genera el comprobante automáticamente aunque
-	 * nunca se haya presionado el botón manual"), que necesita los mismos datos pero generando el PDF
-	 * de una directo (ya no hay "borrador pendiente" que convertir en ese punto, la transacción ya se
-	 * guardó). */
+	/** Arma los datos del Boucher de Transferencia Interna a partir del formulario — la reusan tanto
+	 * reciboAutoHtml (vista previa en vivo) como generarComprobanteAutogenerado (PDF real al guardar). */
 	function construirDatosBoucherInterna(numero: number): DatosComprobanteInterno {
 		const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
 		const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
@@ -874,207 +875,244 @@
 		};
 	}
 
-	async function handleGenerarBoucherTransferencia() {
-		generandoComprobanteInterno = true;
-		try {
-			let numero = comprobanteInternoNumero;
-			if (!numero) {
-				numero = await getSiguienteNumeroComprobanteInterno(supabase);
+	// Asigna el correlativo del Boucher Interna una sola vez, apenas Alcance=Interna — sin esperar
+	// ningún click (a pedido explícito del usuario: "siempre se debe autogenerar"). También fija
+	// num_operacion con el N° del propio recibo (no aplica un N° de Operación real en una transferencia
+	// interna, no hay banco externo de por medio) — mismo criterio que antes tenía el botón manual.
+	$effect(() => {
+		if (formValues.tipo_alcance !== 'interna' || comprobanteInternoNumero) return;
+		getSiguienteNumeroComprobanteInterno(supabase)
+			.then((numero) => {
 				comprobanteInternoNumero = numero;
-			}
+				formValues = { ...formValues, num_operacion: String(numero).padStart(4, '0') };
+				numOperacionLocked = false;
+			})
+			.catch((err) => console.error('[TransaccionModal] No se pudo asignar el N° de Boucher Interna:', err));
+	});
 
-			// Fecha y Monto salen de los campos "reconocidos" del área 1 (formValues.fecha/monto_total) —
-			// a pedido explícito del usuario. N° de Operación no aplica de verdad en una transferencia
-			// interna (no hay banco externo de por medio), así que en vez de dejar lo que haya reconocido
-			// el OCR del boucher adjunto, se sobrescribe con el propio N° del recibo recién generado —
-			// mismo formato con el que se imprime en el PDF ("N° 0000").
-			const datos = construirDatosBoucherInterna(numero);
-			const numeroTexto = String(numero).padStart(4, '0');
-			formValues = { ...formValues, num_operacion: numeroTexto };
-			numOperacionLocked = false;
-
-			reciboPendiente = { tipo: 'interna', numero, nombreArchivo: `RECIBO-TRANSFERENCIA-INTERNA-${numeroTexto}.pdf`, datos };
-			abrirPreviewHtml(construirHtmlInterna(datos));
-			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
-		} catch (err) {
-			console.error('[TransaccionModal] No se pudo generar el boucher de transferencia:', err);
-			toast.error('No se pudo generar el boucher de transferencia.');
-		} finally {
-			generandoComprobanteInterno = false;
-		}
-	}
-
-	// Popup "Autogenerar Boucher de Transferencia" para Externa+Ingreso (a pedido explícito del usuario,
-	// con imagen de referencia) — a diferencia de Interna (que genera directo al presionar el botón),
-	// este caso necesita datos que no están en el formulario principal (cliente que paga, quien recibe el
-	// pago, ambas firmas manuscritas — ver ReciboPagoModal.svelte), así que el botón abre un popup en vez
-	// de generar de inmediato. Mismo criterio de correlativo que comprobanteInternoNumero: se pide una
-	// sola vez y se reusa en cualquier regeneración posterior. Aplica para CUALQUIER medio de pago, no
-	// solo Efectivo — la sección "FORMA DE PAGO" del PDF cambia según cuál sea (ver
-	// esReciboPagoEfectivo/reciboPagoEfectivo.ts): con Efectivo muestra el casillero fijo de siempre; con
-	// Transferencia/Depósito/Yape o Plin, un recuadro con la descripción libre que se pide en el popup.
+	// Recibo de Pago (Externa+Ingreso) — a pedido explícito del usuario: siempre se autogenera solo, en
+	// vivo, para CUALQUIER medio de pago (ver reciboAutoHtml/construirDatosReciboPagoAuto más abajo).
+	// Concepto y datos del cliente se muestran como campos editables en el propio formulario (ver
+	// template) — se prellenan solos pero el usuario puede corregirlos. La firma manuscrita es OPCIONAL
+	// y aplica para cualquier medio de pago, no solo Efectivo (a pedido explícito del usuario): un botón
+	// "Firmar Comprobante" abre un popup solo con las firmas (ver abrirFirmaReciboPago más abajo) — no
+	// bloquea nada si el usuario no firma, el comprobante se genera igual.
 	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
-	// Botón "Autogenerar Recibo de Pago a Proveedor" (ver reciboPagoProveedor.ts) — a pedido explícito del
-	// usuario, con imagen de referencia: mismo caso que mostrarBotonReciboPago pero para Egreso en vez de
-	// Ingreso (acá la empresa entrega el dinero). A pedido explícito del usuario, disponible de forma
-	// permanente para CUALQUIER medio de pago (no solo Efectivo) — mismo criterio que mostrarBotonReciboPago:
-	// la sección "FORMA DE PAGO" del PDF se adapta según esReciboPagoEfectivo (ver reciboPagoProveedor.ts).
+	// Recibo de Pago a Proveedor (Externa+Egreso) — mismo criterio que mostrarBotonReciboPago pero para
+	// Egreso en vez de Ingreso (acá la empresa entrega el dinero, ver reciboPagoProveedor.ts).
 	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso');
-	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG)
+	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG) — solo afecta qué texto muestra la sección "FORMA DE PAGO" del PDF y qué correlativo usa, ya no si se puede firmar.
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
 	// Correlativo independiente del recibo NO Efectivo — son dos recibos DIFERENTES (ver
 	// reciboPagoEfectivo.ts), cada uno con su propia numeración serial, a pedido explícito del usuario.
 	let numeroReciboPagoNoEfectivo = $state<number | null>(null);
-	let generandoReciboPago = $state(false);
-	// Cliente que paga — a pedido explícito del usuario, se autocompleta desde la transacción en vez de
-	// escribirse a mano: para Externa+Ingreso, "Centro de Costo Origen" ES el cliente (ver
-	// centroCostoClienteIdMap/optionsFor más abajo), así que basta resolver su id y traer nombre/documento.
+	// Cliente que paga — a pedido explícito del usuario, se autocompleta desde la transacción (para
+	// Externa+Ingreso, "Centro de Costo Origen" ES el cliente, ver centroCostoClienteIdMap/optionsFor más
+	// abajo) pero queda editable en el formulario (bind:value, ver template) por si hace falta corregirlo.
 	let clienteReciboNombre = $state('');
 	let clienteReciboDni = $state('');
-	async function abrirReciboPago() {
-		clienteReciboNombre = '';
-		clienteReciboDni = '';
+	// Firma manuscrita del Recibo de Pago — opcional, capturada en el popup "Firmar Comprobante" (ver
+	// ReciboPagoModal.svelte, ahora reducido a solo firmas + DNI de quien recibe). receptorDniFirma se
+	// prellena con el DNI del empleado logueado (ver permisosState.dni) recién al abrir el popup.
+	let firmaClienteDataUrl = $state('');
+	let firmaReceptorDataUrl = $state('');
+	let receptorDniFirma = $state('');
+	$effect(() => {
+		if (!mostrarBotonReciboPago) return;
 		const idCliente = centroCostoClienteIdMap[formValues.id_centro_costo_origen];
-		if (idCliente) {
-			const { data } = await supabase.from('cliente').select('nombre, num_documento').eq('id_cliente', idCliente).maybeSingle();
-			if (data) {
-				clienteReciboNombre = data.nombre ?? '';
-				clienteReciboDni = data.num_documento ?? '';
-			}
+		if (!idCliente) {
+			clienteReciboNombre = '';
+			clienteReciboDni = '';
+			firmaClienteDataUrl = '';
+			firmaReceptorDataUrl = '';
+			return;
 		}
+		supabase
+			.from('cliente')
+			.select('nombre, num_documento')
+			.eq('id_cliente', idCliente)
+			.maybeSingle()
+			.then(({ data }) => {
+				clienteReciboNombre = data?.nombre ?? '';
+				clienteReciboDni = data?.num_documento ?? '';
+				// Cambió el cliente -> cualquier firma que hubiera quedaba de otra persona, ya no aplica.
+				firmaClienteDataUrl = '';
+				firmaReceptorDataUrl = '';
+			});
+	});
+	function abrirFirmaReciboPago() {
 		reciboPagoModalOpen = true;
 	}
+	function handleFirmarReciboPago(datos: DatosFirmaReciboPago) {
+		firmaClienteDataUrl = datos.firmaClienteDataUrl;
+		firmaReceptorDataUrl = datos.firmaReceptorDataUrl;
+		receptorDniFirma = datos.receptorDni;
+		reciboPagoModalOpen = false;
+		toast.success('Firma guardada — se incluirá en el comprobante al guardar.');
+	}
 
-	// Popup "Autogenerar Recibo de Pago a Proveedor" — mismo criterio que abrirReciboPago/
-	// handleGenerarReciboPago de arriba, pero para Externa+Egreso+Efectivo: acá "Centro de Costo Destino"
-	// ES el proveedor (ver getCentroCostoOptionsProveedores/optionsFor más abajo), así que basta resolver
-	// su id_proveedor y traer razón social/RUC.
+	// Popup "Firmar Comprobante" para Recibo de Pago a Proveedor — mismo criterio que
+	// abrirFirmaReciboPago, pero para Externa+Egreso: acá "Centro de Costo Destino" ES el proveedor (ver
+	// getCentroCostoOptionsProveedores/optionsFor más abajo), así que basta resolver su id_proveedor y
+	// traer razón social/RUC.
 	let reciboPagoProveedorModalOpen = $state(false);
 	let numeroReciboPagoProveedor = $state<number | null>(null);
-	let generandoReciboPagoProveedor = $state(false);
 	let proveedorReciboNombre = $state('');
 	let proveedorReciboRuc = $state('');
-	async function abrirReciboPagoProveedor() {
-		proveedorReciboNombre = '';
-		proveedorReciboRuc = '';
-		const { data: centroCosto } = await supabase
+	let firmaEntregoDataUrl = $state('');
+	let firmaRecibioDataUrl = $state('');
+	let entregoDniFirma = $state('');
+	$effect(() => {
+		if (!mostrarBotonReciboPagoProveedor) return;
+		const idCentro = formValues.id_centro_costo_destino;
+		if (!idCentro) {
+			proveedorReciboNombre = '';
+			proveedorReciboRuc = '';
+			firmaEntregoDataUrl = '';
+			firmaRecibioDataUrl = '';
+			return;
+		}
+		supabase
 			.from('centro_costo')
 			.select('id_proveedor')
-			.eq('id_centro_costo', formValues.id_centro_costo_destino)
-			.maybeSingle();
-		if (centroCosto?.id_proveedor) {
-			const { data } = await supabase.from('proveedor').select('razon_social, ruc').eq('id_proveedor', centroCosto.id_proveedor).maybeSingle();
-			if (data) {
-				proveedorReciboNombre = data.razon_social ?? '';
-				proveedorReciboRuc = data.ruc ?? '';
-			}
-		}
+			.eq('id_centro_costo', idCentro)
+			.maybeSingle()
+			.then(({ data: centroCosto }) => {
+				if (!centroCosto?.id_proveedor) {
+					proveedorReciboNombre = '';
+					proveedorReciboRuc = '';
+					firmaEntregoDataUrl = '';
+					firmaRecibioDataUrl = '';
+					return;
+				}
+				supabase
+					.from('proveedor')
+					.select('razon_social, ruc')
+					.eq('id_proveedor', centroCosto.id_proveedor)
+					.maybeSingle()
+					.then(({ data }) => {
+						proveedorReciboNombre = data?.razon_social ?? '';
+						proveedorReciboRuc = data?.ruc ?? '';
+						// Cambió el proveedor -> cualquier firma que hubiera quedaba de otro proveedor.
+						firmaEntregoDataUrl = '';
+						firmaRecibioDataUrl = '';
+					});
+			});
+	});
+	function abrirFirmaReciboPagoProveedor() {
 		reciboPagoProveedorModalOpen = true;
 	}
-
-	async function handleGenerarReciboPagoProveedor(popup: DatosPopupReciboPagoProveedor) {
-		generandoReciboPagoProveedor = true;
-		try {
-			let numero = numeroReciboPagoProveedor;
-			if (!numero) {
-				numero = await getSiguienteNumeroReciboPagoProveedor(supabase);
-				numeroReciboPagoProveedor = numero;
-			}
-
-			// Para Egreso, "Centro de Costo Origen" es el proyecto/fondo que paga (ver idCentroCostoProyecto
-			// más abajo) — a diferencia de Ingreso, donde el proyecto vive en el destino.
-			const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
-			const [, proyectoNombre] = separarCodigoNombre(origenLabel);
-
-			const datos: DatosReciboPagoProveedor = {
-				numero,
-				fecha: formValues.fecha,
-				proveedorNombre: popup.proveedorNombre,
-				proveedorRuc: popup.proveedorRuc,
-				proyectoNombre,
-				monto: Number(formValues.monto_total) || 0,
-				concepto: popup.concepto,
-				entregoNombre: popup.entregoNombre,
-				entregoDni: popup.entregoDni,
-				firmaEntregoDataUrl: popup.firmaEntregoDataUrl,
-				recibioNombre: popup.proveedorNombre,
-				recibioDni: popup.proveedorRuc,
-				firmaRecibioDataUrl: popup.firmaRecibioDataUrl,
-				esEfectivo: esReciboPagoEfectivo,
-				formaPagoTexto: popup.formaPagoTexto
-			};
-			reciboPagoProveedorModalOpen = false;
-
-			// A pedido explícito del usuario: ya NO se genera el PDF acá — arma el HTML (borrador) y lo
-			// abre en una pestaña nueva; el PDF de verdad recién se arma al guardar/actualizar (ver
-			// generarPdfDeReciboPendiente en handleSubmit).
-			reciboPendiente = { tipo: 'proveedor', numero, nombreArchivo: `RECIBO-DE-PAGO-A-PROVEEDOR-${String(numero).padStart(7, '0')}.pdf`, datos };
-			abrirPreviewHtml(construirHtmlReciboProveedor(datos));
-			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
-		} catch (err) {
-			console.error('[TransaccionModal] No se pudo generar el recibo de pago a proveedor:', err);
-			toast.error('No se pudo generar el recibo de pago a proveedor.');
-		} finally {
-			generandoReciboPagoProveedor = false;
-		}
+	function handleFirmarReciboPagoProveedor(datos: DatosFirmaReciboPagoProveedor) {
+		firmaEntregoDataUrl = datos.firmaEntregoDataUrl;
+		firmaRecibioDataUrl = datos.firmaRecibioDataUrl;
+		entregoDniFirma = datos.entregoDni;
+		reciboPagoProveedorModalOpen = false;
+		toast.success('Firma guardada — se incluirá en el comprobante al guardar.');
 	}
 
-	async function handleGenerarReciboPago(popup: DatosPopupReciboPago) {
-		generandoReciboPago = true;
-		try {
-			// Efectivo y NO Efectivo son dos recibos diferentes (ver esEfectivo en reciboPagoEfectivo.ts) con
-			// numeración serial independiente entre sí — cada uno usa su propia columna/contador.
-			let numero = esReciboPagoEfectivo ? numeroReciboPago : numeroReciboPagoNoEfectivo;
-			if (!numero) {
-				numero = esReciboPagoEfectivo
-					? await getSiguienteNumeroReciboPago(supabase)
-					: await getSiguienteNumeroReciboPagoNoEfectivo(supabase);
-				if (esReciboPagoEfectivo) {
-					numeroReciboPago = numero;
-				} else {
-					numeroReciboPagoNoEfectivo = numero;
-				}
-			}
-
-			const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
-			const [proyectoCodigo, proyectoNombre] = separarCodigoNombre(destinoLabel);
-
-			const datos: DatosReciboPago = {
-				numero,
-				fecha: formValues.fecha,
-				proyectoCodigo,
-				proyectoNombre,
-				monto: Number(formValues.monto_total) || 0,
-				concepto: popup.concepto,
-				clienteNombre: popup.clienteNombre,
-				clienteDni: popup.clienteDni,
-				firmaClienteDataUrl: popup.firmaClienteDataUrl,
-				receptorNombre: popup.receptorNombre,
-				receptorDni: popup.receptorDni,
-				firmaReceptorDataUrl: popup.firmaReceptorDataUrl,
-				esEfectivo: esReciboPagoEfectivo,
-				medioPagoLabel: esReciboPagoEfectivo ? undefined : getOptionLabel(medioPagoField, formValues.medio_pago),
-				numeroOperacion: esReciboPagoEfectivo ? undefined : formValues.num_operacion,
-				nombreTitularCuenta: popup.nombreTitularCuenta
-			};
-			reciboPagoModalOpen = false;
-
-			// A pedido explícito del usuario: ya NO se genera el PDF acá (ni se sube a Drive ni se
-			// descarga) — arma el HTML (borrador) y lo abre en una pestaña nueva; el PDF de verdad recién
-			// se arma al guardar/actualizar la transacción (ver generarPdfDeReciboPendiente en
-			// handleSubmit), mismo criterio que handleGenerarBoucherTransferencia/
-			// handleGenerarReciboPagoProveedor.
-			reciboPendiente = { tipo: 'ingreso', numero, nombreArchivo: `RECIBO-DE-PAGO-${String(numero).padStart(7, '0')}.pdf`, datos };
-			abrirPreviewHtml(construirHtmlReciboPago(datos));
-			toast.success('Recibo generado (borrador en HTML) — se convertirá a PDF y se adjuntará al guardar.');
-		} catch (err) {
-			console.error('[TransaccionModal] No se pudo generar el recibo de pago:', err);
-			toast.error('No se pudo generar el recibo de pago.');
-		} finally {
-			generandoReciboPago = false;
-		}
+	// Concepto del Recibo de Pago/Proveedor — a pedido explícito del usuario, campo siempre visible y
+	// editable en el formulario (no un popup): se prellena con la Descripción de la transacción y sigue
+	// esa Descripción en vivo mientras el usuario no lo toque; apenas lo edita a mano, esa edición manda
+	// (conceptoReciboOverride) hasta que el usuario la borre de nuevo.
+	let conceptoReciboOverride = $state<string | null>(null);
+	const conceptoRecibo = $derived(conceptoReciboOverride ?? formValues.descripcion ?? '');
+	function onConceptoReciboInput(e: Event) {
+		conceptoReciboOverride = (e.target as HTMLTextAreaElement).value;
 	}
+
+	// Asignan los correlativos del Recibo de Pago (Ingreso) y del Recibo a Proveedor (Egreso) una sola
+	// vez, apenas aplica la condición — sin esperar ningún click (a pedido explícito del usuario: "siempre
+	// se debe autogenerar"). El de Ingreso usa el correlativo Efectivo o el no-Efectivo según corresponda
+	// (dos series independientes, ver numeroReciboPagoNoEfectivo arriba); el de Proveedor usa UN SOLO
+	// correlativo compartido entre ambos casos — no se toca ese diseño, solo se adelanta su asignación.
+	$effect(() => {
+		if (!mostrarBotonReciboPago) return;
+		if (esReciboPagoEfectivo) {
+			if (numeroReciboPago) return;
+			getSiguienteNumeroReciboPago(supabase)
+				.then((numero) => (numeroReciboPago = numero))
+				.catch((err) => console.error('[TransaccionModal] No se pudo asignar el N° de Recibo de Pago:', err));
+		} else {
+			if (numeroReciboPagoNoEfectivo) return;
+			getSiguienteNumeroReciboPagoNoEfectivo(supabase)
+				.then((numero) => (numeroReciboPagoNoEfectivo = numero))
+				.catch((err) => console.error('[TransaccionModal] No se pudo asignar el N° de Recibo de Pago:', err));
+		}
+	});
+	$effect(() => {
+		if (!mostrarBotonReciboPagoProveedor || numeroReciboPagoProveedor) return;
+		getSiguienteNumeroReciboPagoProveedor(supabase)
+			.then((numero) => (numeroReciboPagoProveedor = numero))
+			.catch((err) => console.error('[TransaccionModal] No se pudo asignar el N° de Recibo a Proveedor:', err));
+	});
+
+	/** Arma los datos del Recibo de Pago — se autogenera solo, para cualquier medio de pago. Concepto y
+	 * datos del cliente salen de los campos editables del formulario (conceptoRecibo/clienteReciboNombre/
+	 * clienteReciboDni); la firma es opcional (firmaClienteDataUrl/firmaReceptorDataUrl, vacías si el
+	 * usuario nunca abrió "Firmar Comprobante") — el nombre/titular de la cuenta de origen no tiene
+	 * equivalente en el formulario principal, así que queda sin dato (la plantilla ya muestra "—"). */
+	function construirDatosReciboPagoAuto(numero: number): DatosReciboPago {
+		const destinoLabel = optionsFor(destinoField).find((o) => o.value === String(formValues.id_centro_costo_destino))?.label ?? '';
+		const [proyectoCodigo, proyectoNombre] = separarCodigoNombre(destinoLabel);
+		return {
+			numero,
+			fecha: formValues.fecha,
+			proyectoCodigo,
+			proyectoNombre,
+			monto: Number(formValues.monto_total) || 0,
+			concepto: conceptoRecibo,
+			clienteNombre: clienteReciboNombre,
+			clienteDni: clienteReciboDni,
+			firmaClienteDataUrl,
+			receptorNombre: permisosState.userName || 'Usuario',
+			receptorDni: receptorDniFirma || permisosState.dni || '',
+			firmaReceptorDataUrl,
+			esEfectivo: esReciboPagoEfectivo,
+			medioPagoLabel: getOptionLabel(medioPagoField, formValues.medio_pago),
+			numeroOperacion: formValues.num_operacion
+		};
+	}
+
+	/** Arma los datos del Recibo de Pago a Proveedor — mismo criterio que construirDatosReciboPagoAuto. */
+	function construirDatosReciboPagoProveedorAuto(numero: number): DatosReciboPagoProveedor {
+		const origenLabel = optionsFor(origenField).find((o) => o.value === String(formValues.id_centro_costo_origen))?.label ?? '';
+		const [, proyectoNombre] = separarCodigoNombre(origenLabel);
+		return {
+			numero,
+			fecha: formValues.fecha,
+			proveedorNombre: proveedorReciboNombre,
+			proveedorRuc: proveedorReciboRuc,
+			proyectoNombre,
+			monto: Number(formValues.monto_total) || 0,
+			concepto: conceptoRecibo,
+			entregoNombre: permisosState.userName || 'Usuario',
+			entregoDni: entregoDniFirma || permisosState.dni || '',
+			firmaEntregoDataUrl,
+			recibioNombre: proveedorReciboNombre,
+			recibioDni: proveedorReciboRuc,
+			firmaRecibioDataUrl,
+			esEfectivo: esReciboPagoEfectivo,
+			formaPagoTexto: getOptionLabel(medioPagoField, formValues.medio_pago)
+		};
+	}
+
+	/** Vista previa en vivo del comprobante que aplique — Boucher Interna, Recibo de Pago o Recibo a
+	 * Proveedor, para CUALQUIER medio de pago (con o sin firma). Se recalcula solo, en cada cambio del
+	 * formulario (barato: solo arma el HTML, sin html2canvas). */
+	const reciboAutoHtml = $derived.by(() => {
+		if (formValues.tipo_alcance === 'interna') {
+			return construirHtmlInterna(construirDatosBoucherInterna(comprobanteInternoNumero ?? 0));
+		}
+		if (mostrarBotonReciboPago) {
+			const numero = (esReciboPagoEfectivo ? numeroReciboPago : numeroReciboPagoNoEfectivo) ?? 0;
+			return construirHtmlReciboPago(construirDatosReciboPagoAuto(numero));
+		}
+		if (mostrarBotonReciboPagoProveedor) {
+			return construirHtmlReciboProveedor(construirDatosReciboPagoProveedorAuto(numeroReciboPagoProveedor ?? 0));
+		}
+		return null;
+	});
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -1116,8 +1154,12 @@
 			formValues.cuente_destino = '';
 			formValues.cuente_origen = '';
 		}
-		// Efectivo/Yape o Plin no tienen una cuenta bancaria de por medio — se bloquean y limpian Cuenta
-		// Origen/Destino (a pedido del usuario), igual que se limpian arriba al cambiar Tipo/Alcance.
+		// Cambiar el Medio de Pago invalida lo que hubiera elegido antes en Cuenta Origen/Destino — con
+		// Yape o Plin ('4') ninguna de las dos aplica (se bloquean, ver medioPagoBloqueaAmbasCuentas);
+		// con Efectivo ('1') la cuenta "propia" pasa a filtrarse a solo cuentas de Efectivo (ver
+		// filtrarCuentasEfectivo/optionsFor), así que una cuenta bancaria normal ya elegida antes ya no
+		// calzaría con la lista filtrada — se limpian ambas en los dos casos, igual que al cambiar
+		// Tipo/Alcance arriba.
 		if (key === 'medio_pago' && (masked === '1' || masked === '4')) {
 			formValues.cuente_destino = '';
 			formValues.cuente_origen = '';
@@ -1228,12 +1270,29 @@
 	const UNIDADES_DETALLE = ['und', 'kg', 'bolsa', 'm', 'm²', 'm³', 'gal', 'lt', 'caja', 'rollo', 'par', 'juego', 'global'];
 	const totalDetalleCategoria = $derived(detalleCategoria.reduce((sum, f) => sum + (Number(f.cantidad) || 0) * (Number(f.precio_unitario) || 0), 0));
 
+	// Paginación de la tabla de Detalle — a pedido explícito del usuario, 10 filas por página. Se
+	// "clampea" en vez de corregirse con un $effect (mismo criterio que otras tablas paginadas del
+	// ERP, ver movimientos-caja/+page.svelte): si se borran filas y la página actual queda fuera de
+	// rango, detallePaginaActual cae sola a la última página válida sin tocar el estado detallePageNum.
+	const DETALLE_PAGE_SIZE = 10;
+	let detallePageNum = $state(1);
+	const detalleTotalPages = $derived(Math.max(1, Math.ceil(detalleCategoria.length / DETALLE_PAGE_SIZE)));
+	const detallePaginaActual = $derived(Math.min(detallePageNum, detalleTotalPages));
+	const detallePagina = $derived(detalleCategoria.slice((detallePaginaActual - 1) * DETALLE_PAGE_SIZE, detallePaginaActual * DETALLE_PAGE_SIZE));
+	function irAPaginaDetalle(p: number) {
+		if (p < 1 || p > detalleTotalPages) return;
+		detallePageNum = p;
+	}
+
 	function agregarFilaDetalleCategoria() {
 		detalleCategoriaKeySeq += 1;
 		detalleCategoria = [
 			...detalleCategoria,
 			{ _key: detalleCategoriaKeySeq, subcategoria: '', descripcion: '', cantidad: 1, unidad: 'und', precio_unitario: 0, total: 0 }
 		];
+		// Salta a la última página para que la fila recién agregada quede visible de una — si no, con
+		// 10+ filas ya cargadas parecería que el botón no hizo nada.
+		detallePageNum = Math.ceil(detalleCategoria.length / DETALLE_PAGE_SIZE);
 	}
 	function eliminarFilaDetalleCategoria(key: number) {
 		detalleCategoria = detalleCategoria.filter((f) => f._key !== key);
@@ -1252,6 +1311,7 @@
 						return { ...f, _key: detalleCategoriaKeySeq };
 					});
 					if (detalleCategoria.length > 0) detalleCategoriaAbierto = true;
+					detallePageNum = 1;
 				})
 				.catch((err) => console.error('[TransaccionModal] No se pudo cargar el detalle de categoría:', err));
 		}
@@ -1593,13 +1653,27 @@
 			...detalleCategoria,
 			{ _key: detalleCategoriaKeySeq, subcategoria, descripcion: '', cantidad: 1, unidad: 'und', precio_unitario: 0, total: 0 }
 		];
+		detallePageNum = Math.ceil(detalleCategoria.length / DETALLE_PAGE_SIZE);
 	}
 
 	const cuentaDestinoEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso'));
 	const cuentaOrigenEsBancaria = $derived(bloqueadoPorInterna || (formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso'));
-	// Efectivo ('1') o Yape o Plin ('4') no pasan por ninguna cuenta bancaria — a pedido del usuario,
-	// Cuenta Origen y Cuenta Destino se bloquean (y se limpian, ver handleInput) en ambos casos.
-	const cuentasBloqueadasPorMedioPago = $derived(['1', '4'].includes(String(formValues.medio_pago ?? '')));
+	// Yape o Plin ('4') no pasa por ninguna cuenta bancaria de ningún lado — sigue bloqueando Cuenta
+	// Origen y Cuenta Destino por completo (y se limpian, ver handleInput), sin cambios de diseño acá.
+	const medioPagoBloqueaAmbasCuentas = $derived(String(formValues.medio_pago ?? '') === '4');
+	// Efectivo ('1') — a pedido explícito del usuario: la cuenta "propia" (Destino en Ingreso, Origen en
+	// Egreso, ver cuentaDestinoEsBancaria/cuentaOrigenEsBancaria) YA NO se bloquea — el pago en efectivo
+	// sí registra una cuenta bancaria real, pero debe ser una cuenta de EFECTIVO (caja chica/fondo, ver
+	// filtrarCuentasEfectivo más abajo), no cualquier cuenta bancaria. La cuenta de la CONTRAPARTE
+	// (Origen en Ingreso, Destino en Egreso) sigue sin sentido en efectivo — no hay cuenta bancaria de
+	// la otra parte que registrar — así que esa sí se sigue bloqueando (ver isBloqueadoPorMedioPago).
+	const medioPagoEsEfectivo = $derived(String(formValues.medio_pago ?? '') === '1');
+	/** Cuentas bancarias registradas cuyo nombre/titular contiene "efectivo" (ej. "EFECTIVO_GUILLERMO")
+	 * — así se modela una caja chica/fondo de efectivo en Finanzas → Cuentas Bancarias, no hay una
+	 * columna/tipo separado para distinguirlas de una cuenta bancaria real. */
+	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
+		return opciones.filter((o) => /efectivo/i.test(o.label));
+	}
 	// Campos que se bloquean cuando el Alcance es Interna — 'tipo' y 'estado' además se fuerzan a un
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
@@ -1680,9 +1754,15 @@
 			const key = formValues.tipo_alcance === 'externa' ? `${field.key}_externo` : field.key;
 			return soloNombreCentro(dynamicOptions[key] || []);
 		}
-		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) return dynamicOptions.cuenta_banco || [];
+		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) {
+			const todas = dynamicOptions.cuenta_banco || [];
+			return medioPagoEsEfectivo ? filtrarCuentasEfectivo(todas) : todas;
+		}
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
 			const todas = dynamicOptions.cuenta_banco || [];
+			// Efectivo: solo cuentas de caja chica/fondo (ver filtrarCuentasEfectivo) — manda sobre el
+			// filtro de "cuentas que recibieron algún Ingreso" de abajo, no se combinan.
+			if (medioPagoEsEfectivo) return filtrarCuentasEfectivo(todas);
 			// Egreso Y Transacción Interna: prioriza las cuentas que recibieron algún Ingreso de este
 			// Centro de Costo Origen (ver cuentasBancoIngresosOrigen) — si esa lista sale vacía (el centro
 			// nunca recibió ningún Ingreso), cae de vuelta a TODAS las cuentas registradas, para no dejar
@@ -1730,6 +1810,15 @@
 		return undefined;
 	}
 
+	/** Saldo de la opción YA ELEGIDA (no de cada opción de la lista, ver saldoParaOpcion arriba) — a
+	 * pedido explícito del usuario: una vez elegida una Cuenta o un Centro de Costo, su saldo debe
+	 * seguir viéndose DEBAJO del dropdown ya cerrado, no solo dentro de la lista mientras está abierta. */
+	function saldoSeleccionado(field: (typeof formFields)[number]): number | undefined {
+		const valor = formValues[field.key];
+		if (!valor) return undefined;
+		return saldoParaOpcion(field, { value: valor, label: '' });
+	}
+
 	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo Origen/Destino en Ingreso+Externa:
 	 * como ahí muestran clientes/proyectos (ver optionsFor), a pedido explícito del usuario la etiqueta
 	 * también cambia para reflejar lo que de verdad se está eligiendo. */
@@ -1753,16 +1842,12 @@
 			return;
 		}
 
-		// Una transacción Interna emite su propio comprobante oficial (el "RECIBO - TRANSFERENCIA
-		// INTERNA" autogenerado, ver handleGenerarBoucherTransferencia), y una Externa+Ingreso+Efectivo ya
-		// generada con el "RECIBO DE PAGO" (ver handleGenerarReciboPago/numeroReciboPago) también — en
-		// ninguno de los dos casos se requiere que el usuario adjunte además una foto/PDF de respaldo.
-		// Antes este chequeo era incondicional y bloqueaba el guardado sin ningún aviso visible (solo un
-		// texto rojo pequeño bajo el dropzone), lo que hacía parecer que el botón "Crear" no hacía nada.
-		const reciboPagoYaGenerado =
-			(mostrarBotonReciboPago && (esReciboPagoEfectivo ? !!numeroReciboPago : !!numeroReciboPagoNoEfectivo)) ||
-			(mostrarBotonReciboPagoProveedor && !!numeroReciboPagoProveedor);
-		if (formValues.tipo_alcance !== 'interna' && !reciboPagoYaGenerado && !comprobanteFile && !comprobanteUrl) {
+		// Una transacción Interna, y cualquier Externa+Ingreso/Egreso, emiten su propio comprobante
+		// oficial solas, en vivo, sin ningún paso manual (ver reciboAutoHtml) — la firma es opcional (ver
+		// botón "Firmar Comprobante") y nunca bloquea el guardado, así que en ninguno de esos casos se
+		// requiere que el usuario adjunte además una foto/PDF de respaldo.
+		const reciboAutogeneradoAplica = formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor;
+		if (!reciboAutogeneradoAplica && !comprobanteFile && !comprobanteUrl) {
 			comprobanteError = 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.';
 			toast.error(comprobanteError);
 			return;
@@ -1770,11 +1855,11 @@
 
 		submitting = true;
 		try {
-			// A pedido explícito del usuario: todo recibo autogenerado (Boucher Interna/Recibo por Pago/
-			// Recibo a Proveedor) se queda en HTML mientras la transacción sigue siendo un borrador — el
-			// PDF de verdad (html2canvas/jsPDF) recién se arma acá, justo antes de guardar/actualizar. Si
-			// no se presionó ningún botón "Autogenerar..." (reciboPendiente sigue null), devuelve null.
-			const reciboGeneradoFile = await generarPdfDeReciboPendiente();
+			// El PDF de verdad (html2canvas/jsPDF) del comprobante autogenerado que aplique se arma acá,
+			// justo antes de guardar/actualizar, y SIN la marca de agua "BORRADOR" (esa solo va en la vista
+			// previa HTML, nunca en el archivo real). Devuelve null solo si ningún tipo de comprobante
+			// autogenerado aplica a esta transacción.
+			const reciboGeneradoFile = await generarComprobanteAutogenerado();
 
 			let finalComprobanteUrl = comprobanteUrl;
 			let uploadedFileId: string | null = null;
@@ -1824,9 +1909,8 @@
 				}
 			}
 
-			// num_comprobante_interno: solo viaja si el botón "Autogenerar Boucher de Transferencia" ya
-			// se presionó al menos una vez (ver comprobanteInternoNumero/handleGenerarBoucherTransferencia
-			// más arriba) — si nunca se presionó, se guarda null (no se emitió ningún comprobante).
+			// num_comprobante_interno: solo viaja si ya se resolvió el correlativo (ver comprobanteInternoNumero
+			// y su $effect más arriba) — null si esta transacción nunca fue de Alcance Interna.
 			const payload = {
 				...formValues,
 				comprobante_url: finalComprobanteUrl,
@@ -1946,48 +2030,6 @@
 					uploadingComprobantesPago = false;
 				}
 
-				// A pedido explícito del usuario: "cuando cree la transferencia, tengo que poder descargar el
-				// boucher de transferencia autogenerado" — al crear (no al editar) una transacción interna se
-				// genera y descarga el comprobante automáticamente, se haya presionado o no el botón manual
-				// "Autogenerar Boucher de Transferencia". Si SÍ se presionó antes de guardar, generarPdfDeReciboPendiente()
-				// (ver arriba, al inicio de este handleSubmit) ya generó/descargó/adjuntó el PDF real y ya
-				// viajó en el payload de la creación — no hay nada más que hacer acá (guard !comprobanteInternoNumero).
-				// Si nunca se presionó, el correlativo recién se asigna acá y el PDF se genera directo (ya no
-				// hay "borrador pendiente" que convertir, la fila ya se guardó) — se persiste en la fila ya
-				// creada para que quede consistente con el número impreso en el PDF descargado.
-				if (mode === 'create' && formValues.tipo_alcance === 'interna' && !comprobanteInternoNumero) {
-					try {
-						const idParaVoucher = (result.data as any)?.id_transaccion;
-						const numero = await getSiguienteNumeroComprobanteInterno(supabase);
-						comprobanteInternoNumero = numero;
-						const datosVoucher = construirDatosBoucherInterna(numero);
-						const base64 = await generarComprobanteTransferenciaInternaBase64(datosVoucher);
-						const nombreArchivoVoucher = `RECIBO-TRANSFERENCIA-INTERNA-${String(numero).padStart(4, '0')}.pdf`;
-						await guardarArchivoBinario(base64, nombreArchivoVoucher, 'application/pdf');
-						// Igual que en el flujo normal (ver arriba): el boucher autogenerado se sube a Drive en su
-						// PROPIO campo (comprobante_autogenerado_url), separado del comprobante que suba el usuario
-						// a mano — nunca a comprobante_url.
-						const archivoVoucher = new File([base64ToUint8Array(base64)], nombreArchivoVoucher, { type: 'application/pdf' });
-						const baseNameAuto = idParaVoucher ? `comprobante-autogenerado-${idParaVoucher}` : `comprobante-autogenerado-temp-${Date.now()}`;
-						const uploadedAuto = await subirArchivo(archivoVoucher, baseNameAuto);
-						comprobanteAutogeneradoUrl = uploadedAuto.url;
-						// OJO: updateTransaccion valida TODOS los campos obligatorios del payload que recibe (ver
-						// validatePayload en fieldConfig.ts) — pasar solo { num_comprobante_interno } fallaba la
-						// validación de todos los demás campos obligatorios y no actualizaba nada (el error quedaba
-						// silenciado por el catch de abajo). Se reusa el `payload` completo ya armado arriba.
-						if (idParaVoucher) {
-							await updateTransaccion(
-								supabase,
-								idParaVoucher,
-								{ ...payload, num_comprobante_interno: numero, comprobante_autogenerado_url: uploadedAuto.url },
-								isAdmin()
-							);
-						}
-					} catch (voucherErr) {
-						console.warn('[TransaccionModal] No se pudo autogenerar el boucher de transferencia interna:', voucherErr);
-					}
-				}
-
 				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
 				// avanza al siguiente borrador en vez de cerrar el modal — a pedido del usuario.
 				const hayMasEnCola = colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1;
@@ -2019,7 +2061,9 @@
 {#snippet fieldBlock(field: (typeof formFields)[number])}
 	{@const isLocked = lockedFields.includes(field.key)}
 	{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
-	{@const isBloqueadoPorMedioPago = cuentasBloqueadasPorMedioPago && (field.key === 'cuente_origen' || field.key === 'cuente_destino')}
+	{@const esCuentaPropiaBancaria = (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
+	{@const isBloqueadoPorMedioPago =
+		(field.key === 'cuente_origen' || field.key === 'cuente_destino') && (medioPagoBloqueaAmbasCuentas || (medioPagoEsEfectivo && !esCuentaPropiaBancaria))}
 	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
 	<div>
 		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
@@ -2029,6 +2073,7 @@
 		</label>
 
 		{#if esCampoConSaldo(field)}
+			{@const saldoElegido = saldoSeleccionado(field)}
 			<SelectConSaldo
 				id={`tr-${field.key}`}
 				value={formValues[field.key]}
@@ -2037,6 +2082,11 @@
 				hasError={!!fieldErrors[field.key]}
 				onchange={(v) => handleInput(field.key, v)}
 			/>
+			{#if saldoElegido !== undefined}
+				<p class={`mt-1 text-xs font-semibold ${saldoElegido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+					Saldo actual: {formatCurrency(saldoElegido)}
+				</p>
+			{/if}
 		{:else if field.tipo === 'select' || field.options}
 			<div class="relative">
 				<select
@@ -2086,6 +2136,8 @@
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
+		{:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
+			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas de Efectivo registradas (Finanzas → Cuentas Bancarias).</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
 			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
@@ -2420,81 +2472,120 @@
 					     emite el propio sistema (Boucher de Transferencia Interna / Recibo por Pago / Recibo a
 					     Proveedor) NO es lo mismo que "Adjuntar boucher de pago" (comprobante externo que sube
 					     el usuario a mano) ni "Comprobantes de pago" (documentos de terceros, más abajo) — por
-					     eso tiene su propia sección, separada de ambas. -->
+					     eso tiene su propia sección, separada de ambas. Siempre se autogenera solo, para
+					     cualquier medio de pago — Concepto y los datos del cliente/proveedor son campos
+					     editables acá mismo (se prellenan solos), y la firma es opcional vía "Firmar
+					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 						<div class="rounded-2xl border border-slate-200 p-5">
 							<span class="block text-sm font-bold text-[#0f3b5e] mb-4">Comprobante autogenerado por el ERP</span>
+							<p class="text-xs text-slate-500 mb-4">
+								Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en "Adjuntar
+								boucher de pago" ni en "Comprobantes de pago". Se actualiza en tiempo real con el formulario.
+							</p>
+
+							{#if mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+									<div class="sm:col-span-2">
+										<label class="block text-xs font-semibold text-slate-600 mb-1" for="cr-concepto">Concepto</label>
+										<textarea
+											id="cr-concepto"
+											rows="2"
+											value={conceptoRecibo}
+											oninput={onConceptoReciboInput}
+											disabled={bloqueadaPorAprobacion}
+											placeholder="Descripción del pago..."
+											class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-none disabled:opacity-60"
+										></textarea>
+									</div>
+									{#if mostrarBotonReciboPago}
+										<div>
+											<label class="block text-xs font-semibold text-slate-600 mb-1" for="cr-cliente-nombre">Nombre del cliente</label>
+											<input
+												id="cr-cliente-nombre"
+												type="text"
+												bind:value={clienteReciboNombre}
+												disabled={bloqueadaPorAprobacion}
+												placeholder="Nombre completo"
+												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+											/>
+										</div>
+										<div>
+											<label class="block text-xs font-semibold text-slate-600 mb-1" for="cr-cliente-dni">RUC / DNI del cliente</label>
+											<input
+												id="cr-cliente-dni"
+												type="text"
+												bind:value={clienteReciboDni}
+												disabled={bloqueadaPorAprobacion}
+												placeholder="RUC o DNI"
+												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+											/>
+										</div>
+									{:else if mostrarBotonReciboPagoProveedor}
+										<div>
+											<label class="block text-xs font-semibold text-slate-600 mb-1" for="cr-proveedor-nombre">Razón social del proveedor</label>
+											<input
+												id="cr-proveedor-nombre"
+												type="text"
+												bind:value={proveedorReciboNombre}
+												disabled={bloqueadaPorAprobacion}
+												placeholder="Razón social"
+												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+											/>
+										</div>
+										<div>
+											<label class="block text-xs font-semibold text-slate-600 mb-1" for="cr-proveedor-ruc">RUC del proveedor</label>
+											<input
+												id="cr-proveedor-ruc"
+												type="text"
+												bind:value={proveedorReciboRuc}
+												disabled={bloqueadaPorAprobacion}
+												placeholder="RUC"
+												class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+											/>
+										</div>
+									{/if}
+								</div>
+							{/if}
+
 							<div class="flex flex-col sm:flex-row gap-5">
 								<div class="flex-1 flex flex-col gap-2 min-w-0">
-									<p class="text-xs text-slate-500">
-										Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en
-										"Adjuntar boucher de pago" ni en "Comprobantes de pago".
-									</p>
-									{#if formValues.tipo_alcance === 'interna'}
+									{#if mostrarBotonReciboPago}
 										<button
 											type="button"
-											onclick={handleGenerarBoucherTransferencia}
-											disabled={generandoComprobanteInterno || bloqueadaPorAprobacion}
+											onclick={abrirFirmaReciboPago}
+											disabled={bloqueadaPorAprobacion}
 											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
 										>
-											{#if generandoComprobanteInterno}
-												<Loader2 size={14} class="animate-spin shrink-0" />
-											{:else}
-												<FileText size={14} class="shrink-0" />
-											{/if}
-											Autogenerar Boucher de Transferencia
-										</button>
-									{:else if mostrarBotonReciboPago}
-										<button
-											type="button"
-											onclick={abrirReciboPago}
-											disabled={generandoReciboPago || bloqueadaPorAprobacion}
-											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
-										>
-											{#if generandoReciboPago}
-												<Loader2 size={14} class="animate-spin shrink-0" />
-											{:else}
-												<FileText size={14} class="shrink-0" />
-											{/if}
-											Autogenerar Recibo por Pago
+											<Pencil size={14} class="shrink-0" />
+											{firmaClienteDataUrl && firmaReceptorDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
 									{:else if mostrarBotonReciboPagoProveedor}
 										<button
 											type="button"
-											onclick={abrirReciboPagoProveedor}
-											disabled={generandoReciboPagoProveedor || bloqueadaPorAprobacion}
+											onclick={abrirFirmaReciboPagoProveedor}
+											disabled={bloqueadaPorAprobacion}
 											class="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 text-blue-600 text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 w-fit"
 										>
-											{#if generandoReciboPagoProveedor}
-												<Loader2 size={14} class="animate-spin shrink-0" />
-											{:else}
-												<FileText size={14} class="shrink-0" />
-											{/if}
-											Autogenerar Recibo de Pago a Proveedor
+											<Pencil size={14} class="shrink-0" />
+											{firmaEntregoDataUrl && firmaRecibioDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
 									{/if}
-									{#if reciboPendienteHtml}
-										<button type="button" onclick={() => abrirPreviewHtml(reciboPendienteHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Ver borrador completo
+									{#if reciboAutoHtml}
+										<button type="button" onclick={() => abrirPreviewHtml(reciboAutoHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Vista previa
 										</button>
-										<p class="text-xs text-slate-400">Borrador en HTML — se convertirá a PDF y se adjuntará automáticamente al guardar.</p>
-									{:else if comprobanteAutogeneradoUrl}
-										<button type="button" onclick={() => (showComprobanteAutogeneradoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Ver comprobante generado
-										</button>
-										<p class="text-xs text-emerald-600">✓ Comprobante generado y guardado.</p>
-									{:else if comprobanteInternoNumero || numeroReciboPago || numeroReciboPagoNoEfectivo || numeroReciboPagoProveedor}
-										<p class="text-xs text-emerald-600">✓ Comprobante generado y adjuntado.</p>
+										<p class="text-xs text-slate-400">Se actualiza en tiempo real con el formulario — se adjuntará automáticamente al guardar.</p>
 									{/if}
 								</div>
-								{#if reciboPendienteHtml}
+								{#if reciboAutoHtml}
 									<!-- Todavía no es un PDF real (eso recién ocurre al guardar, ver
-									     generarPdfDeReciboPendiente) — se previsualiza el HTML tal cual en un iframe en
-									     miniatura, sin pagar el costo de html2canvas antes de tiempo. -->
+									     generarComprobanteAutogenerado) — se previsualiza el HTML tal cual en un iframe
+									     en miniatura, sin pagar el costo de html2canvas antes de tiempo. -->
 									<div class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white">
 										<iframe
-											title="Vista previa del recibo (borrador)"
-											srcdoc={reciboPendienteHtml}
+											title="Vista previa del recibo"
+											srcdoc={reciboAutoHtml}
 											class="absolute top-0 left-0 border-0 pointer-events-none bg-white"
 											style="width:780px; height:1300px; transform: scale(0.245); transform-origin: top left;"
 										></iframe>
@@ -2870,7 +2961,7 @@
 										</tr>
 									</thead>
 									<tbody>
-										{#each detalleCategoria as fila (fila._key)}
+										{#each detallePagina as fila (fila._key)}
 											<tr class="border-t border-slate-100">
 												<td class="px-2 py-1.5">
 													<!-- Solo lectura — a pedido explícito del usuario: la Subcategoría ya quedó fijada
@@ -2954,6 +3045,32 @@
 									</tfoot>
 								</table>
 							</div>
+							{#if detalleTotalPages > 1}
+								<div class="flex items-center justify-between mt-2 text-xs text-slate-500">
+									<span>
+										Mostrando {(detallePaginaActual - 1) * DETALLE_PAGE_SIZE + 1} a {Math.min(detallePaginaActual * DETALLE_PAGE_SIZE, detalleCategoria.length)} de {detalleCategoria.length} filas
+									</span>
+									<div class="flex items-center gap-1">
+										<button
+											type="button"
+											onclick={() => irAPaginaDetalle(detallePaginaActual - 1)}
+											disabled={detallePaginaActual <= 1}
+											class="px-2 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50"
+										>
+											Anterior
+										</button>
+										<span class="px-1">Página {detallePaginaActual} de {detalleTotalPages}</span>
+										<button
+											type="button"
+											onclick={() => irAPaginaDetalle(detallePaginaActual + 1)}
+											disabled={detallePaginaActual >= detalleTotalPages}
+											class="px-2 py-1 rounded-md border border-slate-300 disabled:opacity-40 hover:bg-slate-50"
+										>
+											Siguiente
+										</button>
+									</div>
+								</div>
+							{/if}
 						{/if}
 							</div>
 						{/if}
@@ -3150,13 +3267,6 @@
 />
 
 <DocumentPreviewModal
-	open={showComprobanteAutogeneradoPreview}
-	url={comprobanteAutogeneradoUrl}
-	title="Comprobante autogenerado por el ERP"
-	onClose={() => (showComprobanteAutogeneradoPreview = false)}
-/>
-
-<DocumentPreviewModal
 	open={!!previewComprobantePago}
 	url={previewComprobantePago?.file ? URL.createObjectURL(previewComprobantePago.file) : (previewComprobantePago?.url ?? null)}
 	title={previewComprobantePago?.nombre_archivo ?? 'Comprobante'}
@@ -3165,24 +3275,21 @@
 
 <ReciboPagoModal
 	open={reciboPagoModalOpen}
-	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
-	clienteNombreInicial={clienteReciboNombre}
-	clienteDniInicial={clienteReciboDni}
-	esEfectivo={esReciboPagoEfectivo}
-	generando={generandoReciboPago}
+	clienteNombre={clienteReciboNombre}
+	receptorDniInicial={receptorDniFirma}
+	firmaClienteInicial={firmaClienteDataUrl}
+	firmaReceptorInicial={firmaReceptorDataUrl}
 	onCancel={() => (reciboPagoModalOpen = false)}
-	onGenerar={handleGenerarReciboPago}
+	onGenerar={handleFirmarReciboPago}
 />
 
 <ReciboPagoProveedorModal
 	open={reciboPagoProveedorModalOpen}
-	conceptoInicial={`Pago por ${formValues.categoria ? getOptionLabel(categoriaField, formValues.categoria) : ''}`.trim()}
-	proveedorNombreInicial={proveedorReciboNombre}
-	proveedorRucInicial={proveedorReciboRuc}
-	esEfectivo={esReciboPagoEfectivo}
-	formaPagoInicial={formValues.medio_pago ? getOptionLabel(medioPagoField, formValues.medio_pago) : ''}
-	generando={generandoReciboPagoProveedor}
+	proveedorNombre={proveedorReciboNombre}
+	entregoDniInicial={entregoDniFirma}
+	firmaEntregoInicial={firmaEntregoDataUrl}
+	firmaRecibioInicial={firmaRecibioDataUrl}
 	onCancel={() => (reciboPagoProveedorModalOpen = false)}
-	onGenerar={handleGenerarReciboPagoProveedor}
+	onGenerar={handleFirmarReciboPagoProveedor}
 />
 

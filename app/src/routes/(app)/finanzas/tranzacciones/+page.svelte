@@ -166,6 +166,9 @@
 	async function openComprobantePreview(item: Transaccion) {
 		previewDocuments = [
 			...(item.comprobante_url ? [{ url: item.comprobante_url, label: 'Boucher', filename: nombreArchivoBoucher(item) }] : []),
+			...(item.comprobante_autogenerado_url
+				? [{ url: item.comprobante_autogenerado_url, label: 'Comprobante autogenerado por el ERP', filename: nombreArchivoBoucher(item) }]
+				: []),
 			...(item.factura_url ? [{ url: item.factura_url, label: 'Factura o boleta', filename: nombrePdfTransaccion(item) }] : [])
 		];
 		previewTitle = `Documentos - ${item.num_documento || 'Transacción'}`;

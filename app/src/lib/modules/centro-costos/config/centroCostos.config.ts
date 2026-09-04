@@ -207,8 +207,11 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		// user-admin) cuando se crea esa entidad, y 'subcontratista' se asigna solo (en vez de
 		// 'proveedor') cuando el proveedor tiene "Producto y Servicio" = 'SUBCONTRATISTA - OBRA' (ver
 		// sincronizarTipoCentroCostoProveedor) — ninguno de los cinco se elige a mano, por eso no están en
-		// `formOptions` — y 'area'/'otro' quedaron fuera del catálogo manual a pedido del usuario (se
-		// dejan en `options` solo por si alguna fila vieja los tuviera, no hay ninguna hoy).
+		// `formOptions`. 'area' quedó fuera del catálogo manual (se deja en `options` solo por si alguna
+		// fila vieja lo tuviera) — 'otro' SÍ se puede elegir a mano (ver formOptions abajo); cualquier
+		// selector que ofrezca "Centros de Costos creados a mano" (ej. getCentroCostoOptionsSoloCentros
+		// en transacciones.service.ts) debe incluir 'otro' en su filtro o un centro así queda invisible
+		// ahí aunque exista y se vea bien en su propia lista.
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },

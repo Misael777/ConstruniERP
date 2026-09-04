@@ -45,6 +45,22 @@
 		}
 	});
 
+	// Fuerza los campos bloqueados por disabledWhen a su disabledValue — a pedido explícito del usuario:
+	// "Cuenta Efectivo" bloquea y fuerza el Banco a "EFECTIVO" (ver disabledWhen/disabledValue en
+	// cuentaBanco.config.ts), mismo criterio ya usado en CuentaPagarModal.svelte/CuentaCobrarModal.svelte.
+	$effect(() => {
+		for (const field of formFields) {
+			if (field.disabledWhen?.(formValues)) {
+				const forzado = typeof field.disabledValue === 'function' ? String(field.disabledValue(formValues) ?? '') : String(field.disabledValue ?? '');
+				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
+			}
+		}
+	});
+
+	function isDisabled(field: (typeof formFields)[number]): boolean {
+		return field.disabledWhen?.(formValues) ?? false;
+	}
+
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -102,6 +118,7 @@
 			<form onsubmit={handleSubmit}>
 				<div class="p-6 grid grid-cols-2 gap-4">
 					{#each formFields as field (field.key)}
+						{@const disabled = isDisabled(field)}
 						<div class={field.key === 'observacion' ? 'col-span-full' : ''}>
 							<label for={`cb-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 								{field.label}
@@ -113,8 +130,9 @@
 									id={`cb-${field.key}`}
 									name={field.key}
 									value={formValues[field.key]}
+									{disabled}
 									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								>
 									<option value="" disabled>Selecciona una opción</option>
 									{#each field.options ?? [] as opt}
@@ -129,13 +147,16 @@
 									value={formValues[field.key]}
 									maxlength={field.maxLength}
 									placeholder={field.placeholder}
+									{disabled}
 									oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 								/>
 							{/if}
 
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
+							{:else if disabled}
+								<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Tipo de Cuenta es "Cuenta Efectivo".</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}

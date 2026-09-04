@@ -7,9 +7,10 @@
 	 * Centro de Costo Origen/Destino en TransaccionModal.svelte) reemplazan el `<select>` nativo por este
 	 * botón + panel propio, mismo aspecto visual (borde, radio, foco) que el resto del formulario. El
 	 * saldo/monto SOLO se muestra en las opciones de la lista desplegada — a pedido explícito del
-	 * usuario, el campo ya cerrado (con una opción elegida) muestra nomás la etiqueta, sin el saldo al
-	 * costado, para no romper la simetría del resto de los campos del formulario (ninguno de los demás
-	 * campos del formulario repite un dato calculado junto a su propio valor ya elegido).
+	 * usuario, este componente ya cerrado (con una opción elegida) sigue mostrando nomás la etiqueta,
+	 * sin el saldo al costado del botón — quien lo usa (ver saldoSeleccionado en TransaccionModal.svelte)
+	 * sí muestra el saldo de la opción YA ELEGIDA en una línea aparte DEBAJO del botón, una vez cerrado;
+	 * no es responsabilidad de este componente en sí, que se mantiene agnóstico de eso.
 	 *
 	 * El panel se posiciona con `position:fixed` calculado a mano (coordenadas reales del botón en
 	 * pantalla, ver posicionarPanel) en vez de `position:absolute` normal — a pedido explícito del

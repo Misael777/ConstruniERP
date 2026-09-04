@@ -41,7 +41,7 @@ export interface DatosComprobanteInterno {
 	cuentaBancariaDestino: string;
 }
 
-function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno): string {
+function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno, sinMarcaAgua = false): string {
 	const numeroTexto = `N° ${String(datos.numero).padStart(4, '0')}`;
 	const montoLetras = `(${montoEnLetras(datos.monto)})`;
 
@@ -118,13 +118,13 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosComprobanteInterno):
 				<div>Usuario: ${escapeHtml(datos.usuario)}</div>
 				<div>Fecha y hora: ${escapeHtml(new Date().toLocaleString('es-PE'))}</div>
 			</div>
-			${marcaAguaBorrador(56)}
+			${sinMarcaAgua ? '' : marcaAguaBorrador(56)}
 		</div>
 	`;
 }
 
-async function renderVoucherComoImagen(esCopia: boolean, datos: DatosComprobanteInterno) {
-	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
+async function renderVoucherComoImagen(esCopia: boolean, datos: DatosComprobanteInterno, sinMarcaAgua = false) {
+	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos, sinMarcaAgua)}`;
 	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 }
 
@@ -143,8 +143,11 @@ export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
  * copia se renderiza por separado (mismo layout, solo cambia la etiqueta "COPIA -") y se ubica justo
  * después de donde terminó la anterior — un nombre/concepto largo que agranda la primera copia nunca se
  * superpone con la segunda, porque la altura de cada imagen se mide después de renderizarla. */
-export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno): Promise<string> {
-	const [original, copia] = await Promise.all([renderVoucherComoImagen(false, datos), renderVoucherComoImagen(true, datos)]);
+export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno, sinMarcaAgua = false): Promise<string> {
+	const [original, copia] = await Promise.all([
+		renderVoucherComoImagen(false, datos, sinMarcaAgua),
+		renderVoucherComoImagen(true, datos, sinMarcaAgua)
+	]);
 
 	const doc = new jsPDF();
 	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;

@@ -21,8 +21,10 @@
  *     tipo                       VARCHAR(20) CHECK (tipo IN ('ingreso','egreso')),
  *     monto_total                NUMERIC NOT NULL,
  *     medio_pago                 VARCHAR(2),
- *     cuente_origen               VARCHAR(20),   -- OJO: typo real en BD ("cuente", no "cuenta")
- *     cuente_destino              VARCHAR(20),   -- ídem
+ *     cuente_origen               VARCHAR(30),   -- OJO: typo real en BD ("cuente", no "cuenta").
+ *       -- Ampliado de VARCHAR(20) a VARCHAR(30) para igualar cuenta_banco.numero_cuenta (ver
+ *       -- transaccion_cuente_origen_destino_ampliar_migration.sql).
+ *     cuente_destino              VARCHAR(30),   -- ídem
  *     estado                      VARCHAR(10),   -- sin CHECK real, texto libre (probado insertando valor arbitrario)
  *     usuario_registro            VARCHAR(100),
  *     created_at                  TIMESTAMPTZ DEFAULT NOW(),
@@ -465,7 +467,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'cuente_origen',
 		label: 'Cuenta origen',
 		tipo: 'text',
-		maxLength: 20,
+		// Igual a cuenta_banco.numero_cuenta (VARCHAR(30), ver cuentaBanco.config.ts) — este campo guarda
+		// ese mismo valor cuando el origen es una cuenta bancaria (ver getCuentaBancoOptions), así que no
+		// puede ser más corto o algunas cuentas válidas (ej. "EFECTIVO_<nombre>") no entran. Ver
+		// transaccion_cuente_origen_destino_ampliar_migration.sql.
+		maxLength: 30,
 		placeholder: 'N° de cuenta o CCI',
 		showInTable: false,
 		showInForm: true,
@@ -475,7 +481,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'cuente_destino',
 		label: 'Cuenta destino',
 		tipo: 'text',
-		maxLength: 20,
+		// Ver nota de cuente_origen arriba — mismo criterio.
+		maxLength: 30,
 		placeholder: 'N° de cuenta o CCI',
 		showInTable: false,
 		showInForm: true,

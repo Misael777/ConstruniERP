@@ -27,7 +27,7 @@ export interface DatosMensajeEgreso {
 /** Pago a proveedor por transferencia/depósito bancario (no efectivo), con la cuenta de origen desde
  * la que se pagó. */
 export function armarMensajeEgreso(datos: DatosMensajeEgreso): string {
-	return `Yo, ${datos.usuario}, he registrado el pago de ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado a la cuenta de ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}. (no es efectivo)`;
+	return `Yo, ${datos.usuario}, he registrado el pago de ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado a la cuenta de ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}.`;
 }
 
 export interface DatosMensajeIngreso {

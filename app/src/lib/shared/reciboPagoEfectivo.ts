@@ -7,11 +7,13 @@
  * (en RECIBO DE PAGO A PROVEEDOR de reciboPagoProveedor.ts es al revés). La sección 3 "FORMA DE PAGO"
  * cambia según `esEfectivo` — a pedido explícito del usuario, con imagen de referencia: NO Efectivo ya
  * no es un solo texto libre ("Yape a Willy Melchor"), son 3 datos por separado: el medio elegido en el
- * formulario principal (ícono + label), el N° de Operación (ya reconocido/ingresado ahí mismo, no se
- * vuelve a pedir) y el nombre de quien figura como titular de la cuenta origen (esto sí se pide en
- * ReciboPagoModal.svelte, es el único dato nuevo). Se arma como HTML/CSS y se convierte a imagen con
- * html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en navegador, Tauri Windows y
- * Tauri Android.
+ * formulario principal (ícono + label), el N° de Operación (ya reconocido/ingresado ahí mismo) y el
+ * nombre de quien figura como titular de la cuenta origen (nombreTitularCuenta, sin fuente en el
+ * formulario — queda "—" si no hay dato). Las firmas (v-firmas) YA NO dependen de esEfectivo — a pedido
+ * explícito del usuario, son opcionales para cualquier medio de pago (ver botón "Firmar Comprobante" en
+ * TransaccionModal.svelte); esEfectivo solo decide qué muestra la sección 3. Se arma como HTML/CSS y se
+ * convierte a imagen con html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en
+ * navegador, Tauri Windows y Tauri Android.
  */
 import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
@@ -52,8 +54,8 @@ export interface DatosReciboPago {
 	 * (formValues.num_operacion) — solo cuando esEfectivo es false. */
 	numeroOperacion?: string;
 	/** Nombre de quien figura como titular de la cuenta desde la que se hizo la transferencia/Yape/
-	 * depósito — solo cuando esEfectivo es false, único dato de esta sección que sí se pide en
-	 * ReciboPagoModal.svelte (los otros dos ya existen en el formulario principal). */
+	 * depósito — solo cuando esEfectivo es false. Sin fuente en el formulario principal ni en ningún
+	 * popup; queda "—" si no hay dato (ver TransaccionModal.svelte, construirDatosReciboPagoAuto). */
 	nombreTitularCuenta?: string;
 }
 
@@ -72,7 +74,7 @@ function iconoMedioPago(label: string): string {
 	return /yape|plin/i.test(label) ? ICONO_TELEFONO : ICONO_BANCO;
 }
 
-function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago): string {
+function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago, sinMarcaAgua = false): string {
 	const numeroTexto = `N° ${String(datos.numero).padStart(7, '0')}`;
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
@@ -177,13 +179,13 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago): string 
 					<div class="v-firma-info">DNI: ${escapeHtml(datos.receptorDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
 			</div>
-			${marcaAguaBorrador(48)}
+			${sinMarcaAgua ? '' : marcaAguaBorrador(48)}
 		</div>
 	`;
 }
 
-async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPago) {
-	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos)}`;
+async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPago, sinMarcaAgua = false) {
+	const html = `<style>${ESTILOS_VOUCHER_BASE}</style>${construirVoucherHtml(esCopia, datos, sinMarcaAgua)}`;
 	return renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 }
 
@@ -198,8 +200,11 @@ export function construirHtmlCompleto(datos: DatosReciboPago): string {
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
  * guardarArchivoBinario — mismo criterio que comprobanteTransferenciaInterna.ts/
  * reciboPagoProveedor.ts. */
-export async function generarReciboPagoBase64(datos: DatosReciboPago): Promise<string> {
-	const [original, copia] = await Promise.all([renderVoucherComoImagen(false, datos), renderVoucherComoImagen(true, datos)]);
+export async function generarReciboPagoBase64(datos: DatosReciboPago, sinMarcaAgua = false): Promise<string> {
+	const [original, copia] = await Promise.all([
+		renderVoucherComoImagen(false, datos, sinMarcaAgua),
+		renderVoucherComoImagen(true, datos, sinMarcaAgua)
+	]);
 
 	const doc = new jsPDF();
 	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;
