@@ -5,11 +5,13 @@
 	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	// Solo "Centros de Costos" (fondos propios) — NO "Cuentas Internas" (cliente/proveedor/empleado,
+	// ledgers de contraparte, no dinero de la empresa) — mismo filtro que la pestaña "Centros de
+	// Costos" en Centro de Costos y Cuentas Internas, ver nota en conciliacion.service.ts.
+	import { getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
 	import {
 		getSaldoTotalCentrosCosto,
 		getSaldoTotalCuentasBancarias,
-		getSaldoInicialTotalCuentasBancarias,
 		registrarConciliacionInterna,
 		registrarConciliacionBancoManual,
 		getConciliaciones,
@@ -24,7 +26,6 @@
 	let loading = $state(true);
 	let saldoCentros = $state(0);
 	let saldoBancos = $state(0);
-	let saldoInicial = $state(0);
 	let registrandoInterna = $state(false);
 
 	let conciliaciones = $state<ConciliacionFinanciera[]>([]);
@@ -66,20 +67,18 @@
 	async function cargar() {
 		loading = true;
 		try {
-			const [sc, sb, si, conc, apert, opciones, cuentas, centros] = await Promise.all([
+			const [sc, sb, conc, apert, opciones, cuentas, centros] = await Promise.all([
 				getSaldoTotalCentrosCosto(supabase),
 				getSaldoTotalCuentasBancarias(supabase),
-				getSaldoInicialTotalCuentasBancarias(supabase),
 				getConciliaciones(supabase),
 				getAperturasFinancieras(supabase),
 				getCuentaBancoOptions(supabase),
 				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta, saldo_inicial').eq('activo', true).then((r) => r.data ?? []),
-				getCentroCostoOptions(supabase)
+				getCentroCostoOptionsSoloCentros(supabase)
 			]);
 			centroCostoOptions = centros;
 			saldoCentros = sc;
 			saldoBancos = sb;
-			saldoInicial = si;
 			conciliaciones = conc;
 			aperturas = apert;
 			cuentaOptions = opciones;
@@ -94,11 +93,9 @@
 
 	onMount(cargar);
 
-	// Cuenta Bancaria arranca con saldo_inicial (dinero que YA estaba antes del ERP) mientras que
-	// Centro de Costo siempre arranca en 0 — sin restar el saldo inicial, cualquier cuenta con plata
-	// real al empezar mostraría una "diferencia" que no es un error, solo el punto de partida.
-	const saldoBancosAjustado = $derived(saldoBancos - saldoInicial);
-	const diferenciaInterna = $derived(saldoCentros - saldoBancosAjustado);
+	// Apertura Financiera genera movimientos REALES en ambos lados (ver conciliacion.service.ts) — se
+	// comparan directamente, sin ningún ajuste aparte.
+	const diferenciaInterna = $derived(saldoCentros - saldoBancos);
 
 	async function handleRegistrarInterna() {
 		registrandoInterna = true;
@@ -193,16 +190,21 @@
 	<!-- ── Cruce interno ────────────────────────────────────────────────────── -->
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm mb-8">
 		<h2 class="font-bold text-brand-marine text-sm mb-1">Cruce Interno — Centros de Costo vs Cuentas Bancarias</h2>
-		<p class="text-[11px] text-slate-400 mb-4">Automático, sin datos manuales — compara dos totales que ya calcula el ERP. La cuenta bancaria se compara ajustada por su saldo inicial (Centro de Costo siempre arranca en 0, Cuenta Bancaria no).</p>
+		<p class="text-[11px] text-slate-400 mb-4">
+			Automático, sin datos manuales — compara dos totales que ya calcula el ERP. Saldo Cuentas Bancarias ya incluye lo declarado en Apertura Financiera (saldo inicial real). Saldo Centros de Costo
+			es el saldo "vigente" de cada centro: su última Apertura + solo las transacciones reales posteriores a esa fecha de corte (no se refleja en la pantalla propia de Centro de Costos, que
+			siempre suma todo el historial sin fecha de corte).
+			"Centro de Costo" acá es solo fondos propios (pestaña "Centros de Costos" del submódulo Centro de Costos y Cuentas Internas) — Cuentas Internas (cliente/proveedor/empleado) queda fuera, son
+			ledgers de contraparte, no dinero de la empresa.
+		</p>
 		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
 			<div>
 				<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Building2 size={11} /> Saldo Centros de Costo</div>
 				<div class="text-xl font-black text-brand-marine mt-0.5">{formatCurrency(saldoCentros)}</div>
 			</div>
 			<div>
-				<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Landmark size={11} /> Cuentas Bancarias (ajustado)</div>
-				<div class="text-xl font-black text-brand-marine mt-0.5">{formatCurrency(saldoBancosAjustado)}</div>
-				<div class="text-[10px] text-slate-400">{formatCurrency(saldoBancos)} real − {formatCurrency(saldoInicial)} saldo inicial</div>
+				<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Landmark size={11} /> Saldo Cuentas Bancarias</div>
+				<div class="text-xl font-black text-brand-marine mt-0.5">{formatCurrency(saldoBancos)}</div>
 			</div>
 			<div>
 				<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Diferencia</div>
@@ -295,8 +297,10 @@
 			<h2 class="font-bold text-brand-marine text-sm">Apertura Financiera / Saldo Inicial</h2>
 		</div>
 		<p class="text-[11px] text-slate-400 mb-4">
-			Ancla histórica de auditoría — nunca participa en el cálculo de ningún saldo en vivo del ERP. Revisa TODAS las cuentas bancarias y TODOS los centros de costo para la misma fecha de corte;
-			solo se puede generar cuando la suma de ambos lados cuadra.
+			Al generar, esto actualiza de verdad el Saldo Inicial de cada cuenta bancaria (verás el cambio también en Cuentas Bancarias). Un centro de costo no tiene dónde guardar un saldo inicial
+			propio, así que su monto queda como referencia en este registro — Control Financiero calcula su saldo vigente sumando ese monto más las transacciones reales que registres después de esta
+			fecha (no se refleja en la pantalla propia de Centro de Costos). Revisa TODAS las cuentas bancarias y TODOS los centros de costo (solo fondos propios — Cuentas Internas queda fuera, ver nota
+			de Cruce Interno) para la misma fecha de corte; solo se puede generar cuando la suma de ambos lados cuadra.
 		</p>
 
 		<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">

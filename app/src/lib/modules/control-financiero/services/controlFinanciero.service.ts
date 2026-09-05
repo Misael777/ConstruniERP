@@ -12,7 +12,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias, getSaldoInicialTotalCuentasBancarias } from './conciliacion.service';
+import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias } from './conciliacion.service';
 
 export type EstadoCheck = 'ok' | 'alerta' | 'error';
 
@@ -191,33 +191,28 @@ async function checkConsistenciaCuentasBancarias(client: SupabaseClient): Promis
 }
 
 /**
- * Saldos consistentes: Σ Centro de Costo debe ser igual a Σ Cuenta Bancaria ajustada por su
- * saldo_inicial (Centro de Costo siempre arranca en 0 en getSaldosPorCentroCosto; Cuenta Bancaria
- * arranca en saldo_inicial — sin restarlo, cualquier cuenta con plata real al empezar mostraría una
- * diferencia que no es un error). Recorriendo tipo por tipo (egreso debita el centro/cuenta origen,
- * ingreso/financiamiento/transferencia acreditan el centro/cuenta destino — ver
- * getSaldosPorCentroCosto en centroCostos.service.ts y recalcularSaldoCuentaBanco en
- * cuentaBanco.service.ts) ambos totales se mueven en espejo transacción por transacción; una
- * diferencia real acá señala una transacción cuya cuenta_banco o centro_costo referenciado no existe
- * o no está registrado en el lado que se esperaba — el mismo chequeo que "Cruce Interno" en
- * Conciliación, pero corrido automáticamente como parte de la revisión general.
+ * Saldos consistentes: Σ Centro de Costo (getSaldoTotalCentrosCosto en conciliacion.service.ts —
+ * SOLO fondos propios: obra/consultoría/bolsa general/otro/proyectos con venta cerrada, NUNCA
+ * Cuentas Internas cliente/proveedor/empleado, que son ledgers de contraparte y no dinero de la
+ * empresa; ya incluye el saldo "vigente" de cada centro — última Apertura Financiera + transacciones
+ * posteriores a su fecha de corte, ver esa función) debe ser igual a Σ Cuenta Bancaria (ya incluye
+ * `saldo_inicial`, que Apertura Financiera escribe de verdad). Ambos totales se comparan
+ * directamente, sin ningún ajuste aparte. Una diferencia real acá señala una transacción cuya
+ * cuenta_banco o centro_costo referenciado no existe o no está registrado en el lado que se
+ * esperaba — el mismo chequeo que "Cruce Interno" en Conciliación, pero corrido automáticamente como
+ * parte de la revisión general.
  */
 async function checkSaldosConsistentes(client: SupabaseClient): Promise<ResultadoCheck> {
-	const [saldoCentros, saldoBancos, saldoInicial] = await Promise.all([
-		getSaldoTotalCentrosCosto(client),
-		getSaldoTotalCuentasBancarias(client),
-		getSaldoInicialTotalCuentasBancarias(client)
-	]);
-	const saldoBancosAjustado = Number((saldoBancos - saldoInicial).toFixed(2));
-	const diferencia = Number((saldoCentros - saldoBancosAjustado).toFixed(2));
-	const detalle = { saldo_centros_costo: saldoCentros, saldo_cuentas_bancarias: saldoBancos, saldo_inicial_total: saldoInicial, saldo_cuentas_ajustado: saldoBancosAjustado, diferencia };
+	const [saldoCentros, saldoBancos] = await Promise.all([getSaldoTotalCentrosCosto(client), getSaldoTotalCuentasBancarias(client)]);
+	const diferencia = Number((saldoCentros - saldoBancos).toFixed(2));
+	const detalle = { saldo_centros_costo: saldoCentros, saldo_cuentas_bancarias: saldoBancos, diferencia };
 
 	if (Math.abs(diferencia) <= 0.01) {
-		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias (ajustada por saldo inicial).', detalle };
+		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias.', detalle };
 	}
 	return {
 		estado: 'error',
-		mensaje: `Diferencia de ${diferencia.toFixed(2)} entre Σ Centros de Costo (${saldoCentros.toFixed(2)}) y Σ Cuentas Bancarias ajustada (${saldoBancosAjustado.toFixed(2)}) — revisa Conciliación.`,
+		mensaje: `Diferencia de ${diferencia.toFixed(2)} entre Σ Centros de Costo (${saldoCentros.toFixed(2)}) y Σ Cuentas Bancarias (${saldoBancos.toFixed(2)}) — revisa Conciliación.`,
 		detalle
 	};
 }

@@ -1,20 +1,41 @@
 /**
  * Servicio de Conciliación — Control Financiero (ver control_financiero_migration.sql). Dos
  * comparaciones INDEPENDIENTES, nunca colapsadas en una sola cifra:
- *   (a) Cruce interno: Σ saldos de Centro de Costo vs Σ saldos de Cuenta Bancaria — ambos ya
- *       calculados por getSaldosPorCentroCosto/getSaldosCuentaBanco (centroCostos.service.ts /
- *       cuentaBanco.service.ts), reutilizados tal cual y solo sumados client-side.
- *   (b) Conciliación bancaria manual: saldo ERP (cuenta_banco.saldo_actual, consolidado o de una
- *       cuenta puntual) vs el monto que el usuario ingresa a mano del estado de cuenta real (sin
- *       integración bancaria — a pedido explícito del usuario).
- * Regla dura: NINGUNA función de este archivo escribe en cuenta_banco.saldo_actual ni en nada
- * derivado de centro_costo — una diferencia real (> tolerancia) solo abre una Incidencia, nunca
- * ajusta un saldo en silencio (ver incidencia.service.ts para el flujo de resolución).
+ *   (a) Cruce interno: Σ saldos de Centro de Costo vs Σ saldos de Cuenta Bancaria.
+ *   (b) Conciliación bancaria manual: saldo ERP (consolidado o de una cuenta puntual) vs el monto que
+ *       el usuario ingresa a mano del estado de cuenta real (sin integración bancaria).
+ * Regla dura: una diferencia real (> tolerancia) en Conciliación siempre abre una Incidencia en vez
+ * de corregir nada en silencio (ver incidencia.service.ts para el flujo de resolución).
+ *
+ * APERTURA FINANCIERA — mecanismo DISTINTO en cada lado, decisión explícita del usuario tras
+ * comparar las alternativas:
+ *   - Cuenta bancaria: escribe `cuenta_banco.saldo_inicial` DE VERDAD y llama a
+ *     `recalcularSaldoCuentaBanco` (mismo RPC atómico que usa el resto del ERP) — la propia pantalla
+ *     de Cuentas Bancarias queda actualizada, no solo Control Financiero. getSaldoTotalCuentasBancarias
+ *     simplemente suma getSaldosCuentaBanco (la columna ya recalculada), sin lógica extra.
+ *   - Centro de costo (sin una columna propia donde guardar un saldo inicial, y a propósito SIN crear
+ *     una transacción sintética que ensuciaría su historial real): el monto declarado queda SOLO en
+ *     `apertura_financiera`, y `getSaldoTotalCentrosCosto` calcula el saldo "vigente" de cada centro
+ *     como (monto de su ÚLTIMA apertura, si tiene una) + Σ(transacciones activas con fecha POSTERIOR
+ *     a esa fecha_corte) — mismo criterio tipo-gated que usa getSaldosPorCentroCosto
+ *     (centroCostos.service.ts), replicado acá porque esa función no acepta un filtro de fecha y no
+ *     se toca (es de otro módulo). Sin apertura, cae al historial completo de siempre (baseline 0).
+ *     CONSECUENCIA ACEPTADA por el usuario: la pantalla propia de "Centro de Costos y Cuentas
+ *     Internas" (su columna "Monto Actual") NO refleja este número — esa pantalla no tiene noción de
+ *     fecha de corte, siempre suma todo el historial. El saldo "vigente" es una cifra que solo vive
+ *     dentro de Control Financiero (Dashboard/Conciliación/Consistencia).
+ *
+ * IMPORTANTE: "Centro de Costo" acá SIEMPRE significa fondos propios (obra/consultoría/bolsa
+ * general/otro/proyectos con venta cerrada) — la misma población que la pestaña "Centros de Costos"
+ * del submódulo "Centro de Costos y Cuentas Internas". NUNCA incluye "Cuentas Internas" (centros
+ * vinculados a cliente/proveedor/empleado), porque esos son ledgers de lo que se le debe a/nos deben
+ * terceros, no dinero que la empresa tenga. Se reutiliza el filtro EXACTO que ya usa esa pestaña, vía
+ * getCentroCostoOptionsSoloCentros (transacciones.service.ts) — no se duplica la lógica.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSaldosPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
-import { getSaldosCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+import { getSaldosCuentaBanco, recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+import { getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
 import { crearIncidencia, type Severidad } from './incidencia.service';
 
 /** Solo redondeo — cualquier diferencia mayor se trata como real (confirmado con el usuario, sin
@@ -46,33 +67,74 @@ export interface ConciliacionFinanciera {
 
 const TABLE_NAME = 'conciliacion_financiera';
 
-/** Σ saldos de TODOS los centros de costo activos — mismo criterio "sumar el mapa por-id" que ya
- * usa el resto del ERP, no hay agregación nueva de por medio. */
-export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client.from('centro_costo').select('id_centro_costo').eq('estado', 'activo');
+/** Mapa id_centro_costo -> su apertura MÁS RECIENTE (por fecha_corte, empate por created_at) — base
+ * del saldo "vigente" de centro de costo, ver nota al inicio del archivo. */
+export interface AperturaVigente {
+	monto: number;
+	fecha_corte: string;
+}
+
+/** Exportada además de usarla internamente — trayectoria.service.ts la reutiliza para saber desde
+ * dónde arranca la reconstrucción histórica de cada centro de costo (mismo criterio "última apertura
+ * = punto fijo de partida" que getSaldoTotalCentrosCosto de abajo). */
+export async function getUltimasAperturasPorCentroCosto(client: SupabaseClient): Promise<Record<number, AperturaVigente>> {
+	const { data, error } = await client
+		.from('apertura_financiera')
+		.select('id_centro_costo, monto, fecha_corte, created_at')
+		.not('id_centro_costo', 'is', null)
+		.order('fecha_corte', { ascending: false })
+		.order('created_at', { ascending: false });
 	if (error) throw error;
-	const ids = (data ?? []).map((c: any) => c.id_centro_costo as number);
+	const mapa: Record<number, { monto: number; fecha_corte: string }> = {};
+	for (const fila of (data ?? []) as any[]) {
+		if (!(fila.id_centro_costo in mapa)) mapa[fila.id_centro_costo] = { monto: Number(fila.monto), fecha_corte: fila.fecha_corte };
+	}
+	return mapa;
+}
+
+/** Σ saldo VIGENTE de los centros de costo de FONDOS PROPIOS activos (tab "Centros de Costos" — ver
+ * nota arriba, excluye Cuentas Internas): para cada centro, su última apertura (si existe) + solo las
+ * transacciones posteriores a esa fecha de corte, con el mismo criterio tipo-gated que
+ * getSaldosPorCentroCosto (centroCostos.service.ts) — replicado acá porque esa función no acepta un
+ * filtro de fecha y no se toca (es de otro módulo). Sin apertura, cae al historial completo de
+ * siempre (baseline 0). */
+export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise<number> {
+	const [opciones, aperturas] = await Promise.all([getCentroCostoOptionsSoloCentros(client), getUltimasAperturasPorCentroCosto(client)]);
+	const ids = opciones.map((o) => Number(o.value));
 	if (ids.length === 0) return 0;
-	const saldos = await getSaldosPorCentroCosto(client, ids);
-	return Object.values(saldos).reduce((sum, v) => sum + v, 0);
+	const idsSet = new Set(ids);
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha')
+		.eq('estado', 'activo');
+	if (error) throw error;
+
+	const neto: Record<number, number> = {};
+	for (const id of ids) neto[id] = 0;
+	for (const t of (data ?? []) as any[]) {
+		const monto = Number(t.monto_total);
+		const origen = t.id_centro_costo_origen;
+		const destino = t.id_centro_costo_destino;
+		if (origen != null && idsSet.has(origen) && (t.tipo === 'egreso' || t.tipo === 'transferencia')) {
+			const corte = aperturas[origen]?.fecha_corte;
+			if (!corte || t.fecha > corte) neto[origen] -= monto;
+		}
+		if (destino != null && idsSet.has(destino) && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) {
+			const corte = aperturas[destino]?.fecha_corte;
+			if (!corte || t.fecha > corte) neto[destino] += monto;
+		}
+	}
+
+	let total = 0;
+	for (const id of ids) total += (aperturas[id]?.monto ?? 0) + neto[id];
+	return total;
 }
 
 /** Σ saldo_actual de TODAS las cuentas bancarias activas. */
 export async function getSaldoTotalCuentasBancarias(client: SupabaseClient): Promise<number> {
 	const saldos = await getSaldosCuentaBanco(client);
 	return Object.values(saldos).reduce((sum, v) => sum + v, 0);
-}
-
-/** Σ saldo_inicial de TODAS las cuentas bancarias activas — el dinero que YA estaba en esas cuentas
- * antes de que el ERP empezara a llevarlas (ver cuenta_banco_saldo_migration.sql). Necesario para
- * comparar contra Centro de Costo correctamente: centro_costo siempre arranca en 0 (no tiene un
- * "saldo_inicial" propio, ver getSaldosPorCentroCosto), mientras que cuenta_banco.saldo_actual =
- * saldo_inicial + neto de movimientos — sin restar este total, CUALQUIER cuenta con saldo inicial
- * real produciría una "diferencia" permanente que no es un error, solo el punto de partida. */
-export async function getSaldoInicialTotalCuentasBancarias(client: SupabaseClient): Promise<number> {
-	const { data, error } = await client.from('cuenta_banco').select('saldo_inicial').eq('activo', true);
-	if (error) throw error;
-	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r.saldo_inicial ?? 0), 0);
 }
 
 function severidadPorDiferencia(diferencia: number): Severidad {
@@ -124,25 +186,16 @@ async function registrarConciliacion(
 	return { success: true, message: estado === 'cuadrada' ? 'Conciliación cuadrada' : 'Diferencia detectada — se generó una incidencia', data: data as ConciliacionFinanciera };
 }
 
-/** (a) Cruce interno — automático, sin input manual. Compara Centro de Costo (siempre arranca en 0)
- * contra Cuenta Bancaria YA AJUSTADA por su saldo_inicial (ver getSaldoInicialTotalCuentasBancarias) —
- * sin ese ajuste, cualquier cuenta con saldo inicial real mostraría una "diferencia" permanente que
- * no es un error real, solo el punto de partida antes de que el ERP empezara a llevar la cuenta. */
+/** (a) Cruce interno — automático, sin input manual. */
 export async function registrarConciliacionInterna(client: SupabaseClient, usuarioRegistro: string | null): Promise<ServiceResult<ConciliacionFinanciera>> {
-	const [saldoCentros, saldoCuentas, saldoInicial] = await Promise.all([
-		getSaldoTotalCentrosCosto(client),
-		getSaldoTotalCuentasBancarias(client),
-		getSaldoInicialTotalCuentasBancarias(client)
-	]);
-	const saldoCuentasAjustado = saldoCuentas - saldoInicial;
+	const [saldoCentros, saldoCuentas] = await Promise.all([getSaldoTotalCentrosCosto(client), getSaldoTotalCuentasBancarias(client)]);
 	return registrarConciliacion(
 		client,
 		'interna',
 		saldoCentros,
-		saldoCuentasAjustado,
+		saldoCuentas,
 		usuarioRegistro,
-		(diferencia) =>
-			`Cruce interno con diferencia: Centros de Costo ${saldoCentros.toFixed(2)} vs Cuentas Bancarias ${saldoCuentas.toFixed(2)} ajustado por saldo inicial ${saldoInicial.toFixed(2)} = ${saldoCuentasAjustado.toFixed(2)} (diferencia ${diferencia.toFixed(2)}).`
+		(diferencia) => `Cruce interno con diferencia: Centros de Costo ${saldoCentros.toFixed(2)} vs Cuentas Bancarias ${saldoCuentas.toFixed(2)} (diferencia ${diferencia.toFixed(2)}).`
 	);
 }
 
@@ -216,29 +269,6 @@ export interface AperturaFinanciera {
 	created_at: string;
 }
 
-export interface AperturaFinancieraPayload {
-	fecha_corte: string;
-	monto: number;
-	id_cuenta_banco: number | null;
-	id_centro_costo: number | null;
-	fuente: FuenteApertura;
-	observaciones: string | null;
-}
-
-/** Ancla histórica de auditoría — NUNCA participa en un cálculo de saldo en vivo (cuenta_banco.
- * saldo_actual y los totales de arriba no la leen). Solo se inserta, no se edita (si hace falta
- * corregirla, se da de alta una nueva fila — mismo espíritu que "reversal, no borrado físico" ya
- * usado en transacciones). */
-export async function crearAperturaFinanciera(client: SupabaseClient, payload: AperturaFinancieraPayload, usuarioRegistro: string | null): Promise<ServiceResult<AperturaFinanciera>> {
-	const { data, error } = await client
-		.from('apertura_financiera')
-		.insert({ ...payload, usuario_registro: usuarioRegistro })
-		.select('*')
-		.single();
-	if (error) return { success: false, message: `No se pudo registrar la apertura financiera: ${error.message}` };
-	return { success: true, message: 'Apertura financiera registrada', data: data as AperturaFinanciera };
-}
-
 export async function getAperturasFinancieras(client: SupabaseClient): Promise<AperturaFinanciera[]> {
 	const { data, error } = await client.from('apertura_financiera').select('*').order('fecha_corte', { ascending: false });
 	if (error) throw error;
@@ -261,9 +291,16 @@ export interface AperturaLotePayload {
  * esto — el gate de "no dejar generar hasta que cuadre" vive en la UI, no acá, porque necesita
  * reaccionar en vivo mientras el usuario edita cada monto. Inserta una fila por cuenta + una fila por
  * centro, todas con la misma fecha_corte/fuente/observaciones (eso es lo que las agrupa como "el
- * mismo corte" en el historial — no hace falta una columna de lote aparte). Sigue sin escribir nada
- * en cuenta_banco.saldo_inicial ni en centro_costo — puro registro de auditoría, igual que
- * crearAperturaFinanciera.
+ * mismo corte" en el historial — no hace falta una columna de lote aparte).
+ *
+ * Cuenta bancaria escribe `saldo_inicial` DE VERDAD y llama a `recalcularSaldoCuentaBanco` (mismo RPC
+ * atómico de siempre) — decisión explícita del usuario para que la propia pantalla de Cuentas
+ * Bancarias también quede actualizada. Centro de costo NO escribe nada aparte de este mismo registro
+ * en `apertura_financiera` (a propósito, decisión explícita del usuario: no crear una transacción
+ * sintética que ensuciaría el historial real de ese centro) — su saldo "vigente" lo calcula
+ * getSaldoTotalCentrosCosto arriba, a partir de esta misma fila. Best-effort por cuenta: si el
+ * refresco de una cuenta puntual falla, no tumba el registro del corte completo (ya insertado); se
+ * loguea y sigue con las demás.
  */
 export async function crearAperturaFinancieraLote(client: SupabaseClient, payload: AperturaLotePayload, usuarioRegistro: string | null): Promise<ServiceResult<AperturaFinanciera[]>> {
 	const filas = [
@@ -290,5 +327,28 @@ export async function crearAperturaFinancieraLote(client: SupabaseClient, payloa
 
 	const { data, error } = await client.from('apertura_financiera').insert(filas).select('*');
 	if (error) return { success: false, message: `No se pudo registrar el corte financiero: ${error.message}` };
-	return { success: true, message: `Corte financiero registrado — ${filas.length} fila(s) (${payload.cuentas.length} cuenta(s), ${payload.centros.length} centro(s) de costo).`, data: data as AperturaFinanciera[] };
+
+	if (payload.cuentas.length > 0) {
+		const ids = payload.cuentas.map((c) => c.id_cuenta_banco);
+		const { data: cuentasBanco } = await client.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta').in('id_cuenta_banco', ids);
+		const numeroPorId = new Map((cuentasBanco ?? []).map((c: any) => [c.id_cuenta_banco, c.numero_cuenta as string]));
+
+		await Promise.all(
+			payload.cuentas.map(async (c) => {
+				try {
+					await client.from('cuenta_banco').update({ saldo_inicial: c.monto }).eq('id_cuenta_banco', c.id_cuenta_banco);
+					const numeroCuenta = numeroPorId.get(c.id_cuenta_banco);
+					if (numeroCuenta) await recalcularSaldoCuentaBanco(client, numeroCuenta);
+				} catch (err) {
+					console.error('[conciliacion.service] No se pudo actualizar saldo_inicial de la cuenta', c.id_cuenta_banco, err);
+				}
+			})
+		);
+	}
+
+	return {
+		success: true,
+		message: `Corte financiero registrado — ${filas.length} fila(s) (${payload.cuentas.length} cuenta(s), ${payload.centros.length} centro(s) de costo).`,
+		data: data as AperturaFinanciera[]
+	};
 }

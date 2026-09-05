@@ -37,6 +37,7 @@
 	import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias, getConciliacionesPendientesCount } from '../services/conciliacion.service';
 	import { getIncidenciasAbiertasCount } from '../services/incidencia.service';
 	import { ejecutarRevision, getUltimaRevision, type RevisionFinanciera } from '../services/controlFinanciero.service';
+	import { getTrayectoriaCentrosCosto, getTrayectoriaCuentasBancarias, type TrayectoriaResultado } from '../services/trayectoria.service';
 	import {
 		TrendingUp,
 		TrendingDown,
@@ -86,6 +87,47 @@
 	let ultimaRevision = $state<RevisionFinanciera | null>(null);
 	let ejecutandoRevision = $state(false);
 
+	// ── Trayectoria de saldo en el tiempo (a pedido explícito del usuario) ──
+	let trayectoriaCentros = $state<TrayectoriaResultado>({ fechas: [], series: [] });
+	let trayectoriaCuentas = $state<TrayectoriaResultado>({ fechas: [], series: [] });
+	const PALETA_TRAYECTORIA = ['#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#10b981', '#64748b', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
+
+	/** Cada serie trae solo sus propios puntos (fecha, saldo) — para graficarlas juntas hace falta
+	 * "rellenar hacia adelante" (forward-fill) el último saldo conocido de cada una en TODAS las
+	 * fechas del eje compartido (labels), no solo en las fechas donde ESA entidad tuvo movimiento.
+	 * Antes de su primer punto (apertura o primera transacción), queda en `null` — Chart.js con
+	 * `spanGaps` corta la línea ahí en vez de dibujar un 0 falso. */
+	function construirDatasetsTrayectoria(resultado: TrayectoriaResultado) {
+		return {
+			labels: resultado.fechas,
+			datasets: resultado.series.map((serie, i) => {
+				const data: (number | null)[] = [];
+				let idx = 0;
+				let ultimo: number | null = null;
+				for (const fecha of resultado.fechas) {
+					while (idx < serie.puntos.length && serie.puntos[idx].fecha <= fecha) {
+						ultimo = serie.puntos[idx].saldo;
+						idx++;
+					}
+					data.push(ultimo);
+				}
+				return {
+					label: serie.label,
+					data,
+					borderColor: PALETA_TRAYECTORIA[i % PALETA_TRAYECTORIA.length],
+					backgroundColor: 'transparent',
+					borderWidth: 1.5,
+					pointRadius: 0,
+					tension: 0.1,
+					spanGaps: false
+				};
+			})
+		};
+	}
+
+	const datasetsTrayectoriaCentros = $derived(construirDatasetsTrayectoria(trayectoriaCentros));
+	const datasetsTrayectoriaCuentas = $derived(construirDatasetsTrayectoria(trayectoriaCuentas));
+
 	const estadoGeneral = $derived.by((): 'ok' | 'alerta' | 'error' => {
 		if (incidenciasAbiertas > 0 || (ultimaRevision?.controles_error ?? 0) > 0) return 'error';
 		if (conciliacionesPendientes > 0 || (ultimaRevision?.controles_alerta ?? 0) > 0) return 'alerta';
@@ -128,7 +170,7 @@
 		loading = true;
 		loadError = '';
 		try {
-			const [resumenData, nodosData, historicaData, proyeccionData, opciones, rendimiento, gastosCorp] = await Promise.all([
+			const [resumenData, nodosData, historicaData, proyeccionData, opciones, rendimiento, gastosCorp, trayCentros, trayCuentas] = await Promise.all([
 				getResumenGeneral(supabase),
 				getFlujoDeNodos(supabase),
 				getSerieMensualFlujoCaja(supabase, 12),
@@ -138,7 +180,9 @@
 					tipo: filtroTipo || undefined,
 					idCentroCosto: filtroCentro ? Number(filtroCentro) : null
 				}),
-				getGastosCorporativosGlobales(supabase)
+				getGastosCorporativosGlobales(supabase),
+				getTrayectoriaCentrosCosto(supabase),
+				getTrayectoriaCuentasBancarias(supabase)
 			]);
 			resumen = resumenData;
 			flujoNodos = nodosData;
@@ -147,6 +191,8 @@
 			centrosOptions = opciones;
 			items = rendimiento;
 			gastosCorporativos = gastosCorp;
+			trayectoriaCentros = trayCentros;
+			trayectoriaCuentas = trayCuentas;
 			await cargarSaludFinanciera();
 		} catch (err: any) {
 			loadError = err?.message ?? 'No se pudo cargar el dashboard';
@@ -422,6 +468,51 @@
 		<p class="text-[11px] text-slate-400 mb-3">Últimos 12 meses reales (línea sólida) + 6 meses proyectados (línea punteada) a partir de Cuentas por Pagar/Cobrar pendientes o vencidas.</p>
 		<div class="flex-1 min-h-0">
 			<Line data={flujoCajaChartData} options={{ responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10, weight: 'bold' } } } }, scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } } }} />
+		</div>
+	</div>
+
+	<!-- ── TRAYECTORIA DE SALDO EN EL TIEMPO (por Centro de Costo / Cuenta Bancaria) ── -->
+	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col mb-8">
+		<h3 class="font-bold text-brand-marine text-sm mb-1">Trayectoria de Saldo — Centros de Costo</h3>
+		<p class="text-[11px] text-slate-400 mb-3">
+			Una línea por centro de costo (fondos propios): arranca en su última Apertura Financiera y avanza con cada transacción real posterior. Haz clic en la leyenda para aislar/ocultar líneas.
+		</p>
+		<div class="flex-1 min-h-0">
+			{#if datasetsTrayectoriaCentros.datasets.length === 0}
+				<p class="text-xs text-slate-300 flex items-center justify-center h-full">Sin datos todavía — registra una Apertura o alguna transacción.</p>
+			{:else}
+				<Line
+					data={datasetsTrayectoriaCentros}
+					options={{
+						responsive: true,
+						maintainAspectRatio: false,
+						interaction: { mode: 'nearest', intersect: false },
+						plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 9 } } } },
+						scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } }
+					}}
+				/>
+			{/if}
+		</div>
+	</div>
+
+	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col mb-8">
+		<h3 class="font-bold text-brand-marine text-sm mb-1">Trayectoria de Saldo — Cuentas Bancarias</h3>
+		<p class="text-[11px] text-slate-400 mb-3">Una línea por cuenta bancaria: arranca en su Saldo Inicial y avanza con cada transacción real que la use como origen o destino.</p>
+		<div class="flex-1 min-h-0">
+			{#if datasetsTrayectoriaCuentas.datasets.length === 0}
+				<p class="text-xs text-slate-300 flex items-center justify-center h-full">Sin cuentas bancarias registradas todavía.</p>
+			{:else}
+				<Line
+					data={datasetsTrayectoriaCuentas}
+					options={{
+						responsive: true,
+						maintainAspectRatio: false,
+						interaction: { mode: 'nearest', intersect: false },
+						plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 9 } } } },
+						scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } }
+					}}
+				/>
+			{/if}
 		</div>
 	</div>
 
