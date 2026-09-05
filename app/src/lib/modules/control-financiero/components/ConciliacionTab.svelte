@@ -13,7 +13,7 @@
 		registrarConciliacionInterna,
 		registrarConciliacionBancoManual,
 		getConciliaciones,
-		crearAperturaFinanciera,
+		crearAperturaFinancieraLote,
 		getAperturasFinancieras,
 		type ConciliacionFinanciera,
 		type AperturaFinanciera,
@@ -30,7 +30,7 @@
 	let conciliaciones = $state<ConciliacionFinanciera[]>([]);
 	let aperturas = $state<AperturaFinanciera[]>([]);
 	let cuentaOptions = $state<{ value: string; label: string }[]>([]);
-	let cuentasParaApertura = $state<{ id_cuenta_banco: number; numero_cuenta: string; titular_cuenta: string }[]>([]);
+	let cuentasParaApertura = $state<{ id_cuenta_banco: number; numero_cuenta: string; titular_cuenta: string; saldo_inicial: number }[]>([]);
 	let centroCostoOptions = $state<{ value: string; label: string }[]>([]);
 
 	// Conciliación bancaria manual
@@ -40,15 +40,21 @@
 	let observacionesManual = $state('');
 	let registrandoManual = $state(false);
 
-	// Apertura financiera
+	// Apertura financiera / Corte — a pedido explícito del usuario: revisa TODAS las cuentas
+	// bancarias Y todos los centros de costo de un tirón para la misma fecha de corte, y no deja
+	// "Generar Apertura" hasta que Σ centros === Σ cuentas (dentro de tolerancia) — mismo criterio de
+	// tolerancia que Cruce Interno/Consistencia (TOLERANCIA_CONCILIACION = 0.01).
 	let fechaCorte = $state(new Date().toISOString().slice(0, 10));
-	let montoApertura = $state('');
-	let ambitoApertura = $state<'global' | 'cuenta_banco' | 'centro_costo'>('global');
-	let idCuentaApertura = $state('');
-	let idCentroCostoApertura = $state('');
 	let fuenteApertura = $state<FuenteApertura>('estado_de_cuenta_bancario');
 	let observacionesApertura = $state('');
-	let guardandoApertura = $state(false);
+	let montosCuentas = $state<Record<number, string>>({});
+	let montosCentros = $state<Record<string, string>>({});
+	let generandoApertura = $state(false);
+
+	function prellenarMontosApertura() {
+		montosCuentas = Object.fromEntries(cuentasParaApertura.map((c) => [c.id_cuenta_banco, String(c.saldo_inicial ?? 0)]));
+		montosCentros = Object.fromEntries(centroCostoOptions.map((c) => [c.value, montosCentros[c.value] ?? '0']));
+	}
 
 	const FUENTE_LABELS: Record<FuenteApertura, string> = {
 		estado_de_cuenta_bancario: 'Estado de cuenta bancario',
@@ -67,7 +73,7 @@
 				getConciliaciones(supabase),
 				getAperturasFinancieras(supabase),
 				getCuentaBancoOptions(supabase),
-				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta').eq('activo', true).then((r) => r.data ?? []),
+				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta, saldo_inicial').eq('activo', true).then((r) => r.data ?? []),
 				getCentroCostoOptions(supabase)
 			]);
 			centroCostoOptions = centros;
@@ -78,6 +84,7 @@
 			aperturas = apert;
 			cuentaOptions = opciones;
 			cuentasParaApertura = cuentas as any[];
+			prellenarMontosApertura();
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo cargar la conciliación');
 		} finally {
@@ -134,38 +141,40 @@
 		}
 	}
 
-	async function handleGuardarApertura() {
-		const monto = Number(montoApertura);
-		if (!fechaCorte || !Number.isFinite(monto)) {
-			toast.error('Completa la fecha de corte y el monto.');
-			return;
-		}
-		guardandoApertura = true;
+	// Σ de lo que el usuario va tipeando en cada fila, en vivo — esto es lo que arma/rompe el gate de
+	// "Generar Apertura" de abajo, no las sumas ya persistidas (saldoCentros/saldoBancos arriba).
+	const totalCuentasLote = $derived(Object.values(montosCuentas).reduce((sum, v) => sum + (Number(v) || 0), 0));
+	const totalCentrosLote = $derived(Object.values(montosCentros).reduce((sum, v) => sum + (Number(v) || 0), 0));
+	const diferenciaLote = $derived(Number((totalCentrosLote - totalCuentasLote).toFixed(2)));
+	const loteCuadra = $derived(Math.abs(diferenciaLote) <= 0.01);
+	const puedeGenerarApertura = $derived(loteCuadra && !!fechaCorte && !generandoApertura);
+
+	async function handleGenerarApertura() {
+		if (!puedeGenerarApertura) return;
+		generandoApertura = true;
 		try {
-			const result = await crearAperturaFinanciera(
+			const result = await crearAperturaFinancieraLote(
 				supabase,
 				{
 					fecha_corte: fechaCorte,
-					monto,
-					id_cuenta_banco: ambitoApertura === 'cuenta_banco' && idCuentaApertura ? Number(idCuentaApertura) : null,
-					id_centro_costo: ambitoApertura === 'centro_costo' && idCentroCostoApertura ? Number(idCentroCostoApertura) : null,
 					fuente: fuenteApertura,
-					observaciones: observacionesApertura || null
+					observaciones: observacionesApertura || null,
+					cuentas: cuentasParaApertura.map((c) => ({ id_cuenta_banco: c.id_cuenta_banco, monto: Number(montosCuentas[c.id_cuenta_banco] || 0) })),
+					centros: centroCostoOptions.map((c) => ({ id_centro_costo: Number(c.value), monto: Number(montosCentros[c.value] || 0) }))
 				},
 				permisosState.userName || null
 			);
 			if (result.success) {
 				toast.success(result.message);
-				montoApertura = '';
 				observacionesApertura = '';
 				await cargar();
 			} else {
 				toast.error(result.message);
 			}
 		} catch (err: any) {
-			toast.error(err?.message ?? 'No se pudo registrar la apertura financiera');
+			toast.error(err?.message ?? 'No se pudo generar la apertura financiera');
 		} finally {
-			guardandoApertura = false;
+			generandoApertura = false;
 		}
 	}
 
@@ -285,16 +294,16 @@
 			<Archive size={16} class="text-slate-400" />
 			<h2 class="font-bold text-brand-marine text-sm">Apertura Financiera / Saldo Inicial</h2>
 		</div>
-		<p class="text-[11px] text-slate-400 mb-4">Ancla histórica de auditoría — se guarda como referencia, nunca participa en el cálculo de ningún saldo en vivo del ERP.</p>
-		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+		<p class="text-[11px] text-slate-400 mb-4">
+			Ancla histórica de auditoría — nunca participa en el cálculo de ningún saldo en vivo del ERP. Revisa TODAS las cuentas bancarias y TODOS los centros de costo para la misma fecha de corte;
+			solo se puede generar cuando la suma de ambos lados cuadra.
+		</p>
+
+		<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
 			<div class="flex flex-col gap-1">
 				<label for="af-fecha" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Fecha de Corte</label>
 				<input id="af-fecha" type="date" bind:value={fechaCorte} class="px-3 py-2 rounded-lg border border-slate-300 text-sm" />
-				<p class="text-[10px] text-slate-400">Fecha "a la cual" este monto se considera correcto — un ancla histórica, no se recalcula después.</p>
-			</div>
-			<div class="flex flex-col gap-1">
-				<label for="af-monto" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Monto</label>
-				<input id="af-monto" type="number" step="0.01" bind:value={montoApertura} placeholder="0.00" class="px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+				<p class="text-[10px] text-slate-400">Fecha "a la cual" estos montos se consideran correctos — un ancla histórica, no se recalcula después.</p>
 			</div>
 			<div class="flex flex-col gap-1">
 				<label for="af-fuente" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Fuente</label>
@@ -305,50 +314,93 @@
 				</select>
 			</div>
 			<div class="flex flex-col gap-1">
-				<label for="af-ambito" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Ámbito</label>
-				<select
-					id="af-ambito"
-					bind:value={ambitoApertura}
-					onchange={() => {
-						idCuentaApertura = '';
-						idCentroCostoApertura = '';
-					}}
-					class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white"
-				>
-					<option value="global">Global (todo el ERP)</option>
-					<option value="cuenta_banco">Una cuenta bancaria</option>
-					<option value="centro_costo">Un centro de costo</option>
-				</select>
-			</div>
-			{#if ambitoApertura === 'cuenta_banco'}
-				<div class="flex flex-col gap-1">
-					<label for="af-cuenta" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cuenta Bancaria</label>
-					<select id="af-cuenta" bind:value={idCuentaApertura} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-						<option value="">Selecciona una cuenta...</option>
-						{#each cuentasParaApertura as c}
-							<option value={String(c.id_cuenta_banco)}>{c.titular_cuenta} - {c.numero_cuenta}</option>
-						{/each}
-					</select>
-				</div>
-			{:else if ambitoApertura === 'centro_costo'}
-				<div class="flex flex-col gap-1">
-					<label for="af-centro" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Centro de Costo</label>
-					<select id="af-centro" bind:value={idCentroCostoApertura} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-						<option value="">Selecciona un centro de costo...</option>
-						{#each centroCostoOptions as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
-				</div>
-			{/if}
-			<div class="flex flex-col gap-1">
 				<label for="af-obs" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Observaciones</label>
-				<input id="af-obs" type="text" bind:value={observacionesApertura} class="px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+				<input id="af-obs" type="text" bind:value={observacionesApertura} class="px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="Ej. corte inicial de migración" />
 			</div>
 		</div>
-		<button type="button" onclick={handleGuardarApertura} disabled={guardandoApertura} class="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 mb-4">
-			Registrar apertura
-		</button>
+
+		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+			<!-- Cuentas Bancarias -->
+			<div class="border border-slate-200 rounded-xl overflow-hidden">
+				<div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+					<span class="text-xs font-bold text-slate-600 flex items-center gap-1.5"><Landmark size={13} /> Cuentas Bancarias ({cuentasParaApertura.length})</span>
+					<span class="text-xs font-black text-brand-marine">{formatCurrency(totalCuentasLote)}</span>
+				</div>
+				<div class="max-h-72 overflow-y-auto divide-y divide-slate-100">
+					{#each cuentasParaApertura as c (c.id_cuenta_banco)}
+						<div class="flex items-center gap-2 px-3 py-2">
+							<span class="flex-1 text-xs text-slate-600 truncate">{c.titular_cuenta} - {c.numero_cuenta}</span>
+							<input
+								type="number"
+								step="0.01"
+								value={montosCuentas[c.id_cuenta_banco] ?? ''}
+								oninput={(e) => (montosCuentas = { ...montosCuentas, [c.id_cuenta_banco]: (e.target as HTMLInputElement).value })}
+								class="w-28 px-2 py-1 rounded-lg border border-slate-300 text-xs text-right"
+							/>
+						</div>
+					{:else}
+						<div class="px-3 py-6 text-center text-xs text-slate-400">Sin cuentas bancarias activas.</div>
+					{/each}
+				</div>
+			</div>
+
+			<!-- Centros de Costo -->
+			<div class="border border-slate-200 rounded-xl overflow-hidden">
+				<div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+					<span class="text-xs font-bold text-slate-600 flex items-center gap-1.5"><Building2 size={13} /> Centros de Costo ({centroCostoOptions.length})</span>
+					<span class="text-xs font-black text-brand-marine">{formatCurrency(totalCentrosLote)}</span>
+				</div>
+				<div class="max-h-72 overflow-y-auto divide-y divide-slate-100">
+					{#each centroCostoOptions as opt (opt.value)}
+						<div class="flex items-center gap-2 px-3 py-2">
+							<span class="flex-1 text-xs text-slate-600 truncate">{opt.label}</span>
+							<input
+								type="number"
+								step="0.01"
+								value={montosCentros[opt.value] ?? ''}
+								oninput={(e) => (montosCentros = { ...montosCentros, [opt.value]: (e.target as HTMLInputElement).value })}
+								class="w-28 px-2 py-1 rounded-lg border border-slate-300 text-xs text-right"
+							/>
+						</div>
+					{:else}
+						<div class="px-3 py-6 text-center text-xs text-slate-400">Sin centros de costo activos.</div>
+					{/each}
+				</div>
+			</div>
+		</div>
+
+		<div class="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-100 mb-4">
+			<div class="flex items-center gap-6">
+				<div>
+					<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Centros de Costo</div>
+					<div class="text-base font-black text-brand-marine">{formatCurrency(totalCentrosLote)}</div>
+				</div>
+				<div>
+					<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Cuentas Bancarias</div>
+					<div class="text-base font-black text-brand-marine">{formatCurrency(totalCuentasLote)}</div>
+				</div>
+				<div>
+					<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Diferencia</div>
+					<div class={`text-base font-black flex items-center gap-1.5 ${loteCuadra ? 'text-emerald-600' : 'text-red-600'}`}>
+						{#if loteCuadra}<ShieldCheck size={16} />{:else}<ShieldAlert size={16} />{/if}
+						{formatCurrency(diferenciaLote)}
+					</div>
+				</div>
+			</div>
+			<div class="flex flex-col items-end gap-1">
+				<button
+					type="button"
+					onclick={handleGenerarApertura}
+					disabled={!puedeGenerarApertura}
+					class="px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-semibold hover:bg-[#154a73] disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					Generar Apertura
+				</button>
+				{#if !loteCuadra}
+					<p class="text-[10px] text-red-500">Ajusta los montos hasta que la diferencia sea S/ 0.00 para poder generar.</p>
+				{/if}
+			</div>
+		</div>
 
 		<div class="overflow-x-auto">
 			<table class="w-full text-xs text-left whitespace-nowrap">

@@ -244,3 +244,51 @@ export async function getAperturasFinancieras(client: SupabaseClient): Promise<A
 	if (error) throw error;
 	return (data ?? []) as AperturaFinanciera[];
 }
+
+export interface AperturaLotePayload {
+	fecha_corte: string;
+	fuente: FuenteApertura;
+	observaciones: string | null;
+	cuentas: { id_cuenta_banco: number; monto: number }[];
+	centros: { id_centro_costo: number; monto: number }[];
+}
+
+/**
+ * Corte financiero completo — a pedido explícito del usuario: en vez de declarar el saldo inicial de
+ * UNA cuenta o UN centro de costo a la vez, revisa TODAS las cuentas bancarias y TODOS los centros de
+ * costo activos de un tirón, para la misma fecha_corte. El llamador (ConciliacionTab.svelte) ya
+ * validó que Σ montos de cuentas === Σ montos de centros (dentro de tolerancia) ANTES de invocar
+ * esto — el gate de "no dejar generar hasta que cuadre" vive en la UI, no acá, porque necesita
+ * reaccionar en vivo mientras el usuario edita cada monto. Inserta una fila por cuenta + una fila por
+ * centro, todas con la misma fecha_corte/fuente/observaciones (eso es lo que las agrupa como "el
+ * mismo corte" en el historial — no hace falta una columna de lote aparte). Sigue sin escribir nada
+ * en cuenta_banco.saldo_inicial ni en centro_costo — puro registro de auditoría, igual que
+ * crearAperturaFinanciera.
+ */
+export async function crearAperturaFinancieraLote(client: SupabaseClient, payload: AperturaLotePayload, usuarioRegistro: string | null): Promise<ServiceResult<AperturaFinanciera[]>> {
+	const filas = [
+		...payload.cuentas.map((c) => ({
+			fecha_corte: payload.fecha_corte,
+			monto: c.monto,
+			id_cuenta_banco: c.id_cuenta_banco,
+			id_centro_costo: null,
+			fuente: payload.fuente,
+			observaciones: payload.observaciones,
+			usuario_registro: usuarioRegistro
+		})),
+		...payload.centros.map((c) => ({
+			fecha_corte: payload.fecha_corte,
+			monto: c.monto,
+			id_cuenta_banco: null,
+			id_centro_costo: c.id_centro_costo,
+			fuente: payload.fuente,
+			observaciones: payload.observaciones,
+			usuario_registro: usuarioRegistro
+		}))
+	];
+	if (filas.length === 0) return { success: false, message: 'No hay cuentas bancarias ni centros de costo para registrar.' };
+
+	const { data, error } = await client.from('apertura_financiera').insert(filas).select('*');
+	if (error) return { success: false, message: `No se pudo registrar el corte financiero: ${error.message}` };
+	return { success: true, message: `Corte financiero registrado — ${filas.length} fila(s) (${payload.cuentas.length} cuenta(s), ${payload.centros.length} centro(s) de costo).`, data: data as AperturaFinanciera[] };
+}
