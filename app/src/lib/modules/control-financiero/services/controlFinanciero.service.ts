@@ -12,7 +12,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias } from './conciliacion.service';
+import { getSaldosDetalleCentrosCosto, getSaldosDetalleCuentasBancarias } from './conciliacion.service';
 
 export type EstadoCheck = 'ok' | 'alerta' | 'error';
 
@@ -191,21 +191,30 @@ async function checkConsistenciaCuentasBancarias(client: SupabaseClient): Promis
 }
 
 /**
- * Saldos consistentes: Σ Centro de Costo (getSaldoTotalCentrosCosto en conciliacion.service.ts —
+ * Saldos consistentes: Σ Centro de Costo (getSaldosDetalleCentrosCosto en conciliacion.service.ts —
  * SOLO fondos propios: obra/consultoría/bolsa general/otro/proyectos con venta cerrada, NUNCA
  * Cuentas Internas cliente/proveedor/empleado, que son ledgers de contraparte y no dinero de la
  * empresa; ya incluye el saldo "vigente" de cada centro — última Apertura Financiera + transacciones
  * posteriores a su fecha de corte, ver esa función) debe ser igual a Σ Cuenta Bancaria (ya incluye
- * `saldo_inicial`, que Apertura Financiera escribe de verdad). Ambos totales se comparan
- * directamente, sin ningún ajuste aparte. Una diferencia real acá señala una transacción cuya
- * cuenta_banco o centro_costo referenciado no existe o no está registrado en el lado que se
- * esperaba — el mismo chequeo que "Cruce Interno" en Conciliación, pero corrido automáticamente como
- * parte de la revisión general.
+ * `saldo_inicial`, que Apertura Financiera escribe de verdad). Se trae el DESGLOSE por entidad (no
+ * solo el total) para que el detalle expandible de la tarjeta muestre exactamente qué centro/cuenta
+ * está aportando cuánto — a pedido explícito del usuario, para poder verificar la suma a mano. Una
+ * diferencia real acá señala una transacción cuya cuenta_banco o centro_costo referenciado no existe
+ * o no está registrado en el lado que se esperaba — el mismo chequeo que "Cruce Interno" en
+ * Conciliación, pero corrido automáticamente como parte de la revisión general.
  */
 async function checkSaldosConsistentes(client: SupabaseClient): Promise<ResultadoCheck> {
-	const [saldoCentros, saldoBancos] = await Promise.all([getSaldoTotalCentrosCosto(client), getSaldoTotalCuentasBancarias(client)]);
+	const [centros, cuentas] = await Promise.all([getSaldosDetalleCentrosCosto(client), getSaldosDetalleCuentasBancarias(client)]);
+	const saldoCentros = Number(centros.reduce((sum, c) => sum + c.monto, 0).toFixed(2));
+	const saldoBancos = Number(cuentas.reduce((sum, c) => sum + c.monto, 0).toFixed(2));
 	const diferencia = Number((saldoCentros - saldoBancos).toFixed(2));
-	const detalle = { saldo_centros_costo: saldoCentros, saldo_cuentas_bancarias: saldoBancos, diferencia };
+	const detalle = {
+		diferencia,
+		saldo_centros_costo: saldoCentros,
+		saldo_cuentas_bancarias: saldoBancos,
+		centros_de_costo: centros.map((c) => ({ centro: c.label, monto: c.monto })),
+		cuentas_bancarias: cuentas.map((c) => ({ cuenta: c.label, monto: c.monto }))
+	};
 
 	if (Math.abs(diferencia) <= 0.01) {
 		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias.', detalle };

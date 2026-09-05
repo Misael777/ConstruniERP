@@ -12,6 +12,7 @@
 	import {
 		getSaldoTotalCentrosCosto,
 		getSaldoTotalCuentasBancarias,
+		getSaldosDetalleCentrosCosto,
 		registrarConciliacionInterna,
 		registrarConciliacionBancoManual,
 		getConciliaciones,
@@ -19,7 +20,8 @@
 		getAperturasFinancieras,
 		type ConciliacionFinanciera,
 		type AperturaFinanciera,
-		type FuenteApertura
+		type FuenteApertura,
+		type SaldoDetalleEntidad
 	} from '../services/conciliacion.service';
 	import { Scale, Landmark, Building2, RefreshCw, ShieldCheck, ShieldAlert, Archive } from '@lucide/svelte';
 
@@ -33,6 +35,7 @@
 	let cuentaOptions = $state<{ value: string; label: string }[]>([]);
 	let cuentasParaApertura = $state<{ id_cuenta_banco: number; numero_cuenta: string; titular_cuenta: string; saldo_inicial: number }[]>([]);
 	let centroCostoOptions = $state<{ value: string; label: string }[]>([]);
+	let saldosDetalleCentros = $state<SaldoDetalleEntidad[]>([]);
 
 	// Conciliación bancaria manual
 	let fechaManual = $state(new Date().toISOString().slice(0, 10));
@@ -52,9 +55,18 @@
 	let montosCentros = $state<Record<string, string>>({});
 	let generandoApertura = $state(false);
 
+	/** Prefill de cuenta bancaria lee la columna real `saldo_inicial` (siempre correcta). Centro de
+	 * costo debe hacer lo mismo con su saldo VIGENTE actual (getSaldosDetalleCentrosCosto) — antes
+	 * caía a `montosCentros[c.value] ?? '0'`, un valor que solo vivía en memoria del componente y se
+	 * perdía al cambiar de pestaña (el {#if} del orquestador destruye y recrea ConciliacionTab). Eso
+	 * hacía que reabrir el wizard prellenara todos los centros en 0, y si el usuario solo editaba
+	 * uno para que la suma cuadrara, "Generar Apertura" creaba una fila MÁS RECIENTE con monto=0 para
+	 * el resto — que por diseño (última apertura gana) pisaba en silencio sus valores reales
+	 * anteriores. */
 	function prellenarMontosApertura() {
 		montosCuentas = Object.fromEntries(cuentasParaApertura.map((c) => [c.id_cuenta_banco, String(c.saldo_inicial ?? 0)]));
-		montosCentros = Object.fromEntries(centroCostoOptions.map((c) => [c.value, montosCentros[c.value] ?? '0']));
+		const saldoVigentePorCentro = Object.fromEntries(saldosDetalleCentros.map((d) => [d.id, d.monto]));
+		montosCentros = Object.fromEntries(centroCostoOptions.map((c) => [c.value, String(saldoVigentePorCentro[c.value] ?? 0)]));
 	}
 
 	const FUENTE_LABELS: Record<FuenteApertura, string> = {
@@ -67,14 +79,15 @@
 	async function cargar() {
 		loading = true;
 		try {
-			const [sc, sb, conc, apert, opciones, cuentas, centros] = await Promise.all([
+			const [sc, sb, conc, apert, opciones, cuentas, centros, detalleCentros] = await Promise.all([
 				getSaldoTotalCentrosCosto(supabase),
 				getSaldoTotalCuentasBancarias(supabase),
 				getConciliaciones(supabase),
 				getAperturasFinancieras(supabase),
 				getCuentaBancoOptions(supabase),
 				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta, saldo_inicial').eq('activo', true).then((r) => r.data ?? []),
-				getCentroCostoOptionsSoloCentros(supabase)
+				getCentroCostoOptionsSoloCentros(supabase),
+				getSaldosDetalleCentrosCosto(supabase)
 			]);
 			centroCostoOptions = centros;
 			saldoCentros = sc;
@@ -83,6 +96,7 @@
 			aperturas = apert;
 			cuentaOptions = opciones;
 			cuentasParaApertura = cuentas as any[];
+			saldosDetalleCentros = detalleCentros;
 			prellenarMontosApertura();
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo cargar la conciliación');

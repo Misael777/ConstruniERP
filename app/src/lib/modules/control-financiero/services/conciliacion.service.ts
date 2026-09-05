@@ -92,16 +92,23 @@ export async function getUltimasAperturasPorCentroCosto(client: SupabaseClient):
 	return mapa;
 }
 
-/** Σ saldo VIGENTE de los centros de costo de FONDOS PROPIOS activos (tab "Centros de Costos" — ver
- * nota arriba, excluye Cuentas Internas): para cada centro, su última apertura (si existe) + solo las
- * transacciones posteriores a esa fecha de corte, con el mismo criterio tipo-gated que
- * getSaldosPorCentroCosto (centroCostos.service.ts) — replicado acá porque esa función no acepta un
- * filtro de fecha y no se toca (es de otro módulo). Sin apertura, cae al historial completo de
- * siempre (baseline 0). */
-export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise<number> {
+export interface SaldoDetalleEntidad {
+	id: string;
+	label: string;
+	monto: number;
+}
+
+/** Saldo VIGENTE de CADA centro de costo de FONDOS PROPIOS activo (tab "Centros de Costos" — ver
+ * nota arriba, excluye Cuentas Internas): su última apertura (si existe) + solo las transacciones
+ * posteriores a esa fecha de corte, con el mismo criterio tipo-gated que getSaldosPorCentroCosto
+ * (centroCostos.service.ts) — replicado acá porque esa función no acepta un filtro de fecha y no se
+ * toca (es de otro módulo). Sin apertura, cae al historial completo de siempre (baseline 0).
+ * Desglosado por entidad — para el total, ver getSaldoTotalCentrosCosto; para mostrar "qué está
+ * sumando" en Consistencia/Conciliación, usar esta función directamente. */
+export async function getSaldosDetalleCentrosCosto(client: SupabaseClient): Promise<SaldoDetalleEntidad[]> {
 	const [opciones, aperturas] = await Promise.all([getCentroCostoOptionsSoloCentros(client), getUltimasAperturasPorCentroCosto(client)]);
 	const ids = opciones.map((o) => Number(o.value));
-	if (ids.length === 0) return 0;
+	if (ids.length === 0) return [];
 	const idsSet = new Set(ids);
 
 	const { data, error } = await client
@@ -126,12 +133,34 @@ export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise
 		}
 	}
 
-	let total = 0;
-	for (const id of ids) total += (aperturas[id]?.monto ?? 0) + neto[id];
-	return total;
+	return opciones.map((opt) => {
+		const id = Number(opt.value);
+		return { id: opt.value, label: opt.label, monto: Number(((aperturas[id]?.monto ?? 0) + neto[id]).toFixed(2)) };
+	});
 }
 
-/** Σ saldo_actual de TODAS las cuentas bancarias activas. */
+/** Σ saldo VIGENTE de todos los centros de costo — ver getSaldosDetalleCentrosCosto. */
+export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise<number> {
+	const detalle = await getSaldosDetalleCentrosCosto(client);
+	return Number(detalle.reduce((sum, d) => sum + d.monto, 0).toFixed(2));
+}
+
+/** Saldo_actual de CADA cuenta bancaria activa, con su etiqueta ("Titular - N° de cuenta") — para
+ * mostrar "qué está sumando" en Consistencia/Conciliación. */
+export async function getSaldosDetalleCuentasBancarias(client: SupabaseClient): Promise<SaldoDetalleEntidad[]> {
+	const [{ data: cuentas, error }, saldos] = await Promise.all([
+		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta').eq('activo', true),
+		getSaldosCuentaBanco(client)
+	]);
+	if (error) throw error;
+	return (cuentas ?? []).map((c: any) => ({
+		id: c.numero_cuenta,
+		label: `${c.titular_cuenta} - ${c.numero_cuenta}`,
+		monto: Number((saldos[c.numero_cuenta] ?? 0).toFixed(2))
+	}));
+}
+
+/** Σ saldo_actual de TODAS las cuentas bancarias activas — ver getSaldosDetalleCuentasBancarias. */
 export async function getSaldoTotalCuentasBancarias(client: SupabaseClient): Promise<number> {
 	const saldos = await getSaldosCuentaBanco(client);
 	return Object.values(saldos).reduce((sum, v) => sum + v, 0);

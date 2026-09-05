@@ -98,12 +98,16 @@ export async function getTrayectoriaCentrosCosto(client: SupabaseClient): Promis
 }
 
 /** Cuenta bancaria: saldo_inicial como punto de partida (sin necesitar fecha_corte — esa columna ya
- * es "todo lo que había antes de que el ERP empezara a llevar la cuenta") + cada transacción real que
- * la toca como origen (debita) o destino (acredita), sin filtro de tipo — mismo criterio que
- * recalcularSaldoCuentaBanco (cuentaBanco.service.ts). */
+ * es "todo lo que había antes de que el ERP empezara a llevar la cuenta"), anclado en su
+ * `fecha_autorizacion` (o hoy, si no la tiene) — SIEMPRE se agrega este punto, aunque la cuenta no
+ * tenga ninguna transacción todavía, porque su saldo puede venir 100% de una Apertura Financiera
+ * (que escribe saldo_inicial directo, sin pasar por ninguna transacción — ver conciliacion.service.ts)
+ * — sin este punto de partida, esas cuentas quedaban totalmente fuera del gráfico aunque sí tuvieran
+ * saldo real. Luego, cada transacción real que la toca como origen (debita) o destino (acredita), sin
+ * filtro de tipo — mismo criterio que recalcularSaldoCuentaBanco (cuentaBanco.service.ts). */
 export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Promise<TrayectoriaResultado> {
 	const [{ data: cuentas, error: errCuentas }, { data: transacciones, error: errTrans }] = await Promise.all([
-		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta, saldo_inicial').eq('activo', true),
+		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta, saldo_inicial, fecha_autorizacion').eq('activo', true),
 		client
 			.from('transaccion')
 			.select('cuente_origen, cuente_destino, monto_total, fecha')
@@ -115,10 +119,13 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 
 	const fechasSet = new Set<string>();
 	const series: SerieTrayectoria[] = [];
+	const hoy = new Date().toISOString().slice(0, 10);
 
 	for (const c of (cuentas ?? []) as any[]) {
 		let saldo = Number(c.saldo_inicial);
-		const puntos: PuntoTrayectoria[] = [];
+		const fechaInicio = c.fecha_autorizacion || hoy;
+		const puntos: PuntoTrayectoria[] = [{ fecha: fechaInicio, saldo }];
+		fechasSet.add(fechaInicio);
 		for (const t of (transacciones ?? []) as any[]) {
 			const monto = Number(t.monto_total);
 			let delta = 0;
@@ -129,7 +136,6 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 			puntos.push({ fecha: t.fecha, saldo });
 			fechasSet.add(t.fecha);
 		}
-		if (puntos.length === 0) continue; // sin transacciones — nada que trazar, evita una línea invisible en el gráfico
 		series.push({ id: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}`, puntos });
 	}
 
