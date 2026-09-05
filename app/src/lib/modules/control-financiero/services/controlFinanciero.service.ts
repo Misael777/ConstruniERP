@@ -42,17 +42,19 @@ async function checkIntegridadTransacciones(client: SupabaseClient): Promise<Res
 		.eq('estado', 'activo');
 	if (error) throw error;
 
-	const rotas = (data ?? []).filter(
+	const evaluadas = data ?? [];
+	const rotas = evaluadas.filter(
 		(t: any) =>
 			!(Number(t.monto_total) > 0) ||
 			!TIPOS_VALIDOS.has(t.tipo) ||
 			(t.id_centro_costo_origen !== null && t.id_centro_costo_origen === t.id_centro_costo_destino)
 	);
-	if (rotas.length === 0) return { estado: 'ok', mensaje: 'Todas las transacciones activas tienen monto, tipo y centros de costo válidos.' };
+	const detalle = { total_evaluadas: evaluadas.length, filas: rotas };
+	if (rotas.length === 0) return { estado: 'ok', mensaje: 'Todas las transacciones activas tienen monto, tipo y centros de costo válidos.', detalle };
 	return {
 		estado: 'error',
 		mensaje: `${rotas.length} transacción(es) con monto ≤ 0, tipo inválido, o mismo centro de costo como origen y destino.`,
-		detalle: rotas.map((t: any) => t.id_transaccion)
+		detalle
 	};
 }
 
@@ -67,11 +69,17 @@ async function checkIntegridadMovimientos(client: SupabaseClient): Promise<Resul
 	const pagosHuerfanos = (pagos ?? []).filter((p: any) => !p.transaccion || p.transaccion.estado !== 'activo');
 	const cobrosHuerfanos = (cobros ?? []).filter((c: any) => !c.transaccion || c.transaccion.estado !== 'activo');
 	const total = pagosHuerfanos.length + cobrosHuerfanos.length;
-	if (total === 0) return { estado: 'ok', mensaje: 'Todo pago/cobro confirmado tiene una transacción de respaldo activa.' };
+	const detalle = {
+		total_pagos_confirmados: (pagos ?? []).length,
+		total_cobros_confirmados: (cobros ?? []).length,
+		pagos_huerfanos: pagosHuerfanos.map((p: any) => p.id_pago),
+		cobros_huerfanos: cobrosHuerfanos.map((c: any) => c.id_cobro)
+	};
+	if (total === 0) return { estado: 'ok', mensaje: 'Todo pago/cobro confirmado tiene una transacción de respaldo activa.', detalle };
 	return {
 		estado: 'error',
 		mensaje: `${pagosHuerfanos.length} pago(s) y ${cobrosHuerfanos.length} cobro(s) confirmados sin una transacción de respaldo activa (huérfana o anulada).`,
-		detalle: { pagos: pagosHuerfanos.map((p: any) => p.id_pago), cobros: cobrosHuerfanos.map((c: any) => c.id_cobro) }
+		detalle
 	};
 }
 
@@ -90,19 +98,19 @@ async function checkConsistenciaSaldos(client: SupabaseClient): Promise<Resultad
 		if (m.cuente_destino) neto.set(m.cuente_destino, (neto.get(m.cuente_destino) ?? 0) + monto);
 	}
 
-	const conDrift = (cuentas ?? [])
-		.map((c: any) => {
-			const recomputado = Number(c.saldo_inicial) + (neto.get(c.numero_cuenta) ?? 0);
-			const drift = Number((Number(c.saldo_actual) - recomputado).toFixed(2));
-			return { numero_cuenta: c.numero_cuenta, saldo_actual: Number(c.saldo_actual), recomputado, drift };
-		})
-		.filter((c) => Math.abs(c.drift) > 0.01);
+	const comparacion = (cuentas ?? []).map((c: any) => {
+		const recomputado = Number(c.saldo_inicial) + (neto.get(c.numero_cuenta) ?? 0);
+		const drift = Number((Number(c.saldo_actual) - recomputado).toFixed(2));
+		return { numero_cuenta: c.numero_cuenta, saldo_inicial: Number(c.saldo_inicial), saldo_actual: Number(c.saldo_actual), recomputado, drift };
+	});
+	const conDrift = comparacion.filter((c) => Math.abs(c.drift) > 0.01);
+	const detalle = { filas: comparacion };
 
-	if (conDrift.length === 0) return { estado: 'ok', mensaje: 'saldo_actual de todas las cuentas bancarias activas coincide con el recálculo en vivo.' };
+	if (conDrift.length === 0) return { estado: 'ok', mensaje: 'saldo_actual de todas las cuentas bancarias activas coincide con el recálculo en vivo.', detalle };
 	return {
 		estado: 'error',
 		mensaje: `${conDrift.length} cuenta(s) bancaria(s) con saldo_actual desactualizado frente al recálculo en vivo — posible drift histórico previo a los RPC atómicos.`,
-		detalle: conDrift
+		detalle
 	};
 }
 
@@ -121,11 +129,12 @@ async function checkPosiblesDuplicados(client: SupabaseClient): Promise<Resultad
 		grupos.set(clave, lista);
 	}
 	const duplicados = [...grupos.values()].filter((ids) => ids.length > 1);
-	if (duplicados.length === 0) return { estado: 'ok', mensaje: 'Sin transacciones con la misma fecha/monto/centros de costo/tipo repetidos.' };
+	const detalle = { total_evaluadas: (data ?? []).length, grupos_duplicados: duplicados };
+	if (duplicados.length === 0) return { estado: 'ok', mensaje: 'Sin transacciones con la misma fecha/monto/centros de costo/tipo repetidos.', detalle };
 	return {
 		estado: 'alerta',
 		mensaje: `${duplicados.length} grupo(s) de transacciones potencialmente duplicadas (mismo día, monto, centros de costo y tipo) — revisar, no necesariamente un error.`,
-		detalle: duplicados
+		detalle
 	};
 }
 
@@ -149,13 +158,14 @@ async function checkConsistenciaCentrosCosto(client: SupabaseClient): Promise<Re
 		else if (idsBaja.has(t.id_centro_costo_origen) || idsBaja.has(t.id_centro_costo_destino)) conCentroBaja.push(t.id_transaccion);
 	}
 
+	const detalle = { total_centros: idsExistentes.size, total_transacciones_evaluadas: (transacciones ?? []).length, rotas, con_centro_baja: conCentroBaja };
 	if (rotas.length > 0) {
-		return { estado: 'error', mensaje: `${rotas.length} transacción(es) apuntan a un centro de costo que ya no existe.`, detalle: { rotas, conCentroBaja } };
+		return { estado: 'error', mensaje: `${rotas.length} transacción(es) apuntan a un centro de costo que ya no existe.`, detalle };
 	}
 	if (conCentroBaja.length > 0) {
-		return { estado: 'alerta', mensaje: `${conCentroBaja.length} transacción(es) activa(s) usan un centro de costo dado de baja.`, detalle: conCentroBaja };
+		return { estado: 'alerta', mensaje: `${conCentroBaja.length} transacción(es) activa(s) usan un centro de costo dado de baja.`, detalle };
 	}
-	return { estado: 'ok', mensaje: 'Toda transacción activa referencia un centro de costo existente y activo.' };
+	return { estado: 'ok', mensaje: 'Toda transacción activa referencia un centro de costo existente y activo.', detalle };
 }
 
 async function checkConsistenciaCuentasBancarias(client: SupabaseClient): Promise<ResultadoCheck> {
@@ -171,11 +181,12 @@ async function checkConsistenciaCuentasBancarias(client: SupabaseClient): Promis
 		.filter((t: any) => (t.cuente_origen && inactivas.has(t.cuente_origen)) || (t.cuente_destino && inactivas.has(t.cuente_destino)))
 		.map((t: any) => t.id_transaccion);
 
-	if (usandoInactiva.length === 0) return { estado: 'ok', mensaje: 'Ninguna transacción activa usa una cuenta bancaria inactiva/no autorizada/dada de baja.' };
+	const detalle = { total_cuentas: (cuentas ?? []).length, total_transacciones_evaluadas: (transacciones ?? []).length, usando_inactiva: usandoInactiva };
+	if (usandoInactiva.length === 0) return { estado: 'ok', mensaje: 'Ninguna transacción activa usa una cuenta bancaria inactiva/no autorizada/dada de baja.', detalle };
 	return {
 		estado: 'alerta',
 		mensaje: `${usandoInactiva.length} transacción(es) activa(s) usan una cuenta bancaria que hoy está inactiva/no autorizada/dada de baja.`,
-		detalle: usandoInactiva
+		detalle
 	};
 }
 
@@ -199,14 +210,15 @@ async function checkSaldosConsistentes(client: SupabaseClient): Promise<Resultad
 	]);
 	const saldoBancosAjustado = Number((saldoBancos - saldoInicial).toFixed(2));
 	const diferencia = Number((saldoCentros - saldoBancosAjustado).toFixed(2));
+	const detalle = { saldo_centros_costo: saldoCentros, saldo_cuentas_bancarias: saldoBancos, saldo_inicial_total: saldoInicial, saldo_cuentas_ajustado: saldoBancosAjustado, diferencia };
 
 	if (Math.abs(diferencia) <= 0.01) {
-		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias (ajustada por saldo inicial).' };
+		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias (ajustada por saldo inicial).', detalle };
 	}
 	return {
 		estado: 'error',
 		mensaje: `Diferencia de ${diferencia.toFixed(2)} entre Σ Centros de Costo (${saldoCentros.toFixed(2)}) y Σ Cuentas Bancarias ajustada (${saldoBancosAjustado.toFixed(2)}) — revisa Conciliación.`,
-		detalle: { saldoCentros, saldoBancos, saldoInicial, saldoBancosAjustado, diferencia }
+		detalle
 	};
 }
 
