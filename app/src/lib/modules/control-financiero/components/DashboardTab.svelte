@@ -15,6 +15,7 @@
 	import { Line, Bar, Doughnut } from 'svelte-chartjs';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
+	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import NodeGraph from '$lib/components/dashboard/NodeGraph.svelte';
 	import {
@@ -33,7 +34,31 @@
 		type SerieMensualFlujoCaja,
 		type ProyeccionFutura
 	} from '$lib/modules/dashboard-finanzas/services/dashboardFinanzas.service';
-	import { TrendingUp, TrendingDown, Percent, Wallet, Target, Gauge, ChartPie, ChevronUp, ChevronDown, RefreshCw, Building2, Waypoints, Users, LineChart as LineChartIcon } from '@lucide/svelte';
+	import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias, getConciliacionesPendientesCount } from '../services/conciliacion.service';
+	import { getIncidenciasAbiertasCount } from '../services/incidencia.service';
+	import { ejecutarRevision, getUltimaRevision, type RevisionFinanciera } from '../services/controlFinanciero.service';
+	import {
+		TrendingUp,
+		TrendingDown,
+		Percent,
+		Wallet,
+		Target,
+		Gauge,
+		ChartPie,
+		ChevronUp,
+		ChevronDown,
+		RefreshCw,
+		Building2,
+		Waypoints,
+		Users,
+		LineChart as LineChartIcon,
+		ShieldCheck,
+		ShieldAlert,
+		ShieldQuestion,
+		Landmark,
+		ScrollText,
+		AlertCircle
+	} from '@lucide/svelte';
 
 	ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement);
 
@@ -52,6 +77,52 @@
 	let gastosCorporativos = $state(0);
 	let sortBy = $state<keyof CentroCostoRendimiento>('flujoCajaNeto');
 	let sortDir = $state<'asc' | 'desc'>('desc');
+
+	// ── Salud financiera (Control Financiero) ───────────────────────────────
+	let saldoCentros = $state(0);
+	let saldoBancos = $state(0);
+	let conciliacionesPendientes = $state(0);
+	let incidenciasAbiertas = $state(0);
+	let ultimaRevision = $state<RevisionFinanciera | null>(null);
+	let ejecutandoRevision = $state(false);
+
+	const estadoGeneral = $derived.by((): 'ok' | 'alerta' | 'error' => {
+		if (incidenciasAbiertas > 0 || (ultimaRevision?.controles_error ?? 0) > 0) return 'error';
+		if (conciliacionesPendientes > 0 || (ultimaRevision?.controles_alerta ?? 0) > 0) return 'alerta';
+		return 'ok';
+	});
+
+	async function cargarSaludFinanciera() {
+		try {
+			const [sc, sb, cp, ia, ur] = await Promise.all([
+				getSaldoTotalCentrosCosto(supabase),
+				getSaldoTotalCuentasBancarias(supabase),
+				getConciliacionesPendientesCount(supabase),
+				getIncidenciasAbiertasCount(supabase),
+				getUltimaRevision(supabase)
+			]);
+			saldoCentros = sc;
+			saldoBancos = sb;
+			conciliacionesPendientes = cp;
+			incidenciasAbiertas = ia;
+			ultimaRevision = ur;
+		} catch (err: any) {
+			console.error('[DashboardTab] No se pudo cargar la salud financiera:', err);
+		}
+	}
+
+	async function handleEjecutarRevision() {
+		ejecutandoRevision = true;
+		try {
+			ultimaRevision = await ejecutarRevision(supabase, permisosState.userName || null);
+			toast.success('Revisión ejecutada');
+			await cargarSaludFinanciera();
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo ejecutar la revisión');
+		} finally {
+			ejecutandoRevision = false;
+		}
+	}
 
 	async function loadAll() {
 		loading = true;
@@ -76,6 +147,7 @@
 			centrosOptions = opciones;
 			items = rendimiento;
 			gastosCorporativos = gastosCorp;
+			await cargarSaludFinanciera();
 		} catch (err: any) {
 			loadError = err?.message ?? 'No se pudo cargar el dashboard';
 			toast.error(loadError);
@@ -99,6 +171,11 @@
 
 	function pct(v: number | null): string {
 		return v === null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+	}
+
+	function formatFecha(iso: string | undefined | null): string {
+		if (!iso) return 'Nunca';
+		return new Date(iso).toLocaleString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 	}
 
 	// ── Flujo de Caja en el Tiempo: histórico (sólido) + proyección (punteado) ─────────────────────
@@ -210,15 +287,67 @@
 	};
 </script>
 
-<svelte:head>
-	<title>Dashboard | Construni ERP</title>
-</svelte:head>
+<!-- ── Salud Financiera ─────────────────────────────────────────────────── -->
+<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm mb-8">
+	<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+		<div class="flex items-center gap-2">
+			{#if estadoGeneral === 'ok'}
+				<ShieldCheck size={20} class="text-emerald-500" />
+				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Consistente</h2>
+			{:else if estadoGeneral === 'alerta'}
+				<ShieldQuestion size={20} class="text-amber-500" />
+				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Con observaciones</h2>
+			{:else}
+				<ShieldAlert size={20} class="text-red-500" />
+				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Requiere atención</h2>
+			{/if}
+		</div>
+		<button
+			type="button"
+			onclick={handleEjecutarRevision}
+			disabled={ejecutandoRevision}
+			class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-semibold hover:bg-[#154a73] disabled:opacity-50"
+		>
+			<RefreshCw size={14} class={ejecutandoRevision ? 'animate-spin' : ''} /> Ejecutar revisión
+		</button>
+	</div>
+	<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+		<div>
+			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Landmark size={11} /> Saldo Bancario</div>
+			<div class="text-lg font-black text-brand-marine mt-0.5">{formatCurrency(saldoBancos)}</div>
+		</div>
+		<div>
+			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Building2 size={11} /> Saldo Centros de Costo</div>
+			<div class="text-lg font-black text-brand-marine mt-0.5">{formatCurrency(saldoCentros)}</div>
+		</div>
+		<div>
+			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><ScrollText size={11} /> Conciliaciones Pendientes</div>
+			<div class={`text-lg font-black mt-0.5 ${conciliacionesPendientes > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{conciliacionesPendientes}</div>
+		</div>
+		<div>
+			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><AlertCircle size={11} /> Incidencias Abiertas</div>
+			<div class={`text-lg font-black mt-0.5 ${incidenciasAbiertas > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{incidenciasAbiertas}</div>
+		</div>
+		<div>
+			<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Controles OK / Alerta / Error</div>
+			<div class="text-lg font-black mt-0.5">
+				<span class="text-emerald-600">{ultimaRevision?.controles_ok ?? '—'}</span> /
+				<span class="text-amber-600">{ultimaRevision?.controles_alerta ?? '—'}</span> /
+				<span class="text-red-600">{ultimaRevision?.controles_error ?? '—'}</span>
+			</div>
+		</div>
+		<div>
+			<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Última Revisión</div>
+			<div class="text-xs font-semibold text-slate-600 mt-1.5">{formatFecha(ultimaRevision?.fecha)}</div>
+		</div>
+	</div>
+</div>
 
 <!-- Topbar header -->
 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
 	<div>
-		<h1 class="text-2xl font-bold text-brand-marine flex items-center gap-2">
-			<i class="fas fa-chart-line text-blue-600"></i> Panel de Control Financiero
+		<h1 class="text-xl font-bold text-brand-marine flex items-center gap-2">
+			<i class="fas fa-chart-line text-blue-600"></i> Flujo de dinero y proyecciones
 		</h1>
 		<p class="text-sm text-slate-500 mt-1">Flujo de dinero entre centros de costo, en vivo desde Supabase — histórico y proyectado.</p>
 	</div>

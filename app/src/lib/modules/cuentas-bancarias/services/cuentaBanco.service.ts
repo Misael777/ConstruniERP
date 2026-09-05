@@ -146,40 +146,21 @@ export async function updateCuentaBanco(
 }
 
 /** Recalcula `saldo_actual` desde cero: saldo_inicial + todo lo que entró (transaccion.cuente_destino =
- * esta cuenta) - todo lo que salió (cuente_origen = esta cuenta), entre las transacciones activas.
- * Mismo criterio "recompute completo" que recalcularCuentaPagar/recalcularCuentaCobrar (evita depender
- * de incrementos/decrementos sueltos que podrían desincronizarse si algo falla a mitad de camino) — se
+ * esta cuenta) - todo lo que salió (cuente_origen = esta cuenta), entre las transacciones activas. Se
  * llama después de crear/editar esta misma cuenta (ver arriba) y después de crear/editar/eliminar/
  * anular/reactivar cualquier transacción que use esta cuenta como origen o destino (ver
- * transacciones.service.ts). Best-effort: si la cuenta no existe (numeroCuenta no registrado) o la
- * consulta falla, no lanza — nunca debe romper el flujo principal que la llamó. */
+ * transacciones.service.ts).
+ *
+ * Wrapper delgado sobre fn_recalcular_saldo_cuenta_banco (ver financial_integrity_rpc_migration.sql):
+ * la fórmula sigue siendo la misma, pero ahora corre bajo `SELECT ... FOR UPDATE` en una sola
+ * transacción de Postgres — antes era un SELECT-calcula-en-JS-UPDATE sin lock, con una condición de
+ * carrera confirmada (dos transacciones concurrentes sobre la misma cuenta podían pisarse el UPDATE,
+ * dejando saldo_actual desactualizado en silencio). Best-effort: si la RPC falla, no lanza — nunca
+ * debe romper el flujo principal que la llamó (mismo criterio que antes). */
 export async function recalcularSaldoCuentaBanco(client: SupabaseClient, numeroCuenta: string | null | undefined): Promise<void> {
 	if (!numeroCuenta) return;
-	try {
-		const { data: cuenta } = await client.from(TABLE_NAME).select('id_cuenta_banco, saldo_inicial').eq('numero_cuenta', numeroCuenta).maybeSingle();
-		if (!cuenta) return;
-
-		const { data: movimientos, error } = await client
-			.from('transaccion')
-			.select('cuente_origen, cuente_destino, monto_total')
-			.eq('estado', 'activo')
-			.or(`cuente_origen.eq.${numeroCuenta},cuente_destino.eq.${numeroCuenta}`);
-		if (error) throw error;
-
-		const neto = (movimientos ?? []).reduce((saldo: number, t: any) => {
-			const monto = Number(t.monto_total);
-			if (t.cuente_origen === numeroCuenta) saldo -= monto;
-			if (t.cuente_destino === numeroCuenta) saldo += monto;
-			return saldo;
-		}, 0);
-
-		await client
-			.from(TABLE_NAME)
-			.update({ saldo_actual: Number(cuenta.saldo_inicial) + neto })
-			.eq('id_cuenta_banco', cuenta.id_cuenta_banco);
-	} catch (err) {
-		console.error('[cuentaBanco.service] No se pudo recalcular el saldo de la cuenta:', numeroCuenta, err);
-	}
+	const { error } = await client.rpc('fn_recalcular_saldo_cuenta_banco', { p_numero_cuenta: numeroCuenta });
+	if (error) console.error('[cuentaBanco.service] No se pudo recalcular el saldo de la cuenta:', numeroCuenta, error);
 }
 
 /** Mapa numero_cuenta -> saldo_actual de todas las cuentas activas — para mostrar "Saldo actual" junto

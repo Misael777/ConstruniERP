@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency, applyColumnFilters, isColumnFilterActive } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency, applyColumnFilters, isColumnFilterActive } from '$lib/shared/fieldConfig';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -23,7 +23,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as PAGO_FIELDS
 } from '../config/pago.config';
-import { construirPayloadTransaccionPorPago, createTransaccion, labelPorCodigoMedioPago } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorPago, construirInsertDataTransaccion, labelPorCodigoMedioPago } from '../../transacciones/services/transacciones.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import type { ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
 
@@ -902,35 +902,40 @@ export async function updatePago(
 }
 
 /**
- * Segundo paso, obligatorio, para pasar una cuota programada a 'pagado': crea la transacción de
- * respaldo (a partir del payload que la UI arma con construirPayloadTransaccionPorPago / lo que el
- * usuario haya ajustado en el modal) y SOLO si se crea con éxito, confirma el pago como 'pagado'
- * enlazado a ella. Si la transacción falla, el pago NO se toca — sigue en su estado anterior (ver
- * updatePago, que deliberadamente no cambia estado_pago hasta que esto se llama y funciona).
+ * Segundo paso, obligatorio, para pasar una cuota programada a 'pagado': confirma el pago como
+ * 'pagado' Y crea su transacción de respaldo (a partir del payload que la UI arma con
+ * construirPayloadTransaccionPorPago / lo que el usuario haya ajustado en el modal) en UNA sola
+ * llamada atómica a fn_confirmar_pago (ver financial_integrity_rpc_migration.sql) — antes eran dos
+ * pasos separados (createTransaccion + UPDATE pagos) sin transacción envolvente: si el segundo paso
+ * fallaba, quedaba una transacción "huérfana" ya creada pero sin ningún pago vinculado a ella. Ahora,
+ * si cualquier paso falla, TODO se revierte — el pago sigue en su estado anterior, sin transacción
+ * fantasma en el ledger.
  */
 export async function confirmarPagoPagado(
 	client: SupabaseClient,
 	idPago: number,
 	transaccionPayload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	usuarioNombre: string | null = null
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Pago>> {
 	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar').eq(PAGO_PK, idPago).single();
 	if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
 
-	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
-	if (!transResult.success || !transResult.data) {
-		return { success: false, message: transResult.message, errors: transResult.errors };
-	}
+	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
 
-	const { data, error } = await client
-		.from(PAGO_TABLE)
-		.update({ estado_pago: 'pagado', id_transaccion: transResult.data.id_transaccion })
-		.eq(PAGO_PK, idPago)
-		.select('*')
-		.single();
-	if (error) return { success: false, message: `La transacción se creó, pero no se pudo confirmar el pago: ${translateSupabaseError(error, PAGO_FIELDS)}` };
+	const { data, error } = await client.rpc('fn_confirmar_pago', {
+		p_id_cuenta_pagar: pagoActual.id_cuenta_pagar,
+		p_transaccion_payload: built.insertData,
+		p_id_pago: idPago,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) return { success: false, message: `No se pudo confirmar el pago: ${translateRpcError(error, PAGO_FIELDS)}` };
 
+	// rebalancearUltimaCuota puede ajustar el monto de OTRA cuota 'programado' (ver esa función) después
+	// de que fn_confirmar_pago ya recalculó la cuenta — se recalcula una vez más para que
+	// monto_pagado/saldo_pendiente/estado reflejen ese ajuste (mismo orden que la versión anterior).
 	await rebalancearUltimaCuota(client, data.id_cuenta_pagar, idPago);
 	await recalcularCuentaPagar(client, data.id_cuenta_pagar);
 
@@ -997,50 +1002,46 @@ export async function buscarCuentasPagarVinculables(
  * Transacciones. A diferencia de createPago + confirmarPagoPagado (pensados para cuando el pago se
  * registra ANTES de tener la transacción de respaldo, quedando 'programado' mientras tanto), acá el
  * usuario ya completó todos los datos de la transacción en el mismo formulario, así que el pago se
- * genera directo en 'pagado', sin pasar por ese estado intermedio. Mismo chequeo de monto disponible
- * que createPago, para no dejar que la suma de pagos supere el Monto Comprometido de la cuenta.
+ * genera directo en 'pagado', sin pasar por ese estado intermedio.
+ *
+ * Una sola llamada atómica a fn_confirmar_pago (mismo RPC que confirmarPagoPagado, sin `p_id_pago`):
+ * el chequeo de monto disponible corre bajo el bloqueo de la cuenta (cierra el TOCTOU que tenía el
+ * chequeo `montoDisponible` de antes) y, si el INSERT del pago falla, la transacción recién creada se
+ * revierte con él — ya no puede quedar huérfana (antes el propio mensaje de error admitía "la
+ * transacción se creó, pero no se pudo registrar el pago... revisa la cuenta manualmente").
  */
 export async function registrarPagoDesdeTransaccion(
 	client: SupabaseClient,
 	idCuentaPagar: number,
 	transaccionPayload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	usuarioNombre: string | null = null
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Transaccion>> {
-	const monto = Number(transaccionPayload.monto_total);
-	const disponible = await montoDisponible(client, idCuentaPagar);
-	if (monto - disponible > 0.01) {
-		return {
-			success: false,
-			message: `No se puede vincular: el monto (${formatCurrency(monto)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}).`
-		};
-	}
+	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
 
-	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
-	if (!transResult.success || !transResult.data) {
-		return { success: false, message: transResult.message, errors: transResult.errors };
-	}
-
-	const { error: pagoError } = await client.from(PAGO_TABLE).insert({
-		[PARENT_FK_COLUMN]: idCuentaPagar,
-		monto,
+	const pagoPayload = {
+		monto: Number(transaccionPayload.monto_total),
 		fecha_pago: transaccionPayload.fecha,
 		medio_pago: labelPorCodigoMedioPago(transaccionPayload.medio_pago as string | null),
 		referencia: (transaccionPayload.descripcion as string | null) ?? null,
-		usuario_registro: usuarioRegistro,
-		estado_pago: 'pagado',
-		id_transaccion: transResult.data.id_transaccion
+		usuario_registro: usuarioRegistro
+	};
+
+	const { data: pago, error } = await client.rpc('fn_confirmar_pago', {
+		p_id_cuenta_pagar: idCuentaPagar,
+		p_transaccion_payload: built.insertData,
+		p_pago_payload: pagoPayload,
+		p_idempotency_key: idempotencyKey
 	});
-	if (pagoError) {
-		return {
-			success: false,
-			message: `La transacción se creó (#${transResult.data.id_transaccion}), pero no se pudo registrar el pago contra la cuenta: ${translateSupabaseError(pagoError, PAGO_FIELDS)}. Revisa la cuenta manualmente.`
-		};
+	if (error) {
+		return { success: false, message: `No se pudo vincular el pago: ${translateRpcError(error, PAGO_FIELDS)}` };
 	}
 
-	await recalcularCuentaPagar(client, idCuentaPagar);
+	const { data: transaccion } = await client.from('transaccion').select('*').eq('id_transaccion', (pago as Pago).id_transaccion).single();
 
-	return { success: true, message: 'Transacción creada y vinculada — el pago quedó registrado en la cuenta.', data: transResult.data };
+	return { success: true, message: 'Transacción creada y vinculada — el pago quedó registrado en la cuenta.', data: transaccion as Transaccion };
 }
 
 /**
@@ -1148,41 +1149,19 @@ export async function deletePago(client: SupabaseClient, idPago: number, esAdmin
 /**
  * Recalcula monto_pagado/saldo_pendiente sumando SOLO los pagos con estado_pago='pagado' (las
  * cuotas 'programado' generadas por generarCuotasProgramadas NO cuentan hasta que se registren
- * como pagos reales), y ajusta estado con computeEstadoCuentaPagar. No es una transacción atómica
- * de BD — ver misma nota en cuentasCobrar.service.ts.
+ * como pagos reales), ajusta estado con computeEstadoCuentaPagar y reprograma fecha_pago_programada
+ * a la cuota 'programado' más próxima — mismos criterios de siempre, ver fn_recalcular_cuenta_pagar
+ * en financial_integrity_rpc_migration.sql para la fórmula exacta (portada 1:1 desde esta función).
  *
- * También reprograma fecha_pago_programada a la cuota 'programado' más próxima (mismo criterio que
- * primeraFechaFraccion en CuentaPagarModal) cada vez que se llama — a pedido del usuario: cuando ya
- * se pagó la cuota más próxima, el Estado (vencido/pendiente) debe evaluarse contra la cuota
- * SIGUIENTE, no quedarse pegado a la fecha de la que ya se pagó. Sin esto, una cuenta con la
- * primera cuota vencida-pero-ya-pagada seguía marcándose "Vencido" para siempre aunque la próxima
- * cuota real todavía no venciera. Si ya no queda ninguna cuota 'programado' (todas pagadas/
- * canceladas), queda en null — no hay una "próxima" que mostrar.
+ * Wrapper delgado sobre esa RPC: corre bajo `SELECT ... FOR UPDATE` en una sola transacción de
+ * Postgres — antes era un SELECT-calcula-en-JS-UPDATE sin lock, con una condición de carrera
+ * confirmada (dos confirmaciones de pago casi simultáneas podían perder una actualización, dejando
+ * monto_pagado/saldo_pendiente desactualizados en silencio). Todo caller existente (createPago,
+ * updatePago, deletePago) hereda la versión atómica sin cambiar su propio código.
  */
 export async function recalcularCuentaPagar(client: SupabaseClient, idCuentaPagar: number): Promise<void> {
-	const { data: cuenta } = await client
-		.from(TABLE_NAME)
-		.select('monto_comprometido, fecha_vencimiento')
-		.eq(PK_COLUMN, idCuentaPagar)
-		.single();
-	if (!cuenta) return;
-
-	const { data: pagos } = await client.from(PAGO_TABLE).select('monto, estado_pago, fecha_pago').eq(PARENT_FK_COLUMN, idCuentaPagar);
-	const totalPagado = (pagos ?? [])
-		.filter((p: any) => p.estado_pago === 'pagado')
-		.reduce((sum: number, p: any) => sum + Number(p.monto), 0);
-	const saldoPendiente = Math.max(Number(cuenta.monto_comprometido) - totalPagado, 0);
-
-	const programados = (pagos ?? []).filter((p: any) => p.estado_pago === 'programado');
-	const fechaPagoProgramada =
-		programados.length > 0 ? programados.reduce((min: string, p: any) => (p.fecha_pago < min ? p.fecha_pago : min), programados[0].fecha_pago) : null;
-
-	const nuevoEstado = computeEstadoCuentaPagar(saldoPendiente, cuenta.fecha_vencimiento, fechaPagoProgramada);
-
-	await client
-		.from(TABLE_NAME)
-		.update({ monto_pagado: totalPagado, saldo_pendiente: saldoPendiente, estado: nuevoEstado, fecha_pago_programada: fechaPagoProgramada })
-		.eq(PK_COLUMN, idCuentaPagar);
+	const { error } = await client.rpc('fn_recalcular_cuenta_pagar', { p_id_cuenta_pagar: idCuentaPagar });
+	if (error) console.error('[cuentasPagar.service] No se pudo recalcular la cuenta por pagar:', idCuentaPagar, error);
 }
 
 /** El dropdown "Proveedor" en Nueva/Editar Cuenta por Pagar muestra la razón social + su producto

@@ -229,6 +229,24 @@ export function translateSupabaseError(error: { code?: string; message?: string 
 	return error.message || 'Ocurrió un error inesperado.';
 }
 
+/** Vocabulario fijo de `HINT` que los RPC financieros (fn_crear_transaccion, fn_confirmar_pago/cobro,
+ * fn_anular_transaccion — ver financial_integrity_rpc_migration.sql) lanzan vía `RAISE EXCEPTION ...
+ * USING HINT = '...'`, expuesto por supabase-js como `error.hint` (separado de `error.message`, que
+ * trae el texto crudo en español para logs/consola). Un HINT no reconocido (o su ausencia) cae al
+ * mismo tratamiento que translateSupabaseError — nunca se expone texto crudo de Postgres a la UI. */
+const RPC_HINT_MESSAGES: Record<string, string> = {
+	SALDO_INSUFICIENTE: 'Saldo insuficiente para completar la operación. Registra un Financiamiento o Ingreso antes de continuar.',
+	MONTO_EXCEDE_COMPROMETIDO: 'El monto supera lo que falta por cubrir de esta cuenta. Revisa las demás cuotas antes de continuar.',
+	CUENTA_NO_ENCONTRADA: 'No se encontró el registro relacionado. Puede que ya haya sido eliminado o modificado por otra persona — actualiza la página e intenta de nuevo.',
+	TIENE_PAGO_VINCULADO: 'No se puede eliminar: tiene un pago o cobro ya confirmado vinculado. Usa "Anular" en su lugar.'
+};
+
+export function translateRpcError(error: { code?: string; message?: string; hint?: string }, fields: FieldConfig[]): string {
+	if (error.hint && RPC_HINT_MESSAGES[error.hint]) return RPC_HINT_MESSAGES[error.hint];
+	if (error.code === '23505') return 'Ya existe un registro idéntico — puede que esta acción ya se haya realizado.';
+	return translateSupabaseError(error, fields);
+}
+
 /**
  * Días transcurridos desde la fecha límite más vencida hasta hoy — para la columna "Días de
  * Retraso" de cuentas por pagar/cobrar. Devuelve null si `estado` no es 'vencido' ("días de

@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
 import { TABLE_NAME, PK_COLUMN, SEARCHABLE_COLUMNS, DEFAULT_PAGE_SIZE, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, FIELDS_CONFIG } from '../config/cuentaCobrar.config';
 import {
 	TABLE_NAME as COBRO_TABLE,
@@ -15,7 +15,7 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as COBRO_FIELDS
 } from '../config/cobro.config';
-import { construirPayloadTransaccionPorCobro, createTransaccion } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorCobro, construirInsertDataTransaccion } from '../../transacciones/services/transacciones.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 import { getMontoRecibidoPorCentroCosto } from '../../centro-costos/services/centroCostos.service';
@@ -657,35 +657,36 @@ export async function updateCobro(
 }
 
 /**
- * Segundo paso, obligatorio, para pasar una cuota programada a 'cobrado': crea la transacción de
- * respaldo (a partir del payload que la UI arma con construirPayloadTransaccionPorCobro / lo que el
- * usuario haya ajustado en el modal) y SOLO si se crea con éxito, confirma el cobro como 'cobrado'
- * enlazado a ella. Si la transacción falla, el cobro NO se toca — sigue en su estado anterior (ver
- * updateCobro, que deliberadamente no cambia estado_cobro hasta que esto se llama y funciona).
+ * Segundo paso, obligatorio, para pasar una cuota programada a 'cobrado': confirma el cobro como
+ * 'cobrado' Y crea su transacción de respaldo en UNA sola llamada atómica a fn_confirmar_cobro (ver
+ * financial_integrity_rpc_migration.sql) — mismo motivo/beneficio que confirmarPagoPagado en
+ * cuentasPagar.service.ts (antes eran dos pasos separados sin transacción envolvente, con riesgo de
+ * dejar una transacción huérfana si el segundo fallaba).
  */
 export async function confirmarCobroCobrado(
 	client: SupabaseClient,
 	idCobro: number,
 	transaccionPayload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	usuarioNombre: string | null = null
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Cobro>> {
 	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar').eq(COBRO_PK, idCobro).single();
 	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
 
-	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
-	if (!transResult.success || !transResult.data) {
-		return { success: false, message: transResult.message, errors: transResult.errors };
-	}
+	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
 
-	const { data, error } = await client
-		.from(COBRO_TABLE)
-		.update({ estado_cobro: 'cobrado', id_transaccion: transResult.data.id_transaccion })
-		.eq(COBRO_PK, idCobro)
-		.select('*')
-		.single();
-	if (error) return { success: false, message: `La transacción se creó, pero no se pudo confirmar el cobro: ${translateSupabaseError(error, COBRO_FIELDS)}` };
+	const { data, error } = await client.rpc('fn_confirmar_cobro', {
+		p_id_cuenta_cobrar: cobroActual.id_cuenta_cobrar,
+		p_transaccion_payload: built.insertData,
+		p_id_cobro: idCobro,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) return { success: false, message: `No se pudo confirmar el cobro: ${translateRpcError(error, COBRO_FIELDS)}` };
 
+	// rebalancearUltimaCuota puede ajustar el monto de OTRA cuota 'programado' después de que
+	// fn_confirmar_cobro ya recalculó la cuenta — se recalcula una vez más (mismo orden que antes).
 	await rebalancearUltimaCuota(client, data.id_cuenta_cobrar, idCobro);
 	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
 
@@ -744,7 +745,10 @@ export async function buscarCuentasCobrarVinculables(
 
 /**
  * Crea la transacción Y, en el mismo paso, un cobro ya 'cobrado' vinculado a ella contra una cuenta
- * por cobrar existente — mismo criterio que registrarPagoDesdeTransaccion en cuentasPagar.service.ts.
+ * por cobrar existente — mismo criterio que registrarPagoDesdeTransaccion en cuentasPagar.service.ts,
+ * ahora vía una sola llamada atómica a fn_confirmar_cobro (sin `p_id_cobro`) — ver
+ * financial_integrity_rpc_migration.sql: cierra el mismo TOCTOU y la misma ventana de "transacción
+ * huérfana si el INSERT del cobro fallaba" que tenía la versión anterior.
  * `medio_cobro` solo tiene 2 opciones en su catálogo (Efectivo/Transferencia bancaria, ver
  * cobro.config.ts) mientras que transaccion.medio_pago tiene 4 — se copia el código tal cual (mismo
  * criterio ya usado en construirPayloadTransaccionPorCobro, que hace el camino inverso): si el usuario
@@ -756,44 +760,35 @@ export async function registrarCobroDesdeTransaccion(
 	idCuentaCobrar: number,
 	transaccionPayload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	usuarioNombre: string | null = null
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Transaccion>> {
-	const monto = Number(transaccionPayload.monto_total);
-	const disponible = await montoDisponible(client, idCuentaCobrar);
-	if (monto - disponible > 0.01) {
-		return {
-			success: false,
-			message: `No se puede vincular: el monto (${formatCurrency(monto)}) supera lo que falta por cubrir de esta cuenta (${formatCurrency(Math.max(disponible, 0))}).`
-		};
-	}
-
-	const transResult = await createTransaccion(client, transaccionPayload, usuarioRegistro, usuarioNombre);
-	if (!transResult.success || !transResult.data) {
-		return { success: false, message: transResult.message, errors: transResult.errors };
-	}
+	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
 
 	const medioPagoCodigo = transaccionPayload.medio_pago as string | null;
-	const { error: cobroError } = await client.from(COBRO_TABLE).insert({
-		[PARENT_FK_COLUMN]: idCuentaCobrar,
-		monto,
+	const cobroPayload = {
+		monto: Number(transaccionPayload.monto_total),
 		fecha_cobro: transaccionPayload.fecha,
 		medio_cobro: medioPagoCodigo ? Number(medioPagoCodigo) : null,
 		cuenta_banco: (transaccionPayload.cuente_destino as string | null) ?? null,
 		referencia: (transaccionPayload.descripcion as string | null) ?? null,
-		usuario_registro: usuarioRegistro,
-		estado_cobro: 'cobrado',
-		id_transaccion: transResult.data.id_transaccion
+		usuario_registro: usuarioRegistro
+	};
+
+	const { data: cobro, error } = await client.rpc('fn_confirmar_cobro', {
+		p_id_cuenta_cobrar: idCuentaCobrar,
+		p_transaccion_payload: built.insertData,
+		p_cobro_payload: cobroPayload,
+		p_idempotency_key: idempotencyKey
 	});
-	if (cobroError) {
-		return {
-			success: false,
-			message: `La transacción se creó (#${transResult.data.id_transaccion}), pero no se pudo registrar el cobro contra la cuenta: ${translateSupabaseError(cobroError, COBRO_FIELDS)}. Revisa la cuenta manualmente.`
-		};
+	if (error) {
+		return { success: false, message: `No se pudo vincular el cobro: ${translateRpcError(error, COBRO_FIELDS)}` };
 	}
 
-	await recalcularCuentaCobrar(client, idCuentaCobrar);
+	const { data: transaccion } = await client.from('transaccion').select('*').eq('id_transaccion', (cobro as Cobro).id_transaccion).single();
 
-	return { success: true, message: 'Transacción creada y vinculada — el cobro quedó registrado en la cuenta.', data: transResult.data };
+	return { success: true, message: 'Transacción creada y vinculada — el cobro quedó registrado en la cuenta.', data: transaccion as Transaccion };
 }
 
 /**
@@ -898,26 +893,18 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number, esAdm
 
 /**
  * Recalcula monto_cobrado/saldo_pendiente/estado de una cuenta a partir de la plata REAL ya recibida
- * (transacción de ingreso activa en su centro de costo, ver calcularMontoCobradoYEstado) — a pedido
- * explícito del usuario, ya no se basa en `cobros`/estado_cobro='cobrado' ni preserva "vencido" como
- * marca manual: los 3 estados (Pendiente/Pagado/Vencido) se derivan solos. Se llama tras
- * registrar/eliminar un cobro, que es cuando cambia la transacción vinculada.
+ * (transacción de ingreso activa en su centro de costo) — los 3 estados (Pendiente/Pagado/Vencido) se
+ * derivan solos, mismos criterios de siempre (ver fn_recalcular_cuenta_cobrar en
+ * financial_integrity_rpc_migration.sql, fórmula portada 1:1 desde esta función).
+ *
+ * Wrapper delgado sobre esa RPC: corre bajo `SELECT ... FOR UPDATE` en una sola transacción de
+ * Postgres — antes era un SELECT-calcula-en-JS-UPDATE sin lock, con la misma condición de carrera que
+ * recalcularCuentaPagar en cuentasPagar.service.ts (ver ahí). Se llama tras registrar/eliminar un
+ * cobro, que es cuando cambia la transacción vinculada.
  */
 export async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
-	const { data: cuenta } = await client.from(TABLE_NAME).select('monto, id_centro_costo, fecha_vencimiento').eq(PK_COLUMN, idCuentaCobrar).single();
-	if (!cuenta) return;
-
-	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(
-		client,
-		cuenta.id_centro_costo,
-		Number(cuenta.monto),
-		cuenta.fecha_vencimiento
-	);
-
-	await client
-		.from(TABLE_NAME)
-		.update({ monto_cobrado: montoCobrado, saldo_pendiente: saldoPendiente, estado })
-		.eq(PK_COLUMN, idCuentaCobrar);
+	const { error } = await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: idCuentaCobrar });
+	if (error) console.error('[cuentasCobrar.service] No se pudo recalcular la cuenta por cobrar:', idCuentaCobrar, error);
 }
 
 export async function getClienteOptions(client: SupabaseClient): Promise<FieldOption[]> {

@@ -89,7 +89,7 @@
 		 * (ver +page.svelte de cuentas-cobrar/cuentas-pagar) donde esta transacción es la prueba
 		 * obligatoria de un cobro/pago que recién pasa a 'cobrado'/'pagado' — crearla aquí Y enlazarla
 		 * es una sola operación atómica en el backend (confirmarCobroCobrado/confirmarPagoPagado). */
-		onConfirm?: ((payload: Record<string, unknown>) => Promise<{ success: boolean; message: string; errors?: Record<string, string>; data?: any }>) | null;
+		onConfirm?: ((payload: Record<string, unknown>, idempotencyKey: string) => Promise<{ success: boolean; message: string; errors?: Record<string, string>; data?: any }>) | null;
 		confirmTitle?: string | null;
 		confirmButtonLabel?: string | null;
 		/** Claves de FIELDS_CONFIG que llegan pre-determinadas y no deben poder tocarse — hoy usado
@@ -411,8 +411,16 @@
 	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
 	let otrosCamposAbierto = $state(false);
 
+	// Idempotency key para fn_crear_transaccion/fn_confirmar_pago/fn_confirmar_cobro (ver
+	// financial_integrity_rpc_migration.sql) — se genera UNA vez al abrir el modal y viaja tal cual en
+	// cada intento de guardado, incluidos los reintentos: si el usuario hace doble-click o un guardado
+	// se reintenta tras un timeout de red, el backend reconoce la misma key y devuelve la transacción
+	// ya creada en vez de duplicarla. Se regenera recién cuando el modal se vuelve a abrir.
+	let idempotencyKey = $state('');
+
 	$effect(() => {
 		if (open) {
+			idempotencyKey = crypto.randomUUID();
 			formValues = buildInitialValues();
 			fieldErrors = {};
 			comprobanteFile = null;
@@ -1923,7 +1931,7 @@
 
 			let result;
 			if (onConfirm) {
-				result = await onConfirm(payload);
+				result = await onConfirm(payload, idempotencyKey);
 			} else if (mode === 'edit' && transaccion) {
 				result = await updateTransaccion(supabase, transaccion.id_transaccion, payload, isAdmin());
 			} else if (cuentaVinculadaSeleccionada && colaArchivos.length <= 1 && formValues.tipo === 'egreso') {
@@ -1933,7 +1941,8 @@
 					cuentaVinculadaSeleccionada.id,
 					payload,
 					userData?.user?.email ?? null,
-					permisosState.userName || null
+					permisosState.userName || null,
+					idempotencyKey
 				);
 			} else if (cuentaVinculadaSeleccionada && colaArchivos.length <= 1 && formValues.tipo === 'ingreso') {
 				const { data: userData } = await supabase.auth.getUser();
@@ -1942,14 +1951,20 @@
 					cuentaVinculadaSeleccionada.id,
 					payload,
 					userData?.user?.email ?? null,
-					permisosState.userName || null
+					permisosState.userName || null,
+					idempotencyKey
 				);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
-				result = await createTransaccion(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null);
+				result = await createTransaccion(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null, idempotencyKey);
 			}
 
 			if (result.success) {
+				// Se guardó — la próxima llamada (siguiente ítem de la cola, o un guardado manual nuevo)
+				// necesita su PROPIA idempotency key; un reintento tras un error, en cambio, reutiliza la
+				// key de arriba sin pasar por acá (ver comentario en su declaración).
+				idempotencyKey = crypto.randomUUID();
+
 				// Housekeeping en Drive — mejor esfuerzo: si algo de esto falla no se muestra como error,
 				// el guardado ya se completó correctamente.
 				try {

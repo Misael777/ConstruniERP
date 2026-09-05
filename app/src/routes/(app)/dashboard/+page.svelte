@@ -10,7 +10,7 @@
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 
 	// Landing temática de Dashboard — a pedido explícito del usuario: el panel financiero que vivía acá
-	// se movió a Finanzas → Dashboard Finanzas (ver finanzas/dashboard/+page.svelte); este módulo pasó a
+	// se movió a Finanzas → Control Financiero (ver finanzas/control-financiero/+page.svelte); este módulo pasó a
 	// ser la pantalla de bienvenida tras iniciar sesión, con anuncios/comunicados corporativos que
 	// cualquier admin puede publicar (ver AnuncioModal.svelte/anuncios.service.ts). Mismo path
 	// `/dashboard` y mismo permiso `ver_dashboard` de siempre — nada de la navegación/login que ya

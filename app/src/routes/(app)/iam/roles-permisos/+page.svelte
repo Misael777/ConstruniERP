@@ -37,7 +37,7 @@
 			id: 'finanzas', name: 'Finanzas', icon: 'fas fa-dollar-sign', colorClass: 'text-blue-600 bg-blue-50 border-blue-100',
 			submodules: [
 				{ key: 'ver_finanzas', label: 'General Finanzas' },
-				{ key: 'ver_finanzas_dashboard', label: 'Dashboard Finanzas' },
+				{ key: 'ver_finanzas_dashboard', label: 'Control Financiero' },
 				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
 				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
 				{ key: 'ver_finanzas_transacciones', label: 'Transacciones' },

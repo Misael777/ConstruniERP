@@ -586,9 +586,9 @@
 	// confirmandoPagoId) — crea la transacción Y confirma el pago como 'pagado' en un solo paso
 	// atómico (ver confirmarPagoPagado en cuentasPagar.service.ts). Si esto falla, el pago se queda
 	// como estaba (nunca "pagado" sin transacción).
-	async function confirmarTransaccionPago(payload: Record<string, unknown>) {
+	async function confirmarTransaccionPago(payload: Record<string, unknown>, idempotencyKey: string) {
 		const { data: userData } = await supabase.auth.getUser();
-		const result = await confirmarPagoPagado(supabase, confirmandoPagoId as number, payload, userData?.user?.email ?? null, permisosState.userName || null);
+		const result = await confirmarPagoPagado(supabase, confirmandoPagoId as number, payload, userData?.user?.email ?? null, permisosState.userName || null, idempotencyKey);
 		if (result.success) await Promise.all([fetchList(), fetchSelectedPagos(), fetchMontoFiltrado(), fetchKpis()]);
 		return result;
 	}

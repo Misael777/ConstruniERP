@@ -7,7 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, formatCurrency } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency } from '$lib/shared/fieldConfig';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -420,30 +420,20 @@ export async function actualizarFechasTransacciones(
 	return { success: true, message: 'Fechas actualizadas' };
 }
 
-export async function createTransaccion(
-	client: SupabaseClient,
+/** Payload listo para pasar como `p_payload` a fn_crear_transaccion (mismas columnas de `transaccion`
+ * que antes se mandaban directo a `.insert()`) — extraído para que confirmarPagoPagado/
+ * registrarPagoDesdeTransaccion (cuentasPagar.service.ts) y confirmarCobroCobrado/
+ * registrarCobroDesdeTransaccion (cuentasCobrar.service.ts) puedan armarlo también, ya que esos ahora
+ * llaman a fn_confirmar_pago/fn_confirmar_cobro (que a su vez invocan fn_crear_transaccion DENTRO de la
+ * misma transacción de BD) en vez de a esta función. Devuelve `null` si la validación de campos falla.
+ */
+export function construirInsertDataTransaccion(
 	payload: Record<string, unknown>,
 	usuarioRegistro: string | null,
 	usuarioNombre: string | null = null
-): Promise<ServiceResult<Transaccion>> {
+): { insertData: Record<string, unknown> } | { errors: Record<string, string> } {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
-	if (Object.keys(errors).length > 0) {
-		return { success: false, message: 'Revisa los campos marcados', errors };
-	}
-	// comprobante_url no vive en FIELDS_CONFIG (lo sube TransaccionModal.svelte a Google Drive antes de
-	// llamar aquí, ver uploadComprobante) — toda transacción Externa debe tener uno, se valida
-	// server-side también por si algún día se llama a esto desde otro lado que no sea ese modal. Una
-	// transacción Interna emite su propio comprobante oficial (ver comprobanteTransferenciaInterna.ts),
-	// y una Externa+Ingreso+Efectivo con su "RECIBO DE PAGO" ya generado (ver reciboPagoEfectivo.ts,
-	// num_recibo_pago asignado) tampoco requiere este adjunto — mismo criterio que TransaccionModal.svelte.
-	if (payload.tipo_alcance !== 'interna' && !payload.num_recibo_pago && !payload.comprobante_url) {
-		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
-	}
-
-	const saldoCheck = await validarSaldoSuficiente(client, payload);
-	if (!saldoCheck.ok) {
-		return { success: false, message: saldoCheck.message, errors: { monto_total: 'Saldo insuficiente' } };
-	}
+	if (Object.keys(errors).length > 0) return { errors };
 
 	const insertData = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
@@ -474,18 +464,47 @@ export async function createTransaccion(
 		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
 	};
 
-	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
-	if (error) {
-		console.error('[transacciones.service] Error crudo de Postgres al crear la transacción:', error, insertData);
-		return { success: false, message: `No se pudo crear la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	return { insertData };
+}
+
+/** true si el payload trae el comprobante que toda transacción Externa debe tener adjunto — mismo
+ * criterio que antes vivía inline en createTransaccion, extraído para que confirmarPagoPagado/
+ * confirmarCobroCobrado (que arman su propio payload de transacción) también lo apliquen. Una
+ * transacción Interna emite su propio comprobante oficial, y una Externa+Ingreso+Efectivo con su
+ * "RECIBO DE PAGO" ya generado (num_recibo_pago asignado) tampoco requiere este adjunto. */
+function tieneComprobanteRequerido(payload: Record<string, unknown>): boolean {
+	return payload.tipo_alcance === 'interna' || !!payload.num_recibo_pago || !!payload.comprobante_url;
+}
+
+export async function createTransaccion(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	if (!tieneComprobanteRequerido(payload)) {
+		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
-	// Si cuente_origen/cuente_destino corresponden a una cuenta bancaria propia registrada, su
-	// saldo_actual se recalcula acá — a pedido explícito del usuario: Ingreso con esta cuenta como
-	// destino la incrementa, cualquier tipo con esta cuenta como origen la debita (ver
-	// recalcularSaldoCuentaBanco, mismo criterio que saldoDisponibleCuentaBanco de arriba). Best-effort,
-	// nunca rompe la creación ya confirmada de la transacción.
-	await Promise.all([recalcularSaldoCuentaBanco(client, (data as Transaccion).cuente_origen), recalcularSaldoCuentaBanco(client, (data as Transaccion).cuente_destino)]);
+	const built = construirInsertDataTransaccion(payload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) {
+		return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
+	}
+
+	// La atomicidad (bloqueo de filas, chequeo de saldo suficiente re-verificado bajo lock, inserción
+	// y recálculo de saldo_actual de cuenta_banco) vive ahora en fn_crear_transaccion — ver
+	// financial_integrity_rpc_migration.sql. `idempotencyKey` (crypto.randomUUID(), generado una vez al
+	// abrir el modal, ver TransaccionModal.svelte) hace que un doble-click o un retry de red devuelva
+	// la misma transacción ya creada en vez de duplicarla.
+	const { data, error } = await client.rpc('fn_crear_transaccion', {
+		p_payload: built.insertData,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) {
+		console.error('[transacciones.service] Error crudo de Postgres al crear la transacción:', error, built.insertData);
+		return { success: false, message: `No se pudo crear la transacción: ${translateRpcError(error, FIELDS_CONFIG)}` };
+	}
 
 	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
 }
@@ -575,16 +594,20 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	const { data: cobros } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id);
-	for (const cobro of (cobros ?? []) as any[]) {
-		await client.from('cobros').update({ estado_cobro: 'programado', id_transaccion: null }).eq('id_cobro', cobro.id_cobro);
-		await recalcularCuentaCobrar(client, cobro.id_cuenta_cobrar);
-	}
-
-	const { data: pagos } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id);
-	for (const pago of (pagos ?? []) as any[]) {
-		await client.from('pagos').update({ estado_pago: 'programado', id_transaccion: null }).eq('id_pago', pago.id_pago);
-		await recalcularCuentaPagar(client, pago.id_cuenta_pagar);
+	// Guardia agregada en la auditoría de integridad financiera (confirmada con el usuario): el borrado
+	// físico ya NO se permite si esta transacción respalda un pago/cobro ya confirmado, sin importar el
+	// rol — antes desvinculaba pagos/cobros ANTES de borrar la fila, dejando una ventana de
+	// inconsistencia si el DELETE fallaba justo después. Ahora ese caso se colapsa en "usa Anular", que
+	// sí corre bajo bloqueo atómico (ver fn_anular_transaccion en financial_integrity_rpc_migration.sql).
+	const [{ count: countPagos }, { count: countCobros }] = await Promise.all([
+		client.from('pagos').select('id_pago', { count: 'exact', head: true }).eq('id_transaccion', id),
+		client.from('cobros').select('id_cobro', { count: 'exact', head: true }).eq('id_transaccion', id)
+	]);
+	if ((countPagos ?? 0) > 0 || (countCobros ?? 0) > 0) {
+		return {
+			success: false,
+			message: 'No se puede eliminar: esta transacción respalda un pago o cobro ya confirmado. Usa "Anular" en su lugar — preserva el registro para auditoría y revierte el pago/cobro vinculado de forma segura.'
+		};
 	}
 
 	// ON DELETE CASCADE en trans_detalle.id_transaccion se encarga de borrar su detalle asociado.
@@ -643,32 +666,20 @@ export async function desaprobarTransaccion(client: SupabaseClient, id: number, 
 /**
  * Anula la transacción (estado='anulado') — a diferencia de deleteTransaccion, NO borra la fila,
  * queda visible con el badge "Anulada". Si es el respaldo de un cobro/pago ya confirmado, ese
- * cobro/pago ya no debe seguir contando como probado: se revierte a 'programado' (mismo criterio que
- * deleteTransaccion) y su cuenta se recalcula. Solo un administrador puede llamar a esto (UI-gated,
- * ver TransaccionModal.svelte).
+ * cobro/pago ya no debe seguir contando como probado: se revierte a 'programado' y su cuenta se
+ * recalcula. Solo un administrador puede llamar a esto (UI-gated, ver TransaccionModal.svelte —
+ * este RPC no puede verificar roles server-side, mismo límite que el resto del ERP sin RLS real).
+ *
+ * Todo el trabajo (bloquear la fila de la transacción, desvincular pago/cobro, recalcular sus cuentas,
+ * marcar 'anulado', recalcular saldo_actual de cuenta_banco) corre atómicamente dentro de
+ * fn_anular_transaccion — ver financial_integrity_rpc_migration.sql. Naturalmente idempotente: llamar
+ * dos veces sobre una transacción ya anulada es un no-op seguro.
  */
 export async function anularTransaccion(client: SupabaseClient, id: number, esAdmin: boolean): Promise<ServiceResult<Transaccion>> {
 	if (!esAdmin) return { success: false, message: 'Solo un administrador puede anular una transacción.' };
 
-	const { data: cobros } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id);
-	for (const cobro of (cobros ?? []) as any[]) {
-		await client.from('cobros').update({ estado_cobro: 'programado', id_transaccion: null }).eq('id_cobro', cobro.id_cobro);
-		await recalcularCuentaCobrar(client, cobro.id_cuenta_cobrar);
-	}
-
-	const { data: pagos } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id);
-	for (const pago of (pagos ?? []) as any[]) {
-		await client.from('pagos').update({ estado_pago: 'programado', id_transaccion: null }).eq('id_pago', pago.id_pago);
-		await recalcularCuentaPagar(client, pago.id_cuenta_pagar);
-	}
-
-	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'anulado' }).eq(PK_COLUMN, id).select('*').single();
-	if (error) return { success: false, message: `No se pudo anular la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-
-	// Una transacción anulada deja de contar (estado != 'activo') en recalcularSaldoCuentaBanco/
-	// saldoDisponibleCuentaBanco — recalcula para que el saldo de la cuenta bancaria vuelva a reflejar
-	// que este movimiento "no ocurrió realmente" (mismo criterio que el resto del ERP).
-	await Promise.all([recalcularSaldoCuentaBanco(client, (data as any)?.cuente_origen), recalcularSaldoCuentaBanco(client, (data as any)?.cuente_destino)]);
+	const { data, error } = await client.rpc('fn_anular_transaccion', { p_id_transaccion: id });
+	if (error) return { success: false, message: `No se pudo anular la transacción: ${translateRpcError(error, FIELDS_CONFIG)}` };
 
 	return { success: true, message: 'Transacción anulada', data: data as Transaccion };
 }

@@ -555,9 +555,9 @@
 	// confirmandoCobroId) — crea la transacción Y confirma el cobro como 'cobrado' en un solo paso
 	// atómico (ver confirmarCobroCobrado en cuentasCobrar.service.ts). Si esto falla, el cobro se
 	// queda como estaba (nunca "cobrado" sin transacción).
-	async function confirmarTransaccionCobro(payload: Record<string, unknown>) {
+	async function confirmarTransaccionCobro(payload: Record<string, unknown>, idempotencyKey: string) {
 		const { data: userData } = await supabase.auth.getUser();
-		const result = await confirmarCobroCobrado(supabase, confirmandoCobroId as number, payload, userData?.user?.email ?? null, permisosState.userName || null);
+		const result = await confirmarCobroCobrado(supabase, confirmandoCobroId as number, payload, userData?.user?.email ?? null, permisosState.userName || null, idempotencyKey);
 		if (result.success) await Promise.all([fetchList(), fetchSelectedCobros(), fetchMontoFiltrado(), fetchKpis()]);
 		return result;
 	}
