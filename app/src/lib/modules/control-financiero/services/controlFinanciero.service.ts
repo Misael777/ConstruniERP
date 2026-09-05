@@ -179,10 +179,42 @@ async function checkConsistenciaCuentasBancarias(client: SupabaseClient): Promis
 	};
 }
 
+/**
+ * Saldos consistentes: Σ Centro de Costo debe ser igual a Σ Cuenta Bancaria ajustada por su
+ * saldo_inicial (Centro de Costo siempre arranca en 0 en getSaldosPorCentroCosto; Cuenta Bancaria
+ * arranca en saldo_inicial — sin restarlo, cualquier cuenta con plata real al empezar mostraría una
+ * diferencia que no es un error). Recorriendo tipo por tipo (egreso debita el centro/cuenta origen,
+ * ingreso/financiamiento/transferencia acreditan el centro/cuenta destino — ver
+ * getSaldosPorCentroCosto en centroCostos.service.ts y recalcularSaldoCuentaBanco en
+ * cuentaBanco.service.ts) ambos totales se mueven en espejo transacción por transacción; una
+ * diferencia real acá señala una transacción cuya cuenta_banco o centro_costo referenciado no existe
+ * o no está registrado en el lado que se esperaba — el mismo chequeo que "Cruce Interno" en
+ * Conciliación, pero corrido automáticamente como parte de la revisión general.
+ */
+async function checkSaldosConsistentes(client: SupabaseClient): Promise<ResultadoCheck> {
+	const [saldoCentros, saldoBancos, saldoInicial] = await Promise.all([
+		getSaldoTotalCentrosCosto(client),
+		getSaldoTotalCuentasBancarias(client),
+		getSaldoInicialTotalCuentasBancarias(client)
+	]);
+	const saldoBancosAjustado = Number((saldoBancos - saldoInicial).toFixed(2));
+	const diferencia = Number((saldoCentros - saldoBancosAjustado).toFixed(2));
+
+	if (Math.abs(diferencia) <= 0.01) {
+		return { estado: 'ok', mensaje: 'Σ Centros de Costo cuadra con Σ Cuentas Bancarias (ajustada por saldo inicial).' };
+	}
+	return {
+		estado: 'error',
+		mensaje: `Diferencia de ${diferencia.toFixed(2)} entre Σ Centros de Costo (${saldoCentros.toFixed(2)}) y Σ Cuentas Bancarias ajustada (${saldoBancosAjustado.toFixed(2)}) — revisa Conciliación.`,
+		detalle: { saldoCentros, saldoBancos, saldoInicial, saldoBancosAjustado, diferencia }
+	};
+}
+
 export const CHEQUEOS: ChequeoConsistencia[] = [
 	{ id: 'integridad_transacciones', label: 'Integridad de transacciones', run: checkIntegridadTransacciones },
 	{ id: 'integridad_movimientos', label: 'Integridad de movimientos (pagos/cobros)', run: checkIntegridadMovimientos },
 	{ id: 'consistencia_saldos', label: 'Consistencia de saldos bancarios', run: checkConsistenciaSaldos },
+	{ id: 'saldos_consistentes', label: 'Saldos consistentes (Centros de Costo vs Cuentas Bancarias)', run: checkSaldosConsistentes },
 	{ id: 'posibles_duplicados', label: 'Posibles duplicados', run: checkPosiblesDuplicados },
 	{ id: 'consistencia_centros_costo', label: 'Consistencia de centros de costo', run: checkConsistenciaCentrosCosto },
 	{ id: 'consistencia_cuentas_bancarias', label: 'Consistencia de cuentas bancarias', run: checkConsistenciaCuentasBancarias }
