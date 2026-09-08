@@ -8,6 +8,7 @@
 	import ConsistenciaTab from '$lib/modules/control-financiero/components/ConsistenciaTab.svelte';
 	import ConciliacionTab from '$lib/modules/control-financiero/components/ConciliacionTab.svelte';
 	import IncidenciasTab from '$lib/modules/control-financiero/components/IncidenciasTab.svelte';
+	import { Shield } from '@lucide/svelte';
 
 	let activeTab = $state<'dashboard' | 'consistencia' | 'conciliacion' | 'incidencias'>('dashboard');
 </script>
@@ -18,7 +19,7 @@
 
 <div class="mb-4">
 	<h1 class="text-2xl font-bold text-brand-marine flex items-center gap-2">
-		<i class="fas fa-shield-halved text-blue-600"></i> Control Financiero
+		<Shield size={24} class="text-blue-600" /> Control Financiero
 	</h1>
 	<p class="text-sm text-slate-500 mt-1">Capa de supervisión del módulo financiero: verificar, conciliar, detectar diferencias y dar seguimiento a su resolución.</p>
 </div>

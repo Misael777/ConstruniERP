@@ -58,7 +58,8 @@
 		ShieldQuestion,
 		Landmark,
 		ScrollText,
-		AlertCircle
+		AlertCircle,
+		Clock
 	} from '@lucide/svelte';
 
 	ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale, LinearScale, PointElement, LineElement, BarElement);
@@ -334,18 +335,24 @@
 </script>
 
 <!-- ── Salud Financiera ─────────────────────────────────────────────────── -->
-<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm mb-8">
-	<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-		<div class="flex items-center gap-2">
+<!-- Banner de estado: borde de color a la izquierda (verde/ámbar/rojo, ver estadoGeneral) para que el
+     resultado de la revisión se distinga de un vistazo, mismo lenguaje visual que un banner de alerta. -->
+<div
+	class={`bg-white p-5 rounded-2xl border border-slate-100 border-l-4 shadow-sm mb-8 ${
+		estadoGeneral === 'ok' ? 'border-l-emerald-500' : estadoGeneral === 'alerta' ? 'border-l-amber-500' : 'border-l-red-500'
+	}`}
+>
+	<div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+		<div class="flex items-center gap-2.5">
 			{#if estadoGeneral === 'ok'}
-				<ShieldCheck size={20} class="text-emerald-500" />
-				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Consistente</h2>
+				<ShieldCheck size={24} class="text-emerald-500 shrink-0" />
+				<h2 class="font-bold text-brand-marine text-base">Salud Financiera: Consistente</h2>
 			{:else if estadoGeneral === 'alerta'}
-				<ShieldQuestion size={20} class="text-amber-500" />
-				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Con observaciones</h2>
+				<ShieldQuestion size={24} class="text-amber-500 shrink-0" />
+				<h2 class="font-bold text-brand-marine text-base">Salud Financiera: Con observaciones</h2>
 			{:else}
-				<ShieldAlert size={20} class="text-red-500" />
-				<h2 class="font-bold text-brand-marine text-sm">Salud Financiera: Requiere atención</h2>
+				<ShieldAlert size={24} class="text-red-500 shrink-0" />
+				<h2 class="font-bold text-brand-marine text-base">Salud Financiera: Requiere atención</h2>
 			{/if}
 		</div>
 		<button
@@ -357,44 +364,56 @@
 			<RefreshCw size={14} class={ejecutandoRevision ? 'animate-spin' : ''} /> Ejecutar revisión
 		</button>
 	</div>
-	<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+	<!-- Mismo tamaño/peso de valor en las 6 columnas, alineados todos al mismo nivel — a pedido explícito
+	     del usuario: antes, apenas una etiqueta se envolvía a 2 líneas ("Saldo Centros de Costo",
+	     "Conciliaciones Pendientes", etc.) su valor quedaba más abajo que el de una columna vecina con
+	     etiqueta de 1 sola línea ("Saldo Bancario"), dando un efecto de "desnivel" en toda la fila.
+	     min-h-[28px] en cada etiqueta reserva el mismo alto tenga 1 o 2 líneas, así el valor de las 6
+	     columnas arranca siempre a la misma altura. Los valores en sí van en font-mono (tipografía
+	     monoespaciada, distinta de las etiquetas y del resto de la interfaz) con tabular-nums para que
+	     los dígitos midan lo mismo entre sí — look más "financiero", más fácil de comparar de un vistazo. -->
+	<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-4 gap-y-5">
 		<div>
-			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Landmark size={11} /> Saldo Bancario</div>
-			<div class="text-lg font-black text-brand-marine mt-0.5">{formatCurrency(saldoBancos)}</div>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Landmark size={11} class="shrink-0" /> Saldo Bancario</div>
+			<div class="font-mono tabular-nums text-xl font-black text-brand-marine mt-1">{formatCurrency(saldoBancos)}</div>
 		</div>
 		<div>
-			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Building2 size={11} /> Saldo Centros de Costo</div>
-			<div class="text-lg font-black text-brand-marine mt-0.5">{formatCurrency(saldoCentros)}</div>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Building2 size={11} class="shrink-0" /> Saldo Centros de Costo</div>
+			<div class="font-mono tabular-nums text-xl font-black text-brand-marine mt-1">{formatCurrency(saldoCentros)}</div>
 		</div>
 		<div>
-			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><ScrollText size={11} /> Conciliaciones Pendientes</div>
-			<div class={`text-lg font-black mt-0.5 ${conciliacionesPendientes > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{conciliacionesPendientes}</div>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><ScrollText size={11} class="shrink-0" /> Conciliaciones Pendientes</div>
+			<div class={`font-mono tabular-nums text-xl font-black mt-1 ${conciliacionesPendientes > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{conciliacionesPendientes}</div>
 		</div>
 		<div>
-			<div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider"><AlertCircle size={11} /> Incidencias Abiertas</div>
-			<div class={`text-lg font-black mt-0.5 ${incidenciasAbiertas > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{incidenciasAbiertas}</div>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><AlertCircle size={11} class="shrink-0" /> Incidencias Abiertas</div>
+			<div class={`font-mono tabular-nums text-xl font-black mt-1 ${incidenciasAbiertas > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{incidenciasAbiertas}</div>
 		</div>
 		<div>
-			<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Controles OK / Alerta / Error</div>
-			<div class="text-lg font-black mt-0.5">
-				<span class="text-emerald-600">{ultimaRevision?.controles_ok ?? '—'}</span> /
-				<span class="text-amber-600">{ultimaRevision?.controles_alerta ?? '—'}</span> /
-				<span class="text-red-600">{ultimaRevision?.controles_error ?? '—'}</span>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Gauge size={11} class="shrink-0" /> OK / Alerta / Error</div>
+			<div class="font-mono tabular-nums text-xl font-black mt-1">
+				<span class="text-emerald-600">{ultimaRevision?.controles_ok ?? '—'}</span
+				><span class="text-slate-300"> / </span><span class="text-amber-600">{ultimaRevision?.controles_alerta ?? '—'}</span
+				><span class="text-slate-300"> / </span><span class="text-red-600">{ultimaRevision?.controles_error ?? '—'}</span>
 			</div>
 		</div>
 		<div>
-			<div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Última Revisión</div>
-			<div class="text-xs font-semibold text-slate-600 mt-1.5">{formatFecha(ultimaRevision?.fecha)}</div>
+			<div class="flex items-center gap-1 min-h-[28px] text-[10px] font-bold text-slate-400 uppercase tracking-wider"><Clock size={11} class="shrink-0" /> Última Revisión</div>
+			<div class="font-mono tabular-nums text-sm font-bold text-slate-600 mt-1.5">{formatFecha(ultimaRevision?.fecha)}</div>
 		</div>
 	</div>
 </div>
 
-<!-- Topbar header -->
-<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+<!-- Encabezado de sección — a diferencia de "Salud Financiera" (banner de estado, arriba), esta es la
+     segunda mitad del tab: el flujo de dinero en sí. Un <h2> más chico que el <h1> de la página
+     ("Control Financiero", ver +page.svelte) — antes era otro <h1> casi del mismo tamaño, dando la
+     sensación de dos títulos de página compitiendo uno debajo del otro. Mismo ícono Lucide que el resto
+     del tab (antes Font Awesome, único caso suelto de otra librería de íconos acá). -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pt-2 border-t border-slate-100">
 	<div>
-		<h1 class="text-xl font-bold text-brand-marine flex items-center gap-2">
-			<i class="fas fa-chart-line text-blue-600"></i> Flujo de dinero y proyecciones
-		</h1>
+		<h2 class="text-lg font-bold text-brand-marine flex items-center gap-2">
+			<LineChartIcon size={20} class="text-blue-600" /> Flujo de dinero y proyecciones
+		</h2>
 		<p class="text-sm text-slate-500 mt-1">Flujo de dinero entre centros de costo, en vivo desde Supabase — histórico y proyectado.</p>
 	</div>
 	<div class="flex items-center gap-3">
