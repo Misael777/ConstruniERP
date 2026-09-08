@@ -201,18 +201,18 @@
 		return `${dd}_${mm}_${yyyy}`;
 	}
 
-	/** Nombre del PDF al descargar el Boucher (el comprobante principal, área 1 del formulario) — a
-	 * pedido explícito del usuario, estructura propia, distinta de la Factura/Comprobantes de pago (ver
-	 * nombrePdfTransaccion): Fecha_N° de Operación_N° de Transacción. */
+	/** Nombre del PDF al descargar el Boucher (el comprobante principal, área 1 del formulario, y el
+	 * Comprobante autogenerado por el ERP, mismo criterio) — a pedido explícito del usuario, estructura
+	 * fija: Fecha_OPER_N° de Operación_TRANS_N° de Transacción (ej. "12_01_2026_OPER_01121436_TRANS_117"). */
 	function nombreArchivoBoucher(item: Transaccion): string {
-		return `${fechaParaNombreArchivo(item.fecha)}_${item.num_operacion || ''}_${item.id_transaccion}`;
+		return `${fechaParaNombreArchivo(item.fecha)}_OPER_${item.num_operacion || ''}_TRANS_${item.id_transaccion}`;
 	}
 
 	/** Nombre del PDF al descargar una Factura/boleta o un comprobante de la sección "Comprobantes" —
-	 * a pedido explícito del usuario, el orden de los segmentos cambia según el tipo de transacción.
-	 * PENDIENTE (nota del usuario): definir qué va en N° de Operación cuando el Medio de Pago es
-	 * Efectivo — hoy ese segmento queda vacío si la transacción no tiene uno guardado. */
-	/** `numDocumentoOverride` (a pedido explícito del usuario, corrigiendo un bug real): para un
+	 * a pedido explícito del usuario, el orden de los segmentos cambia según el tipo de transacción:
+	 *  - Ingreso: N° de Documento_TRANS_N° de Transacción_OPER_N° de Operación_Fecha.
+	 *  - Egreso: Fecha_N° de Documento_TRANS_N° de Transacción_OPER_N° de Operación.
+	 * `numDocumentoOverride` (a pedido explícito del usuario, corrigiendo un bug real): para un
 	 * comprobante de la sección "Comprobantes" hay que usar el N° de Documento PROPIO de esa fila (el
 	 * que reconoce el OCR o se escribe a mano ahí), no el de la transacción en general — ese campo ya
 	 * no se llena desde que Tipo de Documento/N° de Documento se sacaron de "Otros campos", así que
@@ -221,10 +221,8 @@
 		const fecha = fechaParaNombreArchivo(item.fecha);
 		const numDocumento = numDocumentoOverride || item.num_documento || '';
 		const numOperacion = item.num_operacion || '';
-		const etiquetaSistema = 'TRANSACCION GENERADA POR EL SISTEMA';
-		if (item.tipo === 'egreso') return `${fecha}_${numDocumento}_${etiquetaSistema}_${numOperacion}`;
-		if (item.tipo === 'ingreso') return `${numDocumento}_${etiquetaSistema}_${numOperacion}_${fecha}`;
-		return `Documentos - ${item.num_documento || 'Transacción'}`;
+		if (item.tipo === 'ingreso') return `${numDocumento}_TRANS_${item.id_transaccion}_OPER_${numOperacion}_${fecha}`;
+		return `${fecha}_${numDocumento}_TRANS_${item.id_transaccion}_OPER_${numOperacion}`;
 	}
 
 	// Tab "Calendario" — muestra las transacciones reales (no las cuotas pendientes de
