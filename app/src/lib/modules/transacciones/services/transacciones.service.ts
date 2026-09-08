@@ -124,10 +124,10 @@ export interface Transaccion {
 	 * (documentos de terceros): antes reusaba comprobante_url y eso pisaba/borraba el boucher que el
 	 * usuario había subido. Ver transaccion_comprobante_autogenerado_migration.sql. */
 	comprobante_autogenerado_url: string | null;
-	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, ni esta
-	 * transacción ni la cuenta por pagar/cobrar ni el cobro/pago vinculados se pueden editar/eliminar
-	 * salvo por un administrador — ver updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION
-	 * en cuentasCobrar.service.ts/cuentasPagar.service.ts. */
+	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, esta transacción
+	 * queda bloqueada para TODOS, sin excepción de administrador (a pedido explícito del usuario) — ver
+	 * updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION. Para editarla hay que quitar la
+	 * aprobación primero (ver desaprobarTransaccion, esa sí sigue siendo admin-only). */
 	aprobado: boolean;
 	aprobado_por: string | null;
 	aprobado_en: string | null;
@@ -186,8 +186,12 @@ export interface ServiceResult<T = undefined> {
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
 
+// A pedido explícito del usuario: una vez aprobada, la transacción queda BLOQUEADA para TODOS, sin
+// excepción de administrador (antes un admin sí podía seguir editándola/borrándola). Para volver a
+// editarla hay que quitar la aprobación primero (ver desaprobarTransaccion, esa sí sigue siendo
+// admin-only) — solo entonces vuelve a pasar este chequeo.
 const BLOQUEADO_POR_APROBACION =
-	'No se puede modificar/eliminar: el comprobante ya fue aprobado por un administrador. Solo un administrador puede hacerlo.';
+	'No se puede modificar/eliminar: el comprobante ya fue aprobado. Para editarla, un administrador debe quitar la aprobación primero.';
 
 /** `estado` ya no es un <select> manual en el formulario (a pedido del usuario, ver TransaccionModal.svelte)
  * — se calcula solo acá: 'consulta' mientras el Alcance sea Interna (mismo comportamiento que antes
@@ -524,7 +528,7 @@ export async function updateTransaccion(
 	}
 
 	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
-	if (actual?.aprobado && !esAdmin) {
+	if (actual?.aprobado) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
@@ -583,14 +587,15 @@ export async function updateTransaccion(
 }
 
 /**
- * Elimina la transacción. Bloqueada para no-admins si ya está aprobada. Si es el respaldo de un
+ * Elimina la transacción. Bloqueada para TODOS (sin excepción de admin) si ya está aprobada — ver
+ * BLOQUEADO_POR_APROBACION. Si es el respaldo de un
  * cobro/pago ya confirmado, ese cobro/pago pierde su prueba: se revierte a 'programado' (se
  * "desconfirma") y la cuenta por cobrar/pagar se recalcula — si estaba pagada del todo, vuelve a
  * pendiente, ya que ahora le falta esa transacción (ver recalcularCuentaCobrar/recalcularCuentaPagar).
  */
 export async function deleteTransaccion(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
 	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
-	if (actual?.aprobado && !esAdmin) {
+	if (actual?.aprobado) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 

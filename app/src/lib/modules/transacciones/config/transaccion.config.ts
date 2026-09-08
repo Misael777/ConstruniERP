@@ -202,6 +202,26 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Operario', label: 'Operario' },
 			{ value: 'Ayudante', label: 'Ayudante' },
 			{ value: 'Oficial', label: 'Oficial' },
+			// Especialidad de tercer nivel de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA en
+			// TransaccionModal.svelte) — el valor final que se guarda en `categoria` es la especialidad
+			// elegida (ej. "Operario Carpintero"), no el rol genérico, así que cada una tiene que estar
+			// acá también (mismo motivo que el resto de esta lista, ver comentario más arriba).
+			{ value: 'Operario Carpintero', label: 'Operario Carpintero' },
+			{ value: 'Operario Albañil', label: 'Operario Albañil' },
+			{ value: 'Operario Fierrero', label: 'Operario Fierrero' },
+			{ value: 'Operario Eléctrico', label: 'Operario Eléctrico' },
+			{ value: 'Operario Sanitario', label: 'Operario Sanitario' },
+			{ value: 'Operario Multifuncional', label: 'Operario Multifuncional' },
+			{ value: 'Oficial Carpintero', label: 'Oficial Carpintero' },
+			{ value: 'Oficial Albañil', label: 'Oficial Albañil' },
+			{ value: 'Oficial Fierrero', label: 'Oficial Fierrero' },
+			{ value: 'Oficial Eléctrico', label: 'Oficial Eléctrico' },
+			{ value: 'Ayudante Sanitario', label: 'Ayudante Sanitario' },
+			{ value: 'Ayudante Carpintero', label: 'Ayudante Carpintero' },
+			{ value: 'Ayudante Albañil', label: 'Ayudante Albañil' },
+			{ value: 'Ayudante Fierrero', label: 'Ayudante Fierrero' },
+			{ value: 'Ayudante Eléctrico', label: 'Ayudante Eléctrico' },
+			{ value: 'Ayudante General', label: 'Ayudante General' },
 			{ value: 'Vigilante', label: 'Vigilante' },
 			{ value: 'Eléctrico', label: 'Eléctrico' },
 			{ value: 'Otras Subcontratos', label: 'Otras Subcontratos' },

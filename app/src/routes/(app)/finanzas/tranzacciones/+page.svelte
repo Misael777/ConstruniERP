@@ -429,11 +429,11 @@
 				const cuentaDestino = cuentaBancoLookup.get(item.cuente_destino ?? '') ?? item.cuente_destino ?? '—';
 				if (item.medio_pago === '1') {
 					mensajeR2Texto = armarMensajeIngresoEfectivo({
-						usuario: permisosState.userName || 'Usuario',
 						monto: item.monto_total,
-						proveedor: centroCostoLabel(item.id_centro_costo_origen),
+						fecha: item.fecha,
+						cliente: centroCostoLabel(item.id_centro_costo_origen),
 						cuentaBancaria: cuentaDestino,
-						fecha: item.fecha
+						nombreProyecto: centroCostoNombre(item.id_centro_costo_destino)
 					});
 				} else {
 					mensajeR2Texto = armarMensajeIngreso({
@@ -848,9 +848,9 @@
 						</button>
 					{/if}
 					{#if item.aprobado}
-						<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, ya no se puede editar">
-							<Lock size={16} />
-						</span>
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 inline-flex items-center gap-0.5" title="Ver (bloqueada: transacción aprobada, ya no se puede editar)" aria-label="Ver transacción aprobada">
+							<Lock size={12} class="shrink-0" /><Eye size={16} />
+						</button>
 					{:else}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 							<Pencil size={16} />

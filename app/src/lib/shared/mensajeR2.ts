@@ -47,17 +47,18 @@ export function armarMensajeIngreso(datos: DatosMensajeIngreso): string {
 }
 
 export interface DatosMensajeIngresoEfectivo {
-	usuario: string;
 	monto: number;
-	proveedor: string;
-	/** Label de la cuenta bancaria de destino — normalmente vacío/"—" en Efectivo (no hay cuenta real de
-	 * por medio), se muestra igual tal cual llegue. */
-	cuentaBancaria: string;
 	/** 'YYYY-MM-DD'. */
 	fecha: string;
+	cliente: string;
+	/** Label de la cuenta bancaria de destino — normalmente vacío/"—" en Efectivo (el dinero no entra a
+	 * ninguna cuenta bancaria real), se muestra igual tal cual llegue. */
+	cuentaBancaria: string;
+	nombreProyecto: string;
 }
 
-/** Ingreso recibido en efectivo, por quien tiene la sesión abierta. */
+/** Ingreso recibido en efectivo — a pedido explícito del usuario, mismo tenor que armarMensajeIngreso
+ * (no efectivo), agregando "en efectivo" al monto. */
 export function armarMensajeIngresoEfectivo(datos: DatosMensajeIngresoEfectivo): string {
-	return `Yo, ${datos.usuario}, he registrado el pago de ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado en efectivo y recibido por ${datos.usuario}, ósea ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}`;
+	return `Se ha registrado un ingreso en efectivo de ${formatCurrency(datos.monto)}, el día ${formatearFechaCorta(datos.fecha)} del cliente ${datos.cliente}, a la cuenta a nombre de ${datos.cuentaBancaria}, por el proyecto ${datos.nombreProyecto}`;
 }

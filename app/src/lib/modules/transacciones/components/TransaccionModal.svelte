@@ -34,6 +34,7 @@
 		getCuentasBancoUsadasEnIngresos
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getSaldosCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { formatearFechaCorta } from '$lib/shared/pdfFormatoUtil';
 	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
 	import { generarReciboPagoProveedorBase64, construirHtmlCompleto as construirHtmlReciboProveedor, type DatosReciboPagoProveedor } from '$lib/shared/reciboPagoProveedor';
@@ -147,10 +148,13 @@
 	let submitting = $state(false);
 	let aprobando = $state(false);
 
-	// Bloquea edición/borrado (todo el form, no solo el comprobante) una vez que un administrador
-	// aprobó el comprobante — solo otro administrador puede seguir editando. Ver aprobarTransaccion/
-	// desaprobarTransaccion y BLOQUEADO_POR_APROBACION en transacciones.service.ts.
-	const bloqueadaPorAprobacion = $derived(mode === 'edit' && !!transaccion?.aprobado && !isAdmin());
+	// Bloquea edición/borrado (todo el form, no solo el comprobante) una vez que un administrador aprobó
+	// el comprobante — a pedido explícito del usuario, sin excepción de administrador (antes un admin sí
+	// podía seguir editando). La transacción sigue siendo VISIBLE, con todos los campos deshabilitados;
+	// para volver a editarla hay que quitar la aprobación primero (ver handleDesaprobar más abajo, esa
+	// acción sigue siendo admin-only). Ver aprobarTransaccion/desaprobarTransaccion y
+	// BLOQUEADO_POR_APROBACION en transacciones.service.ts.
+	const bloqueadaPorAprobacion = $derived(mode === 'edit' && !!transaccion?.aprobado);
 
 	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, a pedido del usuario (ver texto de ayuda del dropzone)
 
@@ -187,6 +191,14 @@
 	let comprobantesPagoCargadoParaId: number | null = null;
 	let uploadingComprobantesPago = $state(false);
 	let previewComprobantePago = $state<ComprobantePagoFila | null>(null);
+	/** `documents` para el DocumentPreviewModal de una fila de "Comprobantes de pago" — arma la URL UNA
+	 * sola vez (createObjectURL para un archivo local recién elegido, aún no subido) y el nombre de
+	 * descarga con la estructura pedida (ver nombreDescargaComprobante). */
+	const previewComprobantePagoDocs = $derived.by(() => {
+		if (!previewComprobantePago) return [];
+		const url = previewComprobantePago.file ? URL.createObjectURL(previewComprobantePago.file) : (previewComprobantePago.url ?? '');
+		return [{ url, label: previewComprobantePago.nombre_archivo ?? 'Comprobante', filename: nombreDescargaComprobante(previewComprobantePago.num_documento ?? '') }];
+	});
 
 	function agregarComprobantesPago(files: FileList | File[]) {
 		const nuevas: ComprobantePagoFila[] = [];
@@ -427,6 +439,7 @@
 			comprobanteUrl = transaccion?.comprobante_url ?? null;
 			comprobanteError = '';
 			comprobanteAutogeneradoUrl = transaccion?.comprobante_autogenerado_url ?? null;
+			saldosRevelados = {};
 			comprobantesPago = [];
 			comprobantesPagoOriginales = [];
 			comprobantesPagoCargadoParaId = null;
@@ -612,6 +625,35 @@
 
 	function fileExt(name: string): string {
 		return name.includes('.') ? `.${name.split('.').pop()}` : '';
+	}
+
+	/** Nombre de archivo al DESCARGAR el boucher de pago (o el comprobante autogenerado por el ERP,
+	 * mismo criterio) desde Nueva/Editar Transacción — a pedido explícito del usuario, con una
+	 * estructura fija: fecha_OPER_numOperación_TRANS_numTransacción (ej.
+	 * "12_01_2026_OPER_01121436_TRANS_117"). DocumentPreviewModal ya sanitiza caracteres inválidos de
+	 * sistema de archivos al descargar (ver sanitizeFilename ahí), acá solo se arma el texto con "_"
+	 * como separador. En 'create' (transacción todavía sin guardar) num_transaccion queda vacío — no hay
+	 * un N° real todavía. */
+	function nombreDescargaBoucher(): string {
+		const fechaTexto = formValues.fecha ? formatearFechaCorta(formValues.fecha).replace(/\//g, '_') : '';
+		const numOperacion = formValues.num_operacion || '';
+		const numTransaccion = transaccion?.id_transaccion ?? '';
+		return `${fechaTexto}_OPER_${numOperacion}_TRANS_${numTransaccion}`;
+	}
+
+	/** Nombre de archivo al descargar una fila de "Comprobantes de pago" — a pedido explícito del
+	 * usuario, distinto orden según Ingreso/Egreso:
+	 *  - Ingreso: numDocumento_TRANS_numTransacción_OPER_numOperación_fecha
+	 *  - Egreso: fecha_numDocumento_TRANS_numTransacción_OPER_numOperación
+	 * `numDocumento` es el de esa fila puntual (cada comprobante puede tener el suyo); fecha/N°
+	 * Operación/N° Transacción son los de la transacción, compartidos por todas las filas. */
+	function nombreDescargaComprobante(numDocumento: string): string {
+		const fechaTexto = formValues.fecha ? formatearFechaCorta(formValues.fecha).replace(/\//g, '_') : '';
+		const numOperacion = formValues.num_operacion || '';
+		const numTransaccion = transaccion?.id_transaccion ?? '';
+		const doc = numDocumento || 'sin-documento';
+		if (formValues.tipo === 'ingreso') return `${doc}_TRANS_${numTransaccion}_OPER_${numOperacion}_${fechaTexto}`;
+		return `${fechaTexto}_${doc}_TRANS_${numTransaccion}_OPER_${numOperacion}`;
 	}
 
 	/**
@@ -1576,14 +1618,40 @@
 		{ key: 'prestamo_obra', label: 'Préstamo', opciones: ['Otros Préstamo'] }
 	];
 
+	// Especialidad de Operario/Oficial/Ayudante (2do nivel de Sub Contrata, ver TIPOS_GASTO_OBRA), a
+	// pedido explícito del usuario con su propio cuadro de referencia — presentada como <optgroup>
+	// DENTRO del mismo dropdown de Subcategoría (ver template más abajo), no como un 3er selector aparte
+	// (versión anterior, más compleja). El valor final que se guarda en formValues.categoria/se agrega a
+	// Detalle es la especialidad elegida (ej. "Operario Carpintero"), no el rol genérico — ver
+	// transaccion.config.ts, que también necesita cada especialidad en su lista de `options` para pasar
+	// validatePayload.
+	const SUBOPCIONES_SUBCONTRATA: Record<string, string[]> = {
+		Operario: ['Operario Carpintero', 'Operario Albañil', 'Operario Fierrero', 'Operario Eléctrico', 'Operario Sanitario', 'Operario Multifuncional'],
+		Oficial: ['Oficial Carpintero', 'Oficial Albañil', 'Oficial Fierrero', 'Oficial Eléctrico'],
+		Ayudante: ['Ayudante Sanitario', 'Ayudante Carpintero', 'Ayudante Albañil', 'Ayudante Fierrero', 'Ayudante Eléctrico', 'Ayudante General']
+	};
+	/** Si `valor` es una especialidad (ej. "Operario Carpintero"), devuelve su rol padre ("Operario") —
+	 * solo para reconstruir a qué GRUPO ("Sub Contrata") pertenece un valor ya guardado al editar (ver
+	 * categoriaObraGrupoEfectivo más abajo); el dropdown en sí ya no lo necesita (un <select> nativo
+	 * selecciona su <option> aunque esté dentro de un <optgroup>, sin ayuda extra). null si `valor` no es
+	 * ninguna especialidad. */
+	function rolPadreDeSubOpcion(valor: string): string | null {
+		for (const rol in SUBOPCIONES_SUBCONTRATA) {
+			if (SUBOPCIONES_SUBCONTRATA[rol].includes(valor)) return rol;
+		}
+		return null;
+	}
+
 	// Categoría en cascada para Obra + Egreso, a pedido explícito del usuario: primer dropdown = grupo
 	// (mismas columnas de TIPOS_GASTO_OBRA), segundo dropdown = la opción de ese grupo, que se guarda
 	// directo en formValues.categoria. categoriaObraGrupo es puro estado de UI (no se persiste); al
-	// editar una transacción existente se reconstruye buscando en qué grupo cae el valor ya guardado.
+	// editar una transacción existente se reconstruye buscando en qué grupo cae el valor ya guardado —
+	// tolerante a que ese valor ya sea una especialidad de tercer nivel (ver rolPadreDeSubOpcion).
 	let categoriaObraGrupo = $state('');
 	const categoriaObraGrupoEfectivo = $derived.by(() => {
 		if (categoriaObraGrupo) return categoriaObraGrupo;
-		return TIPOS_GASTO_OBRA.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+		const valor = rolPadreDeSubOpcion(formValues.categoria) ?? formValues.categoria;
+		return TIPOS_GASTO_OBRA.find((g) => g.opciones.includes(valor))?.key ?? '';
 	});
 	function handleCategoriaObraGrupoChange(value: string) {
 		categoriaObraGrupo = value;
@@ -1827,6 +1895,13 @@
 		return saldoParaOpcion(field, { value: valor, label: '' });
 	}
 
+	/** "Saldo actual" de la opción ya elegida (ver saldoSeleccionado) — a pedido explícito del usuario,
+	 * arranca oculto tras asteriscos y solo se revela al hacer clic encima; uno por campo (Cuenta Origen/
+	 * Destino, Centro de Costo Origen/Destino pueden estar los 4 visibles a la vez). Se reinicia a oculto
+	 * cada vez que cambia la opción elegida en ese campo (ver el {#key} en el template) — no se queda
+	 * "pegado" revelado al cambiar de cuenta/centro de costo. */
+	let saldosRevelados = $state<Record<string, boolean>>({});
+
 	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo Origen/Destino en Ingreso+Externa:
 	 * como ahí muestran clientes/proyectos (ver optionsFor), a pedido explícito del usuario la etiqueta
 	 * también cambia para reflejar lo que de verdad se está eligiendo. */
@@ -1841,7 +1916,7 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if (bloqueadaPorAprobacion) {
-			toast.error('No se puede modificar: el comprobante ya fue aprobado. Solo un administrador puede hacerlo.');
+			toast.error('No se puede modificar: el comprobante ya fue aprobado. Un administrador debe quitar la aprobación primero.');
 			return;
 		}
 		revalidate();
@@ -2095,12 +2170,20 @@
 				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt) }))}
 				disabled={isDisabled}
 				hasError={!!fieldErrors[field.key]}
-				onchange={(v) => handleInput(field.key, v)}
+				onchange={(v) => {
+					handleInput(field.key, v);
+					saldosRevelados = { ...saldosRevelados, [field.key]: false };
+				}}
 			/>
 			{#if saldoElegido !== undefined}
-				<p class={`mt-1 text-xs font-semibold ${saldoElegido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-					Saldo actual: {formatCurrency(saldoElegido)}
-				</p>
+				<button
+					type="button"
+					onclick={() => (saldosRevelados = { ...saldosRevelados, [field.key]: !saldosRevelados[field.key] })}
+					class={`mt-1 text-xs font-semibold text-left hover:underline w-fit ${saldoElegido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}
+					title={saldosRevelados[field.key] ? 'Clic para ocultar el saldo' : 'Clic para ver el saldo'}
+				>
+					Saldo actual: {saldosRevelados[field.key] ? formatCurrency(saldoElegido) : '••••••••'}
+				</button>
 			{/if}
 		{:else if field.tipo === 'select' || field.options}
 			<div class="relative">
@@ -2183,7 +2266,8 @@
 								<span class="flex items-center gap-1.5">
 									<ShieldCheck size={16} class="shrink-0" />
 									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
-									{#if !isAdmin()}Solo un administrador puede modificar o eliminar esta transacción ahora.{/if}
+									Esta transacción está bloqueada y no se puede editar mientras esté aprobada.
+									{#if isAdmin()}Para editarla, quita la aprobación primero.{/if}
 								</span>
 								{#if isAdmin()}
 									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
@@ -2683,6 +2767,11 @@
 													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
 												</div>
 												<div class="relative">
+													<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
+													     a pedido explícito del usuario, presentada en el MISMO dropdown vía
+													     <optgroup> nativo (más simple que un 3er selector aparte): el rol se ve
+													     como encabezado de grupo y sus especialidades debajo, un solo clic para
+													     elegir. -->
 													<select
 														id="tr-categoria-otros-subcategoria"
 														value={formValues.categoria}
@@ -2692,7 +2781,15 @@
 													>
 														<option value="">Subcategoría</option>
 														{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-															<option value={opt}>{opt}</option>
+															{#if SUBOPCIONES_SUBCONTRATA[opt]}
+																<optgroup label={opt}>
+																	{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
+																		<option value={sub}>{sub}</option>
+																	{/each}
+																</optgroup>
+															{:else}
+																<option value={opt}>{opt}</option>
+															{/if}
 														{/each}
 													</select>
 													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -2926,6 +3023,10 @@
 										<div>
 											<label for="tr-detalle-subcatalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Subcategoría</label>
 											<div class="relative">
+												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
+												     agrupada en el MISMO dropdown vía <optgroup> nativo (más simple que un 3er
+												     selector aparte): elegir una especialidad agrega la fila directo, igual que
+												     cualquier otra opción de esta lista. -->
 												<select
 													id="tr-detalle-subcatalogo"
 													value=""
@@ -2939,7 +3040,15 @@
 												>
 													<option value="">Elige una opción para agregarla</option>
 													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-														<option value={opt}>{opt}</option>
+														{#if SUBOPCIONES_SUBCONTRATA[opt]}
+															<optgroup label={opt}>
+																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
+																	<option value={sub}>{sub}</option>
+																{/each}
+															</optgroup>
+														{:else}
+															<option value={opt}>{opt}</option>
+														{/if}
 													{/each}
 												</select>
 												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -3278,13 +3387,15 @@
 	open={showComprobantePreview}
 	url={comprobanteUrl}
 	title="Comprobante"
+	documents={comprobanteUrl ? [{ url: comprobanteUrl, label: 'Comprobante', filename: nombreDescargaBoucher() }] : []}
 	onClose={() => (showComprobantePreview = false)}
 />
 
 <DocumentPreviewModal
 	open={!!previewComprobantePago}
-	url={previewComprobantePago?.file ? URL.createObjectURL(previewComprobantePago.file) : (previewComprobantePago?.url ?? null)}
+	url={previewComprobantePagoDocs[0]?.url ?? null}
 	title={previewComprobantePago?.nombre_archivo ?? 'Comprobante'}
+	documents={previewComprobantePagoDocs}
 	onClose={() => (previewComprobantePago = null)}
 />
 
