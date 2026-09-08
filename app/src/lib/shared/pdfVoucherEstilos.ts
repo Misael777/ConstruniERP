@@ -92,10 +92,6 @@ export const ESTILOS_VOUCHER_BASE = `
 	.v-firma-linea { border-top: 1px solid #94a3b8; width: 80%; margin: 4px auto 0; }
 	.v-firma-nombre { font-size: 11px; font-weight: 700; color: #1e293b; margin-top: 5px; }
 	.v-firma-info { font-size: 9px; color: #64748b; line-height: 1.45; margin-top: 2px; }
-	/* Recibo NO EFECTIVO — mismo criterio ya usado en la versión anterior de este recibo: fondo
-	   crema/beige para diferenciarlo de un vistazo del recibo en Efectivo (blanco). */
-	.voucher-copia.v-no-efectivo { background: #f4e9d2; }
-	.voucher-copia.v-no-efectivo .v-caja { background: #f8fafc; }
 `;
 
 /** Ícono de brújula para el círculo del header del "RECIBO - TRANSFERENCIA INTERNA" (ver

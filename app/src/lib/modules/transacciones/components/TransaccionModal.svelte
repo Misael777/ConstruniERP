@@ -1163,6 +1163,38 @@
 		}
 		return null;
 	});
+
+	// Miniatura de vista previa (ver template más abajo) — a pedido explícito del usuario: antes tenía
+	// una escala/alto fijos (0.245 / 1300px) que asumían que las 2 copias del recibo siempre entraban en
+	// ese alto; con contenido más largo (ej. nombres largos que envuelven a 2 líneas) las 2 copias
+	// completas no cabían y la miniatura se veía "cortada" a la mitad de la segunda copia. Ahora la
+	// escala se recalcula cada vez que el iframe termina de cargar (dispara de nuevo en cada cambio de
+	// reciboAutoHtml, ya que cambiar `srcdoc` recarga el iframe) midiendo el alto REAL del documento ya
+	// renderizado, igual que "object-fit: contain" para una imagen — las 2 copias completas SIEMPRE
+	// entran en el recuadro visible, nunca se recortan.
+	let previewWrapperEl: HTMLDivElement | undefined = $state();
+	let previewIframeEl: HTMLIFrameElement | undefined = $state();
+	let previewEscala = $state(0.245);
+	function ajustarEscalaPreview() {
+		const doc = previewIframeEl?.contentDocument;
+		if (!doc || !previewWrapperEl) return;
+		// OJO: documentElement.scrollHeight NO sirve acá — como el iframe mide 3000px de alto (ver arriba,
+		// a propósito, generoso para que su scroll interno nunca recorte nada antes de medir), un
+		// contenido más corto que eso hace que scrollHeight devuelva el alto del VIEWPORT (3000), no el
+		// del contenido real (scrollHeight = el mayor entre ambos). Se mide en cambio la posición del
+		// borde inferior de la ÚLTIMA copia (siempre el último hijo directo de <body>, ver
+		// construirHtmlCompleto en comprobanteTransferenciaInterna.ts/reciboPagoEfectivo.ts/
+		// reciboPagoProveedor.ts) + 20px del padding inferior del <body> de esa plantilla.
+		const ultimaCopia = doc.body?.lastElementChild as HTMLElement | null;
+		if (!ultimaCopia) return;
+		const altoContenido = ultimaCopia.getBoundingClientRect().bottom + 20;
+		const anchoContenido = 780; // ancho fijo del iframe (ver style más abajo), no hace falta medirlo.
+		const cajaAncho = previewWrapperEl.clientWidth;
+		const cajaAlto = previewWrapperEl.clientHeight;
+		if (!altoContenido || !cajaAncho || !cajaAlto) return;
+		previewEscala = Math.min(cajaAncho / anchoContenido, cajaAlto / altoContenido);
+	}
+
 	function handleInput(key: string, rawValue: string) {
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
@@ -2771,22 +2803,19 @@
 								{#if reciboAutoHtml}
 									<!-- Todavía no es un PDF real (eso recién ocurre al guardar, ver
 									     generarComprobanteAutogenerado) — se previsualiza el HTML tal cual en un iframe
-									     en miniatura, sin pagar el costo de html2canvas antes de tiempo. Clic abre la
-									     misma miniatura en grande, en el popup de abajo (DocumentPreviewModal con
-									     `html`), en vez de una pestaña nueva del navegador. -->
-									<div
-										role="button"
-										tabindex="0"
-										onclick={() => (showReciboAutoPreview = true)}
-										onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (showReciboAutoPreview = true)}
-										aria-label="Ver comprobante en grande"
-										class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white cursor-pointer hover:ring-2 hover:ring-blue-300"
-									>
+									     en miniatura, sin pagar el costo de html2canvas antes de tiempo. Alto del iframe
+									     generoso (3000px) para que su PROPIO scroll interno nunca recorte el contenido
+									     antes de medirlo — el recuadro visible (w-48 h-64) recorta con overflow-hidden,
+									     pero previewEscala (ver ajustarEscalaPreview) se recalcula para que las 2 copias
+									     completas siempre entren ahí, nunca se ven cortadas. -->
+									<div bind:this={previewWrapperEl} class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white">
 										<iframe
+											bind:this={previewIframeEl}
 											title="Vista previa del recibo"
 											srcdoc={reciboAutoHtml}
+											onload={ajustarEscalaPreview}
 											class="absolute top-0 left-0 border-0 pointer-events-none bg-white"
-											style="width:780px; height:1300px; transform: scale(0.245); transform-origin: top left;"
+											style={`width:780px; height:3000px; transform: scale(${previewEscala}); transform-origin: top left;`}
 										></iframe>
 									</div>
 								{/if}

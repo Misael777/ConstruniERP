@@ -10,17 +10,13 @@
  * concepto largo simplemente se envuelve y agranda su recuadro solo, sin desbordar. 100% cliente, sin
  * backend — funciona igual en navegador, Tauri Windows y Tauri Android.
  */
-import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
-import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaLarga, formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
-import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
+import { renderHtmlToPngDataUrl, ensamblarPdfDosCopiasA4 } from './pdfHtmlRender';
 import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 
 const ANCHO_PLANTILLA_PX = 750;
-const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
-const MARGEN_PAGINA_MM = 10;
 
 export interface DatosComprobanteInterno {
 	numero: number;
@@ -140,30 +136,13 @@ export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
  * guardarArchivoBinario (mismo helper multiplataforma que ya usan las exportaciones y R1/R2). Cada
- * copia se renderiza por separado (mismo layout, solo cambia la etiqueta "COPIA -") y se ubica justo
- * después de donde terminó la anterior — un nombre/concepto largo que agranda la primera copia nunca se
- * superpone con la segunda, porque la altura de cada imagen se mide después de renderizarla. */
+ * copia se renderiza por separado (mismo layout, solo cambia la etiqueta "COPIA -"); el ensamblado en
+ * la hoja A4 (incluida la escala si el contenido es más alto de lo normal, ver ensamblarPdfDosCopiasA4)
+ * vive centralizado en pdfHtmlRender.ts — antes esta lógica estaba triplicada por archivo. */
 export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno, sinMarcaAgua = false): Promise<string> {
 	const [original, copia] = await Promise.all([
 		renderVoucherComoImagen(false, datos, sinMarcaAgua),
 		renderVoucherComoImagen(true, datos, sinMarcaAgua)
 	]);
-
-	const doc = new jsPDF();
-	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;
-	const alturaCopiaMm = (copia.heightPx / copia.widthPx) * ANCHO_PAGINA_MM;
-
-	let y = MARGEN_PAGINA_MM;
-	doc.addImage(original.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaOriginalMm);
-	y += alturaOriginalMm + 4;
-
-	doc.setDrawColor(150);
-	doc.setLineDashPattern([1.5, 1.5], 0);
-	doc.line(MARGEN_PAGINA_MM, y, MARGEN_PAGINA_MM + ANCHO_PAGINA_MM, y);
-	doc.setLineDashPattern([], 0);
-	y += 4;
-
-	doc.addImage(copia.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaCopiaMm);
-
-	return arrayBufferToBase64(doc.output('arraybuffer'));
+	return ensamblarPdfDosCopiasA4(original, copia);
 }
