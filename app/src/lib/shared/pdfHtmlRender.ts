@@ -14,6 +14,8 @@
  * html2canvas-pro sí entiende oklch/oklab/lab/color() y es API-compatible (mismo import por defecto).
  */
 import html2canvas from 'html2canvas-pro';
+import jsPDF from 'jspdf';
+import { arrayBufferToBase64 } from './base64';
 
 export interface HtmlRenderResult {
 	dataUrl: string;
@@ -57,4 +59,62 @@ export async function renderHtmlToPngDataUrl(html: string, widthPx: number, scal
 	} finally {
 		document.body.removeChild(contenedor);
 	}
+}
+
+const ANCHO_PAGINA_MM = 190; // ancho de contenido en el PDF (A4 210mm con 10mm de margen a cada lado)
+const MARGEN_PAGINA_MM = 10;
+const GAP_ENTRE_COPIAS_MM = 8; // 4mm antes de la línea punteada + 4mm después (ver más abajo)
+
+/** Arma un PDF A4 con Original + Copia de un mismo comprobante/recibo, una debajo de la otra en la
+ * MISMA hoja, separadas por una línea punteada — antes esta misma lógica estaba TRIPLICADA (una copia
+ * casi idéntica en comprobanteTransferenciaInterna.ts/reciboPagoEfectivo.ts/reciboPagoProveedor.ts),
+ * ahora centralizada acá.
+ *
+ * A pedido explícito del usuario: las 2 copias SIEMPRE deben caber completas en una sola hoja A4 — la
+ * versión anterior calculaba la altura de cada imagen y las dibujaba una tras otra sin verificar si la
+ * suma entraba en el alto de la página (297mm en A4). jsPDF NO pagina ni recorta imágenes que se salen
+ * del alto de la hoja: simplemente las dibuja en la posición Y calculada, y lo que cae más allá del
+ * borde de la página queda fuera del área visible/imprimible — invisible al guardar, descargar o abrir
+ * el PDF, aunque la VISTA PREVIA en HTML (sin ese límite físico de página) se viera completa. Con
+ * contenido más alto de lo normal (nombres largos que envuelven a 2 líneas, secciones con más texto)
+ * la Copia terminaba "cortada" contra el borde inferior de la hoja. Ahora, si la suma de ambas no entra
+ * en el alto disponible, se escalan las DOS juntas (ancho y alto a la vez, para no deformar el recibo)
+ * hasta que sí quepan — nunca se recortan ni se pasan a una segunda hoja. */
+export async function ensamblarPdfDosCopiasA4(original: HtmlRenderResult, copia: HtmlRenderResult): Promise<string> {
+	const doc = new jsPDF();
+	const altoPaginaMm = doc.internal.pageSize.getHeight();
+
+	let anchoOriginalMm = ANCHO_PAGINA_MM;
+	let anchoCopiaMm = ANCHO_PAGINA_MM;
+	let altoOriginalMm = (original.heightPx / original.widthPx) * anchoOriginalMm;
+	let altoCopiaMm = (copia.heightPx / copia.widthPx) * anchoCopiaMm;
+
+	const altoDisponibleMm = altoPaginaMm - MARGEN_PAGINA_MM * 2 - GAP_ENTRE_COPIAS_MM;
+	const altoTotalMm = altoOriginalMm + altoCopiaMm;
+	if (altoTotalMm > altoDisponibleMm) {
+		const factor = altoDisponibleMm / altoTotalMm;
+		anchoOriginalMm *= factor;
+		anchoCopiaMm *= factor;
+		altoOriginalMm *= factor;
+		altoCopiaMm *= factor;
+	}
+
+	// Centradas horizontalmente dentro del ancho de contenido — solo se nota si hubo que achicarlas
+	// (factor < 1); si entraban tal cual, x queda igual a MARGEN_PAGINA_MM, como antes.
+	const xOriginal = MARGEN_PAGINA_MM + (ANCHO_PAGINA_MM - anchoOriginalMm) / 2;
+	const xCopia = MARGEN_PAGINA_MM + (ANCHO_PAGINA_MM - anchoCopiaMm) / 2;
+
+	let y = MARGEN_PAGINA_MM;
+	doc.addImage(original.dataUrl, 'PNG', xOriginal, y, anchoOriginalMm, altoOriginalMm);
+	y += altoOriginalMm + GAP_ENTRE_COPIAS_MM / 2;
+
+	doc.setDrawColor(150);
+	doc.setLineDashPattern([1.5, 1.5], 0);
+	doc.line(MARGEN_PAGINA_MM, y, MARGEN_PAGINA_MM + ANCHO_PAGINA_MM, y);
+	doc.setLineDashPattern([], 0);
+	y += GAP_ENTRE_COPIAS_MM / 2;
+
+	doc.addImage(copia.dataUrl, 'PNG', xCopia, y, anchoCopiaMm, altoCopiaMm);
+
+	return arrayBufferToBase64(doc.output('arraybuffer'));
 }

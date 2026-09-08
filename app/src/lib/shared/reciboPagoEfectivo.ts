@@ -15,17 +15,13 @@
  * convierte a imagen con html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en
  * navegador, Tauri Windows y Tauri Android.
  */
-import jsPDF from 'jspdf';
 import { montoEnLetras } from './numeroALetras';
-import { arrayBufferToBase64 } from './base64';
 import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
-import { renderHtmlToPngDataUrl } from './pdfHtmlRender';
+import { renderHtmlToPngDataUrl, ensamblarPdfDosCopiasA4 } from './pdfHtmlRender';
 import { ESTILOS_VOUCHER_BASE, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 
 const ANCHO_PLANTILLA_PX = 750;
-const ANCHO_PAGINA_MM = 190;
-const MARGEN_PAGINA_MM = 10;
 
 export interface DatosReciboPago {
 	numero: number;
@@ -79,7 +75,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago, sinMarca
 	const horaActual = new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' });
 
 	return `
-		<div class="voucher-copia ${datos.esEfectivo ? '' : 'v-no-efectivo'}">
+		<div class="voucher-copia">
 			<div class="v-header">
 				<div class="v-empresa">
 					<div class="v-logo">${ICONO_BILLETE_LOGO}</div>
@@ -198,29 +194,12 @@ export function construirHtmlCompleto(datos: DatosReciboPago): string {
 }
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
- * guardarArchivoBinario — mismo criterio que comprobanteTransferenciaInterna.ts/
- * reciboPagoProveedor.ts. */
+ * guardarArchivoBinario — el ensamblado en la hoja A4 (incluida la escala si el contenido es más alto
+ * de lo normal) vive centralizado en pdfHtmlRender.ts, ver ensamblarPdfDosCopiasA4. */
 export async function generarReciboPagoBase64(datos: DatosReciboPago, sinMarcaAgua = false): Promise<string> {
 	const [original, copia] = await Promise.all([
 		renderVoucherComoImagen(false, datos, sinMarcaAgua),
 		renderVoucherComoImagen(true, datos, sinMarcaAgua)
 	]);
-
-	const doc = new jsPDF();
-	const alturaOriginalMm = (original.heightPx / original.widthPx) * ANCHO_PAGINA_MM;
-	const alturaCopiaMm = (copia.heightPx / copia.widthPx) * ANCHO_PAGINA_MM;
-
-	let y = MARGEN_PAGINA_MM;
-	doc.addImage(original.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaOriginalMm);
-	y += alturaOriginalMm + 4;
-
-	doc.setDrawColor(150);
-	doc.setLineDashPattern([1.5, 1.5], 0);
-	doc.line(MARGEN_PAGINA_MM, y, MARGEN_PAGINA_MM + ANCHO_PAGINA_MM, y);
-	doc.setLineDashPattern([], 0);
-	y += 4;
-
-	doc.addImage(copia.dataUrl, 'PNG', MARGEN_PAGINA_MM, y, ANCHO_PAGINA_MM, alturaCopiaMm);
-
-	return arrayBufferToBase64(doc.output('arraybuffer'));
+	return ensamblarPdfDosCopiasA4(original, copia);
 }
