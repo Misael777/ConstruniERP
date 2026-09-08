@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Search } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
@@ -422,6 +422,14 @@
 
 	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
 	let otrosCamposAbierto = $state(false);
+	// "Comprobante autogenerado por el ERP" también colapsable (a pedido del usuario) — arranca
+	// abierta (a diferencia de "Otros campos"), porque acá vive la acción principal de firmar/
+	// previsualizar el comprobante, no campos secundarios.
+	let comprobanteAutoAbierto = $state(true);
+	// Vista previa del comprobante autogenerado EN VIVO (reciboAutoHtml, todavía no es un archivo
+	// real) — a pedido explícito del usuario, en un popup igual que "Ojito"/DocumentPreviewModal en
+	// vez de abrir una pestaña nueva del navegador (ver abajo, reemplaza a abrirPreviewHtml).
+	let showReciboAutoPreview = $state(false);
 
 	// Idempotency key para fn_crear_transaccion/fn_confirmar_pago/fn_confirmar_cobro (ver
 	// financial_integrity_rpc_migration.sql) — se genera UNA vez al abrir el modal y viaja tal cual en
@@ -822,15 +830,6 @@
 		return idx === -1 ? [label, ''] : [label.slice(0, idx), label.slice(idx + 3)];
 	}
 
-	/** Abre el HTML del recibo (vista previa en vivo, ver reciboAutoHtml) en una pestaña nueva vía Blob
-	 * URL — sin generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los
-	 * 30s, así que revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
-	function abrirPreviewHtml(html: string) {
-		const blob = new Blob([html], { type: 'text/html' });
-		const url = URL.createObjectURL(blob);
-		window.open(url, '_blank');
-		setTimeout(() => URL.revokeObjectURL(url), 30000);
-	}
 
 	/** Genera el PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) del comprobante
 	 * autogenerado que aplique — a pedido explícito del usuario, este comprobante NO se guarda como
@@ -1719,6 +1718,61 @@
 		else if (esProyectoDeConsultoria) handleCategoriaConsultoriaGrupoChange(value);
 		else if (esCorporativo) handleCategoriaCorpGrupoChange(value);
 	}
+	// Buscador ("lupa") para el desplegable de Subcategoría de Detalle (a pedido explícito del
+	// usuario: la lista puede ser larga — ej. todas las especialidades de Operario/Oficial/Ayudante —
+	// y no quiere tener que scrollear un <select> nativo para encontrar la que busca). Filtra en
+	// memoria sobre catalogoDetalleActual/SUBOPCIONES_SUBCONTRATA (ya cargados, sin ida y vuelta al
+	// servidor) — mismo patrón visual que el buscador "Vincular con Cuenta por Pagar/Cobrar" de más
+	// arriba, pero sin debounce/async porque acá la lista entera ya está en memoria.
+	type SubcategoriaOpcion = { value: string; label: string; grupo: string | null };
+	let subcategoriaBusqueda = $state('');
+	let subcategoriaAbierta = $state(false);
+	const subcategoriaOpciones = $derived.by((): SubcategoriaOpcion[] => {
+		const opciones = catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [];
+		const resultado: SubcategoriaOpcion[] = [];
+		for (const opt of opciones) {
+			if (SUBOPCIONES_SUBCONTRATA[opt]) {
+				for (const sub of SUBOPCIONES_SUBCONTRATA[opt]) resultado.push({ value: sub, label: sub, grupo: opt });
+			} else {
+				resultado.push({ value: opt, label: opt, grupo: null });
+			}
+		}
+		return resultado;
+	});
+	const subcategoriaFiltradas = $derived(
+		subcategoriaBusqueda.trim()
+			? subcategoriaOpciones.filter((o) => o.label.toLowerCase().includes(subcategoriaBusqueda.trim().toLowerCase()))
+			: subcategoriaOpciones
+	);
+	// Agrupa por tramos contiguos (Operario/Oficial/Ayudante ya salen juntos de subcategoriaOpciones,
+	// filtrar no cambia el orden) — evita Object.groupBy (no disponible en el target de TS de este
+	// proyecto) para el mismo resultado visual que el <optgroup> nativo de antes.
+	const subcategoriaFiltradasAgrupadas = $derived.by(() => {
+		const grupos: { grupo: string | null; items: SubcategoriaOpcion[] }[] = [];
+		for (const opcion of subcategoriaFiltradas) {
+			const ultimo = grupos[grupos.length - 1];
+			if (ultimo && ultimo.grupo === opcion.grupo) ultimo.items.push(opcion);
+			else grupos.push({ grupo: opcion.grupo, items: [opcion] });
+		}
+		return grupos;
+	});
+	// Limpia la búsqueda cuando cambia el Grupo/Categoría elegido arriba — evita que quede un texto
+	// filtrando una lista que ya no corresponde.
+	$effect(() => {
+		detalleCatalogoGrupoEfectivo;
+		subcategoriaBusqueda = '';
+	});
+	function seleccionarSubcategoria(opcion: SubcategoriaOpcion) {
+		agregarFilaDesdeCatalogo(opcion.value);
+		subcategoriaBusqueda = '';
+		subcategoriaAbierta = false;
+	}
+	function onSubcategoriaBlur() {
+		// Delay antes de cerrar — sin esto, el blur cierra la lista ANTES de que el click en un
+		// resultado llegue a registrarse (mismo motivo que onCuentaVinculadaBlur más arriba).
+		setTimeout(() => (subcategoriaAbierta = false), 150);
+	}
+
 	function agregarFilaDesdeCatalogo(subcategoria: string) {
 		if (!subcategoria) return;
 		// Además de agregar la fila al Detalle, esta selección ES la Categoría de la transacción — a
@@ -2577,8 +2631,16 @@
 					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 						<div class="rounded-2xl border border-slate-200 p-5">
-							<span class="block text-sm font-bold text-[#0f3b5e] mb-4">Comprobante autogenerado por el ERP</span>
-							<p class="text-xs text-slate-500 mb-4">
+							<button
+								type="button"
+								onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
+								class="flex items-center gap-1.5 text-sm font-bold text-[#0f3b5e] w-full text-left"
+							>
+								Comprobante autogenerado por el ERP
+								{#if comprobanteAutoAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+							</button>
+							{#if comprobanteAutoAbierto}
+							<p class="text-xs text-slate-500 mb-4 mt-4">
 								Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en "Adjuntar
 								boucher de pago" ni en "Comprobantes de pago". Se actualiza en tiempo real con el formulario.
 							</p>
@@ -2671,7 +2733,7 @@
 										</button>
 									{/if}
 									{#if reciboAutoHtml}
-										<button type="button" onclick={() => abrirPreviewHtml(reciboAutoHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+										<button type="button" onclick={() => (showReciboAutoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
 											Vista previa
 										</button>
 										<p class="text-xs text-slate-400">Se actualiza en tiempo real con el formulario — se adjuntará automáticamente al guardar.</p>
@@ -2680,8 +2742,17 @@
 								{#if reciboAutoHtml}
 									<!-- Todavía no es un PDF real (eso recién ocurre al guardar, ver
 									     generarComprobanteAutogenerado) — se previsualiza el HTML tal cual en un iframe
-									     en miniatura, sin pagar el costo de html2canvas antes de tiempo. -->
-									<div class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white">
+									     en miniatura, sin pagar el costo de html2canvas antes de tiempo. Clic abre la
+									     misma miniatura en grande, en el popup de abajo (DocumentPreviewModal con
+									     `html`), en vez de una pestaña nueva del navegador. -->
+									<div
+										role="button"
+										tabindex="0"
+										onclick={() => (showReciboAutoPreview = true)}
+										onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (showReciboAutoPreview = true)}
+										aria-label="Ver comprobante en grande"
+										class="relative w-full sm:w-48 h-64 shrink-0 rounded-xl border border-slate-200 overflow-hidden bg-white cursor-pointer hover:ring-2 hover:ring-blue-300"
+									>
 										<iframe
 											title="Vista previa del recibo"
 											srcdoc={reciboAutoHtml}
@@ -2691,6 +2762,7 @@
 									</div>
 								{/if}
 							</div>
+							{/if}
 						</div>
 					{/if}
 
@@ -3382,6 +3454,13 @@
 		</div>
 	</div>
 {/if}
+
+<DocumentPreviewModal
+	open={showReciboAutoPreview}
+	html={reciboAutoHtml}
+	title="Comprobante autogenerado por el ERP"
+	onClose={() => (showReciboAutoPreview = false)}
+/>
 
 <DocumentPreviewModal
 	open={showComprobantePreview}
