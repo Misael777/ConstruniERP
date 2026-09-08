@@ -423,9 +423,10 @@
 	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
 	let otrosCamposAbierto = $state(false);
 	// "Comprobante autogenerado por el ERP" también colapsable (a pedido del usuario) — arranca
-	// abierta (a diferencia de "Otros campos"), porque acá vive la acción principal de firmar/
-	// previsualizar el comprobante, no campos secundarios.
-	let comprobanteAutoAbierto = $state(true);
+	// COLAPSADA (a pedido explícito del usuario, revirtiendo la decisión anterior de que arrancara
+	// abierta): el botón "Vista previa" ahora vive en la cabecera, fuera del colapsable (ver template),
+	// así que sigue disponible sin tener que expandir esta sección primero.
+	let comprobanteAutoAbierto = $state(false);
 	// Vista previa del comprobante autogenerado EN VIVO (reciboAutoHtml, todavía no es un archivo
 	// real) — a pedido explícito del usuario, en un popup igual que "Ojito"/DocumentPreviewModal en
 	// vez de abrir una pestaña nueva del navegador (ver abajo, reemplaza a abrirPreviewHtml).
@@ -2686,14 +2687,29 @@
 					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 						<div class="rounded-2xl border border-slate-200 p-5">
-							<button
-								type="button"
-								onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
-								class="flex items-center gap-1.5 text-sm font-bold text-[#0f3b5e] w-full text-left"
-							>
-								Comprobante autogenerado por el ERP
-								{#if comprobanteAutoAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
-							</button>
+							<div class="flex items-center justify-between gap-2">
+								<button
+									type="button"
+									onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
+									class="flex items-center gap-1.5 text-sm font-bold text-[#0f3b5e] text-left"
+								>
+									Comprobante autogenerado por el ERP
+									{#if comprobanteAutoAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+								</button>
+								<!-- A pedido explícito del usuario: "Vista previa" debe seguir disponible aunque la
+								     sección esté colapsada (que ahora es el estado por defecto, ver
+								     comprobanteAutoAbierto) — vive acá, fuera del {#if} de abajo, en vez de solo
+								     dentro del cuerpo expandido. -->
+								{#if reciboAutoHtml}
+									<button
+										type="button"
+										onclick={() => (showReciboAutoPreview = true)}
+										class="shrink-0 text-xs text-blue-600 hover:underline"
+									>
+										Vista previa
+									</button>
+								{/if}
+							</div>
 							{#if comprobanteAutoAbierto}
 							<p class="text-xs text-slate-500 mb-4 mt-4">
 								Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en "Adjuntar
@@ -2794,9 +2810,8 @@
 										<p class="text-xs text-slate-400">La firma solo aplica cuando el Medio de Pago es Efectivo.</p>
 									{/if}
 									{#if reciboAutoHtml}
-										<button type="button" onclick={() => (showReciboAutoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Vista previa
-										</button>
+										<!-- El botón "Vista previa" en sí ahora vive en la cabecera (ver más arriba, siempre
+										     visible) — acá solo queda la leyenda. -->
 										<p class="text-xs text-slate-400">Se actualiza en tiempo real con el formulario — se adjuntará automáticamente al guardar.</p>
 									{/if}
 								</div>
