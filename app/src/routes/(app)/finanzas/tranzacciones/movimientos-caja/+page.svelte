@@ -50,6 +50,32 @@
 	// Excluye la fila sintética de "Saldo Inicial" (esSaldoInicial=true) — no es una transacción real.
 	let movimientosFilas = $state<FilaMovimiento[]>([]);
 
+	// ── Barrita única de scroll para la columna "Centro de Costo" ──────────────────────────────────
+	// A pedido explícito del usuario: antes cada fila tenía su propia barrita de scroll (se veía
+	// "cargada" con 8 barritas repetidas); ahora hay UNA sola, que vive en el encabezado (ahí el ancho
+	// SIEMPRE coincide exacto con el de la columna, mismo layout de tabla — no hace falta medir
+	// posiciones a mano) y mueve el scroll de TODAS las filas a la vez. Las filas ya no son
+	// scrolleables por su cuenta (overflow-x-hidden, sin su propia barrita) — el único control es la
+	// del encabezado. ANCHO_MAX_CENTRO_COSTO es un ancho de sobra fijo (no el contenido real de cada
+	// fila) para no tener que medir el ancho de scroll de cada una; alcanza para los textos más largos
+	// que se ven hoy en este panel.
+	const ANCHO_MAX_CENTRO_COSTO = 700;
+	let masterScrollCentroCostoEl: HTMLDivElement | undefined = $state();
+	let filaCentroCostoEls: HTMLDivElement[] = [];
+	function registrarFilaCentroCosto(node: HTMLDivElement) {
+		filaCentroCostoEls.push(node);
+		node.scrollLeft = masterScrollCentroCostoEl?.scrollLeft ?? 0;
+		return {
+			destroy() {
+				filaCentroCostoEls = filaCentroCostoEls.filter((el) => el !== node);
+			}
+		};
+	}
+	function onMasterScrollCentroCosto() {
+		const left = masterScrollCentroCostoEl?.scrollLeft ?? 0;
+		for (const el of filaCentroCostoEls) el.scrollLeft = left;
+	}
+
 	async function fetchMovimientos() {
 		loading = true;
 		try {
@@ -302,7 +328,20 @@
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Tipo</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600">Concepto</th>
-					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Centro de Costo</th>
+					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap align-top">
+						Centro de Costo
+						<!-- Barrita ÚNICA para toda la columna (ver registrarFilaCentroCosto/onMasterScrollCentroCosto
+						     más arriba) — vive acá porque el ancho de un <th> siempre coincide exacto con el de su
+						     columna, sin necesitar medir nada a mano. Arrastrarla mueve las 8 filas a la vez. -->
+						<div
+							bind:this={masterScrollCentroCostoEl}
+							onscroll={onMasterScrollCentroCosto}
+							class="mt-1.5 max-w-[300px] h-2 overflow-x-auto scroll-fino"
+							title="Desliza para ver el Centro de Costo completo de cada fila"
+						>
+							<div style={`width:${ANCHO_MAX_CENTRO_COSTO}px; height:1px;`}></div>
+						</div>
+					</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Método de Pago</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Monto</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Saldo Acumulado</th>
@@ -318,7 +357,14 @@
 						</span>
 					</td>
 					<td class="px-3 py-3.5 max-w-[220px] truncate">{fila.concepto}</td>
-					<td class="px-3 py-3.5 whitespace-nowrap text-slate-700">{fila.centroCostoOrigenLabel} → {fila.centroCostoDestinoLabel}</td>
+					<td class="px-3 py-3.5 text-slate-700">
+						<!-- Sin barrita propia (a pedido explícito del usuario: 8 barritas repetidas, una por
+						     fila, se veían "cargadas") — la única barrita vive en el encabezado de la columna y
+						     mueve el scroll de todas las filas a la vez, ver registrarFilaCentroCosto. -->
+						<div class="max-w-[300px] overflow-x-hidden whitespace-nowrap" use:registrarFilaCentroCosto>
+							{fila.centroCostoOrigenLabel} → {fila.centroCostoDestinoLabel}
+						</div>
+					</td>
 					<td class="px-3 py-3.5 whitespace-nowrap">
 						{#if medioPago}
 							{@const MedioPagoIcon = MEDIO_PAGO_ICON[medioPago] ?? Wallet}
@@ -407,3 +453,22 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	/* Barrita de scroll fina para la celda "Centro de Costo" (ver arriba) — más discreta que la barra de
+	   scroll por defecto del navegador, para que no domine visualmente una celda tan angosta. */
+	.scroll-fino {
+		scrollbar-width: thin;
+		scrollbar-color: #cbd5e1 transparent;
+	}
+	.scroll-fino::-webkit-scrollbar {
+		height: 5px;
+	}
+	.scroll-fino::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.scroll-fino::-webkit-scrollbar-thumb {
+		background-color: #cbd5e1;
+		border-radius: 9999px;
+	}
+</style>
