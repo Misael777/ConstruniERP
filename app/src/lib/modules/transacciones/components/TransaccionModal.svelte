@@ -942,15 +942,16 @@
 	// Recibo de Pago (Externa+Ingreso) — a pedido explícito del usuario: siempre se autogenera solo, en
 	// vivo, para CUALQUIER medio de pago (ver reciboAutoHtml/construirDatosReciboPagoAuto más abajo).
 	// Concepto y datos del cliente se muestran como campos editables en el propio formulario (ver
-	// template) — se prellenan solos pero el usuario puede corregirlos. La firma manuscrita es OPCIONAL
-	// y aplica para cualquier medio de pago, no solo Efectivo (a pedido explícito del usuario): un botón
-	// "Firmar Comprobante" abre un popup solo con las firmas (ver abrirFirmaReciboPago más abajo) — no
-	// bloquea nada si el usuario no firma, el comprobante se genera igual.
+	// template) — se prellenan solos pero el usuario puede corregirlos. La firma manuscrita SÍ vuelve a
+	// depender del Medio de Pago (a pedido explícito del usuario, revirtiendo la decisión anterior): el
+	// botón "Firmar Comprobante" solo se muestra con Efectivo (ver medioPagoEsEfectivo en el template) —
+	// con Transferencia/Depósito/Yape o Plin ya queda el registro bancario, no tiene sentido pedir una
+	// firma física. Sigue sin bloquear el guardado en ningún caso, firmado o no.
 	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
 	// Recibo de Pago a Proveedor (Externa+Egreso) — mismo criterio que mostrarBotonReciboPago pero para
 	// Egreso en vez de Ingreso (acá la empresa entrega el dinero, ver reciboPagoProveedor.ts).
 	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso');
-	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG) — solo afecta qué texto muestra la sección "FORMA DE PAGO" del PDF y qué correlativo usa, ya no si se puede firmar.
+	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG) — afecta qué texto muestra la sección "FORMA DE PAGO" del PDF, qué correlativo usa, Y (ver medioPagoEsEfectivo más abajo, mismo valor) si se puede firmar.
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
 	// Correlativo independiente del recibo NO Efectivo — son dos recibos DIFERENTES (ver
@@ -1212,6 +1213,15 @@
 		if (key === 'medio_pago' && (masked === '1' || masked === '4')) {
 			formValues.cuente_destino = '';
 			formValues.cuente_origen = '';
+		}
+		// A pedido explícito del usuario: si la cuenta "propia" recién elegida (Origen en Egreso, Destino
+		// en Ingreso — ver cuentaOrigenEsBancaria/cuentaDestinoEsBancaria) es una cuenta de Efectivo (ver
+		// filtrarCuentasEfectivo), el Medio de Pago debe ser Efectivo por coherencia — se fuerza acá y se
+		// bloquea en el template (ver medioPagoForzadoPorCuentaEfectivo) para que no quede una cuenta de
+		// caja chica registrada con un Medio de Pago distinto (ej. "Transferencia bancaria").
+		if ((key === 'cuente_origen' && cuentaOrigenEsBancaria) || (key === 'cuente_destino' && cuentaDestinoEsBancaria)) {
+			const opcionElegida = (dynamicOptions.cuenta_banco || []).find((o) => o.value === masked);
+			if (opcionElegida && /efectivo/i.test(opcionElegida.label)) formValues.medio_pago = '1';
 		}
 		if (key === 'tipo_alcance') {
 			// Tipo de Documento también depende del Alcance (Talonario/Boucher en Interna vs el
@@ -1804,6 +1814,16 @@
 	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
 		return opciones.filter((o) => /efectivo/i.test(o.label));
 	}
+	// A pedido explícito del usuario: si la cuenta "propia" ya elegida es de Efectivo, el Medio de Pago
+	// queda forzado en Efectivo (ver handleInput) y bloqueado acá — evita que el usuario lo cambie a
+	// algo incoherente con la cuenta ya elegida (ej. "Yape o Plin" con una cuenta de caja chica). Se
+	// desbloquea solo si la cuenta propia se limpia (cambia el Centro de Costo, Tipo, Alcance, etc.).
+	const medioPagoForzadoPorCuentaEfectivo = $derived.by(() => {
+		const valor = cuentaOrigenEsBancaria ? formValues.cuente_origen : cuentaDestinoEsBancaria ? formValues.cuente_destino : '';
+		if (!valor) return false;
+		const opcion = (dynamicOptions.cuenta_banco || []).find((o) => o.value === valor);
+		return !!opcion && /efectivo/i.test(opcion.label);
+	});
 	// Campos que se bloquean cuando el Alcance es Interna — 'tipo' y 'estado' además se fuerzan a un
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
@@ -2208,12 +2228,13 @@
 	{@const esCuentaPropiaBancaria = (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
 	{@const isBloqueadoPorMedioPago =
 		(field.key === 'cuente_origen' || field.key === 'cuente_destino') && (medioPagoBloqueaAmbasCuentas || (medioPagoEsEfectivo && !esCuentaPropiaBancaria))}
-	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
+	{@const isBloqueadoPorCuentaEfectivo = field.key === 'medio_pago' && medioPagoForzadoPorCuentaEfectivo}
+	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago || isBloqueadoPorCuentaEfectivo}
 	<div>
 		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 			{labelFor(field)}
 			{#if field.required}<span class="text-red-500">*</span>{/if}
-			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
+			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago || isBloqueadoPorCuentaEfectivo}<Lock size={12} class="text-slate-400" />{/if}
 		</label>
 
 		{#if esCampoConSaldo(field)}
@@ -2286,6 +2307,8 @@
 			<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoInterna}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
+		{:else if isBloqueadoPorCuentaEfectivo}
+			<p class="mt-1 text-xs text-slate-400">Se fija en "Efectivo" porque la cuenta elegida es de Efectivo.</p>
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 		{:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
@@ -2711,7 +2734,11 @@
 
 							<div class="flex flex-col sm:flex-row gap-5">
 								<div class="flex-1 flex flex-col gap-2 min-w-0">
-									{#if mostrarBotonReciboPago}
+									<!-- A pedido explícito del usuario: la firma solo tiene sentido cuando el pago fue en
+									     Efectivo (un comprobante físico entregado en mano) — con Transferencia/Depósito/
+									     Yape o Plin ya queda el registro bancario, así que "Firmar Comprobante" se oculta
+									     por completo (ver medioPagoEsEfectivo) en vez de solo quedar disponible. -->
+									{#if medioPagoEsEfectivo && mostrarBotonReciboPago}
 										<button
 											type="button"
 											onclick={abrirFirmaReciboPago}
@@ -2721,7 +2748,7 @@
 											<Pencil size={14} class="shrink-0" />
 											{firmaClienteDataUrl && firmaReceptorDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
-									{:else if mostrarBotonReciboPagoProveedor}
+									{:else if medioPagoEsEfectivo && mostrarBotonReciboPagoProveedor}
 										<button
 											type="button"
 											onclick={abrirFirmaReciboPagoProveedor}
@@ -2731,6 +2758,8 @@
 											<Pencil size={14} class="shrink-0" />
 											{firmaEntregoDataUrl && firmaRecibioDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
+									{:else if !medioPagoEsEfectivo && (mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor)}
+										<p class="text-xs text-slate-400">La firma solo aplica cuando el Medio de Pago es Efectivo.</p>
 									{/if}
 									{#if reciboAutoHtml}
 										<button type="button" onclick={() => (showReciboAutoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
@@ -3095,35 +3124,49 @@
 										<div>
 											<label for="tr-detalle-subcatalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Subcategoría</label>
 											<div class="relative">
-												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
-												     agrupada en el MISMO dropdown vía <optgroup> nativo (más simple que un 3er
-												     selector aparte): elegir una especialidad agrega la fila directo, igual que
-												     cualquier otra opción de esta lista. -->
-												<select
+												<!-- Buscador en vez de <select> nativo (a pedido explícito del usuario: la lista
+												     puede ser larga y no quiere scrollearla) — elegir un resultado agrega la fila
+												     directo, igual que antes. Especialidad de Operario/Oficial/Ayudante (ver
+												     SUBOPCIONES_SUBCONTRATA) sigue agrupada, ahora con un encabezado de grupo en
+												     vez de <optgroup>. -->
+												<Search size={14} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												<input
 													id="tr-detalle-subcatalogo"
-													value=""
-													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-													onchange={(e) => {
-														const target = e.target as HTMLSelectElement;
-														agregarFilaDesdeCatalogo(target.value);
-														target.value = '';
+													type="text"
+													value={subcategoriaBusqueda}
+													oninput={(e) => {
+														subcategoriaBusqueda = (e.target as HTMLInputElement).value;
+														subcategoriaAbierta = true;
 													}}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Elige una opción para agregarla</option>
-													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-														{#if SUBOPCIONES_SUBCONTRATA[opt]}
-															<optgroup label={opt}>
-																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
-																	<option value={sub}>{sub}</option>
-																{/each}
-															</optgroup>
+													onfocus={() => (subcategoriaAbierta = true)}
+													onblur={onSubcategoriaBlur}
+													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
+													placeholder={detalleCatalogoGrupoEfectivo ? 'Buscar y elegir…' : 'Elige primero una Categoría'}
+													autocomplete="off"
+													class="w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												/>
+												{#if subcategoriaAbierta && detalleCatalogoGrupoEfectivo}
+													<div class="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+														{#if subcategoriaFiltradas.length === 0}
+															<p class="px-3 py-2 text-xs text-slate-400">Sin coincidencias.</p>
 														{:else}
-															<option value={opt}>{opt}</option>
+															{#each subcategoriaFiltradasAgrupadas as grupo, i (grupo.grupo ?? '_' + i)}
+																{#if grupo.grupo}
+																	<p class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{grupo.grupo}</p>
+																{/if}
+																{#each grupo.items as opcion (opcion.value)}
+																	<button
+																		type="button"
+																		onclick={() => seleccionarSubcategoria(opcion)}
+																		class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0"
+																	>
+																		{opcion.label}
+																	</button>
+																{/each}
+															{/each}
 														{/if}
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													</div>
+												{/if}
 											</div>
 										</div>
 									</div>
