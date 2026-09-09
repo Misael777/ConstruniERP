@@ -3,7 +3,7 @@
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
@@ -243,7 +243,11 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
+		// "ver_finanzas_cuentas_pendientes" otorgable desde IAM → Roles y Permisos (que el menú lateral/
+		// guard general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
+		// rebotaba al entrar.
+		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
 			goto('/dashboard');
 			return;
 		}

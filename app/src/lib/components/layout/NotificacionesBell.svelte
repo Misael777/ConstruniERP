@@ -149,12 +149,14 @@
 		if (tipo === 'eliminar') return 'Eliminar';
 		if (tipo === 'cerrar_venta') return 'Cerrar venta';
 		if (tipo === 'exportar') return 'Exportar';
+		if (tipo === 'quitar_aprobacion') return 'Quitar aprobación';
 		return 'Editar';
 	}
 
 	function etiquetaEntidad(tipo: SolicitudAprobacion['tipo_entidad']) {
 		if (tipo === 'cliente') return 'Cliente';
 		if (tipo === 'exportacion') return 'Exportación';
+		if (tipo === 'transaccion') return 'Transacción';
 		return 'Venta';
 	}
 

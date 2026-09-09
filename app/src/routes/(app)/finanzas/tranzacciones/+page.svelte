@@ -2,7 +2,7 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
@@ -319,7 +319,11 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
+		// "ver_finanzas_transacciones" otorgable desde IAM → Roles y Permisos (que el menú lateral/guard
+		// general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
+		// rebotaba al entrar.
+		if (!hasPermiso('ver_finanzas_transacciones')) {
 			goto('/dashboard');
 			return;
 		}

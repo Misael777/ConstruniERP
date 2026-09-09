@@ -42,6 +42,7 @@
 	import ReciboPagoProveedorModal, { type DatosFirmaReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
+	import { crearSolicitud } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient, downloadFromDriveClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
@@ -757,6 +758,44 @@
 			toast.error(err?.message ?? 'Ocurrió un error inesperado');
 		} finally {
 			aprobando = false;
+		}
+	}
+
+	// A pedido explícito del usuario: quien NO es administrador ya no puede quitar la aprobación
+	// directo (antes ni siquiera tenía un botón visible para eso) — en su lugar manda una solicitud,
+	// visible para todos los administradores en la campanita de notificaciones (mismo patrón que
+	// Ventas, ver aprobaciones.service.ts). Al aprobarla, un admin corre exactamente desaprobarTransaccion
+	// (mismo efecto que handleDesaprobar arriba) — el solicitante puede editar/eliminar normalmente
+	// después, mismo flujo de 2 pasos que ya existía, solo que el desbloqueo ahora pasa por un admin
+	// real en vez de un botón instantáneo.
+	let solicitandoQuitarAprobacion = $state(false);
+	async function handleSolicitarQuitarAprobacion() {
+		if (!transaccion) return;
+		if (
+			!confirm(
+				'¿Enviar una solicitud para que un administrador quite la aprobación de esta transacción? Podrás editarla/eliminarla una vez que la apruebe.'
+			)
+		)
+			return;
+		solicitandoQuitarAprobacion = true;
+		try {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'transaccion',
+				idEntidad: transaccion.id_transaccion,
+				tipoAccion: 'quitar_aprobacion',
+				descripcionEntidad: `${transaccion.num_documento || `Transacción #${transaccion.id_transaccion}`} · ${formatCurrency(transaccion.monto_total)}`
+			});
+			if (result.success) {
+				toast.success('Solicitud enviada. Un administrador debe aprobarla para poder editar/eliminar esta transacción.');
+				onSaved();
+				onClose();
+			} else {
+				toast.error(result.message || 'No se pudo enviar la solicitud.');
+			}
+		} catch (err: any) {
+			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+		} finally {
+			solicitandoQuitarAprobacion = false;
 		}
 	}
 
@@ -2377,11 +2416,15 @@
 									<ShieldCheck size={16} class="shrink-0" />
 									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
 									Esta transacción está bloqueada y no se puede editar mientras esté aprobada.
-									{#if isAdmin()}Para editarla, quita la aprobación primero.{/if}
+									{#if isAdmin()}Para editarla, quita la aprobación primero.{:else}Para editarla o eliminarla, solicita que un administrador quite la aprobación.{/if}
 								</span>
 								{#if isAdmin()}
 									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
 										<ShieldOff size={14} /> Quitar aprobación
+									</button>
+								{:else}
+									<button type="button" onclick={handleSolicitarQuitarAprobacion} disabled={solicitandoQuitarAprobacion} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
+										<ShieldOff size={14} /> Solicitar aprobación para editar
 									</button>
 								{/if}
 							</div>

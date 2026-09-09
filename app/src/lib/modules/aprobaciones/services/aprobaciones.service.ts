@@ -12,7 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
-import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { createTransaccion, desaprobarTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 import { describeError } from '$lib/shared/describeError';
@@ -20,8 +20,11 @@ import { describeError } from '$lib/shared/describeError';
 // 'exportacion' (tipo_entidad) / 'exportar' (tipo_accion): a diferencia de editar/eliminar/cerrar_venta,
 // una exportación no apunta a una fila puntual — id_entidad queda null para este caso (ver migración
 // solicitud_aprobacion_exportar_aviso_migration.sql, que también vuelve la columna nullable).
-export type TipoEntidadSolicitud = 'cliente' | 'proyecto' | 'exportacion';
-export type TipoAccionSolicitud = 'editar' | 'eliminar' | 'cerrar_venta' | 'exportar';
+// 'transaccion' (tipo_entidad) / 'quitar_aprobacion' (tipo_accion): a pedido explícito del usuario,
+// reemplaza el botón instantáneo "Quitar aprobación" de TransaccionModal.svelte para quien no es
+// administrador — solo pide el desbloqueo (sin payload_cambios), ver el dispatch en aprobarSolicitud.
+export type TipoEntidadSolicitud = 'cliente' | 'proyecto' | 'exportacion' | 'transaccion';
+export type TipoAccionSolicitud = 'editar' | 'eliminar' | 'cerrar_venta' | 'exportar' | 'quitar_aprobacion';
 export type EstadoSolicitud = 'pendiente' | 'aprobado' | 'rechazado';
 
 export interface SolicitudAprobacion {
@@ -641,6 +644,10 @@ export async function aprobarSolicitud(client: SupabaseClient, idSolicitud: numb
 		} else {
 			result = { success: false, message: generado.message };
 		}
+	} else if (solicitud.tipo_accion === 'quitar_aprobacion') {
+		// Mismo efecto que el botón "Quitar aprobación" que hoy usa un Admin directo en
+		// TransaccionModal.svelte — acá lo corre el admin que resuelve la solicitud, no quien la pidió.
+		result = await desaprobarTransaccion(client, solicitud.id_entidad as number, true);
 	} else {
 		const table = solicitud.tipo_entidad === 'cliente' ? 'cliente' : 'proyecto';
 		const pk = solicitud.tipo_entidad === 'cliente' ? 'id_cliente' : 'id_proyecto';
