@@ -18,6 +18,7 @@
 		centroCostoMontoMap = {},
 		centroCostoProyectoMap = {},
 		centroCostoClienteMap = {},
+		clienteBloqueado = false,
 		onClose,
 		onSaved
 	}: {
@@ -37,8 +38,19 @@
 		 * Cliente primero, filtra la lista de Centro de Costo a solo los suyos (ver handleInput /
 		 * optionsFor). */
 		centroCostoClienteMap?: Record<string, string>;
+		/** true = "Cliente" queda bloqueado (no editable) — a pedido explícito del usuario, para la
+		 * Cuenta por Cobrar que se autogenera al registrar un Egreso "Préstamo Otorgado" con Centro de
+		 * Costo Origen=Corporativo (ver finanzas/cuentas-cobrar/+page.svelte): ese caso siempre usa el
+		 * cliente genérico fijo "PRÉSTAMOS / FINANCIERA" (ver getOrCrearClientePrestamos), ya viene
+		 * elegido en `cuenta` y no debe poder cambiarse. false en cualquier otro flujo (crear/editar
+		 * normal) — mismo patrón que proveedorBloqueado en CuentaPagarModal.svelte. */
+		clienteBloqueado?: boolean;
 		onClose: () => void;
-		onSaved: () => void;
+		// Recibe la fila (o filas, si es una serie) recién creada/actualizada — a pedido explícito del
+		// usuario, finanzas/cuentas-cobrar/+page.svelte lo usa para grabar recién ahí la transacción del
+		// flujo "Préstamo Otorgado" (ver crearTransaccionPorPrestamoOtorgado), mismo criterio que
+		// CuentaPagarModal.svelte.
+		onSaved: (cuenta?: CuentaCobrar | CuentaCobrar[]) => void | Promise<void>;
 	} = $props();
 
 	// 'condición_pago' (Número de Cuotas) ya no se muestra como campo inline: se configura en la
@@ -173,6 +185,7 @@
 		// de ese proyecto"), se autocompleta y se bloquea una vez que hay un cliente vinculado a ese
 		// centro de costo (ver handleInput/centroCostoClienteMap).
 		if (field.key === 'id_cliente' && centroCostoClienteMap[formValues.id_centro_costo] !== undefined) return true;
+		if (field.key === 'id_cliente' && clienteBloqueado) return true;
 		return field.disabledWhen?.(formValues) ?? false;
 	}
 
@@ -261,7 +274,10 @@
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				onSaved();
+				// await: mismo criterio que CuentaPagarModal.svelte — onSaved puede hacer trabajo async
+				// propio (ver crearTransaccionPorPrestamoOtorgado en finanzas/cuentas-cobrar/+page.svelte)
+				// que necesita quedar cubierto por este try/catch.
+				await onSaved(result.data);
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');

@@ -5,8 +5,38 @@
  * aplicado en Clientes (aprobaciones.service.ts).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
+import { darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { describeError } from '$lib/shared/describeError';
+
+const NOMBRE_PROVEEDOR_PRESTAMOS = 'PRÉSTAMOS / FINANCIERA';
+const RUC_PROVEEDOR_PRESTAMOS = '00000000000';
+
+/** Proveedor genérico fijo para las Cuentas por Pagar que se autogeneran al registrar una transacción
+ * Ingreso de Categoría "Préstamo" con Proyecto=Corporativo (ver TransaccionModal.svelte y
+ * finanzas/cuentas-pagar/+page.svelte) — a pedido explícito del usuario: un préstamo no tiene un
+ * proveedor real vinculado en el sistema, así que ese campo (obligatorio) siempre usa este mismo
+ * registro, bloqueado para que no se pueda cambiar. Get-or-create por razón social: la primera vez lo
+ * crea (mismo patrón que ProveedorModal.svelte — razón social + RUC + su propio centro de costo
+ * vinculado, ver getOrCrearCentroCostoParaEntidad), las siguientes reusa el mismo id. */
+export async function getOrCrearProveedorPrestamos(client: SupabaseClient): Promise<number> {
+	const { data: existente, error: errorBusqueda } = await client
+		.from('proveedor')
+		.select('id_proveedor')
+		.eq('razon_social', NOMBRE_PROVEEDOR_PRESTAMOS)
+		.maybeSingle();
+	if (errorBusqueda) throw errorBusqueda;
+	if (existente) return existente.id_proveedor;
+
+	const { data: creado, error } = await client
+		.from('proveedor')
+		.insert({ razon_social: NOMBRE_PROVEEDOR_PRESTAMOS, ruc: RUC_PROVEEDOR_PRESTAMOS })
+		.select('id_proveedor')
+		.single();
+	if (error) throw error;
+
+	await getOrCrearCentroCostoParaEntidad(client, 'proveedor', creado.id_proveedor, NOMBRE_PROVEEDOR_PRESTAMOS);
+	return creado.id_proveedor;
+}
 
 export interface ServiceResult {
 	success: boolean;

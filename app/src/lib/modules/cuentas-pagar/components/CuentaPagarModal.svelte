@@ -22,6 +22,7 @@
 		cuenta = null,
 		dynamicOptions = {},
 		centroCostoTipoMap = {},
+		proveedorBloqueado = false,
 		onClose,
 		onSaved
 	}: {
@@ -32,8 +33,18 @@
 		/** id_centro_costo (texto) -> tipo — para bloquear "ID Partida" cuando el centro de costo
 		 * elegido es 'bolsa general', ver getCentroCostoTipoMap en transacciones.service.ts. */
 		centroCostoTipoMap?: Record<string, string>;
+		/** true = "Proveedor" queda bloqueado (no editable) — a pedido explícito del usuario, para la
+		 * Cuenta por Pagar que se autogenera al registrar un Ingreso "Préstamo" con Proyecto=Corporativo
+		 * (ver finanzas/cuentas-pagar/+page.svelte): ese caso siempre usa el proveedor genérico fijo
+		 * "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos), ya viene elegido en `cuenta` y no
+		 * debe poder cambiarse. false en cualquier otro flujo (crear/editar normal). */
+		proveedorBloqueado?: boolean;
 		onClose: () => void;
-		onSaved: () => void;
+		// Recibe la fila (o filas, si es una serie periódica vía createCuentasPagarRecurrentes) recién
+		// creada/actualizada — a pedido explícito del usuario, finanzas/cuentas-pagar/+page.svelte lo usa
+		// para grabar recién ahí la transacción del flujo "Préstamo Recibido" (ver
+		// crearTransaccionPorPrestamoRecibido), sin necesidad de otra consulta.
+		onSaved: (cuenta?: CuentaPagar | CuentaPagar[]) => void | Promise<void>;
 	} = $props();
 
 	// 'condicion_pago' (Número de Cuotas) ya no se muestra como campo inline: se configura en la
@@ -50,9 +61,17 @@
 		// A pedido del usuario: "Responsable" arranca prellenado con el usuario que está creando la
 		// cuenta (mismo nombre que empleados.nombre, ver getEmpleadoOptions) — solo al crear, no pisa el
 		// valor guardado al editar. Sigue siendo editable por si corresponde asignarla a alguien más.
-		if (!cuenta && 'responsable' in values) values.responsable = permisosState.userName;
-		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear.
-		if (!cuenta && 'frecuencia_pago' in values) values.frecuencia_pago = 'sin_periodicidad';
+		// OJO: se checa `(cuenta as any)?.responsable == null` (no solo `!cuenta`) — finanzas/cuentas-
+		// pagar/+page.svelte puede abrir en modo 'create' con `cuenta` YA con algunos campos precargados
+		// (ver abrirCreacionPrecargadaDesdeTransaccion, para la Cuenta por Pagar que se autogenera desde
+		// un Ingreso "Préstamo"); en ese caso `cuenta` no es null pero tampoco trae responsable/
+		// frecuencia_pago, así que estos defaults deben seguir aplicando igual.
+		if ((cuenta as any)?.responsable == null && 'responsable' in values) values.responsable = permisosState.userName;
+		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear —
+		// `frecuencia_pago` es NOT NULL en la BD (con DEFAULT 'sin_periodicidad', pero un INSERT que
+		// manda explícitamente null no cae en ese default, hay que mandar el valor real) — dejarlo vacío
+		// rompe el guardado con "Falta completar un campo obligatorio".
+		if ((cuenta as any)?.frecuencia_pago == null && 'frecuencia_pago' in values) values.frecuencia_pago = 'sin_periodicidad';
 		return values;
 	}
 
@@ -224,6 +243,7 @@
 	function isDisabled(field: (typeof formFields)[number]): boolean {
 		if (field.key === 'id_partida' && idPartidaBloqueado) return true;
 		if (field.key === 'id_presupuesto' && idPresupuestoBloqueado) return true;
+		if (field.key === 'id_proveedor' && proveedorBloqueado) return true;
 		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
 	}
 
@@ -290,7 +310,10 @@
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				onSaved();
+				// await: onSaved puede hacer trabajo async propio (ver crearTransaccionPorPrestamoRecibido
+				// en finanzas/cuentas-pagar/+page.svelte) — sin este await, una excepción ahí sería una
+				// promesa rechazada sin capturar (este try/catch no la vería), silenciosa para el usuario.
+				await onSaved(result.data);
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');

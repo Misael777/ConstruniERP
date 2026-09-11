@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
@@ -23,8 +24,18 @@
 		confirmarCobroCobrado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getCentroCostoProyectoMap, getCentroCostoClienteMap, getCentroCostoTipoMap, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import {
+		getCentroCostoOptions,
+		getCentroCostoOptionsVentasCerradas,
+		getCentroCostoMontoVentaCerrada,
+		getCentroCostoProyectoMap,
+		getCentroCostoClienteMap,
+		getCentroCostoTipoMap,
+		getEmpleadoOptions,
+		crearTransaccionSistema
+	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { getOrCrearClientePrestamos } from '$lib/modules/clientes/services/clientes.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -136,6 +147,17 @@
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaCobrar | null>(null);
+	/** true solo cuando el modal se abre precargado desde la transacción Egreso "Préstamo Otorgado" (ver
+	 * abrirCreacionPrecargadaDesdeTransaccion) — bloquea "Cliente" en CuentaCobrarModal para que se
+	 * quede fijo en el cliente genérico "PRÉSTAMOS / FINANCIERA", ver getOrCrearClientePrestamos. Mismo
+	 * patrón que proveedorBloqueado en finanzas/cuentas-pagar/+page.svelte. */
+	let clienteBloqueado = $state(false);
+	/** Datos crudos leídos del sessionStorage de la precarga (ver abrirCreacionPrecargadaDesdeTransaccion)
+	 * — se conservan hasta que la cuenta se guarda para poder grabar recién ahí la transacción real del
+	 * préstamo (ver crearTransaccionPorPrestamoOtorgado/handleSaved), que necesita
+	 * id_centro_costo_destino (el prestatario real, no viaja en `editingCuenta` porque cuentas_cobrar no
+	 * tiene esa columna). null = este alta/edición NO viene de ese flujo. */
+	let prestamoPrefillDatos = $state<Record<string, unknown> | null>(null);
 	let cobroModalOpen = $state(false);
 	let editingCobro = $state<Cobro | null>(null);
 	/** Prellenar Monto/Fecha de Cobro al abrir "Registrar Cobro" desde la cuota sintética de una cuenta
@@ -268,6 +290,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
+		abrirCreacionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -307,16 +330,51 @@
 	function openCreate() {
 		modalMode = 'create';
 		editingCuenta = null;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+	// A pedido explícito del usuario: si se llega acá recién después de crear una transacción Egreso de
+	// tipo "Préstamo Otorgado" con Centro de Costo Origen=Corporativo (ver TransaccionModal.svelte), se
+	// abre de una vez "Nueva Cuenta por Cobrar" con los datos ya conocidos precargados (Centro de
+	// Costo/Monto/Fecha de Emisión) Y con "Cliente" ya fijado en el genérico "PRÉSTAMOS / FINANCIERA"
+	// (ver getOrCrearClientePrestamos) — bloqueado, no editable (clienteBloqueado), porque el prestatario
+	// real no necesariamente está registrado como cliente en el sistema. Mismo mecanismo cross-page que
+	// abrirCreacionPrecargadaDesdeTransaccion en finanzas/cuentas-pagar/+page.svelte: TransaccionModal
+	// deja los datos base en sessionStorage bajo esta misma clave justo antes de navegar acá; el id del
+	// cliente genérico se resuelve/crea recién acá (async). sessionStorage y el query param se limpian
+	// apenas se consumen, para no reabrirlo si el usuario solo refresca esta misma página después.
+	async function abrirCreacionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('prefillCuentaCobrar') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaCobrarPrefill');
+		sessionStorage.removeItem('cuentaCobrarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-cobrar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			datos.id_cliente = String(await getOrCrearClientePrestamos(supabase));
+			modalMode = 'create';
+			editingCuenta = datos as any;
+			prestamoPrefillDatos = datos;
+			clienteBloqueado = true;
+			modalOpen = true;
+		} catch (err) {
+			console.error('[CuentasCobrar] No se pudo leer la precarga de la transacción:', err);
+			toast.error('No se pudo precargar el cliente de préstamos — completa "Cliente" a mano.');
+		}
 	}
 	function openEdit(item: CuentaCobrar) {
 		modalMode = 'edit';
 		editingCuenta = item;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
 	}
 	function closeModal() {
 		modalOpen = false;
 		editingCuenta = null;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 	}
 
 	async function selectRow(item: CuentaCobrar) {
@@ -532,7 +590,42 @@
 		cobroInitialValues = {};
 	}
 
-	async function handleSaved() {
+	// Espejo de crearTransaccionPorPrestamoRecibido en finanzas/cuentas-pagar/+page.svelte: cuando la
+	// Cuenta por Cobrar recién guardada viene del flujo "Préstamo Otorgado" (ver
+	// abrirCreacionPrecargadaDesdeTransaccion), la transacción real (el dinero que efectivamente salió)
+	// recién se graba ACÁ, en el momento en que la cuenta se guarda. Si falla (ej. saldo insuficiente en
+	// el centro de costo origen — validarSaldoSuficiente sí aplica a Egreso), la Cuenta por Cobrar YA
+	// quedó guardada — no se revierte, solo se avisa para que se registre a mano.
+	async function crearTransaccionPorPrestamoOtorgado(cuenta: CuentaCobrar) {
+		if (!prestamoPrefillDatos) return;
+		try {
+			const { data: userData } = await supabase.auth.getUser();
+			const payload = {
+				tipo_alcance: 'externa',
+				id_centro_costo_origen: cuenta.id_centro_costo,
+				id_centro_costo_destino: prestamoPrefillDatos.id_centro_costo_destino,
+				fecha: cuenta.fecha_emision,
+				tipo: 'egreso',
+				monto_total: cuenta.monto,
+				categoria: 'Préstamo Otorgado',
+				descripcion: cuenta.observaciones || 'Préstamo otorgado'
+			};
+			const result = await crearTransaccionSistema(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
+			if (!result.success) {
+				console.error('[CuentasCobrar] crearTransaccionSistema devolvió un error:', result, payload);
+				toast.error(`La Cuenta por Cobrar se guardó, pero no se pudo registrar la transacción del préstamo: ${result.message}. Regístrala manualmente en Transacciones.`);
+			}
+		} catch (err: any) {
+			console.error('[CuentasCobrar] Excepción al crear la transacción del préstamo:', err);
+			toast.error(`La Cuenta por Cobrar se guardó, pero no se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. Regístrala manualmente en Transacciones.`);
+		}
+	}
+
+	async function handleSaved(cuenta?: CuentaCobrar | CuentaCobrar[]) {
+		if (modalMode === 'create' && prestamoPrefillDatos && cuenta && !Array.isArray(cuenta)) {
+			await crearTransaccionPorPrestamoOtorgado(cuenta);
+		}
+		prestamoPrefillDatos = null;
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
@@ -1023,6 +1116,7 @@
 	centroCostoMontoMap={centroCostoMontoMap}
 	centroCostoProyectoMap={centroCostoProyectoMap}
 	centroCostoClienteMap={centroCostoClienteMap}
+	clienteBloqueado={clienteBloqueado}
 	onClose={closeModal}
 	onSaved={handleSaved}
 />

@@ -260,12 +260,14 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		// — FieldConfig no tiene un mecanismo de valor por defecto propio, mismo criterio que
 		// "responsable" (prellenado con el usuario actual) en ese mismo archivo.
 		// A pedido explícito del usuario: NO divide el Monto Comprometido entre las cuotas — solo indica
-		// cada cuánto se genera una cuenta por pagar NUEVA con el MISMO monto. 'contado' y
-		// 'sin_periodicidad' generan una sola cuenta (sin serie); 'mensual'/'quincenal'/'semanal' generan
-		// una cuenta por cada fecha entre Fecha Emisión y Fin de Periodo de Pago, ver
-		// calcularFechasRecurrentes en cuentasPagar.service.ts.
+		// cada cuánto se genera una cuenta por pagar NUEVA con el MISMO monto. 'sin_periodicidad' genera
+		// una sola cuenta (sin serie); 'mensual'/'quincenal'/'semanal' generan una cuenta por cada fecha
+		// entre Fecha Emisión y Fin de Periodo de Pago, ver calcularFechasRecurrentes en
+		// cuentasPagar.service.ts. OJO: 'contado' NO es un valor real de la columna en BD (la restricción
+		// `cuentas_pagar_frecuencia_pago_check` la rechaza — confirmado insertando de verdad contra
+		// Supabase) — esta lista SOLO debe tener valores que la restricción real acepte, si no el guardado
+		// falla con "El valor ingresado no cumple una regla de la base de datos".
 		options: [
-			{ value: 'contado', label: 'Contado' },
 			{ value: 'semanal', label: 'Semanal' },
 			{ value: 'quincenal', label: 'Quincenal' },
 			{ value: 'mensual', label: 'Mensual' },
@@ -280,11 +282,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Fin de Periodo de Pago',
 		tipo: 'date',
 		// Solo tiene sentido si la cuenta es recurrente (mensual/quincenal/semanal) — se bloquea
-		// (deshabilitado, no se valida) y se limpia para 'contado'/'sin_periodicidad' (esas generan una
-		// sola cuenta, no una serie). Es OBLIGATORIO para las 3 frecuencias periódicas: delimita el
-		// rango completo de la serie que se genera de una sola vez al guardar (ver
+		// (deshabilitado, no se valida) y se limpia para 'sin_periodicidad' (esa genera una sola cuenta,
+		// no una serie). Es OBLIGATORIO para las 3 frecuencias periódicas: delimita el rango completo de
+		// la serie que se genera de una sola vez al guardar (ver
 		// calcularFechasRecurrentes/createCuentasPagarRecurrentes), no hay generación "abierta" sin fin.
-		disabledWhen: (values) => ['contado', 'sin_periodicidad'].includes(String(values.frecuencia_pago ?? '')),
+		disabledWhen: (values) => String(values.frecuencia_pago ?? '') === 'sin_periodicidad',
 		requiredWhen: (values) => ['mensual', 'quincenal', 'semanal'].includes(String(values.frecuencia_pago ?? '')),
 		showInTable: false,
 		showInForm: true,
@@ -295,6 +297,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		label: 'Categoría de Gasto',
 		tipo: 'number', // la columna en BD es SMALLINT; se renderiza como <select> porque trae `options`
 		// Códigos reales del PCGE (Plan Contable General Empresarial - Perú), clase 6: Gastos por Naturaleza.
+		// Las 5 opciones finales (70-74) NO son códigos PCGE — son categorías del flujo de Préstamos
+		// (ver categoriaEsPrestamo en TransaccionModal.svelte), agregadas a pedido explícito del
+		// usuario al final de la lista. Verificado con un insert de prueba real contra Supabase
+		// (categoria_gasto=70, borrado después): a diferencia de frecuencia_pago, esta columna NO
+		// tiene restricción CHECK, así que cualquier SMALLINT es válido.
 		options: [
 			{ value: '60', label: 'Compras' },
 			{ value: '61', label: 'Variación de Inventarios' },
@@ -305,7 +312,12 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: '66', label: 'Pérdida por Deterioro de Activos' },
 			{ value: '67', label: 'Gastos Financieros' },
 			{ value: '68', label: 'Valuación y Deterioro de Activos y Provisiones' },
-			{ value: '69', label: 'Costos de Producción y Gastos por Función' }
+			{ value: '69', label: 'Costos de Producción y Gastos por Función' },
+			{ value: '70', label: 'Préstamos Recibidos' },
+			{ value: '71', label: 'Pago de Capital de Préstamos' },
+			{ value: '72', label: 'Préstamos Otorgados' },
+			{ value: '73', label: 'Cobranza de Préstamos Otorgados' },
+			{ value: '74', label: 'Ingresos Financieros' }
 		],
 		showInTable: false,
 		showInForm: true,

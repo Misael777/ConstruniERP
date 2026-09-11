@@ -513,6 +513,39 @@ export async function createTransaccion(
 	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
 }
 
+/** Crea una transacción SIN exigir comprobante adjunto (a diferencia de createTransaccion, que
+ * rechaza con "Debes adjuntar el comprobante..." si tieneComprobanteRequerido() da false) — para
+ * transacciones generadas por el sistema como efecto secundario de OTRO guardado (ver
+ * crearTransaccionPorPrestamoRecibido en cuentas-pagar/+page.svelte y
+ * crearTransaccionPorPrestamoOtorgado en cuentas-cobrar/+page.svelte), donde no hay ningún archivo
+ * que adjuntar en ese momento — mismo criterio ya usado por confirmarPagoPagado/
+ * confirmarCobroCobrado, que arman su propio insertData con construirInsertDataTransaccion y llaman
+ * directo al RPC, sin pasar por ese guard (pensado solo para el modal interactivo con carga de
+ * archivo). */
+export async function crearTransaccionSistema(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	const built = construirInsertDataTransaccion(payload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) {
+		return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
+	}
+
+	const { data, error } = await client.rpc('fn_crear_transaccion', {
+		p_payload: built.insertData,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) {
+		console.error('[transacciones.service] Error crudo de Postgres al crear la transacción (sistema):', error, built.insertData);
+		return { success: false, message: `No se pudo crear la transacción: ${translateRpcError(error, FIELDS_CONFIG)}` };
+	}
+
+	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
+}
+
 export async function updateTransaccion(
 	client: SupabaseClient,
 	id: number,
@@ -844,6 +877,22 @@ export async function getCentroCostoOptionsClientes(client: SupabaseClient): Pro
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
 		.not('id_cliente', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro' o 'bolsa general' (Corporativo) —
+ * para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en Ingreso+Externa, a
+ * pedido explícito del usuario. Versiones anteriores de este mismo campo mostraron: solo clientes:
+ * todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el mismo grupo "Centros de
+ * Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta cerrada, ver
+ * getCentroCostoOptionsSoloCentros) — esta es la definición vigente. */
+export async function getCentroCostoOptionsClientesYCorporativoUOtro(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
+		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));

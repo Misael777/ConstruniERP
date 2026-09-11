@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
@@ -13,8 +14,10 @@
 		anularTransaccion,
 		reactivarTransaccion,
 		getCentroCostoTipoVentaMap,
+		getCentroCostoOptions,
+		getCentroCostoOptionsClientesYCorporativoUOtro,
+		getCentroCostoOptionsSoloCentros,
 		getCentroCostoOptionsClientes,
-		getCentroCostoSocioBancaYCorporativo,
 		getCentroCostoClienteIdMap,
 		getCentroCostoOptionsProveedores,
 		getCentroCostoOptionsSubcontratistas,
@@ -1204,7 +1207,19 @@
 		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
 		// usuario elija de nuevo entre las opciones correctas en vez de dejar guardado un valor
 		// incoherente.
-		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') {
+		// A pedido explícito del usuario: si Categoría ya es "Préstamo" y lo que cambió fue el propio
+		// Proyecto (Destino) — el usuario está usando el selector "todos los centros de costo por tipo"
+		// que justamente habilita esa Categoría (ver categoriaEsPrestamo/optionsFor) — NO se limpia: todo
+		// el sentido de ese selector es poder cambiar de Proyecto sin perder la Categoría ya elegida.
+		const mantenerPrestamo = key === 'id_centro_costo_destino' && formValues.tipo === 'ingreso' && formValues.categoria === 'Préstamo';
+		// Espejo de mantenerPrestamo, para Egreso: si Categoría ya es "Préstamo Otorgado" y lo que
+		// cambió fue el Centro de Costo Origen O el Destino (ver categoriaEsPrestamoOtorgado/optionsFor —
+		// esta Categoría se alcanza tanto con Origen=Corporativo como con Clase=Otro en Destino), NO se
+		// limpia — mismo criterio, poder reasignar cuál de nuestros centros financia el préstamo, o a
+		// quién se le presta, sin perder la Categoría ya elegida.
+		const mantenerPrestamoOtorgado =
+			(key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && formValues.tipo === 'egreso' && formValues.categoria === 'Préstamo Otorgado';
+		if ((key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && !mantenerPrestamo && !mantenerPrestamoOtorgado) {
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
 			categoriaCorpGrupo = '';
@@ -1213,10 +1228,6 @@
 		// "Tipo de Gasto" (7 dropdowns, ver TIPOS_GASTO_CONSULTORIA) solo aplica a Egreso en proyectos de
 		// Consultoría — mismos disparadores que Categoría para limpiarlo si deja de aplicar.
 		if (key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') formValues.tipo_gasto = '';
-		// En Ingreso, "Centro de Costo Destino" se filtra en cascada a los proyectos del cliente elegido
-		// en "Centro de Costo Origen" (ver optionsFor/centroCostoClienteIdMap) — si Origen cambia, el
-		// Destino ya elegido puede pertenecer a otro cliente, así que se limpia.
-		if (key === 'id_centro_costo_origen' && formValues.tipo === 'ingreso') formValues.id_centro_costo_destino = '';
 		// En Egreso Y en Transacción Interna, "Cuenta origen" se filtra en cascada a las cuentas que
 		// recibieron un Ingreso de este Centro de Costo Origen (ver cuentasBancoIngresosOrigen/
 		// optionsFor) — si Origen cambia, la cuenta ya elegida puede no calzar con el nuevo centro, así
@@ -1339,6 +1350,62 @@
 	});
 	const esCorporativo = $derived(centroCostoTipoMap[idCentroCostoProyecto] === 'bolsa general');
 
+	// A pedido explícito del usuario: en Ingreso, apenas Categoría="Préstamo" (en Nueva Y en Editar) —
+	// ver optionsFor, que deja de acotar "Proyecto" a solo Corporativo y muestra TODOS los centros de
+	// costo agrupados por tipo (un préstamo puede terminar imputado a cualquier proyecto).
+	const categoriaEsPrestamo = $derived(formValues.tipo === 'ingreso' && formValues.categoria === 'Préstamo');
+	// A pedido explícito del usuario: al CREAR (no al editar) una transacción Ingreso con Categoría
+	// "Préstamo", ya no se crea ninguna transacción — se registra directo como Cuenta por Pagar (ver
+	// handleSubmit, que corta ahí mismo, y el botón "Crear" que se convierte en "Cuentas por Pagar" más
+	// abajo en el template). NO exige esCorporativo: "Préstamo" solo aparece como opción de Categoría
+	// mientras Proyecto es Corporativo (ver CATEGORIA_CORPORATIVO_INGRESO), pero una vez elegida, el
+	// usuario puede reasignar Proyecto a cualquier otro centro de costo sin perder la Categoría (ver
+	// mantenerPrestamo en handleInput) — el gatillo real es la Categoría en sí, no en qué Proyecto haya
+	// terminado.
+	const esPrestamoCorporativoIngreso = $derived(mode === 'create' && categoriaEsPrestamo);
+
+	// Espejo de categoriaEsPrestamo/esPrestamoCorporativoIngreso, para Egreso: "Préstamo Otorgado" es
+	// un valor de Categoría DISTINTO del "Préstamo" genérico ya existente en CATEGORIA_CORPORATIVO_EGRESO
+	// (que sigue siendo una categoría normal de gasto, ej. pagar una cuota de un préstamo ya existente)
+	// — a pedido explícito del usuario, al CREAR (no al editar) una transacción Egreso con esta
+	// Categoría, tampoco se crea la transacción acá: se registra como Cuenta por Cobrar (ver handleSubmit
+	// y el botón "Cuentas por Cobrar" más abajo en el template).
+	const categoriaEsPrestamoOtorgado = $derived(formValues.tipo === 'egreso' && formValues.categoria === 'Préstamo Otorgado');
+	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && categoriaEsPrestamoOtorgado);
+
+	// Etiqueta corta por tipo de centro de costo — solo para agrupar visualmente "Proyecto" cuando
+	// categoriaEsPrestamo (ver grupoParaOpcion/optionsFor). Mismos valores que TIPO_CENTRO_COSTO_OPTIONS
+	// en dashboardFinanzas.service.ts, pero no vale la pena importarlo solo por este mapa chico.
+	const TIPO_CENTRO_COSTO_LABEL_CORTO: Record<string, string> = {
+		obra: 'Obra',
+		consultoria: 'Consultoría',
+		'bolsa general': 'Corporativo',
+		area: 'Área',
+		otro: 'Otro',
+		proyecto: 'Proyecto',
+		cliente: 'Cliente',
+		proveedor: 'Proveedor',
+		empleado: 'Empleado',
+		subcontratista: 'Subcontratista'
+	};
+
+	// A pedido explícito del usuario: en Ingreso+Externa, si "Persona/Empresa" (Origen) es de tipo
+	// Corporativo (bolsa general) u Otro, "Proyecto" (Destino) no tiene una lista real de proyectos que
+	// ofrecer — se autocompleta directo con el propio Centro de Costo Corporativo (optionsFor ya reduce
+	// la lista de Destino a esa única opción en ese caso, esto además la deja YA elegida, sin que el
+	// usuario tenga que abrir el dropdown para confirmar la única opción disponible). EXCEPCIÓN: si ya
+	// está en modo Préstamo (categoriaEsPrestamo), Proyecto se elige libre entre TODOS los centros de
+	// costo (ver optionsFor) — este autocompletado no debe pisar esa elección de vuelta a Corporativo.
+	$effect(() => {
+		if (formValues.tipo !== 'ingreso' || formValues.tipo_alcance !== 'externa' || categoriaEsPrestamo) return;
+		const tipoOrigen = centroCostoTipoMap[formValues.id_centro_costo_origen];
+		if (tipoOrigen !== 'bolsa general' && tipoOrigen !== 'otro') return;
+		const corporativo = centroCostoOptionsPersonaEmpresa.find((o) => centroCostoTipoMap[o.value] === 'bolsa general');
+		if (corporativo && formValues.id_centro_costo_destino !== corporativo.value) {
+			formValues = { ...formValues, id_centro_costo_destino: corporativo.value };
+		}
+	});
+
 	// "Detalle de la categoría" — a pedido explícito del usuario: tabla editable de subcategorías
 	// (Subcategoría/Descripción/Cantidad/Unidad/Precio Unitario/Total, con total autocalculado),
 	// visible en cuanto hay una Categoría elegida (cualquier tipo de proyecto). Se acumula client-side
@@ -1416,20 +1483,40 @@
 		}
 	});
 
-	// A pedido explícito del usuario: en Ingreso+Externa, "Centro de Costo Origen" pasa a mostrar la
-	// lista de CLIENTES (antes mostraba "solo proyectos", ver optionsFor más abajo) y "Centro de Costo
-	// Destino", en cascada, solo los PROYECTOS de ese cliente — ver getCentroCostoClienteIdMap. También
-	// se cargan acá las listas de proveedores/empleados: en Egreso+Externa se usan para "Centro de
-	// Costo Destino" según el selector "Clase" (ver más abajo).
+	// A pedido explícito del usuario: en Ingreso+Externa, "Centro de Costo Origen" (etiqueta "Persona/
+	// Empresa", ver labelFor) muestra Clientes + centros de costo de tipo Otro o Corporativo (bolsa
+	// general) — ver getCentroCostoOptionsClientesYCorporativoUOtro. Versiones anteriores de este mismo
+	// campo mostraron: solo clientes; todos los centros de costo sin filtrar; solo tipo 'proyecto'/
+	// 'otro'; el mismo grupo "Centros de Costos" del módulo (obra/consultoría/bolsa general/otro +
+	// proyectos de venta cerrada, ver getCentroCostoOptionsSoloCentros) — esta es la definición vigente.
+	// "Centro de Costo Destino" (Proyecto) ya NO depende de esta elección — muestra siempre el mismo
+	// conjunto que el tab "Centro de Costos" del submódulo homónimo (ver centroCostoOptionsSoloCentros
+	// más abajo), sin ninguna cascada cliente→proyectos (la que había antes se quitó a pedido explícito
+	// del usuario), salvo la excepción Corporativo/Otro/Préstamo (ver más abajo, optionsFor).
+	// centroCostoClienteIdMap se sigue usando para prellenar el nombre/DNI del cliente en el Recibo de
+	// Pago cuando el centro elegido SÍ es un cliente (ver clienteReciboNombre/clienteReciboDni más
+	// abajo) — solo se quitó su uso para FILTRAR opciones. centroCostoOptionsClientes/Proveedores/
+	// Subcontratistas/Empleados se siguen cargando para Egreso+Externa, donde el selector "Clase" (ver
+	// más abajo) sigue ofreciendo cada una por separado.
+	let centroCostoOptionsPersonaEmpresa = $state<FieldOption[]>([]);
 	let centroCostoOptionsClientes = $state<FieldOption[]>([]);
 	let centroCostoClienteIdMap = $state<Record<string, string | null>>({});
 	let centroCostoOptionsProveedores = $state<FieldOption[]>([]);
 	let centroCostoOptionsSubcontratistas = $state<FieldOption[]>([]);
 	let centroCostoOptionsEmpleados = $state<FieldOption[]>([]);
-	// "Socio o Banca" (Cliente) / "CORPORATIVO" (Proyecto) para Ingreso+Externa — ver
-	// getCentroCostoSocioBancaYCorporativo/optionsFor.
-	let centroCostoSocioBanca = $state<FieldOption | null>(null);
-	let centroCostoCorporativoIngreso = $state<FieldOption | null>(null);
+	// A pedido explícito del usuario: en Ingreso, si Categoría="Préstamo", "Proyecto" (Destino) deja de
+	// estar acotado (a "solo el Corporativo", ver optionsFor) y muestra TODOS los centros de costo,
+	// agrupados por tipo (Obra/Consultoría/Corporativo/Otro/etc., ver grupoParaOpcion/optionsFor) — un
+	// préstamo puede terminar imputado a cualquier proyecto, no solo a Corporativo.
+	let centroCostoOptionsTodos = $state<FieldOption[]>([]);
+	// A pedido explícito del usuario: en Ingreso+Externa, "Proyecto" (Destino) — cuando no aplica ninguna
+	// de las excepciones de arriba (Préstamo, Origen Corporativo/Otro) — muestra el mismo conjunto que el
+	// tab "Centro de Costos" del submódulo homónimo (obra/consultoría/bolsa general manuales + proyectos
+	// con venta cerrada, ver getCentroCostoOptionsSoloCentros), antes mostraba la lista general de
+	// "proyectos" que le pasaba cada página contenedora vía dynamicOptions — se carga acá adentro en vez
+	// de depender de esa prop para que la lista sea la misma sin importar desde qué página (Transacciones,
+	// Cuentas por Pagar, Cuentas por Cobrar, Ventas) se abra el modal.
+	let centroCostoOptionsSoloCentros = $state<FieldOption[]>([]);
 	let centroCostoClientesCargado = $state(false);
 
 	// "Saldo actual"/"Monto actual" junto a Cuenta Origen/Destino y Centro de Costo Origen/Destino — a
@@ -1488,16 +1575,19 @@
 				getCentroCostoOptionsProveedores(supabase),
 				getCentroCostoOptionsSubcontratistas(supabase),
 				getCentroCostoOptionsEmpleados(supabase),
-				getCentroCostoSocioBancaYCorporativo(supabase)
+				getCentroCostoOptionsClientesYCorporativoUOtro(supabase),
+				getCentroCostoOptions(supabase),
+				getCentroCostoOptionsSoloCentros(supabase)
 			])
-				.then(([opciones, mapa, proveedores, subcontratistas, empleados, socioBancaYCorporativo]) => {
+				.then(([opciones, mapa, proveedores, subcontratistas, empleados, personaEmpresa, todos, soloCentros]) => {
 					centroCostoOptionsClientes = opciones;
 					centroCostoClienteIdMap = mapa;
 					centroCostoOptionsProveedores = proveedores;
 					centroCostoOptionsSubcontratistas = subcontratistas;
 					centroCostoOptionsEmpleados = empleados;
-					centroCostoSocioBanca = socioBancaYCorporativo.socioBanca;
-					centroCostoCorporativoIngreso = socioBancaYCorporativo.corporativo;
+					centroCostoOptionsPersonaEmpresa = personaEmpresa;
+					centroCostoOptionsTodos = todos;
+					centroCostoOptionsSoloCentros = soloCentros;
 				})
 				.catch((err) => console.error('[TransaccionModal] No se pudo cargar la lista de clientes/proveedores/subcontratistas/empleados/proyectos:', err));
 		}
@@ -1507,23 +1597,42 @@
 	// de Costo Origen y Destino (a pedido explícito del usuario): clasifica qué "Cuenta Interna"
 	// ofrece Destino. No es una columna de `transaccion` — es un filtro puramente de UI, se resetea al
 	// abrir el modal (ver el $effect principal de `open` más abajo) y al cambiar Tipo/Alcance.
-	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro';
 	let claseDestino = $state<ClaseDestino>('');
 	function handleClaseDestinoChange(value: string) {
+		const clasePrevia = claseDestino;
 		claseDestino = value as ClaseDestino;
 		formValues = { ...formValues, id_centro_costo_destino: '' };
+		// Si se sale de "Otro" y la Categoría elegida era una de las de Corporativo (esas solo se
+		// ofrecen con Clase=Otro o esCorporativo, ver optionsFor) — se limpia, igual que el resto de
+		// campos que dependen de Destino en handleInput, para no dejar guardado un valor que ya no
+		// aparece en la lista de opciones. Si esCorporativo sigue siendo true (Origen=Corporativo), esa
+		// lista sigue aplicando igual, no se limpia.
+		if (clasePrevia === 'otro' && value !== 'otro' && !esCorporativo) {
+			formValues.categoria = '';
+		}
 	}
 	// "Subcontratista" filtra los centros de costo de proveedores cuyo "Producto y Servicio" es
 	// 'SUBCONTRATISTA - OBRA' (centro_costo.tipo='subcontratista', ver sincronizarTipoCentroCostoProveedor
 	// en centroCostos.service.ts) — lista real y separada de "Proveedores", a pedido explícito del usuario.
+	// "Otro" (a pedido explícito del usuario) — a diferencia de las 4 anteriores (cada una acotada a una
+	// lista curada de una sola entidad), no filtra nada: Centro de Costo Destino pasa a mostrar TODOS los
+	// centros de costo sin restringir (ver optionsFor/centroCostoOptionsTodos) — para cubrir el caso de un
+	// Egreso cuyo destino no es proveedor/subcontratista/empleado/cliente (ej. un centro de costo de
+	// proyecto, Corporativo, o tipo 'otro' propiamente dicho).
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
 		{ value: 'proveedores', label: 'Proveedores' },
 		{ value: 'subcontratista', label: 'Subcontratista' },
 		{ value: 'empleados', label: 'Empleados' },
-		{ value: 'cliente', label: 'Cliente' }
+		{ value: 'cliente', label: 'Cliente' },
+		{ value: 'otro', label: 'Otro' }
 	];
 	// Al editar una transacción de Egreso ya guardada, infiere la Clase a partir de a qué lista
 	// pertenece el Destino guardado — para no arrancar con el selector vacío y el campo Destino oculto.
+	// "Otro" es el fallback cuando el Destino guardado no calza con NINGUNA de las 4 listas curadas (ej.
+	// transacciones viejas hacia un centro de costo de proyecto/Corporativo/tipo 'otro') — antes de
+	// agregar esta opción, ese caso dejaba Clase vacía y Centro de Costo Destino sin ninguna opción que
+	// mostrar (ver optionsFor), ocultando de hecho el valor ya guardado.
 	$effect(() => {
 		if (open && mode === 'edit' && transaccion && formValues.tipo === 'egreso' && !claseDestino && centroCostoClientesCargado) {
 			const destinoId = String(transaccion.id_centro_costo_destino);
@@ -1531,6 +1640,7 @@
 			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
+			else claseDestino = 'otro';
 		}
 	});
 	const CATEGORIA_OBRA_INGRESO: FieldOption[] = [
@@ -1564,7 +1674,11 @@
 		{ value: 'Compras', label: 'Compras' },
 		{ value: 'Movilidad', label: 'Movilidad' },
 		{ value: 'Impuestos', label: 'Impuestos' },
-		{ value: 'Inversión', label: 'Inversión' }
+		{ value: 'Inversión', label: 'Inversión' },
+		// A pedido explícito del usuario: valor DISTINTO del "Préstamo" de arriba (esa sigue siendo una
+		// categoría normal de gasto, ej. pagar una cuota) — dispara el flujo espejo de Ingreso+Préstamo,
+		// ver categoriaEsPrestamoOtorgado/esPrestamoOtorgadoEgreso más arriba.
+		{ value: 'Préstamo Otorgado', label: 'Préstamo Otorgado' }
 	];
 
 	// "Tipo de Gasto" — 7 dropdowns propios (uno por concepto, a pedido explícito del usuario, según
@@ -1827,10 +1941,20 @@
 			// cliente/proveedor/empleado) vinculado, ver soloNombreCentro más abajo.
 			if (lockedFields.includes(field.key)) return soloNombreCentro(dynamicOptions[field.key] || []);
 			// Excepciones a pedido del usuario, todas en Externa:
-			// - Ingreso: "Centro de Costo Origen" muestra la lista de CLIENTES (antes mostraba "solo
-			//   proyectos", igual que Interna) y "Centro de Costo Destino", en cascada, solo los
-			//   PROYECTOS del cliente elegido en Origen (ver centroCostoClienteIdMap más arriba) — vacío
-			//   mientras no se haya elegido un cliente todavía.
+			// - Ingreso: "Centro de Costo Origen" ("Persona/Empresa", ver labelFor) muestra Clientes +
+			//   centros de costo de tipo Otro o Corporativo (bolsa general, ver
+			//   getCentroCostoOptionsClientesYCorporativoUOtro) y "Centro de Costo Destino" (Proyecto)
+			//   muestra el mismo conjunto que el tab "Centro de Costos" del submódulo homónimo (obra/
+			//   consultoría/bolsa general manuales + proyectos con venta cerrada, ver
+			//   getCentroCostoOptionsSoloCentros/centroCostoOptionsSoloCentros) — SIN cascada, sin importar
+			//   qué se haya elegido en Origen (la cascada cliente→proyectos que había antes se quitó a
+			//   pedido explícito del usuario). EXCEPCIÓN, a pedido explícito del usuario: si Origen es de tipo
+			//   Corporativo u Otro, ninguno tiene proyectos propios — Destino pasa a mostrar directo el
+			//   propio Centro de Costo Corporativo (mismo criterio que el caso "Socio o Banca" que existía
+			//   antes de la cascada por cliente). OTRA EXCEPCIÓN, sobre la anterior: si Categoría="Préstamo"
+			//   (categoriaEsPrestamo), Destino deja de estar acotado y muestra TODOS los centros de costo,
+			//   agrupados por tipo (ver grupoParaOpcion) — un préstamo puede terminar imputado a cualquier
+			//   proyecto, no solo a Corporativo.
 			// - Egreso: "Centro de Costo Origen" usa "Centro de Costos" en su sentido estricto (proyectos
 			//   y corporativo — ver getCentroCostoOptionsSoloCentros, misma definición que el tab "Centro
 			//   de Costos" del submódulo Centro de Costos y Cuentas Internas) y "Centro de Costo Destino"
@@ -1838,18 +1962,24 @@
 			//   "Clase" que aparece entre ambos campos (ver claseDestino/OPCIONES_CLASE_DESTINO) — vacío
 			//   mientras no se haya elegido una Clase todavía.
 			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
-				if (field.key === 'id_centro_costo_origen') {
-					const opciones = soloNombreCentro(centroCostoOptionsClientes);
-					return centroCostoSocioBanca ? [...opciones, centroCostoSocioBanca] : opciones;
+				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsPersonaEmpresa);
+				if (categoriaEsPrestamo) {
+					// Ordenado por grupo (tipo) — SelectConSaldo (ver grupoParaOpcion/fieldBlock) necesita
+					// las opciones de un mismo grupo CONSECUTIVAS para dibujar un solo encabezado por
+					// grupo, no las reordena por su cuenta.
+					const ordenado = [...centroCostoOptionsTodos].sort((a, b) => {
+						const grupoA = TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[a.value]] ?? 'Otros';
+						const grupoB = TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[b.value]] ?? 'Otros';
+						return grupoA === grupoB ? 0 : grupoA < grupoB ? -1 : 1;
+					});
+					return soloNombreCentro(ordenado);
 				}
-				// "Socio o Banca" como Cliente no tiene proyectos propios — el Proyecto pasa a ser fijo
-				// "CORPORATIVO", a pedido explícito del usuario (ver getCentroCostoSocioBancaYCorporativo).
-				if (centroCostoSocioBanca && formValues.id_centro_costo_origen === centroCostoSocioBanca.value) {
-					return centroCostoCorporativoIngreso ? [centroCostoCorporativoIngreso] : [];
+				const tipoOrigen = centroCostoTipoMap[formValues.id_centro_costo_origen];
+				if (tipoOrigen === 'bolsa general' || tipoOrigen === 'otro') {
+					const corporativo = centroCostoOptionsPersonaEmpresa.find((o) => centroCostoTipoMap[o.value] === 'bolsa general');
+					return corporativo ? soloNombreCentro([corporativo]) : [];
 				}
-				const idCliente = centroCostoClienteIdMap[formValues.id_centro_costo_origen] ?? null;
-				if (!idCliente) return [];
-				return soloNombreCentro((dynamicOptions.id_centro_costo_destino || []).filter((opt) => centroCostoClienteIdMap[opt.value] === idCliente));
+				return soloNombreCentro(centroCostoOptionsSoloCentros);
 			}
 			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);
@@ -1857,6 +1987,22 @@
 				if (claseDestino === 'subcontratista') return soloNombreCentro(centroCostoOptionsSubcontratistas);
 				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
 				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
+				// "Otro" (a pedido explícito del usuario) — cuentas externas de tipo 'otro', 'consultoria',
+				// 'obra' o 'bolsa general' (Corporativo): cubre el caso de un Egreso cuyo destino no es un
+				// proveedor/subcontratista/empleado/cliente registrado (ej. un préstamo que se le da a una
+				// persona sin vínculo formal en el sistema — ver categoria más abajo, esCorporativo).
+				if (claseDestino === 'otro') {
+					const TIPOS_CLASE_OTRO = new Set(['otro', 'consultoria', 'obra', 'bolsa general']);
+					const opcionesOtro = centroCostoOptionsTodos.filter((o) => TIPOS_CLASE_OTRO.has(centroCostoTipoMap[o.value]));
+					// Si el Destino ya guardado (ver el fallback a 'otro' en el $effect de arriba, al editar)
+					// no calza con ninguno de esos 4 tipos, se agrega igual — sin esto, el campo quedaría con
+					// un valor elegido que no aparece en su propia lista de opciones.
+					if (formValues.id_centro_costo_destino && !opcionesOtro.some((o) => o.value === formValues.id_centro_costo_destino)) {
+						const actual = centroCostoOptionsTodos.find((o) => o.value === formValues.id_centro_costo_destino);
+						if (actual) opcionesOtro.push(actual);
+					}
+					return soloNombreCentro(opcionesOtro);
+				}
 				return [];
 			}
 			const key = formValues.tipo_alcance === 'externa' ? `${field.key}_externo` : field.key;
@@ -1885,7 +2031,10 @@
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
 		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'ingreso') return CATEGORIA_CORPORATIVO_INGRESO;
-		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'egreso') return CATEGORIA_CORPORATIVO_EGRESO;
+		// A pedido explícito del usuario: además de esCorporativo (Origen=Corporativo), Clase="Otro" en
+		// Egreso también habilita el catálogo de categorías de Corporativo (incluye "Préstamo Otorgado")
+		// — cubre registrar un préstamo dado a una persona sin depender de que el Origen sea Corporativo.
+		if (field.key === 'categoria' && formValues.tipo === 'egreso' && (esCorporativo || claseDestino === 'otro')) return CATEGORIA_CORPORATIVO_EGRESO;
 		if (field.optionsWhen) return field.optionsWhen(formValues);
 		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
 	}
@@ -1918,6 +2067,15 @@
 		return undefined;
 	}
 
+	/** Grupo (por tipo de centro de costo) para una opción de "Proyecto" (Destino), SOLO cuando
+	 * categoriaEsPrestamo (ver optionsFor, que en ese caso ya ordena la lista por grupo) — undefined en
+	 * cualquier otro campo/caso, para que SelectConSaldo no dibuje ningún encabezado (comportamiento
+	 * normal, sin agrupar). */
+	function grupoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): string | undefined {
+		if (field.key !== 'id_centro_costo_destino' || !categoriaEsPrestamo) return undefined;
+		return TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[opt.value]] ?? 'Otros';
+	}
+
 	/** Saldo de la opción YA ELEGIDA (no de cada opción de la lista, ver saldoParaOpcion arriba) — a
 	 * pedido explícito del usuario: una vez elegida una Cuenta o un Centro de Costo, su saldo debe
 	 * seguir viéndose DEBAJO del dropdown ya cerrado, no solo dentro de la lista mientras está abierta. */
@@ -1939,7 +2097,9 @@
 	 * también cambia para reflejar lo que de verdad se está eligiendo. */
 	function labelFor(field: (typeof formFields)[number]): string {
 		if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
-			if (field.key === 'id_centro_costo_origen') return 'Cliente';
+			// A pedido explícito del usuario: ya no es necesariamente un cliente (el campo ahora ofrece
+			// TODOS los centros de costo, ver optionsFor), así que la etiqueta pasa a ser más genérica.
+			if (field.key === 'id_centro_costo_origen') return 'Persona/Empresa';
 			if (field.key === 'id_centro_costo_destino') return 'Proyecto';
 		}
 		return field.label;
@@ -1954,6 +2114,60 @@
 		revalidate();
 		if (hasErrors) {
 			toast.error('Revisa los campos marcados en rojo antes de guardar.');
+			return;
+		}
+
+		// A pedido explícito del usuario: al CREAR una transacción Ingreso donde el Proyecto (Destino) es
+		// Corporativo y la Categoría elegida es "Préstamo" (ver CATEGORIA_CORPORATIVO_INGRESO), la
+		// transacción NO se crea acá — un préstamo se registra directo como Cuenta por Pagar, no como un
+		// Ingreso. El botón (ver template, más abajo) ya cambia de "Crear" a "Cuentas por Pagar" para
+		// este caso, pero este mismo chequeo va acá arriba de todo (antes de pedir comprobante o crear
+		// nada) como respaldo — por si el formulario se llega a enviar de otra forma (ej. Enter en un
+		// campo de texto) sin pasar por el clic del botón. Deja los datos ya conocidos (Centro de Costo
+		// destino, Centro de Costo origen — el prestamista real, ver id_centro_costo_origen abajo —,
+		// Monto, Fecha de Emisión) en sessionStorage para que finanzas/cuentas-pagar/+page.svelte los
+		// recoja en su onMount y abra "Nueva Cuenta por Pagar" precargada (ver
+		// abrirCreacionPrecargadaDesdeTransaccion ahí, y getOrCrearProveedorPrestamos para el proveedor
+		// genérico con el que ese campo queda bloqueado). La transacción de Ingreso en sí (el dinero que
+		// de verdad entra) recién se graba ahí, en el momento en que esa Cuenta por Pagar se guarda (ver
+		// crearTransaccionPorPrestamoRecibido) — no acá, y no antes.
+		if (esPrestamoCorporativoIngreso) {
+			sessionStorage.setItem(
+				'cuentaPagarPrefill',
+				JSON.stringify({
+					id_centro_costo: formValues.id_centro_costo_destino,
+					id_centro_costo_origen: formValues.id_centro_costo_origen,
+					monto_comprometido: formValues.monto_total,
+					fecha_emision: formValues.fecha,
+					observacion: 'Préstamo recibido'
+				})
+			);
+			onClose();
+			goto('/finanzas/cuentas-pagar?prefillCuentaPagar=1');
+			return;
+		}
+
+		// Espejo del bloque anterior, para Egreso: al CREAR una transacción donde el Centro de Costo
+		// Origen es Corporativo y la Categoría elegida es "Préstamo Otorgado" (ver
+		// CATEGORIA_CORPORATIVO_EGRESO — valor DISTINTO del "Préstamo" genérico de Egreso, que sigue
+		// siendo una categoría normal de gasto, ej. pagar una cuota de un préstamo ya existente, y no
+		// dispara nada de esto), la transacción tampoco se crea acá — un préstamo OTORGADO se registra
+		// como Cuenta por Cobrar (la empresa ahora tiene un derecho de cobro), y la transacción de Egreso
+		// recién se graba al guardar esa Cuenta por Cobrar (ver crearTransaccionPorPrestamoOtorgado en
+		// cuentas-cobrar/+page.svelte).
+		if (esPrestamoOtorgadoEgreso) {
+			sessionStorage.setItem(
+				'cuentaCobrarPrefill',
+				JSON.stringify({
+					id_centro_costo: formValues.id_centro_costo_origen,
+					id_centro_costo_destino: formValues.id_centro_costo_destino,
+					monto: formValues.monto_total,
+					fecha_emision: formValues.fecha,
+					observaciones: 'Préstamo otorgado'
+				})
+			);
+			onClose();
+			goto('/finanzas/cuentas-cobrar?prefillCuentaCobrar=1');
 			return;
 		}
 
@@ -2199,7 +2413,7 @@
 			<SelectConSaldo
 				id={`tr-${field.key}`}
 				value={formValues[field.key]}
-				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt) }))}
+				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt) }))}
 				disabled={isDisabled}
 				hasError={!!fieldErrors[field.key]}
 				onchange={(v) => {
@@ -2394,6 +2608,72 @@
 							     se muestra junto al comprobante, antes que el resto de los campos núcleo. -->
 							<div class="md:w-56 shrink-0 flex flex-col gap-4">
 								{@render fieldBlock(tipoField)}
+								<!-- Categoría — a pedido explícito del usuario, se movió acá (antes vivía dentro de
+								     "Otros campos", más abajo): ahora queda debajo de Tipo y arriba de "Adjuntar
+								     boucher de pago". flex-col en vez de grid-cols-2 (a diferencia de su posición
+								     anterior): esta columna es angosta (md:w-56 ≈ 224px), 2 selects lado a lado no
+								     entrarían cómodos. -->
+								{#if catalogoDetalleActual.length > 0}
+									<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
+									     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
+									     Detalle (detalleCatalogoGrupoEfectivo/handleDetalleCatalogoGrupoChange), así
+									     que elegir acá o en Detalle queda siempre sincronizado. Elegir acá SOLO fija
+									     la Categoría (no agrega una fila a Detalle, a diferencia de elegir allá, ver
+									     agregarFilaDesdeCatalogo). -->
+									<div>
+										<label for="tr-categoria-otros-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+											Categoría<span class="text-red-500">*</span>
+										</label>
+										<div class="flex flex-col gap-2">
+											<div class="relative">
+												<select
+													id="tr-categoria-otros-grupo"
+													value={detalleCatalogoGrupoEfectivo}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="">Categoría</option>
+													{#each catalogoDetalleActual as grupo}
+														<option value={grupo.key}>{grupo.label}</option>
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+											<div class="relative">
+												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
+												     a pedido explícito del usuario, presentada en el MISMO dropdown vía
+												     <optgroup> nativo (más simple que un 3er selector aparte): el rol se ve
+												     como encabezado de grupo y sus especialidades debajo, un solo clic para
+												     elegir. -->
+												<select
+													id="tr-categoria-otros-subcategoria"
+													value={formValues.categoria}
+													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
+													onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
+													class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+												>
+													<option value="">Subcategoría</option>
+													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
+														{#if SUBOPCIONES_SUBCONTRATA[opt]}
+															<optgroup label={opt}>
+																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
+																	<option value={sub}>{sub}</option>
+																{/each}
+															</optgroup>
+														{:else}
+															<option value={opt}>{opt}</option>
+														{/if}
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+										</div>
+										{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
+									</div>
+								{:else}
+									{@render fieldBlock(categoriaField)}
+								{/if}
 								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
 									Adjuntar boucher de pago
@@ -2773,72 +3053,6 @@
 
 						{#if otrosCamposAbierto}
 							<div class="mt-4 flex flex-col gap-4">
-								<!-- A pedido explícito del usuario: Tipo de Documento/N° de Documento ya no van acá —
-								     esa info ahora se captura por cada comprobante en la 4ta sección, más abajo (ver
-								     comprobantesPago). Categoría queda sola, sin grid para no dejar huecos vacíos. -->
-								<div class="sm:max-w-sm">
-									{#if catalogoDetalleActual.length > 0}
-										<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
-										     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
-										     Detalle (detalleCatalogoGrupoEfectivo/handleDetalleCatalogoGrupoChange), así
-										     que elegir acá o en Detalle queda siempre sincronizado. Elegir acá SOLO fija
-										     la Categoría (no agrega una fila a Detalle, a diferencia de elegir allá, ver
-										     agregarFilaDesdeCatalogo). -->
-										<div>
-											<label for="tr-categoria-otros-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
-												Categoría<span class="text-red-500">*</span>
-											</label>
-											<div class="grid grid-cols-2 gap-2">
-												<div class="relative">
-													<select
-														id="tr-categoria-otros-grupo"
-														value={detalleCatalogoGrupoEfectivo}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="">Categoría</option>
-														{#each catalogoDetalleActual as grupo}
-															<option value={grupo.key}>{grupo.label}</option>
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-												</div>
-												<div class="relative">
-													<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
-													     a pedido explícito del usuario, presentada en el MISMO dropdown vía
-													     <optgroup> nativo (más simple que un 3er selector aparte): el rol se ve
-													     como encabezado de grupo y sus especialidades debajo, un solo clic para
-													     elegir. -->
-													<select
-														id="tr-categoria-otros-subcategoria"
-														value={formValues.categoria}
-														disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-														onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
-														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-													>
-														<option value="">Subcategoría</option>
-														{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-															{#if SUBOPCIONES_SUBCONTRATA[opt]}
-																<optgroup label={opt}>
-																	{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
-																		<option value={sub}>{sub}</option>
-																	{/each}
-																</optgroup>
-															{:else}
-																<option value={opt}>{opt}</option>
-															{/if}
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-												</div>
-											</div>
-											{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
-										</div>
-									{:else}
-										{@render fieldBlock(categoriaField)}
-									{/if}
-								</div>
 								<!-- grid-cols-2 salvo que el tercer campo (Vincular con Cuenta por Pagar/Cobrar)
 								     vaya a aparecer — igual que Origen/Clase/Destino más arriba, forzar 3 columnas
 								     cuando ese campo no se muestra deja un hueco vacío a la derecha. -->
@@ -3410,6 +3624,10 @@
 								{uploadingComprobante || uploadingComprobantesPago ? 'Subiendo archivos…' : 'Guardando…'}
 							{:else if colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1}
 								Guardar y continuar
+							{:else if esPrestamoCorporativoIngreso}
+								Cuentas por Pagar
+							{:else if esPrestamoOtorgadoEgreso}
+								Cuentas por Cobrar
 							{:else}
 								{confirmButtonLabel ?? (mode === 'create' ? 'Crear' : 'Actualizar')}
 							{/if}

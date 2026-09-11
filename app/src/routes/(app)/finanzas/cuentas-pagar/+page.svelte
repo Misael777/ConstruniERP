@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
@@ -27,9 +28,11 @@
 		getCentroCostoOptionsExternos,
 		getCentroCostoOptionsExternosOrigen,
 		getCentroCostoTipoMap,
-		getEmpleadoOptions
+		getEmpleadoOptions,
+		crearTransaccionSistema
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { getOrCrearProveedorPrestamos } from '$lib/modules/proveedores/services/proveedores.service';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
@@ -115,6 +118,16 @@
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaPagar | null>(null);
+	/** true solo cuando el modal se abre precargado desde la transacción Ingreso "Préstamo" (ver
+	 * abrirCreacionPrecargadaDesdeTransaccion) — bloquea "Proveedor" en CuentaPagarModal para que se
+	 * quede fijo en el proveedor genérico "PRÉSTAMOS / FINANCIERA", ver getOrCrearProveedorPrestamos. */
+	let proveedorBloqueado = $state(false);
+	/** Datos crudos leídos del sessionStorage de la precarga (ver abrirCreacionPrecargadaDesdeTransaccion)
+	 * — se conservan hasta que la cuenta se guarda para poder grabar recién ahí la transacción real del
+	 * préstamo (ver crearTransaccionPorPrestamoRecibido/handleSaved), que necesita id_centro_costo_origen
+	 * (el prestamista real, no viaja en `editingCuenta` porque cuentas_pagar no tiene esa columna). null =
+	 * este alta/edición NO viene de ese flujo. */
+	let prestamoPrefillDatos = $state<Record<string, unknown> | null>(null);
 	let pagoModalOpen = $state(false);
 	let editingPago = $state<Pago | null>(null);
 	/** Prellenar Monto/Fecha de Pago al abrir "Registrar Pago" desde la cuota sintética de una cuenta
@@ -279,6 +292,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
+		abrirCreacionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -318,16 +332,53 @@
 	function openCreate() {
 		modalMode = 'create';
 		editingCuenta = null;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+	// A pedido explícito del usuario: si se llega acá recién después de crear una transacción Ingreso de
+	// tipo "Préstamo" con Proyecto=Corporativo (ver TransaccionModal.svelte), se abre de una vez "Nueva
+	// Cuenta por Pagar" con los datos ya conocidos precargados (Centro de Costo/Monto/Fecha de Emisión) Y
+	// con "Proveedor" ya fijado en el genérico "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos)
+	// — bloqueado, no editable (proveedorBloqueado), porque un préstamo no tiene un proveedor real
+	// vinculado en el sistema. No hay forma de pasar props directo entre páginas (es una navegación real,
+	// no un modal anidado) — TransaccionModal.svelte deja los datos base en sessionStorage bajo esta
+	// misma clave justo antes de navegar acá; el id del proveedor genérico se resuelve/crea recién acá
+	// (async). CuentaPagarModal arma sus valores iniciales leyendo `cuenta` sin importar el modo (ver
+	// buildInitialValues ahí), así que pasar un objeto parcial en modo 'create' sí lo precarga — de ahí
+	// el `as any` (el prop está tipado CuentaPagar | null). sessionStorage y el query param se limpian
+	// apenas se consumen, para no reabrirlo si el usuario solo refresca esta misma página después.
+	async function abrirCreacionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('prefillCuentaPagar') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaPagarPrefill');
+		sessionStorage.removeItem('cuentaPagarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-pagar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			datos.id_proveedor = String(await getOrCrearProveedorPrestamos(supabase));
+			modalMode = 'create';
+			editingCuenta = datos as any;
+			prestamoPrefillDatos = datos;
+			proveedorBloqueado = true;
+			modalOpen = true;
+		} catch (err) {
+			console.error('[CuentasPagar] No se pudo leer la precarga de la transacción:', err);
+			toast.error('No se pudo precargar el proveedor de préstamos — completa "Proveedor" a mano.');
+		}
 	}
 	function openEdit(item: CuentaPagar) {
 		modalMode = 'edit';
 		editingCuenta = item;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
 	}
 	function closeModal() {
 		modalOpen = false;
 		editingCuenta = null;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 	}
 
 	async function selectRow(item: CuentaPagar) {
@@ -552,7 +603,47 @@
 		pagoInitialValues = {};
 	}
 
-	async function handleSaved() {
+	// A pedido explícito del usuario: cuando la Cuenta por Pagar recién guardada viene del flujo
+	// "Préstamo Recibido" (ver abrirCreacionPrecargadaDesdeTransaccion), la transacción real (el
+	// dinero que efectivamente entró) recién se graba ACÁ, en el momento en que la cuenta se guarda —
+	// no antes, no en TransaccionModal.svelte (que solo dejó los datos precargados en sessionStorage).
+	// Usa crearTransaccionSistema (sin exigir comprobante, mismo criterio que confirmarPagoPagado) en
+	// vez de createTransaccion, porque esta transacción no viene de un modal interactivo con carga de
+	// archivo. Si falla (ej. algún dato inválido), la Cuenta por Pagar YA quedó guardada — no se
+	// revierte, solo se avisa para que se registre a mano.
+	async function crearTransaccionPorPrestamoRecibido(cuenta: CuentaPagar) {
+		if (!prestamoPrefillDatos) return;
+		try {
+			const { data: userData } = await supabase.auth.getUser();
+			const payload = {
+				tipo_alcance: 'externa',
+				id_centro_costo_origen: prestamoPrefillDatos.id_centro_costo_origen,
+				id_centro_costo_destino: cuenta.id_centro_costo,
+				fecha: cuenta.fecha_emision,
+				tipo: 'ingreso',
+				monto_total: cuenta.monto_comprometido,
+				categoria: 'Préstamo',
+				descripcion: cuenta.observacion || 'Préstamo recibido'
+			};
+			const result = await crearTransaccionSistema(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
+			if (!result.success) {
+				console.error('[CuentasPagar] crearTransaccionSistema devolvió un error:', result, payload);
+				toast.error(`La Cuenta por Pagar se guardó, pero no se pudo registrar la transacción del préstamo: ${result.message}. Regístrala manualmente en Transacciones.`);
+			}
+		} catch (err: any) {
+			// Cualquier excepción inesperada (no solo un ServiceResult con success:false) también debe
+			// avisar — antes de este try/catch, una excepción acá se perdía como promesa rechazada sin
+			// capturar (ver el await agregado en CuentaPagarModal.svelte), sin ningún aviso visible.
+			console.error('[CuentasPagar] Excepción al crear la transacción del préstamo:', err);
+			toast.error(`La Cuenta por Pagar se guardó, pero no se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. Regístrala manualmente en Transacciones.`);
+		}
+	}
+
+	async function handleSaved(cuenta?: CuentaPagar | CuentaPagar[]) {
+		if (modalMode === 'create' && prestamoPrefillDatos && cuenta && !Array.isArray(cuenta)) {
+			await crearTransaccionPorPrestamoRecibido(cuenta);
+		}
+		prestamoPrefillDatos = null;
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
@@ -1043,7 +1134,7 @@
 	{/if}
 </div>
 
-<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} {centroCostoTipoMap} onClose={closeModal} onSaved={handleSaved} />
+<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} {centroCostoTipoMap} {proveedorBloqueado} onClose={closeModal} onSaved={handleSaved} />
 <PagoModal
 	open={pagoModalOpen}
 	idCuentaPagar={selectedId}
