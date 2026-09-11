@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Search } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
@@ -45,6 +45,7 @@
 	import ReciboPagoProveedorModal, { type DatosFirmaReciboPagoProveedor } from '$lib/modules/transacciones/components/ReciboPagoProveedorModal.svelte';
 	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
+	import { crearSolicitud } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri, uploadToDriveClient, renameDriveFileClient, deleteDriveFileClient, downloadFromDriveClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
@@ -425,6 +426,15 @@
 
 	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
 	let otrosCamposAbierto = $state(false);
+	// "Comprobante autogenerado por el ERP" también colapsable (a pedido del usuario) — arranca
+	// COLAPSADA (a pedido explícito del usuario, revirtiendo la decisión anterior de que arrancara
+	// abierta): el botón "Vista previa" ahora vive en la cabecera, fuera del colapsable (ver template),
+	// así que sigue disponible sin tener que expandir esta sección primero.
+	let comprobanteAutoAbierto = $state(false);
+	// Vista previa del comprobante autogenerado EN VIVO (reciboAutoHtml, todavía no es un archivo
+	// real) — a pedido explícito del usuario, en un popup igual que "Ojito"/DocumentPreviewModal en
+	// vez de abrir una pestaña nueva del navegador (ver abajo, reemplaza a abrirPreviewHtml).
+	let showReciboAutoPreview = $state(false);
 
 	// Idempotency key para fn_crear_transaccion/fn_confirmar_pago/fn_confirmar_cobro (ver
 	// financial_integrity_rpc_migration.sql) — se genera UNA vez al abrir el modal y viaja tal cual en
@@ -754,6 +764,44 @@
 		}
 	}
 
+	// A pedido explícito del usuario: quien NO es administrador ya no puede quitar la aprobación
+	// directo (antes ni siquiera tenía un botón visible para eso) — en su lugar manda una solicitud,
+	// visible para todos los administradores en la campanita de notificaciones (mismo patrón que
+	// Ventas, ver aprobaciones.service.ts). Al aprobarla, un admin corre exactamente desaprobarTransaccion
+	// (mismo efecto que handleDesaprobar arriba) — el solicitante puede editar/eliminar normalmente
+	// después, mismo flujo de 2 pasos que ya existía, solo que el desbloqueo ahora pasa por un admin
+	// real en vez de un botón instantáneo.
+	let solicitandoQuitarAprobacion = $state(false);
+	async function handleSolicitarQuitarAprobacion() {
+		if (!transaccion) return;
+		if (
+			!confirm(
+				'¿Enviar una solicitud para que un administrador quite la aprobación de esta transacción? Podrás editarla/eliminarla una vez que la apruebe.'
+			)
+		)
+			return;
+		solicitandoQuitarAprobacion = true;
+		try {
+			const result = await crearSolicitud(supabase, {
+				tipoEntidad: 'transaccion',
+				idEntidad: transaccion.id_transaccion,
+				tipoAccion: 'quitar_aprobacion',
+				descripcionEntidad: `${transaccion.num_documento || `Transacción #${transaccion.id_transaccion}`} · ${formatCurrency(transaccion.monto_total)}`
+			});
+			if (result.success) {
+				toast.success('Solicitud enviada. Un administrador debe aprobarla para poder editar/eliminar esta transacción.');
+				onSaved();
+				onClose();
+			} else {
+				toast.error(result.message || 'No se pudo enviar la solicitud.');
+			}
+		} catch (err: any) {
+			toast.error(err?.message ?? 'Ocurrió un error inesperado');
+		} finally {
+			solicitandoQuitarAprobacion = false;
+		}
+	}
+
 	async function handleAnular() {
 		if (!transaccion) return;
 		if (
@@ -825,15 +873,6 @@
 		return idx === -1 ? [label, ''] : [label.slice(0, idx), label.slice(idx + 3)];
 	}
 
-	/** Abre el HTML del recibo (vista previa en vivo, ver reciboAutoHtml) en una pestaña nueva vía Blob
-	 * URL — sin generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los
-	 * 30s, así que revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
-	function abrirPreviewHtml(html: string) {
-		const blob = new Blob([html], { type: 'text/html' });
-		const url = URL.createObjectURL(blob);
-		window.open(url, '_blank');
-		setTimeout(() => URL.revokeObjectURL(url), 30000);
-	}
 
 	/** Genera el PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) del comprobante
 	 * autogenerado que aplique — a pedido explícito del usuario, este comprobante NO se guarda como
@@ -946,15 +985,16 @@
 	// Recibo de Pago (Externa+Ingreso) — a pedido explícito del usuario: siempre se autogenera solo, en
 	// vivo, para CUALQUIER medio de pago (ver reciboAutoHtml/construirDatosReciboPagoAuto más abajo).
 	// Concepto y datos del cliente se muestran como campos editables en el propio formulario (ver
-	// template) — se prellenan solos pero el usuario puede corregirlos. La firma manuscrita es OPCIONAL
-	// y aplica para cualquier medio de pago, no solo Efectivo (a pedido explícito del usuario): un botón
-	// "Firmar Comprobante" abre un popup solo con las firmas (ver abrirFirmaReciboPago más abajo) — no
-	// bloquea nada si el usuario no firma, el comprobante se genera igual.
+	// template) — se prellenan solos pero el usuario puede corregirlos. La firma manuscrita SÍ vuelve a
+	// depender del Medio de Pago (a pedido explícito del usuario, revirtiendo la decisión anterior): el
+	// botón "Firmar Comprobante" solo se muestra con Efectivo (ver medioPagoEsEfectivo en el template) —
+	// con Transferencia/Depósito/Yape o Plin ya queda el registro bancario, no tiene sentido pedir una
+	// firma física. Sigue sin bloquear el guardado en ningún caso, firmado o no.
 	const mostrarBotonReciboPago = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'ingreso');
 	// Recibo de Pago a Proveedor (Externa+Egreso) — mismo criterio que mostrarBotonReciboPago pero para
 	// Egreso en vez de Ingreso (acá la empresa entrega el dinero, ver reciboPagoProveedor.ts).
 	const mostrarBotonReciboPagoProveedor = $derived(formValues.tipo_alcance === 'externa' && formValues.tipo === 'egreso');
-	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG) — solo afecta qué texto muestra la sección "FORMA DE PAGO" del PDF y qué correlativo usa, ya no si se puede firmar.
+	const esReciboPagoEfectivo = $derived(formValues.medio_pago === '1'); // '1' = Efectivo (ver FIELDS_CONFIG) — afecta qué texto muestra la sección "FORMA DE PAGO" del PDF, qué correlativo usa, Y (ver medioPagoEsEfectivo más abajo, mismo valor) si se puede firmar.
 	let reciboPagoModalOpen = $state(false);
 	let numeroReciboPago = $state<number | null>(null);
 	// Correlativo independiente del recibo NO Efectivo — son dos recibos DIFERENTES (ver
@@ -1256,6 +1296,15 @@
 		if (key === 'medio_pago' && (masked === '1' || masked === '4')) {
 			formValues.cuente_destino = '';
 			formValues.cuente_origen = '';
+		}
+		// A pedido explícito del usuario: si la cuenta "propia" recién elegida (Origen en Egreso, Destino
+		// en Ingreso — ver cuentaOrigenEsBancaria/cuentaDestinoEsBancaria) es una cuenta de Efectivo (ver
+		// filtrarCuentasEfectivo), el Medio de Pago debe ser Efectivo por coherencia — se fuerza acá y se
+		// bloquea en el template (ver medioPagoForzadoPorCuentaEfectivo) para que no quede una cuenta de
+		// caja chica registrada con un Medio de Pago distinto (ej. "Transferencia bancaria").
+		if ((key === 'cuente_origen' && cuentaOrigenEsBancaria) || (key === 'cuente_destino' && cuentaDestinoEsBancaria)) {
+			const opcionElegida = (dynamicOptions.cuenta_banco || []).find((o) => o.value === masked);
+			if (opcionElegida && /efectivo/i.test(opcionElegida.label)) formValues.medio_pago = '1';
 		}
 		if (key === 'tipo_alcance') {
 			// Tipo de Documento también depende del Alcance (Talonario/Boucher en Interna vs el
@@ -1865,6 +1914,61 @@
 		else if (esProyectoDeConsultoria) handleCategoriaConsultoriaGrupoChange(value);
 		else if (esCorporativo) handleCategoriaCorpGrupoChange(value);
 	}
+	// Buscador ("lupa") para el desplegable de Subcategoría de Detalle (a pedido explícito del
+	// usuario: la lista puede ser larga — ej. todas las especialidades de Operario/Oficial/Ayudante —
+	// y no quiere tener que scrollear un <select> nativo para encontrar la que busca). Filtra en
+	// memoria sobre catalogoDetalleActual/SUBOPCIONES_SUBCONTRATA (ya cargados, sin ida y vuelta al
+	// servidor) — mismo patrón visual que el buscador "Vincular con Cuenta por Pagar/Cobrar" de más
+	// arriba, pero sin debounce/async porque acá la lista entera ya está en memoria.
+	type SubcategoriaOpcion = { value: string; label: string; grupo: string | null };
+	let subcategoriaBusqueda = $state('');
+	let subcategoriaAbierta = $state(false);
+	const subcategoriaOpciones = $derived.by((): SubcategoriaOpcion[] => {
+		const opciones = catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [];
+		const resultado: SubcategoriaOpcion[] = [];
+		for (const opt of opciones) {
+			if (SUBOPCIONES_SUBCONTRATA[opt]) {
+				for (const sub of SUBOPCIONES_SUBCONTRATA[opt]) resultado.push({ value: sub, label: sub, grupo: opt });
+			} else {
+				resultado.push({ value: opt, label: opt, grupo: null });
+			}
+		}
+		return resultado;
+	});
+	const subcategoriaFiltradas = $derived(
+		subcategoriaBusqueda.trim()
+			? subcategoriaOpciones.filter((o) => o.label.toLowerCase().includes(subcategoriaBusqueda.trim().toLowerCase()))
+			: subcategoriaOpciones
+	);
+	// Agrupa por tramos contiguos (Operario/Oficial/Ayudante ya salen juntos de subcategoriaOpciones,
+	// filtrar no cambia el orden) — evita Object.groupBy (no disponible en el target de TS de este
+	// proyecto) para el mismo resultado visual que el <optgroup> nativo de antes.
+	const subcategoriaFiltradasAgrupadas = $derived.by(() => {
+		const grupos: { grupo: string | null; items: SubcategoriaOpcion[] }[] = [];
+		for (const opcion of subcategoriaFiltradas) {
+			const ultimo = grupos[grupos.length - 1];
+			if (ultimo && ultimo.grupo === opcion.grupo) ultimo.items.push(opcion);
+			else grupos.push({ grupo: opcion.grupo, items: [opcion] });
+		}
+		return grupos;
+	});
+	// Limpia la búsqueda cuando cambia el Grupo/Categoría elegido arriba — evita que quede un texto
+	// filtrando una lista que ya no corresponde.
+	$effect(() => {
+		detalleCatalogoGrupoEfectivo;
+		subcategoriaBusqueda = '';
+	});
+	function seleccionarSubcategoria(opcion: SubcategoriaOpcion) {
+		agregarFilaDesdeCatalogo(opcion.value);
+		subcategoriaBusqueda = '';
+		subcategoriaAbierta = false;
+	}
+	function onSubcategoriaBlur() {
+		// Delay antes de cerrar — sin esto, el blur cierra la lista ANTES de que el click en un
+		// resultado llegue a registrarse (mismo motivo que onCuentaVinculadaBlur más arriba).
+		setTimeout(() => (subcategoriaAbierta = false), 150);
+	}
+
 	function agregarFilaDesdeCatalogo(subcategoria: string) {
 		if (!subcategoria) return;
 		// Además de agregar la fila al Detalle, esta selección ES la Categoría de la transacción — a
@@ -1896,6 +2000,16 @@
 	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
 		return opciones.filter((o) => /efectivo/i.test(o.label));
 	}
+	// A pedido explícito del usuario: si la cuenta "propia" ya elegida es de Efectivo, el Medio de Pago
+	// queda forzado en Efectivo (ver handleInput) y bloqueado acá — evita que el usuario lo cambie a
+	// algo incoherente con la cuenta ya elegida (ej. "Yape o Plin" con una cuenta de caja chica). Se
+	// desbloquea solo si la cuenta propia se limpia (cambia el Centro de Costo, Tipo, Alcance, etc.).
+	const medioPagoForzadoPorCuentaEfectivo = $derived.by(() => {
+		const valor = cuentaOrigenEsBancaria ? formValues.cuente_origen : cuentaDestinoEsBancaria ? formValues.cuente_destino : '';
+		if (!valor) return false;
+		const opcion = (dynamicOptions.cuenta_banco || []).find((o) => o.value === valor);
+		return !!opcion && /efectivo/i.test(opcion.label);
+	});
 	// Campos que se bloquean cuando el Alcance es Interna — 'tipo' y 'estado' además se fuerzan a un
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
@@ -2400,12 +2514,13 @@
 	{@const esCuentaPropiaBancaria = (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
 	{@const isBloqueadoPorMedioPago =
 		(field.key === 'cuente_origen' || field.key === 'cuente_destino') && (medioPagoBloqueaAmbasCuentas || (medioPagoEsEfectivo && !esCuentaPropiaBancaria))}
-	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
+	{@const isBloqueadoPorCuentaEfectivo = field.key === 'medio_pago' && medioPagoForzadoPorCuentaEfectivo}
+	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago || isBloqueadoPorCuentaEfectivo}
 	<div>
 		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 			{labelFor(field)}
 			{#if field.required}<span class="text-red-500">*</span>{/if}
-			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
+			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago || isBloqueadoPorCuentaEfectivo}<Lock size={12} class="text-slate-400" />{/if}
 		</label>
 
 		{#if esCampoConSaldo(field)}
@@ -2478,6 +2593,8 @@
 			<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoInterna}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
+		{:else if isBloqueadoPorCuentaEfectivo}
+			<p class="mt-1 text-xs text-slate-400">Se fija en "Efectivo" porque la cuenta elegida es de Efectivo.</p>
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 		{:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
@@ -2513,11 +2630,15 @@
 									<ShieldCheck size={16} class="shrink-0" />
 									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
 									Esta transacción está bloqueada y no se puede editar mientras esté aprobada.
-									{#if isAdmin()}Para editarla, quita la aprobación primero.{/if}
+									{#if isAdmin()}Para editarla, quita la aprobación primero.{:else}Para editarla o eliminarla, solicita que un administrador quite la aprobación.{/if}
 								</span>
 								{#if isAdmin()}
 									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
 										<ShieldOff size={14} /> Quitar aprobación
+									</button>
+								{:else}
+									<button type="button" onclick={handleSolicitarQuitarAprobacion} disabled={solicitandoQuitarAprobacion} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
+										<ShieldOff size={14} /> Solicitar aprobación para editar
 									</button>
 								{/if}
 							</div>
@@ -2889,8 +3010,31 @@
 					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 						<div class="rounded-2xl border border-slate-200 p-5">
-							<span class="block text-sm font-bold text-[#0f3b5e] mb-4">Comprobante autogenerado por el ERP</span>
-							<p class="text-xs text-slate-500 mb-4">
+							<div class="flex items-center justify-between gap-2">
+								<button
+									type="button"
+									onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
+									class="flex items-center gap-1.5 text-sm font-bold text-[#0f3b5e] text-left"
+								>
+									Comprobante autogenerado por el ERP
+									{#if comprobanteAutoAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+								</button>
+								<!-- A pedido explícito del usuario: "Vista previa" debe seguir disponible aunque la
+								     sección esté colapsada (que ahora es el estado por defecto, ver
+								     comprobanteAutoAbierto) — vive acá, fuera del {#if} de abajo, en vez de solo
+								     dentro del cuerpo expandido. -->
+								{#if reciboAutoHtml}
+									<button
+										type="button"
+										onclick={() => (showReciboAutoPreview = true)}
+										class="shrink-0 text-xs text-blue-600 hover:underline"
+									>
+										Vista previa
+									</button>
+								{/if}
+							</div>
+							{#if comprobanteAutoAbierto}
+							<p class="text-xs text-slate-500 mb-4 mt-4">
 								Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en "Adjuntar
 								boucher de pago" ni en "Comprobantes de pago". Se actualiza en tiempo real con el formulario.
 							</p>
@@ -2961,7 +3105,11 @@
 
 							<div class="flex flex-col sm:flex-row gap-5">
 								<div class="flex-1 flex flex-col gap-2 min-w-0">
-									{#if mostrarBotonReciboPago}
+									<!-- A pedido explícito del usuario: la firma solo tiene sentido cuando el pago fue en
+									     Efectivo (un comprobante físico entregado en mano) — con Transferencia/Depósito/
+									     Yape o Plin ya queda el registro bancario, así que "Firmar Comprobante" se oculta
+									     por completo (ver medioPagoEsEfectivo) en vez de solo quedar disponible. -->
+									{#if medioPagoEsEfectivo && mostrarBotonReciboPago}
 										<button
 											type="button"
 											onclick={abrirFirmaReciboPago}
@@ -2971,7 +3119,7 @@
 											<Pencil size={14} class="shrink-0" />
 											{firmaClienteDataUrl && firmaReceptorDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
-									{:else if mostrarBotonReciboPagoProveedor}
+									{:else if medioPagoEsEfectivo && mostrarBotonReciboPagoProveedor}
 										<button
 											type="button"
 											onclick={abrirFirmaReciboPagoProveedor}
@@ -2981,11 +3129,12 @@
 											<Pencil size={14} class="shrink-0" />
 											{firmaEntregoDataUrl && firmaRecibioDataUrl ? 'Firmado — Volver a firmar' : 'Firmar Comprobante'}
 										</button>
+									{:else if !medioPagoEsEfectivo && (mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor)}
+										<p class="text-xs text-slate-400">La firma solo aplica cuando el Medio de Pago es Efectivo.</p>
 									{/if}
 									{#if reciboAutoHtml}
-										<button type="button" onclick={() => abrirPreviewHtml(reciboAutoHtml!)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Vista previa
-										</button>
+										<!-- El botón "Vista previa" en sí ahora vive en la cabecera (ver más arriba, siempre
+										     visible) — acá solo queda la leyenda. -->
 										<p class="text-xs text-slate-400">Se actualiza en tiempo real con el formulario — se adjuntará automáticamente al guardar.</p>
 									{/if}
 								</div>
@@ -3009,6 +3158,7 @@
 									</div>
 								{/if}
 							</div>
+							{/if}
 						</div>
 					{/if}
 
@@ -3275,35 +3425,49 @@
 										<div>
 											<label for="tr-detalle-subcatalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Subcategoría</label>
 											<div class="relative">
-												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
-												     agrupada en el MISMO dropdown vía <optgroup> nativo (más simple que un 3er
-												     selector aparte): elegir una especialidad agrega la fila directo, igual que
-												     cualquier otra opción de esta lista. -->
-												<select
+												<!-- Buscador en vez de <select> nativo (a pedido explícito del usuario: la lista
+												     puede ser larga y no quiere scrollearla) — elegir un resultado agrega la fila
+												     directo, igual que antes. Especialidad de Operario/Oficial/Ayudante (ver
+												     SUBOPCIONES_SUBCONTRATA) sigue agrupada, ahora con un encabezado de grupo en
+												     vez de <optgroup>. -->
+												<Search size={14} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												<input
 													id="tr-detalle-subcatalogo"
-													value=""
-													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-													onchange={(e) => {
-														const target = e.target as HTMLSelectElement;
-														agregarFilaDesdeCatalogo(target.value);
-														target.value = '';
+													type="text"
+													value={subcategoriaBusqueda}
+													oninput={(e) => {
+														subcategoriaBusqueda = (e.target as HTMLInputElement).value;
+														subcategoriaAbierta = true;
 													}}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Elige una opción para agregarla</option>
-													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-														{#if SUBOPCIONES_SUBCONTRATA[opt]}
-															<optgroup label={opt}>
-																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
-																	<option value={sub}>{sub}</option>
-																{/each}
-															</optgroup>
+													onfocus={() => (subcategoriaAbierta = true)}
+													onblur={onSubcategoriaBlur}
+													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
+													placeholder={detalleCatalogoGrupoEfectivo ? 'Buscar y elegir…' : 'Elige primero una Categoría'}
+													autocomplete="off"
+													class="w-full rounded-lg border border-slate-300 pl-8 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												/>
+												{#if subcategoriaAbierta && detalleCatalogoGrupoEfectivo}
+													<div class="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+														{#if subcategoriaFiltradas.length === 0}
+															<p class="px-3 py-2 text-xs text-slate-400">Sin coincidencias.</p>
 														{:else}
-															<option value={opt}>{opt}</option>
+															{#each subcategoriaFiltradasAgrupadas as grupo, i (grupo.grupo ?? '_' + i)}
+																{#if grupo.grupo}
+																	<p class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{grupo.grupo}</p>
+																{/if}
+																{#each grupo.items as opcion (opcion.value)}
+																	<button
+																		type="button"
+																		onclick={() => seleccionarSubcategoria(opcion)}
+																		class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0"
+																	>
+																		{opcion.label}
+																	</button>
+																{/each}
+															{/each}
 														{/if}
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													</div>
+												{/if}
 											</div>
 										</div>
 									</div>
@@ -3638,6 +3802,13 @@
 		</div>
 	</div>
 {/if}
+
+<DocumentPreviewModal
+	open={showReciboAutoPreview}
+	html={reciboAutoHtml}
+	title="Comprobante autogenerado por el ERP"
+	onClose={() => (showReciboAutoPreview = false)}
+/>
 
 <DocumentPreviewModal
 	open={showComprobantePreview}

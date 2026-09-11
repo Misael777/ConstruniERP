@@ -303,8 +303,15 @@ export async function getCuentasBancoUsadasEnIngresos(client: SupabaseClient, id
 }
 
 /** Mismo criterio que saldoDisponibleCentroCosto, pero para una cuenta bancaria registrada — suma por
- * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo. */
+ * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo, arrancando desde
+ * saldo_inicial de la cuenta (bug real reportado por el usuario: sin esto, una cuenta con saldo_inicial
+ * quedaba con un saldo disponible más bajo que el real — "Saldo actual" en pantalla SÍ lo incluye, ver
+ * getSaldosCuentaBanco/fn_recalcular_saldo_cuenta_banco, pero esta validación no lo hacía. Mismo fix
+ * aplicado en fn_crear_transaccion, ver fn_crear_transaccion_saldo_inicial_migration.sql). */
 async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: string, excluirIdTransaccion?: number): Promise<number> {
+	const { data: cuenta } = await client.from('cuenta_banco').select('saldo_inicial').eq('numero_cuenta', numeroCuenta).maybeSingle();
+	const saldoInicial = Number(cuenta?.saldo_inicial ?? 0);
+
 	let query = client
 		.from(TABLE_NAME)
 		.select('cuente_origen, cuente_destino, monto_total')
@@ -320,7 +327,7 @@ async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: 
 		if (t.cuente_origen === numeroCuenta) saldo -= monto;
 		if (t.cuente_destino === numeroCuenta) saldo += monto;
 		return saldo;
-	}, 0);
+	}, saldoInicial);
 }
 
 /** Punto de entrada único, llamado desde createTransaccion/updateTransaccion. Devuelve `ok:false` con
@@ -474,10 +481,18 @@ export function construirInsertDataTransaccion(
 /** true si el payload trae el comprobante que toda transacción Externa debe tener adjunto — mismo
  * criterio que antes vivía inline en createTransaccion, extraído para que confirmarPagoPagado/
  * confirmarCobroCobrado (que arman su propio payload de transacción) también lo apliquen. Una
- * transacción Interna emite su propio comprobante oficial, y una Externa+Ingreso+Efectivo con su
- * "RECIBO DE PAGO" ya generado (num_recibo_pago asignado) tampoco requiere este adjunto. */
+ * transacción Interna emite su propio comprobante oficial, una Externa+Ingreso+Efectivo con su
+ * "RECIBO DE PAGO" ya generado (num_recibo_pago asignado) tampoco requiere este adjunto — bug real
+ * reportado por el usuario: faltaba el mismo caso para Externa+Egreso, que emite su propio "RECIBO DE
+ * PAGO A PROVEEDOR" (num_recibo_pago_proveedor asignado, ver mostrarBotonReciboPagoProveedor en
+ * TransaccionModal.svelte) y también debe quedar exento. */
 function tieneComprobanteRequerido(payload: Record<string, unknown>): boolean {
-	return payload.tipo_alcance === 'interna' || !!payload.num_recibo_pago || !!payload.comprobante_url;
+	return (
+		payload.tipo_alcance === 'interna' ||
+		!!payload.num_recibo_pago ||
+		!!payload.num_recibo_pago_proveedor ||
+		!!payload.comprobante_url
+	);
 }
 
 export async function createTransaccion(
@@ -556,7 +571,7 @@ export async function updateTransaccion(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
-	if (payload.tipo_alcance !== 'interna' && !payload.num_recibo_pago && !payload.comprobante_url) {
+	if (!tieneComprobanteRequerido(payload)) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 

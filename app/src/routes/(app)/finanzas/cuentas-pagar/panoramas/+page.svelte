@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { dndzone } from 'svelte-dnd-action';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { hasPermiso } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { ArrowLeft, Package, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingDown, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
@@ -341,7 +341,11 @@
 	}
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
+		// "ver_finanzas_cuentas_pendientes" (mismo que /finanzas/cuentas-pagar, esta es su sub-página de
+		// Panoramas) otorgable desde IAM → Roles y Permisos — un asesor con ese permiso veía el módulo
+		// en el menú pero rebotaba al entrar.
+		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
 			goto('/dashboard');
 			return;
 		}

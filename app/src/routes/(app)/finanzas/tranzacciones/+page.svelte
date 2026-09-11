@@ -2,7 +2,7 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
@@ -319,7 +319,11 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
+		// "ver_finanzas_transacciones" otorgable desde IAM → Roles y Permisos (que el menú lateral/guard
+		// general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
+		// rebotaba al entrar.
+		if (!hasPermiso('ver_finanzas_transacciones')) {
 			goto('/dashboard');
 			return;
 		}
@@ -824,7 +828,13 @@
 				<!-- Columna de acciones apilada verticalmente: Ver documentos (ojito), Msje justo debajo (a
 				     pedido del usuario) y luego Editar/Bloqueado. -->
 				<div class="flex flex-row items-center justify-end gap-1 sm:flex-col sm:shrink-0 sm:ml-2">
-					{#if item.comprobante_url || item.factura_url}
+					<!-- A pedido explícito del usuario: toda transacción debe tener al menos un ojito, aunque
+					     no tenga boucher/factura adjuntos a mano — el Comprobante autogenerado por el ERP
+					     (ver comprobante_autogenerado_url, se genera solo al guardar en Interna y en
+					     Externa+Ingreso/Egreso, ver reciboAutogeneradoAplica en TransaccionModal.svelte)
+					     cuenta como comprobante propio, antes faltaba en esta condición y el ojito
+					     desaparecía por completo en esos casos. -->
+					{#if item.comprobante_url || item.factura_url || item.comprobante_autogenerado_url}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
 						</button>

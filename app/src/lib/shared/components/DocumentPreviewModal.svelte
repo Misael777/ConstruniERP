@@ -16,6 +16,7 @@
 		title = '',
 		documents = [],
 		initialIndex = 0,
+		html = null,
 		onClose = () => {}
 	}: {
 		open?: boolean;
@@ -32,6 +33,12 @@
 		/** Cuál de `documents` mostrar al abrir (ej. la proforma marcada como final, en vez de siempre
 		 * la primera de la lista). Se ignora si no hay `documents`. */
 		initialIndex?: number;
+		/** Vista previa de HTML crudo en vez de un documento ya subido a Drive — para un comprobante
+		 * autogenerado que se arma en vivo con el formulario y TODAVÍA no existe como archivo real (ver
+		 * TransaccionModal.svelte, "Comprobante autogenerado por el ERP"). Tiene prioridad sobre
+		 * `url`/`documents` cuando se pasa: se renderiza con `srcdoc` en vez de `src`, y el botón
+		 * Descargar se oculta (no hay ningún archivo de Drive detrás todavía que descargar). */
+		html?: string | null;
 		onClose?: () => void;
 	} = $props();
 
@@ -144,19 +151,21 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-2 shrink-0">
-					<button
-						onclick={requestDownload}
-						disabled={isDownloading}
-						class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-						aria-label="Descargar"
-						title="Descargar"
-					>
-						{#if isDownloading}
-							<i class="fas fa-spinner fa-spin text-lg"></i>
-						{:else}
-							<i class="fas fa-download text-lg"></i>
-						{/if}
-					</button>
+					{#if !html}
+						<button
+							onclick={requestDownload}
+							disabled={isDownloading}
+							class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+							aria-label="Descargar"
+							title="Descargar"
+						>
+							{#if isDownloading}
+								<i class="fas fa-spinner fa-spin text-lg"></i>
+							{:else}
+								<i class="fas fa-download text-lg"></i>
+							{/if}
+						</button>
+					{/if}
 					<button
 						onclick={onClose}
 						class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
@@ -168,7 +177,9 @@
 			</div>
 
 			<div class="flex-1 overflow-hidden bg-slate-100">
-				{#if previewUrl}
+				{#if html}
+					<iframe srcdoc={html} {title} class="w-full h-full border-none bg-white"></iframe>
+				{:else if previewUrl}
 					<iframe
 						src={previewUrl}
 						{title}

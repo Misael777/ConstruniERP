@@ -3,7 +3,7 @@
 	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { Plus, Search, ChevronUp, ChevronDown, ChevronLeft, X, Building2, Trash2, RotateCcw, Trash } from '@lucide/svelte';
 	import {
 		FIELDS_CONFIG,
@@ -255,7 +255,11 @@
 	onDestroy(setMobileFab(openCreate, 'Nuevo Centro de Costo'));
 
 	onMount(() => {
-		if (!isAdmin()) {
+		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
+		// "ver_finanzas_centros_costos" otorgable desde IAM → Roles y Permisos (que el menú lateral/guard
+		// general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
+		// rebotaba al entrar.
+		if (!hasPermiso('ver_finanzas_centros_costos')) {
 			goto('/dashboard');
 			return;
 		}

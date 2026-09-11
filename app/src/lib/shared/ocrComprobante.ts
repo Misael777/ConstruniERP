@@ -262,8 +262,13 @@ function extraerTipoDocumento(texto: string): string | null {
  *    encabezados de dos columnas y a cómo Tesseract lee mal "°" que ya usa extraerNumeroOperacion (ver
  *    PREFIJO_NUMERO). */
 function extraerNumeroDocumento(texto: string): string | null {
-	const m = texto.match(/\b([A-Z]{1,3}\d{2,3})[\s-]+(\d{1,8})\b/);
-	if (m) return `${m[1]}-${m[2]}`;
+	// Tesseract confunde con frecuencia el dígito "0" con la letra mayúscula "O" en la fuente de estas
+	// facturas — sobre todo en el correlativo con varios ceros a la izquierda (ej. "F001-00088770" leído
+	// como "FOO1-OOO88770"), lo que rompía el \d de la serie y del correlativo y dejaba el N° de
+	// Documento sin reconocer por completo — a pedido explícito del usuario (factura real que fallaba).
+	// Se acepta O/o como si fuera "0" en este primer intento y se normaliza después de capturar.
+	const m = texto.match(/\b([A-Z]{1,3}[0-9Oo]{2,3})[\s-]+([0-9Oo]{1,8})\b/);
+	if (m) return `${m[1].replace(/[Oo]/g, '0')}-${m[2].replace(/[Oo]/g, '0')}`;
 
 	const conEtiquetaBancaria = extraerNumeroConEtiquetaBancaria(texto);
 	if (conEtiquetaBancaria) return conEtiquetaBancaria;
@@ -292,7 +297,12 @@ export interface ReconocerComprobantePagoResult {
 export async function reconocerComprobantePago(file: File): Promise<ReconocerComprobantePagoResult> {
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
+		// 1600 -> 2200 (a pedido explícito del usuario: un monto real "S/ 48,000.01" se reconoció como
+		// "46,000.01" — confusión de glifo 8/6, no un bug de regex/parseo, ver limpiarMonto/PATRON_MONTO
+		// más arriba, ya verificados). Más resolución reduce ese tipo de ambigüedad de forma general, pero
+		// NO la elimina del todo — sigue siendo OCR probabilístico, por eso "(reconocido)" en el
+		// formulario siempre queda editable a mano (ver TransaccionModal.svelte).
+		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 2200) : file;
 		const { data } = await recognize(fuente, 'spa');
 		const texto = data.text || '';
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada factura/boleta
@@ -325,7 +335,12 @@ export async function reconocerComprobantePago(file: File): Promise<ReconocerCom
 export async function reconocerComprobante(file: File): Promise<ReconocerComprobanteResult> {
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
+		// 1600 -> 2200 (a pedido explícito del usuario: un monto real "S/ 48,000.01" se reconoció como
+		// "46,000.01" — confusión de glifo 8/6, no un bug de regex/parseo, ver limpiarMonto/PATRON_MONTO
+		// más arriba, ya verificados). Más resolución reduce ese tipo de ambigüedad de forma general, pero
+		// NO la elimina del todo — sigue siendo OCR probabilístico, por eso "(reconocido)" en el
+		// formulario siempre queda editable a mano (ver TransaccionModal.svelte).
+		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 2200) : file;
 		const { data } = await recognize(fuente, 'spa');
 		const texto = data.text || '';
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada boucher (en
