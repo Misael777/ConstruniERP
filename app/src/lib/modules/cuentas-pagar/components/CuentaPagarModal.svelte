@@ -12,7 +12,7 @@
 		calcularFechasRecurrentes,
 		computeEstadoCuentaPagar
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar, Pago, FechaCuentaRecurrente } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { CuentaPagar, Pago, FechaCuentaRecurrente, ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
@@ -22,6 +22,8 @@
 		cuenta = null,
 		dynamicOptions = {},
 		centroCostoTipoMap = {},
+		proveedorBloqueado = false,
+		onSubmitOverride = null,
 		onClose,
 		onSaved
 	}: {
@@ -32,8 +34,24 @@
 		/** id_centro_costo (texto) -> tipo — para bloquear "ID Partida" cuando el centro de costo
 		 * elegido es 'bolsa general', ver getCentroCostoTipoMap en transacciones.service.ts. */
 		centroCostoTipoMap?: Record<string, string>;
+		/** true = "Proveedor" queda bloqueado (no editable) — a pedido explícito del usuario, para la
+		 * Cuenta por Pagar que se autogenera al registrar un Ingreso "Préstamo" con Proyecto=Corporativo
+		 * (ver finanzas/cuentas-pagar/+page.svelte): ese caso siempre usa el proveedor genérico fijo
+		 * "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos), ya viene elegido en `cuenta` y no
+		 * debe poder cambiarse. false en cualquier otro flujo (crear/editar normal). */
+		proveedorBloqueado?: boolean;
+		/** Cuando se pasa, REEMPLAZA el alta normal (createCuentaPagar/createCuentasPagarRecurrentes) en
+		 * handleSubmit — a pedido explícito del usuario, para el flujo "Préstamo Recibido": la transacción
+		 * que originó esta cuenta debe grabarse PRIMERO, y la Cuenta por Pagar recién después; si la
+		 * transacción no se puede grabar, la cuenta tampoco debe grabarse. finanzas/cuentas-pagar/
+		 * +page.svelte arma acá esa secuencia (crea la transacción, y solo si sale bien crea la cuenta —
+		 * revirtiendo la transacción si la cuenta terminara fallando) y devuelve el mismo
+		 * ServiceResult<CuentaPagar> que createCuentaPagar devolvería, para que el resto de handleSubmit
+		 * (toast, onSaved, onClose) no tenga que saber nada de esto. null en cualquier otro flujo (crear/
+		 * editar normal, mode='edit' nunca lo usa). Mismo patrón que CuentaCobrarModal.svelte. */
+		onSubmitOverride?: ((formValues: Record<string, string>) => Promise<ServiceResult<CuentaPagar>>) | null;
 		onClose: () => void;
-		onSaved: () => void;
+		onSaved: (cuenta?: CuentaPagar | CuentaPagar[]) => void | Promise<void>;
 	} = $props();
 
 	// 'condicion_pago' (Número de Cuotas) ya no se muestra como campo inline: se configura en la
@@ -50,9 +68,17 @@
 		// A pedido del usuario: "Responsable" arranca prellenado con el usuario que está creando la
 		// cuenta (mismo nombre que empleados.nombre, ver getEmpleadoOptions) — solo al crear, no pisa el
 		// valor guardado al editar. Sigue siendo editable por si corresponde asignarla a alguien más.
-		if (!cuenta && 'responsable' in values) values.responsable = permisosState.userName;
-		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear.
-		if (!cuenta && 'frecuencia_pago' in values) values.frecuencia_pago = 'sin_periodicidad';
+		// OJO: se checa `(cuenta as any)?.responsable == null` (no solo `!cuenta`) — finanzas/cuentas-
+		// pagar/+page.svelte puede abrir en modo 'create' con `cuenta` YA con algunos campos precargados
+		// (ver abrirCreacionPrecargadaDesdeTransaccion, para la Cuenta por Pagar que se autogenera desde
+		// un Ingreso "Préstamo"); en ese caso `cuenta` no es null pero tampoco trae responsable/
+		// frecuencia_pago, así que estos defaults deben seguir aplicando igual.
+		if ((cuenta as any)?.responsable == null && 'responsable' in values) values.responsable = permisosState.userName;
+		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear —
+		// `frecuencia_pago` es NOT NULL en la BD (con DEFAULT 'sin_periodicidad', pero un INSERT que
+		// manda explícitamente null no cae en ese default, hay que mandar el valor real) — dejarlo vacío
+		// rompe el guardado con "Falta completar un campo obligatorio".
+		if ((cuenta as any)?.frecuencia_pago == null && 'frecuencia_pago' in values) values.frecuencia_pago = 'sin_periodicidad';
 		return values;
 	}
 
@@ -224,6 +250,7 @@
 	function isDisabled(field: (typeof formFields)[number]): boolean {
 		if (field.key === 'id_partida' && idPartidaBloqueado) return true;
 		if (field.key === 'id_presupuesto' && idPresupuestoBloqueado) return true;
+		if (field.key === 'id_proveedor' && proveedorBloqueado) return true;
 		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
 	}
 
@@ -278,7 +305,9 @@
 		try {
 			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
-			if (mode === 'edit' && cuenta) {
+			if (onSubmitOverride) {
+				result = await onSubmitOverride(formValues);
+			} else if (mode === 'edit' && cuenta) {
 				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin(), fraccionesAEnviar);
 			} else if (esPeriodico) {
 				const { data: userData } = await supabase.auth.getUser();
@@ -290,7 +319,7 @@
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				onSaved();
+				await onSaved(result.data);
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');

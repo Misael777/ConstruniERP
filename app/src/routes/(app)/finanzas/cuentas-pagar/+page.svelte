@@ -2,8 +2,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
@@ -12,6 +13,7 @@
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import {
 		getCuentasPagar,
+		createCuentaPagar,
 		deleteCuentaPagar,
 		darDeBajaCuentaPagar,
 		restaurarCuentaPagar,
@@ -21,15 +23,19 @@
 		confirmarPagoPagado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
 		getCentroCostoOptions,
 		getCentroCostoOptionsSoloCentros,
 		getCentroCostoOptionsExternos,
 		getCentroCostoOptionsExternosOrigen,
 		getCentroCostoTipoMap,
-		getEmpleadoOptions
+		getEmpleadoOptions,
+		crearTransaccionSistema,
+		deleteTransaccion
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { getOrCrearProveedorPrestamos } from '$lib/modules/proveedores/services/proveedores.service';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
@@ -115,6 +121,16 @@
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaPagar | null>(null);
+	/** true solo cuando el modal se abre precargado desde la transacción Ingreso "Préstamo" (ver
+	 * abrirCreacionPrecargadaDesdeTransaccion) — bloquea "Proveedor" en CuentaPagarModal para que se
+	 * quede fijo en el proveedor genérico "PRÉSTAMOS / FINANCIERA", ver getOrCrearProveedorPrestamos. */
+	let proveedorBloqueado = $state(false);
+	/** Datos crudos leídos del sessionStorage de la precarga (ver abrirCreacionPrecargadaDesdeTransaccion)
+	 * — se conservan hasta que la cuenta se guarda para poder grabar recién ahí la transacción real del
+	 * préstamo (ver crearTransaccionPorPrestamoRecibido/handleSaved), que necesita id_centro_costo_origen
+	 * (el prestamista real, no viaja en `editingCuenta` porque cuentas_pagar no tiene esa columna). null =
+	 * este alta/edición NO viene de ese flujo. */
+	let prestamoPrefillDatos = $state<Record<string, unknown> | null>(null);
 	let pagoModalOpen = $state(false);
 	let editingPago = $state<Pago | null>(null);
 	/** Prellenar Monto/Fecha de Pago al abrir "Registrar Pago" desde la cuota sintética de una cuenta
@@ -243,11 +259,7 @@
 	);
 
 	onMount(async () => {
-		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
-		// "ver_finanzas_cuentas_pendientes" otorgable desde IAM → Roles y Permisos (que el menú lateral/
-		// guard general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
-		// rebotaba al entrar.
-		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
+		if (!isAdmin()) {
 			goto('/dashboard');
 			return;
 		}
@@ -283,6 +295,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
+		abrirCreacionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -322,16 +335,53 @@
 	function openCreate() {
 		modalMode = 'create';
 		editingCuenta = null;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+	// A pedido explícito del usuario: si se llega acá recién después de crear una transacción Ingreso de
+	// tipo "Préstamo" con Proyecto=Corporativo (ver TransaccionModal.svelte), se abre de una vez "Nueva
+	// Cuenta por Pagar" con los datos ya conocidos precargados (Centro de Costo/Monto/Fecha de Emisión) Y
+	// con "Proveedor" ya fijado en el genérico "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos)
+	// — bloqueado, no editable (proveedorBloqueado), porque un préstamo no tiene un proveedor real
+	// vinculado en el sistema. No hay forma de pasar props directo entre páginas (es una navegación real,
+	// no un modal anidado) — TransaccionModal.svelte deja los datos base en sessionStorage bajo esta
+	// misma clave justo antes de navegar acá; el id del proveedor genérico se resuelve/crea recién acá
+	// (async). CuentaPagarModal arma sus valores iniciales leyendo `cuenta` sin importar el modo (ver
+	// buildInitialValues ahí), así que pasar un objeto parcial en modo 'create' sí lo precarga — de ahí
+	// el `as any` (el prop está tipado CuentaPagar | null). sessionStorage y el query param se limpian
+	// apenas se consumen, para no reabrirlo si el usuario solo refresca esta misma página después.
+	async function abrirCreacionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('prefillCuentaPagar') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaPagarPrefill');
+		sessionStorage.removeItem('cuentaPagarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-pagar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			datos.id_proveedor = String(await getOrCrearProveedorPrestamos(supabase));
+			modalMode = 'create';
+			editingCuenta = datos as any;
+			prestamoPrefillDatos = datos;
+			proveedorBloqueado = true;
+			modalOpen = true;
+		} catch (err) {
+			console.error('[CuentasPagar] No se pudo leer la precarga de la transacción:', err);
+			toast.error('No se pudo precargar el proveedor de préstamos — completa "Proveedor" a mano.');
+		}
 	}
 	function openEdit(item: CuentaPagar) {
 		modalMode = 'edit';
 		editingCuenta = item;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
 	}
 	function closeModal() {
 		modalOpen = false;
 		editingCuenta = null;
+		proveedorBloqueado = false;
+		prestamoPrefillDatos = null;
 	}
 
 	async function selectRow(item: CuentaPagar) {
@@ -556,7 +606,66 @@
 		pagoInitialValues = {};
 	}
 
+	// A pedido explícito del usuario (mismo criterio "todo o nada" ya aplicado en
+	// finanzas/cuentas-cobrar/+page.svelte, ver guardarCuentaCobrarConTransaccionPrestamo): en el flujo
+	// "Préstamo Recibido" (ver abrirCreacionPrecargadaDesdeTransaccion), la transacción que originó
+	// esta Cuenta por Pagar debe grabarse PRIMERO, y la cuenta recién DESPUÉS — si la transacción no se
+	// puede grabar, la Cuenta por Pagar TAMPOCO debe grabarse. Se pasa como `onSubmitOverride` a
+	// CuentaPagarModal (ver ahí), que lo usa en vez de createCuentaPagar directo — recibe los mismos
+	// `formValues` que el modal ya validó, así que arma el payload de la transacción a partir de esos
+	// valores (no de la cuenta ya creada, que en este orden todavía no existe).
+	async function guardarCuentaPagarConTransaccionPrestamo(formValues: Record<string, string>): Promise<ServiceResult<CuentaPagar>> {
+		if (!prestamoPrefillDatos) {
+			// Salvaguarda: este override solo debería pasarse mientras el flujo de préstamo está activo
+			// (ver el prop condicional más abajo) — si por lo que sea se llama sin eso, cae al alta normal.
+			const { data: userData } = await supabase.auth.getUser();
+			return createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+		}
+		// Un préstamo recibido es un evento único — este flujo no soporta "Frecuencia de Pago" periódica
+		// (generaría varias Cuentas por Pagar para UNA sola transacción de ingreso, sin sentido acá). El
+		// campo no está bloqueado en el formulario, así que se valida acá antes de tocar nada.
+		if (['mensual', 'quincenal', 'semanal'].includes(String(formValues.frecuencia_pago ?? ''))) {
+			return { success: false, message: 'Un préstamo recibido no puede tener Frecuencia de Pago periódica — usa "Sin periodicidad".' };
+		}
+		const { data: userData } = await supabase.auth.getUser();
+		const payloadTransaccion = {
+			tipo_alcance: 'externa',
+			id_centro_costo_origen: prestamoPrefillDatos.id_centro_costo_origen,
+			id_centro_costo_destino: formValues.id_centro_costo,
+			fecha: formValues.fecha_emision,
+			tipo: 'ingreso',
+			monto_total: formValues.monto_comprometido,
+			categoria: 'Préstamo',
+			descripcion: formValues.observacion || 'Préstamo recibido'
+		};
+		let resultTransaccion;
+		try {
+			resultTransaccion = await crearTransaccionSistema(supabase, payloadTransaccion, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
+		} catch (err: any) {
+			console.error('[CuentasPagar] Excepción al crear la transacción del préstamo:', err);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. La Cuenta por Pagar no se guardó.` };
+		}
+		if (!resultTransaccion.success) {
+			console.error('[CuentasPagar] crearTransaccionSistema devolvió un error:', resultTransaccion, payloadTransaccion);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${resultTransaccion.message}. La Cuenta por Pagar no se guardó.` };
+		}
+
+		const resultCuenta = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+		if (!resultCuenta.success) {
+			// La transacción ya se creó pero la cuenta no — se revierte para no dejar un movimiento de
+			// caja real sin la Cuenta por Pagar que lo respalda.
+			try {
+				await deleteTransaccion(supabase, resultTransaccion.data!.id_transaccion);
+			} catch (err) {
+				console.error('[CuentasPagar] No se pudo revertir la transacción tras fallar la Cuenta por Pagar:', err);
+			}
+			return { success: false, message: `La transacción se registró pero la Cuenta por Pagar no se pudo guardar (la transacción se revirtió): ${resultCuenta.message}` };
+		}
+		return resultCuenta;
+	}
+
 	async function handleSaved() {
+		prestamoPrefillDatos = null;
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
@@ -1047,7 +1156,17 @@
 	{/if}
 </div>
 
-<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} {centroCostoTipoMap} onClose={closeModal} onSaved={handleSaved} />
+<CuentaPagarModal
+	open={modalOpen}
+	mode={modalMode}
+	cuenta={editingCuenta}
+	dynamicOptions={dynamicOptions}
+	{centroCostoTipoMap}
+	{proveedorBloqueado}
+	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaPagarConTransaccionPrestamo : null}
+	onClose={closeModal}
+	onSaved={handleSaved}
+/>
 <PagoModal
 	open={pagoModalOpen}
 	idCuentaPagar={selectedId}

@@ -3,7 +3,7 @@
 	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -23,10 +23,9 @@
 
 	// Módulo 100% client-side (Supabase anon key) para funcionar en Tauri Windows/Android sin
 	// servidor embebido — ver nota de seguridad en centro-costos/+page.svelte: la BD todavía no
-	// tiene RLS real, este guard (hasPermiso) es solo de UI. Autorización de cuentas bancarias es un
-	// dato sensible (números de cuenta/tarjeta) — se restringe a quien tenga el permiso
-	// "ver_finanzas_cuentas_bancarias" otorgado en IAM → Roles y Permisos (antes exigía el rol Admin a
-	// secas, sin importar ese permiso — bug real reportado por el usuario).
+	// tiene RLS real, este guard (isAdmin()) es solo de UI. Autorización de cuentas bancarias es un
+	// dato sensible (números de cuenta/tarjeta), se restringe a administradores igual que Cuentas por
+	// Cobrar/Pagar.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
@@ -86,12 +85,7 @@
 	onDestroy(setMobileFab(openCreate, 'Nueva Cuenta Bancaria'));
 
 	onMount(async () => {
-		// A pedido explícito del usuario: este guard exigía el rol Admin a secas, ignorando el permiso
-		// granular "ver_finanzas_cuentas_bancarias" que ya se puede otorgar desde IAM → Roles y Permisos
-		// (y que el menú lateral/guard general de rutas SÍ respeta) — un asesor con ese permiso otorgado
-		// veía el módulo en el menú pero rebotaba al entrar. Ahora revisa el mismo permiso que todo lo
-		// demás (ver modules.ts).
-		if (!hasPermiso('ver_finanzas_cuentas_bancarias')) {
+		if (!isAdmin()) {
 			goto('/dashboard');
 			return;
 		}

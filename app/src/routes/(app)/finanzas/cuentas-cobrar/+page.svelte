@@ -2,8 +2,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
@@ -13,6 +14,7 @@
 	import { FIELDS_CONFIG as COBRO_FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
 	import {
 		getCuentasCobrar,
+		createCuentaCobrar,
 		deleteCuentaCobrar,
 		darDeBajaCuentaCobrar,
 		restaurarCuentaCobrar,
@@ -23,8 +25,20 @@
 		confirmarCobroCobrado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions, getCentroCostoOptionsVentasCerradas, getCentroCostoMontoVentaCerrada, getCentroCostoProyectoMap, getCentroCostoClienteMap, getCentroCostoTipoMap, getEmpleadoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import type { ServiceResult } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import {
+		getCentroCostoOptions,
+		getCentroCostoOptionsVentasCerradas,
+		getCentroCostoMontoVentaCerrada,
+		getCentroCostoProyectoMap,
+		getCentroCostoClienteMap,
+		getCentroCostoTipoMap,
+		getEmpleadoOptions,
+		crearTransaccionSistema,
+		deleteTransaccion
+	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { getOrCrearClientePrestamos } from '$lib/modules/clientes/services/clientes.service';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -136,6 +150,49 @@
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingCuenta = $state<CuentaCobrar | null>(null);
+	// A pedido explícito del usuario: en la Cuenta por Cobrar del flujo "Préstamo Otorgado" (ver
+	// clienteBloqueado más abajo), "Centro de Costo" NO debe ofrecer las ventas cerradas
+	// (dynamicOptions.id_centro_costo normal) — ahí va NUESTRO centro que financia el préstamo
+	// (Obra/Consultoría/Corporativo), no un proyecto vendido. Se arma cliente-side filtrando la lista
+	// COMPLETA ya cargada (transaccionDynamicOptions.id_centro_costo_origen) por tipo — sin ninguna
+	// consulta nueva. Si el centro ya precargado (editingCuenta.id_centro_costo, ej. tipo 'otro') no
+	// calzara con esos 3 tipos, se agrega igual para no dejarlo fuera de su propia lista de opciones.
+	const centroCostoOpcionesPrestamo = $derived.by(() => {
+		const TIPOS = new Set(['obra', 'consultoria', 'bolsa general']);
+		const todos = transaccionDynamicOptions.id_centro_costo_origen ?? [];
+		const filtradas = todos.filter((o) => TIPOS.has(centroCostoTipoMap[o.value]));
+		const actual = editingCuenta?.id_centro_costo != null ? String(editingCuenta.id_centro_costo) : '';
+		if (actual && !filtradas.some((o) => o.value === actual)) {
+			const encontrado = todos.find((o) => o.value === actual);
+			if (encontrado) return [...filtradas, encontrado];
+		}
+		return filtradas;
+	});
+	/** true solo cuando el modal se abre precargado desde la transacción Egreso "Préstamo Otorgado" (ver
+	 * abrirCreacionPrecargadaDesdeTransaccion) — bloquea "Cliente" en CuentaCobrarModal para que se
+	 * quede fijo en el cliente genérico "PRÉSTAMOS / FINANCIERA", ver getOrCrearClientePrestamos. Mismo
+	 * patrón que proveedorBloqueado en finanzas/cuentas-pagar/+page.svelte. */
+	let clienteBloqueado = $state(false);
+	/** Datos crudos leídos del sessionStorage de la precarga (ver abrirCreacionPrecargadaDesdeTransaccion)
+	 * — se conservan hasta que la cuenta se guarda para poder grabar recién ahí la transacción real del
+	 * préstamo (ver crearTransaccionPorPrestamoOtorgado/handleSaved), que necesita
+	 * id_centro_costo_destino (el prestatario real, no viaja en `editingCuenta` porque cuentas_cobrar no
+	 * tiene esa columna). null = este alta/edición NO viene de ese flujo. */
+	let prestamoPrefillDatos = $state<Record<string, unknown> | null>(null);
+	// A pedido explícito del usuario: nombre del Centro de Costo Destino real (el prestatario) de la
+	// transacción que originó este flujo — "Proyecto" no puede guardar ese valor (ver
+	// centroCostoOpcionesPrestamo/CuentaCobrarModal.svelte, es una FK real a `proyecto`, no a
+	// `centro_costo`), así que se pasa aparte para mostrarlo como texto informativo junto a ese campo
+	// (además de ya quedar guardado en Observaciones, ver TransaccionModal.svelte). Búsqueda cliente-
+	// side sobre la lista completa ya cargada, sin ninguna consulta nueva.
+	const prestamoDestinoNombre = $derived.by(() => {
+		const id = prestamoPrefillDatos?.id_centro_costo_destino != null ? String(prestamoPrefillDatos.id_centro_costo_destino) : '';
+		if (!id) return '';
+		const opt = (transaccionDynamicOptions.id_centro_costo_destino ?? []).find((o) => o.value === id);
+		if (!opt) return '';
+		const idx = opt.label.indexOf(' - ');
+		return idx === -1 ? opt.label : opt.label.slice(idx + 3);
+	});
 	let cobroModalOpen = $state(false);
 	let editingCobro = $state<Cobro | null>(null);
 	/** Prellenar Monto/Fecha de Cobro al abrir "Registrar Cobro" desde la cuota sintética de una cuenta
@@ -235,11 +292,7 @@
 	);
 
 	onMount(async () => {
-		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
-		// "ver_finanzas_cuentas_pendientes" otorgable desde IAM → Roles y Permisos (que el menú lateral/
-		// guard general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
-		// rebotaba al entrar.
-		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
+		if (!isAdmin()) {
 			goto('/dashboard');
 			return;
 		}
@@ -272,6 +325,7 @@
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
+		abrirCreacionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -311,16 +365,51 @@
 	function openCreate() {
 		modalMode = 'create';
 		editingCuenta = null;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+	// A pedido explícito del usuario: si se llega acá recién después de crear una transacción Egreso de
+	// tipo "Préstamo Otorgado" con Centro de Costo Origen=Corporativo (ver TransaccionModal.svelte), se
+	// abre de una vez "Nueva Cuenta por Cobrar" con los datos ya conocidos precargados (Centro de
+	// Costo/Monto/Fecha de Emisión) Y con "Cliente" ya fijado en el genérico "PRÉSTAMOS / FINANCIERA"
+	// (ver getOrCrearClientePrestamos) — bloqueado, no editable (clienteBloqueado), porque el prestatario
+	// real no necesariamente está registrado como cliente en el sistema. Mismo mecanismo cross-page que
+	// abrirCreacionPrecargadaDesdeTransaccion en finanzas/cuentas-pagar/+page.svelte: TransaccionModal
+	// deja los datos base en sessionStorage bajo esta misma clave justo antes de navegar acá; el id del
+	// cliente genérico se resuelve/crea recién acá (async). sessionStorage y el query param se limpian
+	// apenas se consumen, para no reabrirlo si el usuario solo refresca esta misma página después.
+	async function abrirCreacionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('prefillCuentaCobrar') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaCobrarPrefill');
+		sessionStorage.removeItem('cuentaCobrarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-cobrar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			datos.id_cliente = String(await getOrCrearClientePrestamos(supabase));
+			modalMode = 'create';
+			editingCuenta = datos as any;
+			prestamoPrefillDatos = datos;
+			clienteBloqueado = true;
+			modalOpen = true;
+		} catch (err) {
+			console.error('[CuentasCobrar] No se pudo leer la precarga de la transacción:', err);
+			toast.error('No se pudo precargar el cliente de préstamos — completa "Cliente" a mano.');
+		}
 	}
 	function openEdit(item: CuentaCobrar) {
 		modalMode = 'edit';
 		editingCuenta = item;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 		modalOpen = true;
 	}
 	function closeModal() {
 		modalOpen = false;
 		editingCuenta = null;
+		clienteBloqueado = false;
+		prestamoPrefillDatos = null;
 	}
 
 	async function selectRow(item: CuentaCobrar) {
@@ -536,7 +625,62 @@
 		cobroInitialValues = {};
 	}
 
+	// A pedido explícito del usuario: en el flujo "Préstamo Otorgado" (ver
+	// abrirCreacionPrecargadaDesdeTransaccion), la transacción que origina esta Cuenta por Cobrar debe
+	// grabarse PRIMERO, y la cuenta recién DESPUÉS — si la transacción no se puede grabar (ej. saldo
+	// insuficiente en el centro de costo origen), la Cuenta por Cobrar TAMPOCO debe grabarse. Se pasa
+	// como `onSubmitOverride` a CuentaCobrarModal (ver ahí), que lo usa en vez de createCuentaCobrar
+	// directo — recibe los mismos `formValues` que el modal ya validó, así que arma el payload de la
+	// transacción a partir de esos valores (no de la cuenta ya creada, que en este orden todavía no
+	// existe) y devuelve un ServiceResult<CuentaCobrar> idéntico al que createCuentaCobrar devolvería,
+	// para que el resto del modal (toast, onSaved, onClose) siga funcionando sin cambios.
+	async function guardarCuentaCobrarConTransaccionPrestamo(formValues: Record<string, string>): Promise<ServiceResult<CuentaCobrar>> {
+		if (!prestamoPrefillDatos) {
+			// Salvaguarda: este override solo debería pasarse mientras el flujo de préstamo está activo
+			// (ver el prop condicional más abajo) — si por lo que sea se llama sin eso, cae al alta normal.
+			const { data: userData } = await supabase.auth.getUser();
+			return createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);
+		}
+		const { data: userData } = await supabase.auth.getUser();
+		const payloadTransaccion = {
+			tipo_alcance: 'externa',
+			id_centro_costo_origen: formValues.id_centro_costo,
+			id_centro_costo_destino: prestamoPrefillDatos.id_centro_costo_destino,
+			fecha: formValues.fecha_emision,
+			tipo: 'egreso',
+			monto_total: formValues.monto,
+			categoria: 'Préstamo Otorgado',
+			descripcion: formValues.observaciones || 'Préstamo otorgado'
+		};
+		let resultTransaccion;
+		try {
+			resultTransaccion = await crearTransaccionSistema(supabase, payloadTransaccion, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
+		} catch (err: any) {
+			console.error('[CuentasCobrar] Excepción al crear la transacción del préstamo:', err);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. La Cuenta por Cobrar no se guardó.` };
+		}
+		if (!resultTransaccion.success) {
+			console.error('[CuentasCobrar] crearTransaccionSistema devolvió un error:', resultTransaccion, payloadTransaccion);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${resultTransaccion.message}. La Cuenta por Cobrar no se guardó.` };
+		}
+
+		const resultCuenta = await createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);
+		if (!resultCuenta.success) {
+			// La transacción ya se creó pero la cuenta no — se revierte para no dejar un movimiento de
+			// caja real sin la Cuenta por Cobrar que lo respalda (mismo criterio de "todo o nada" que
+			// pidió el usuario, aplicado también en este sentido).
+			try {
+				await deleteTransaccion(supabase, resultTransaccion.data!.id_transaccion);
+			} catch (err) {
+				console.error('[CuentasCobrar] No se pudo revertir la transacción tras fallar la Cuenta por Cobrar:', err);
+			}
+			return { success: false, message: `La transacción se registró pero la Cuenta por Cobrar no se pudo guardar (la transacción se revirtió): ${resultCuenta.message}` };
+		}
+		return resultCuenta;
+	}
+
 	async function handleSaved() {
+		prestamoPrefillDatos = null;
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
 
@@ -1027,6 +1171,10 @@
 	centroCostoMontoMap={centroCostoMontoMap}
 	centroCostoProyectoMap={centroCostoProyectoMap}
 	centroCostoClienteMap={centroCostoClienteMap}
+	clienteBloqueado={clienteBloqueado}
+	centroCostoOpcionesPrestamo={centroCostoOpcionesPrestamo}
+	prestamoDestinoNombre={prestamoDestinoNombre}
+	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaCobrarConTransaccionPrestamo : null}
 	onClose={closeModal}
 	onSaved={handleSaved}
 />

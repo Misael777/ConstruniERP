@@ -35,6 +35,14 @@
 		/** undefined = sin saldo conocido para esa opción (todavía cargando, o no aplica) — no se muestra
 		 * nada al costado, en vez de un "S/ 0.00" engañoso. */
 		saldo?: number;
+		/** Encabezado de grupo (ej. "Obra", "Consultoría") — a pedido explícito del usuario, para "Proyecto"
+		 * cuando Categoría=Préstamo en TransaccionModal.svelte (ver esPrestamoCorporativoIngreso), que
+		 * necesita mostrar TODOS los centros de costo agrupados por tipo. Como este no es un `<select>`
+		 * nativo, no hay `<optgroup>` real — se imita con un encabezado antes de la primera opción de cada
+		 * grupo. Requiere que `options` ya venga ORDENADO por grupo (esta lista no reordena nada, solo
+		 * detecta cuándo cambia el grupo entre una opción y la anterior). undefined = sin agrupar (el resto
+		 * de los usos de este componente, comportamiento sin cambios). */
+		grupo?: string;
 	}
 
 	let {
@@ -181,7 +189,10 @@
 			/>
 		</div>
 		<div role="listbox" class="flex-1 min-h-0 overflow-y-auto py-1">
-			{#each opcionesFiltradas as opt (opt.value)}
+			{#each opcionesFiltradas as opt, i (opt.value)}
+				{#if opt.grupo && (i === 0 || opcionesFiltradas[i - 1].grupo !== opt.grupo)}
+					<p class="px-3 pt-2.5 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">{opt.grupo}</p>
+				{/if}
 				<button
 					type="button"
 					role="option"

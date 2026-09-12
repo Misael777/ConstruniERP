@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
+	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
@@ -121,11 +121,7 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	onMount(async () => {
-		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
-		// "ver_finanzas_transacciones" (mismo que /finanzas/tranzacciones, esta es su sub-página de
-		// Movimientos de Caja) otorgable desde IAM → Roles y Permisos — un asesor con ese permiso veía
-		// el módulo en el menú pero rebotaba al entrar.
-		if (!hasPermiso('ver_finanzas_transacciones')) {
+		if (!isAdmin()) {
 			goto('/dashboard');
 			return;
 		}

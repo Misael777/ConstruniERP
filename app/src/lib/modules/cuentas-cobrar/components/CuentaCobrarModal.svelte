@@ -5,7 +5,7 @@
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { createCuentaCobrar, updateCuentaCobrar, getCobros, computeEstadoCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import type { CuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import type { CuentaCobrar, ServiceResult } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
@@ -18,6 +18,10 @@
 		centroCostoMontoMap = {},
 		centroCostoProyectoMap = {},
 		centroCostoClienteMap = {},
+		clienteBloqueado = false,
+		centroCostoOpcionesPrestamo = [],
+		prestamoDestinoNombre = '',
+		onSubmitOverride = null,
 		onClose,
 		onSaved
 	}: {
@@ -37,8 +41,39 @@
 		 * Cliente primero, filtra la lista de Centro de Costo a solo los suyos (ver handleInput /
 		 * optionsFor). */
 		centroCostoClienteMap?: Record<string, string>;
+		/** true = "Cliente" queda bloqueado (no editable) — a pedido explícito del usuario, para la
+		 * Cuenta por Cobrar que se autogenera al registrar un Egreso "Préstamo Otorgado" con Centro de
+		 * Costo Origen=Corporativo (ver finanzas/cuentas-cobrar/+page.svelte): ese caso siempre usa el
+		 * cliente genérico fijo "PRÉSTAMOS / FINANCIERA" (ver getOrCrearClientePrestamos), ya viene
+		 * elegido en `cuenta` y no debe poder cambiarse. false en cualquier otro flujo (crear/editar
+		 * normal) — mismo patrón que proveedorBloqueado en CuentaPagarModal.svelte. */
+		clienteBloqueado?: boolean;
+		/** Opciones de "Centro de Costo" para el mismo flujo de arriba (Préstamo Otorgado) — a pedido
+		 * explícito del usuario: acá NO se ofrecen las ventas cerradas normales (dynamicOptions.
+		 * id_centro_costo), sino nuestros propios Obra/Consultoría/Corporativo (calculados en
+		 * finanzas/cuentas-cobrar/+page.svelte a partir de listas ya cargadas, sin consulta nueva) —
+		 * ver optionsFor. Vacío en cualquier otro flujo (crear/editar normal). */
+		centroCostoOpcionesPrestamo?: FieldOption[];
+		/** Nombre del Centro de Costo Destino real (el prestatario) de la transacción que originó este
+		 * flujo — a pedido explícito del usuario, se muestra como texto informativo junto al campo
+		 * "Proyecto" (que no puede guardar ese valor, ver nota en el template): '' en cualquier otro
+		 * flujo. */
+		prestamoDestinoNombre?: string;
+		/** Cuando se pasa, REEMPLAZA el alta normal (createCuentaCobrar) en handleSubmit — a pedido
+		 * explícito del usuario, para el flujo "Préstamo Otorgado": la transacción que originó esta
+		 * cuenta debe grabarse PRIMERO, y la Cuenta por Cobrar recién después; si la transacción falla,
+		 * la cuenta tampoco debe grabarse. finanzas/cuentas-cobrar/+page.svelte arma acá esa secuencia
+		 * (crea la transacción, y solo si sale bien crea la cuenta — revirtiendo la transacción si la
+		 * cuenta terminara fallando) y devuelve el mismo ServiceResult<CuentaCobrar> que createCuentaCobrar,
+		 * para que el resto de handleSubmit (toast, onSaved, onClose) no tenga que saber nada de esto.
+		 * null en cualquier otro flujo (crear/editar normal, mode='edit' nunca lo usa). */
+		onSubmitOverride?: ((formValues: Record<string, string>) => Promise<ServiceResult<CuentaCobrar>>) | null;
 		onClose: () => void;
-		onSaved: () => void;
+		// Recibe la fila (o filas, si es una serie) recién creada/actualizada — a pedido explícito del
+		// usuario, finanzas/cuentas-cobrar/+page.svelte lo usa para grabar recién ahí la transacción del
+		// flujo "Préstamo Otorgado" (ver crearTransaccionPorPrestamoOtorgado), mismo criterio que
+		// CuentaPagarModal.svelte.
+		onSaved: (cuenta?: CuentaCobrar | CuentaCobrar[]) => void | Promise<void>;
 	} = $props();
 
 	// 'condición_pago' (Número de Cuotas) ya no se muestra como campo inline: se configura en la
@@ -53,12 +88,18 @@
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
 		}
 		// Moneda arranca en Soles por defecto para una cuenta nueva (a pedido del usuario) — en
-		// edición se respeta lo que ya tenía guardado esa cuenta.
-		if (!cuenta && !values.moneda) values.moneda = 'PEN';
+		// edición se respeta lo que ya tenía guardado esa cuenta. OJO: se checa
+		// `(cuenta as any)?.moneda == null` (no solo `!cuenta`) — finanzas/cuentas-cobrar/+page.svelte
+		// puede abrir en modo 'create' con `cuenta` YA con algunos campos precargados (ver
+		// abrirCreacionPrecargadaDesdeTransaccion, para la Cuenta por Cobrar que se autogenera desde un
+		// Egreso "Préstamo Otorgado"); en ese caso `cuenta` no es null pero tampoco trae moneda/
+		// responsable, así que estos defaults deben seguir aplicando igual (mismo criterio que
+		// CuentaPagarModal.svelte).
+		if ((cuenta as any)?.moneda == null && !values.moneda) values.moneda = 'PEN';
 		// A pedido del usuario: "Responsable" arranca prellenado con el usuario que inició sesión (mismo
 		// patrón que CuentaPagarModal.svelte) — solo al crear, no pisa el valor guardado al editar. Sigue
 		// siendo editable por si corresponde asignarla a alguien más.
-		if (!cuenta && 'responsable' in values) values.responsable = permisosState.userName;
+		if ((cuenta as any)?.responsable == null && 'responsable' in values) values.responsable = permisosState.userName;
 		return values;
 	}
 
@@ -173,6 +214,7 @@
 		// de ese proyecto"), se autocompleta y se bloquea una vez que hay un cliente vinculado a ese
 		// centro de costo (ver handleInput/centroCostoClienteMap).
 		if (field.key === 'id_cliente' && centroCostoClienteMap[formValues.id_centro_costo] !== undefined) return true;
+		if (field.key === 'id_cliente' && clienteBloqueado) return true;
 		return field.disabledWhen?.(formValues) ?? false;
 	}
 
@@ -230,6 +272,11 @@
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// Flujo "Préstamo Otorgado" (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): "Centro
+		// de Costo" es NUESTRO centro que financia el préstamo (Obra/Consultoría/Corporativo), no una
+		// venta cerrada — va ANTES del filtro por Cliente de abajo, porque ese cliente es el genérico
+		// "PRÉSTAMOS / FINANCIERA" y no sirve para filtrar centros de costo en este caso.
+		if (field.key === 'id_centro_costo' && clienteBloqueado) return centroCostoOpcionesPrestamo;
 		// Si ya hay un Cliente elegido, "Centro de Costo" solo ofrece los suyos — a pedido explícito del
 		// usuario ("si elijo un cliente, el campo centro de costo debe mostrarme todos los centros de
 		// costos activos que tengan ese cliente"). Sin Cliente elegido se muestran todos (sin filtrar).
@@ -252,7 +299,9 @@
 		try {
 			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
-			if (mode === 'edit' && cuenta) {
+			if (onSubmitOverride) {
+				result = await onSubmitOverride(formValues);
+			} else if (mode === 'edit' && cuenta) {
 				result = await updateCuentaCobrar(supabase, cuenta.id_cuenta_cobrar, formValues, isAdmin(), fraccionesAEnviar);
 			} else {
 				const { data: userData } = await supabase.auth.getUser();
@@ -261,7 +310,7 @@
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				onSaved();
+				await onSaved(result.data);
 				onClose();
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
@@ -339,6 +388,13 @@
 
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
+							{:else if field.key === 'id_proyecto' && clienteBloqueado && prestamoDestinoNombre}
+								<!-- A pedido explícito del usuario: "Proyecto" no puede guardar el Centro de Costo
+								     Destino real (el prestatario) — es una FK real a la tabla `proyecto`, no a
+								     `centro_costo` (ver la nota en finanzas/cuentas-cobrar/+page.svelte). Se muestra
+								     acá solo como texto informativo, junto con lo que ya queda guardado en
+								     Observaciones — no se guarda como valor de este campo. -->
+								<p class="mt-1 text-xs font-medium text-blue-600">Prestatario real: {prestamoDestinoNombre} (también en Observaciones)</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}

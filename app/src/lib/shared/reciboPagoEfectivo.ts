@@ -9,10 +9,9 @@
  * no es un solo texto libre ("Yape a Willy Melchor"), son 3 datos por separado: el medio elegido en el
  * formulario principal (ícono + label), el N° de Operación (ya reconocido/ingresado ahí mismo) y el
  * nombre de quien figura como titular de la cuenta origen (nombreTitularCuenta, sin fuente en el
- * formulario — queda "—" si no hay dato). Las firmas (v-firmas) SÍ vuelven a depender de esEfectivo (a
- * pedido explícito del usuario, revirtiendo la decisión anterior): con cualquier medio que no sea
- * Efectivo ya queda el registro bancario, así que la sección de firmas se omite por completo (ver
- * "Firmar Comprobante" en TransaccionModal.svelte, gateado con el mismo criterio). Se arma como HTML/CSS y se
+ * formulario — queda "—" si no hay dato). Las firmas (v-firmas) YA NO dependen de esEfectivo — a pedido
+ * explícito del usuario, son opcionales para cualquier medio de pago (ver botón "Firmar Comprobante" en
+ * TransaccionModal.svelte); esEfectivo solo decide qué muestra la sección 3. Se arma como HTML/CSS y se
  * convierte a imagen con html2canvas antes de incrustarla en el PDF con jsPDF — funciona igual en
  * navegador, Tauri Windows y Tauri Android.
  */
@@ -156,9 +155,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago, sinMarca
 				</div>
 			</div>
 
-			${
-				datos.esEfectivo
-					? `<div class="v-firmas">
+			<div class="v-firmas">
 				<div class="v-firma">
 					<div class="v-firma-titulo">Firma digital del cliente<br>(Firma manuscrita)</div>
 					<div class="v-firma-img-wrap">
@@ -177,9 +174,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago, sinMarca
 					<div class="v-firma-nombre">${escapeHtml(datos.receptorNombre)}</div>
 					<div class="v-firma-info">DNI: ${escapeHtml(datos.receptorDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
-			</div>`
-					: ''
-			}
+			</div>
 			${sinMarcaAgua ? '' : marcaAguaBorrador(48)}
 		</div>
 	`;

@@ -318,15 +318,8 @@ export async function getCuentasBancoUsadasEnIngresos(client: SupabaseClient, id
 }
 
 /** Mismo criterio que saldoDisponibleCentroCosto, pero para una cuenta bancaria registrada — suma por
- * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo, arrancando desde
- * saldo_inicial de la cuenta (bug real reportado por el usuario: sin esto, una cuenta con saldo_inicial
- * quedaba con un saldo disponible más bajo que el real — "Saldo actual" en pantalla SÍ lo incluye, ver
- * getSaldosCuentaBanco/fn_recalcular_saldo_cuenta_banco, pero esta validación no lo hacía. Mismo fix
- * aplicado en fn_crear_transaccion, ver fn_crear_transaccion_saldo_inicial_migration.sql). */
+ * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo. */
 async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: string, excluirIdTransaccion?: number): Promise<number> {
-	const { data: cuenta } = await client.from('cuenta_banco').select('saldo_inicial').eq('numero_cuenta', numeroCuenta).maybeSingle();
-	const saldoInicial = Number(cuenta?.saldo_inicial ?? 0);
-
 	let query = client
 		.from(TABLE_NAME)
 		.select('cuente_origen, cuente_destino, monto_total')
@@ -342,7 +335,7 @@ async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: 
 		if (t.cuente_origen === numeroCuenta) saldo -= monto;
 		if (t.cuente_destino === numeroCuenta) saldo += monto;
 		return saldo;
-	}, saldoInicial);
+	}, 0);
 }
 
 /** Punto de entrada único, llamado desde createTransaccion/updateTransaccion. Devuelve `ok:false` con
@@ -497,18 +490,10 @@ export function construirInsertDataTransaccion(
 /** true si el payload trae el comprobante que toda transacción Externa debe tener adjunto — mismo
  * criterio que antes vivía inline en createTransaccion, extraído para que confirmarPagoPagado/
  * confirmarCobroCobrado (que arman su propio payload de transacción) también lo apliquen. Una
- * transacción Interna emite su propio comprobante oficial, una Externa+Ingreso+Efectivo con su
- * "RECIBO DE PAGO" ya generado (num_recibo_pago asignado) tampoco requiere este adjunto — bug real
- * reportado por el usuario: faltaba el mismo caso para Externa+Egreso, que emite su propio "RECIBO DE
- * PAGO A PROVEEDOR" (num_recibo_pago_proveedor asignado, ver mostrarBotonReciboPagoProveedor en
- * TransaccionModal.svelte) y también debe quedar exento. */
+ * transacción Interna emite su propio comprobante oficial, y una Externa+Ingreso+Efectivo con su
+ * "RECIBO DE PAGO" ya generado (num_recibo_pago asignado) tampoco requiere este adjunto. */
 function tieneComprobanteRequerido(payload: Record<string, unknown>): boolean {
-	return (
-		payload.tipo_alcance === 'interna' ||
-		!!payload.num_recibo_pago ||
-		!!payload.num_recibo_pago_proveedor ||
-		!!payload.comprobante_url
-	);
+	return payload.tipo_alcance === 'interna' || !!payload.num_recibo_pago || !!payload.comprobante_url;
 }
 
 export async function createTransaccion(
@@ -544,6 +529,39 @@ export async function createTransaccion(
 	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
 }
 
+/** Crea una transacción SIN exigir comprobante adjunto (a diferencia de createTransaccion, que
+ * rechaza con "Debes adjuntar el comprobante..." si tieneComprobanteRequerido() da false) — para
+ * transacciones generadas por el sistema como efecto secundario de OTRO guardado (ver
+ * crearTransaccionPorPrestamoRecibido en cuentas-pagar/+page.svelte y
+ * crearTransaccionPorPrestamoOtorgado en cuentas-cobrar/+page.svelte), donde no hay ningún archivo
+ * que adjuntar en ese momento — mismo criterio ya usado por confirmarPagoPagado/
+ * confirmarCobroCobrado, que arman su propio insertData con construirInsertDataTransaccion y llaman
+ * directo al RPC, sin pasar por ese guard (pensado solo para el modal interactivo con carga de
+ * archivo). */
+export async function crearTransaccionSistema(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	const built = construirInsertDataTransaccion(payload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) {
+		return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
+	}
+
+	const { data, error } = await client.rpc('fn_crear_transaccion', {
+		p_payload: built.insertData,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) {
+		console.error('[transacciones.service] Error crudo de Postgres al crear la transacción (sistema):', error, built.insertData);
+		return { success: false, message: `No se pudo crear la transacción: ${translateRpcError(error, FIELDS_CONFIG)}` };
+	}
+
+	return { success: true, message: 'Transacción creada correctamente', data: data as Transaccion };
+}
+
 export async function updateTransaccion(
 	client: SupabaseClient,
 	id: number,
@@ -554,7 +572,7 @@ export async function updateTransaccion(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
-	if (!tieneComprobanteRequerido(payload)) {
+	if (payload.tipo_alcance !== 'interna' && !payload.num_recibo_pago && !payload.comprobante_url) {
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
@@ -875,6 +893,22 @@ export async function getCentroCostoOptionsClientes(client: SupabaseClient): Pro
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
 		.not('id_cliente', 'is', null)
+		.order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
+}
+
+/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro' o 'bolsa general' (Corporativo) —
+ * para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en Ingreso+Externa, a
+ * pedido explícito del usuario. Versiones anteriores de este mismo campo mostraron: solo clientes:
+ * todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el mismo grupo "Centros de
+ * Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta cerrada, ver
+ * getCentroCostoOptionsSoloCentros) — esta es la definición vigente. */
+export async function getCentroCostoOptionsClientesYCorporativoUOtro(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from('centro_costo')
+		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
+		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
