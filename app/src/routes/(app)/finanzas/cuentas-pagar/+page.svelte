@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
@@ -13,6 +13,7 @@
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import {
 		getCuentasPagar,
+		createCuentaPagar,
 		deleteCuentaPagar,
 		darDeBajaCuentaPagar,
 		restaurarCuentaPagar,
@@ -22,6 +23,7 @@
 		confirmarPagoPagado,
 		getMontoFiltrado
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
 		getCentroCostoOptions,
 		getCentroCostoOptionsSoloCentros,
@@ -29,7 +31,8 @@
 		getCentroCostoOptionsExternosOrigen,
 		getCentroCostoTipoMap,
 		getEmpleadoOptions,
-		crearTransaccionSistema
+		crearTransaccionSistema,
+		deleteTransaccion
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getOrCrearProveedorPrestamos } from '$lib/modules/proveedores/services/proveedores.service';
@@ -256,11 +259,7 @@
 	);
 
 	onMount(async () => {
-		// A pedido explícito del usuario: exigía el rol Admin a secas, ignorando el permiso granular
-		// "ver_finanzas_cuentas_pendientes" otorgable desde IAM → Roles y Permisos (que el menú lateral/
-		// guard general de rutas SÍ respeta) — un asesor con ese permiso veía el módulo en el menú pero
-		// rebotaba al entrar.
-		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
+		if (!isAdmin()) {
 			goto('/dashboard');
 			return;
 		}
@@ -607,46 +606,65 @@
 		pagoInitialValues = {};
 	}
 
-	// A pedido explícito del usuario: cuando la Cuenta por Pagar recién guardada viene del flujo
-	// "Préstamo Recibido" (ver abrirCreacionPrecargadaDesdeTransaccion), la transacción real (el
-	// dinero que efectivamente entró) recién se graba ACÁ, en el momento en que la cuenta se guarda —
-	// no antes, no en TransaccionModal.svelte (que solo dejó los datos precargados en sessionStorage).
-	// Usa crearTransaccionSistema (sin exigir comprobante, mismo criterio que confirmarPagoPagado) en
-	// vez de createTransaccion, porque esta transacción no viene de un modal interactivo con carga de
-	// archivo. Si falla (ej. algún dato inválido), la Cuenta por Pagar YA quedó guardada — no se
-	// revierte, solo se avisa para que se registre a mano.
-	async function crearTransaccionPorPrestamoRecibido(cuenta: CuentaPagar) {
-		if (!prestamoPrefillDatos) return;
-		try {
+	// A pedido explícito del usuario (mismo criterio "todo o nada" ya aplicado en
+	// finanzas/cuentas-cobrar/+page.svelte, ver guardarCuentaCobrarConTransaccionPrestamo): en el flujo
+	// "Préstamo Recibido" (ver abrirCreacionPrecargadaDesdeTransaccion), la transacción que originó
+	// esta Cuenta por Pagar debe grabarse PRIMERO, y la cuenta recién DESPUÉS — si la transacción no se
+	// puede grabar, la Cuenta por Pagar TAMPOCO debe grabarse. Se pasa como `onSubmitOverride` a
+	// CuentaPagarModal (ver ahí), que lo usa en vez de createCuentaPagar directo — recibe los mismos
+	// `formValues` que el modal ya validó, así que arma el payload de la transacción a partir de esos
+	// valores (no de la cuenta ya creada, que en este orden todavía no existe).
+	async function guardarCuentaPagarConTransaccionPrestamo(formValues: Record<string, string>): Promise<ServiceResult<CuentaPagar>> {
+		if (!prestamoPrefillDatos) {
+			// Salvaguarda: este override solo debería pasarse mientras el flujo de préstamo está activo
+			// (ver el prop condicional más abajo) — si por lo que sea se llama sin eso, cae al alta normal.
 			const { data: userData } = await supabase.auth.getUser();
-			const payload = {
-				tipo_alcance: 'externa',
-				id_centro_costo_origen: prestamoPrefillDatos.id_centro_costo_origen,
-				id_centro_costo_destino: cuenta.id_centro_costo,
-				fecha: cuenta.fecha_emision,
-				tipo: 'ingreso',
-				monto_total: cuenta.monto_comprometido,
-				categoria: 'Préstamo',
-				descripcion: cuenta.observacion || 'Préstamo recibido'
-			};
-			const result = await crearTransaccionSistema(supabase, payload, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
-			if (!result.success) {
-				console.error('[CuentasPagar] crearTransaccionSistema devolvió un error:', result, payload);
-				toast.error(`La Cuenta por Pagar se guardó, pero no se pudo registrar la transacción del préstamo: ${result.message}. Regístrala manualmente en Transacciones.`);
-			}
-		} catch (err: any) {
-			// Cualquier excepción inesperada (no solo un ServiceResult con success:false) también debe
-			// avisar — antes de este try/catch, una excepción acá se perdía como promesa rechazada sin
-			// capturar (ver el await agregado en CuentaPagarModal.svelte), sin ningún aviso visible.
-			console.error('[CuentasPagar] Excepción al crear la transacción del préstamo:', err);
-			toast.error(`La Cuenta por Pagar se guardó, pero no se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. Regístrala manualmente en Transacciones.`);
+			return createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
 		}
+		// Un préstamo recibido es un evento único — este flujo no soporta "Frecuencia de Pago" periódica
+		// (generaría varias Cuentas por Pagar para UNA sola transacción de ingreso, sin sentido acá). El
+		// campo no está bloqueado en el formulario, así que se valida acá antes de tocar nada.
+		if (['mensual', 'quincenal', 'semanal'].includes(String(formValues.frecuencia_pago ?? ''))) {
+			return { success: false, message: 'Un préstamo recibido no puede tener Frecuencia de Pago periódica — usa "Sin periodicidad".' };
+		}
+		const { data: userData } = await supabase.auth.getUser();
+		const payloadTransaccion = {
+			tipo_alcance: 'externa',
+			id_centro_costo_origen: prestamoPrefillDatos.id_centro_costo_origen,
+			id_centro_costo_destino: formValues.id_centro_costo,
+			fecha: formValues.fecha_emision,
+			tipo: 'ingreso',
+			monto_total: formValues.monto_comprometido,
+			categoria: 'Préstamo',
+			descripcion: formValues.observacion || 'Préstamo recibido'
+		};
+		let resultTransaccion;
+		try {
+			resultTransaccion = await crearTransaccionSistema(supabase, payloadTransaccion, userData?.user?.email ?? null, permisosState.userName || null, crypto.randomUUID());
+		} catch (err: any) {
+			console.error('[CuentasPagar] Excepción al crear la transacción del préstamo:', err);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${err?.message ?? 'error inesperado'}. La Cuenta por Pagar no se guardó.` };
+		}
+		if (!resultTransaccion.success) {
+			console.error('[CuentasPagar] crearTransaccionSistema devolvió un error:', resultTransaccion, payloadTransaccion);
+			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${resultTransaccion.message}. La Cuenta por Pagar no se guardó.` };
+		}
+
+		const resultCuenta = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+		if (!resultCuenta.success) {
+			// La transacción ya se creó pero la cuenta no — se revierte para no dejar un movimiento de
+			// caja real sin la Cuenta por Pagar que lo respalda.
+			try {
+				await deleteTransaccion(supabase, resultTransaccion.data!.id_transaccion);
+			} catch (err) {
+				console.error('[CuentasPagar] No se pudo revertir la transacción tras fallar la Cuenta por Pagar:', err);
+			}
+			return { success: false, message: `La transacción se registró pero la Cuenta por Pagar no se pudo guardar (la transacción se revirtió): ${resultCuenta.message}` };
+		}
+		return resultCuenta;
 	}
 
-	async function handleSaved(cuenta?: CuentaPagar | CuentaPagar[]) {
-		if (modalMode === 'create' && prestamoPrefillDatos && cuenta && !Array.isArray(cuenta)) {
-			await crearTransaccionPorPrestamoRecibido(cuenta);
-		}
+	async function handleSaved() {
 		prestamoPrefillDatos = null;
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	}
@@ -1138,7 +1156,17 @@
 	{/if}
 </div>
 
-<CuentaPagarModal open={modalOpen} mode={modalMode} cuenta={editingCuenta} dynamicOptions={dynamicOptions} {centroCostoTipoMap} {proveedorBloqueado} onClose={closeModal} onSaved={handleSaved} />
+<CuentaPagarModal
+	open={modalOpen}
+	mode={modalMode}
+	cuenta={editingCuenta}
+	dynamicOptions={dynamicOptions}
+	{centroCostoTipoMap}
+	{proveedorBloqueado}
+	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaPagarConTransaccionPrestamo : null}
+	onClose={closeModal}
+	onSaved={handleSaved}
+/>
 <PagoModal
 	open={pagoModalOpen}
 	idCuentaPagar={selectedId}

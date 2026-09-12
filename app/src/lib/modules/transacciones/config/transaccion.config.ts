@@ -187,6 +187,15 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			// estaba arriba (Honorarios/Alquileres/Servicios/Préstamo/Compras/Movilidad/Impuestos).
 			{ value: 'Inyecciones', label: 'Inyecciones' },
 			{ value: 'Inversión', label: 'Inversión' },
+			// "Préstamo Otorgado" (flujo Egreso -> Cuenta por Cobrar, ver categoriaEsPrestamoOtorgado en
+			// TransaccionModal.svelte) — valor DISTINTO de 'Préstamo' de arriba (esa sigue siendo pagar una
+			// cuota, categoría normal de gasto). Tiene que estar en esta lista aunque la transacción con
+			// esta Categoría nunca llega a crearse desde TransaccionModal (se corta en handleSubmit y
+			// redirige a Cuentas por Cobrar): la transacción real se arma DESPUÉS, en
+			// crearTransaccionPorPrestamoOtorgado (finanzas/cuentas-cobrar/+page.svelte), y esa SÍ pasa por
+			// validatePayload/construirInsertDataTransaccion — sin esta entrada, ese guardado fallaba con
+			// "Categoría tiene un valor no permitido" (ver fieldConfig.ts), un bug real ya corregido acá.
+			{ value: 'Préstamo Otorgado', label: 'Préstamo Otorgado' },
 			// Subcategorías del dropdown en cascada de Obra + Egreso y Corporativo + Egreso (ver
 			// TIPOS_GASTO_OBRA/TIPOS_GASTO_CORPORATIVO en TransaccionModal.svelte) — el valor final que se
 			// guarda en `categoria` es la subcategoría elegida (ej. "Acero 6mm"), no la categoría

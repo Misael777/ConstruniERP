@@ -39,9 +39,7 @@ export interface DatosReciboPagoProveedor {
 	/** true = medio_pago '1' (Efectivo) — sección 3 muestra el casillero fijo "EFECTIVO". false =
 	 * cualquier otro medio (Transferencia/Depósito/Yape o Plin) — muestra en cambio un recuadro con
 	 * `formaPagoTexto`. Mismo criterio que DatosReciboPago.esEfectivo en reciboPagoEfectivo.ts. Las
-	 * firmas (v-firmas) SÍ dependen de este campo (a pedido explícito del usuario, revirtiendo la
-	 * decisión anterior): con cualquier medio que no sea Efectivo ya queda el registro bancario, así que
-	 * la sección de firmas se omite por completo. */
+	 * firmas (v-firmas) YA NO dependen de este campo — son opcionales para cualquier medio de pago. */
 	esEfectivo: boolean;
 	/** Label del Medio de Pago ya elegido en el formulario principal (ver TransaccionModal.svelte) — solo
 	 * se usa/muestra cuando esEfectivo es false. */
@@ -131,9 +129,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor,
 				</div>
 			</div>
 
-			${
-				datos.esEfectivo
-					? `<div class="v-firmas">
+			<div class="v-firmas">
 				<div class="v-firma">
 					<div class="v-firma-titulo">Entregué conforme<br>(Empresa)</div>
 					<div class="v-firma-img-wrap">
@@ -152,9 +148,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPagoProveedor,
 					<div class="v-firma-nombre">${escapeHtml(datos.recibioNombre)}</div>
 					<div class="v-firma-info">DNI: ${escapeHtml(datos.recibioDni)}<br>Fecha de recepción: ${escapeHtml(formatearFechaCorta(datos.fecha))} ${escapeHtml(horaActual)}</div>
 				</div>
-			</div>`
-					: ''
-			}
+			</div>
 			${sinMarcaAgua ? '' : marcaAguaBorrador(48)}
 		</div>
 	`;

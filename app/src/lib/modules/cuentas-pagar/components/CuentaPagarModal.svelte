@@ -12,7 +12,7 @@
 		calcularFechasRecurrentes,
 		computeEstadoCuentaPagar
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import type { CuentaPagar, Pago, FechaCuentaRecurrente } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import type { CuentaPagar, Pago, FechaCuentaRecurrente, ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 
@@ -23,6 +23,7 @@
 		dynamicOptions = {},
 		centroCostoTipoMap = {},
 		proveedorBloqueado = false,
+		onSubmitOverride = null,
 		onClose,
 		onSaved
 	}: {
@@ -39,11 +40,17 @@
 		 * "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos), ya viene elegido en `cuenta` y no
 		 * debe poder cambiarse. false en cualquier otro flujo (crear/editar normal). */
 		proveedorBloqueado?: boolean;
+		/** Cuando se pasa, REEMPLAZA el alta normal (createCuentaPagar/createCuentasPagarRecurrentes) en
+		 * handleSubmit — a pedido explícito del usuario, para el flujo "Préstamo Recibido": la transacción
+		 * que originó esta cuenta debe grabarse PRIMERO, y la Cuenta por Pagar recién después; si la
+		 * transacción no se puede grabar, la cuenta tampoco debe grabarse. finanzas/cuentas-pagar/
+		 * +page.svelte arma acá esa secuencia (crea la transacción, y solo si sale bien crea la cuenta —
+		 * revirtiendo la transacción si la cuenta terminara fallando) y devuelve el mismo
+		 * ServiceResult<CuentaPagar> que createCuentaPagar devolvería, para que el resto de handleSubmit
+		 * (toast, onSaved, onClose) no tenga que saber nada de esto. null en cualquier otro flujo (crear/
+		 * editar normal, mode='edit' nunca lo usa). Mismo patrón que CuentaCobrarModal.svelte. */
+		onSubmitOverride?: ((formValues: Record<string, string>) => Promise<ServiceResult<CuentaPagar>>) | null;
 		onClose: () => void;
-		// Recibe la fila (o filas, si es una serie periódica vía createCuentasPagarRecurrentes) recién
-		// creada/actualizada — a pedido explícito del usuario, finanzas/cuentas-pagar/+page.svelte lo usa
-		// para grabar recién ahí la transacción del flujo "Préstamo Recibido" (ver
-		// crearTransaccionPorPrestamoRecibido), sin necesidad de otra consulta.
 		onSaved: (cuenta?: CuentaPagar | CuentaPagar[]) => void | Promise<void>;
 	} = $props();
 
@@ -298,7 +305,9 @@
 		try {
 			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
-			if (mode === 'edit' && cuenta) {
+			if (onSubmitOverride) {
+				result = await onSubmitOverride(formValues);
+			} else if (mode === 'edit' && cuenta) {
 				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin(), fraccionesAEnviar);
 			} else if (esPeriodico) {
 				const { data: userData } = await supabase.auth.getUser();
@@ -310,9 +319,6 @@
 
 			if (result.success) {
 				toast.success(result.message ?? 'Operación realizada con éxito');
-				// await: onSaved puede hacer trabajo async propio (ver crearTransaccionPorPrestamoRecibido
-				// en finanzas/cuentas-pagar/+page.svelte) — sin este await, una excepción ahí sería una
-				// promesa rechazada sin capturar (este try/catch no la vería), silenciosa para el usuario.
 				await onSaved(result.data);
 				onClose();
 			} else {
