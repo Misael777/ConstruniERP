@@ -167,6 +167,12 @@ export interface ListParams {
 	estado?: string;
 	/** Filtra por `tipo` exacto ('ingreso'|'egreso'|'financiamiento'|'transferencia'). */
 	tipo?: string;
+	/** Filtra por `tipo_alcance` exacto ('interna'|'externa') — usado por el filtro "Estado: Consulta"
+	 * de la lista (ver +page.svelte): esa opción del dropdown siempre representó, en la práctica, "las
+	 * Transacciones Internas" (antes eran la única fila con estado='consulta'; ahora que Interna cuenta
+	 * como 'activo' igual que cualquier transacción, ver resolveEstadoTransaccion, se filtra por este
+	 * campo directamente en vez de por estado). */
+	tipoAlcance?: string;
 }
 
 export interface ListResult<T> {
@@ -194,11 +200,20 @@ const BLOQUEADO_POR_APROBACION =
 	'No se puede modificar/eliminar: el comprobante ya fue aprobado. Para editarla, un administrador debe quitar la aprobación primero.';
 
 /** `estado` ya no es un <select> manual en el formulario (a pedido del usuario, ver TransaccionModal.svelte)
- * — se calcula solo acá: 'consulta' mientras el Alcance sea Interna (mismo comportamiento que antes
- * forzaba el formulario), 'anulado' se preserva tal cual (solo anularTransaccion/reactivarTransaccion
- * lo cambian), y 'activo' en cualquier otro caso. */
-function resolveEstadoTransaccion(tipoAlcance: string, estadoActual: string | null | undefined): string {
-	if (tipoAlcance === 'interna') return 'consulta';
+ * — se calcula solo acá: 'anulado' se preserva tal cual (solo anularTransaccion/reactivarTransaccion lo
+ * cambian), y 'activo' en cualquier otro caso — incluida una Transacción Interna, que cuenta para los
+ * saldos de inmediato al registrarse, igual que un Ingreso/Egreso Externo.
+ *
+ * Bug real reportado por el usuario, ya corregido (antes forzaba 'consulta' para tipo_alcance==='interna'
+ * — mismo comportamiento que antes forzaba el <select> manual del formulario): más de 25 consultas de
+ * saldo en todo el ERP filtran estrictamente estado='activo', así que una Interna nunca contaba en
+ * ningún saldo (centro de costo, cuenta_banco.saldo_actual, dashboards, Control Financiero...) — no era
+ * un problema de refresco, era exclusión total y permanente. El badge visual "Consulta" que distingue
+ * una Interna en la lista sigue mostrándose igual (ver TransaccionModal.svelte/tranzacciones/
+ * +page.svelte), ahora derivado de `tipo_alcance==='interna'` directamente en vez de leerse de `estado`
+ * — ese campo pasa a significar únicamente "activo/anulado", sin volver a mezclarse con la etiqueta
+ * visual. Backfill del histórico: transaccion_interna_estado_activo_migration.sql. */
+function resolveEstadoTransaccion(estadoActual: string | null | undefined): string {
 	if (estadoActual === 'anulado') return 'anulado';
 	return 'activo';
 }
@@ -394,6 +409,7 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 	if (params.fecha) query = query.eq('fecha', params.fecha);
 	if (params.estado) query = query.eq('estado', params.estado);
 	if (params.tipo) query = query.eq('tipo', params.tipo);
+	if (params.tipoAlcance) query = query.eq('tipo_alcance', params.tipoAlcance);
 
 	const { data, error, count } = await query;
 	if (error) throw error;
@@ -472,7 +488,7 @@ export function construirInsertDataTransaccion(
 		// arriba) — tampoco vive en FIELDS_CONFIG; null si nunca se generó ninguno para esta transacción.
 		comprobante_autogenerado_url: (payload.comprobante_autogenerado_url as string | null) ?? null,
 		// estado tampoco vive en FIELDS_CONFIG (showInForm:false) — ver resolveEstadoTransaccion.
-		estado: resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), null)
+		estado: resolveEstadoTransaccion(null)
 	};
 
 	return { insertData };
@@ -560,7 +576,7 @@ export async function updateTransaccion(
 	updateData.num_recibo_pago_no_efectivo = (payload.num_recibo_pago_no_efectivo as number | null) ?? null;
 	updateData.num_recibo_pago_proveedor = (payload.num_recibo_pago_proveedor as number | null) ?? null;
 	updateData.comprobante_autogenerado_url = (payload.comprobante_autogenerado_url as string | null) ?? null;
-	updateData.estado = resolveEstadoTransaccion(String(payload.tipo_alcance ?? ''), actual?.estado);
+	updateData.estado = resolveEstadoTransaccion(actual?.estado);
 
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();
 	if (error) return { success: false, message: `No se pudo actualizar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };

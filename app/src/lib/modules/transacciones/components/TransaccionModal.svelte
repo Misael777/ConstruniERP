@@ -593,7 +593,7 @@
 
 	function onComprobanteDrop(e: DragEvent) {
 		e.preventDefault();
-		if (bloqueadaPorAprobacion) return;
+		if (bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna') return;
 		processComprobanteFiles(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
 	}
 
@@ -1300,10 +1300,13 @@
 			// catálogo completo en Externa, ver optionsWhen) — se limpia en cualquier dirección del
 			// cambio para no dejar guardado un código que ya no es una opción válida.
 			formValues.tipo_documento = '';
-			// Interna = movimiento entre centros de costo propios -> Tipo se fuerza a 'transferencia' y
-			// Estado a 'consulta' (ver estadoActual más abajo), ambos quedan bloqueados (ver
-			// camposBloqueadosPorInterna en el template); Forma de Pago también se bloquea, sin forzarle
-			// valor. Al volver a Externa se desbloquea todo, dejando los valores como estén.
+			// Interna = movimiento entre centros de costo propios -> Tipo se fuerza a 'transferencia', que
+			// queda bloqueado (ver camposBloqueadosPorInterna en el template); Forma de Pago también se
+			// bloquea, sin forzarle valor. El badge "Consulta" (ver estadoActual más abajo) es solo una
+			// etiqueta visual — el estado real que se guarda sigue siendo 'activo' como cualquier
+			// transacción, cuenta para los saldos de inmediato (bug real corregido, ver
+			// resolveEstadoTransaccion en transacciones.service.ts). Al volver a Externa se desbloquea
+			// todo, dejando los valores como estén.
 			if (rawValue === 'interna') {
 				formValues.tipo = 'transferencia';
 			}
@@ -1326,11 +1329,15 @@
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(confirmTitle ?? (mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
 	const bloqueadoPorInterna = $derived(formValues.tipo_alcance === 'interna');
-	// Estado ya no es un <select> manual (ver transaccion.config.ts) — se calcula acá para el badge:
-	// 'consulta' mientras el Alcance sea Interna (preview inmediato, antes de guardar — el backend
-	// aplica exactamente la misma regla en resolveEstadoTransaccion), si no, el valor persistido
-	// (anulado se preserva hasta que un admin lo reactiva; una transacción nueva todavía sin guardar
-	// se asume 'activo').
+	// Estado ya no es un <select> manual (ver transaccion.config.ts) — se calcula acá PURAMENTE para el
+	// badge visual: 'consulta' mientras el Alcance sea Interna, si no, el valor persistido (anulado se
+	// preserva hasta que un admin lo reactiva; una transacción nueva todavía sin guardar se asume
+	// 'activo'). A diferencia de antes, esto YA NO refleja lo que el backend guarda de verdad en la
+	// columna `estado` — una Interna se guarda con 'activo' como cualquier transacción (ver
+	// resolveEstadoTransaccion en transacciones.service.ts, bug real corregido: antes el backend SÍ
+	// aplicaba esta misma regla, forzando 'consulta' de verdad, y por eso una Interna nunca contaba en
+	// ningún saldo del ERP). Esta variable queda deliberadamente desacoplada de `transaccion?.estado`
+	// para las Internas — es solo la etiqueta que el usuario espera seguir viendo.
 	const estadoActual = $derived(formValues.tipo_alcance === 'interna' ? 'consulta' : (transaccion?.estado ?? 'activo'));
 	// Cuenta Destino/Origen se vuelven un <select> de cuentas bancarias autorizadas (en vez de texto
 	// libre) en dos casos: (1) transacción Externa: en Ingreso, el dinero entrante debe ir a una
@@ -2043,9 +2050,10 @@
 
 	/** "Saldo actual" de la opción ya elegida (ver saldoSeleccionado) — a pedido explícito del usuario,
 	 * arranca oculto tras asteriscos y solo se revela al hacer clic encima; uno por campo (Cuenta Origen/
-	 * Destino, Centro de Costo Origen/Destino pueden estar los 4 visibles a la vez). Se reinicia a oculto
-	 * cada vez que cambia la opción elegida en ese campo (ver el {#key} en el template) — no se queda
-	 * "pegado" revelado al cambiar de cuenta/centro de costo. */
+	 * Destino, Centro de Costo Origen/Destino pueden estar los 4 visibles a la vez). Se mantiene revelado
+	 * u oculto aunque cambie la opción elegida en ese campo — a pedido explícito del usuario, revirtiendo
+	 * la decisión anterior de reiniciarlo a oculto en cada cambio: obligaba a hacer clic en "mostrar
+	 * saldo" una y otra vez mientras se prueban distintas cuentas/centros de costo en el mismo campo. */
 	let saldosRevelados = $state<Record<string, boolean>>({});
 
 	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo Origen/Destino en Ingreso+Externa:
@@ -2317,10 +2325,7 @@
 				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt) }))}
 				disabled={isDisabled}
 				hasError={!!fieldErrors[field.key]}
-				onchange={(v) => {
-					handleInput(field.key, v);
-					saldosRevelados = { ...saldosRevelados, [field.key]: false };
-				}}
+				onchange={(v) => handleInput(field.key, v)}
 			/>
 			{#if saldoElegido !== undefined}
 				<button
@@ -2524,7 +2529,7 @@
 									for="tr-comprobante"
 									ondragover={(e) => e.preventDefault()}
 									ondrop={onComprobanteDrop}
-									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
+									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna' ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
 								>
 									{#if localPreviewUrl}
 										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
@@ -2558,9 +2563,15 @@
 									{/if}
 									{#if comprobanteError}
 										<p class="text-xs text-red-600">{comprobanteError}</p>
+									{:else if formValues.tipo_alcance === 'interna'}
+										<!-- A pedido explícito del usuario: por ahora el boucher manual queda bloqueado
+										     para Transacción Interna (el comprobante autogenerado por el ERP alcanza) —
+										     más adelante se van a cargar bouchers antiguos, pero de forma masiva, no acá
+										     uno por uno al registrar. -->
+										<p class="text-xs text-slate-400">Bloqueado temporalmente para Transacción Interna — el comprobante autogenerado por el ERP es suficiente.</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
-									{:else if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
+									{:else if mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 										<p class="text-xs text-slate-400">Opcional: esta transacción ya emite su propio comprobante (ver botón abajo).</p>
 									{/if}
 								</div>
@@ -2570,7 +2581,7 @@
 									accept="image/*,application/pdf"
 									multiple={mode === 'create' && !onConfirm}
 									class="hidden"
-									disabled={bloqueadaPorAprobacion}
+									disabled={bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna'}
 									onchange={onComprobanteChange}
 								/>
 								</div>

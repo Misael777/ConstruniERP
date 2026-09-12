@@ -129,9 +129,13 @@ async function renderVoucherComoImagen(esCopia: boolean, datos: DatosComprobante
  * mientras la transacción sigue siendo un borrador (más liviano, nada que convertir todavía); recién se
  * convierte a PDF de verdad al guardar/cerrar la transacción (ver generarComprobanteTransferenciaInternaBase64,
  * que se sigue usando pero ahora se llama recién en ese momento — ver handleSubmit en
- * TransaccionModal.svelte). Pensado para abrirse en una pestaña nueva vía Blob URL. */
+ * TransaccionModal.svelte). Pensado para abrirse en una pestaña nueva vía Blob URL. Fondo del body en
+ * blanco (antes gris-azulado #e2e8f0) — a pedido explícito del usuario: si alguien imprime directo desde
+ * esta vista previa (Ctrl+P sobre el popup), un fondo de página completo gasta tinta de sobra en cada
+ * impresión. El PDF real (generarComprobanteTransferenciaInternaBase64/renderHtmlToPngDataUrl) ya usaba
+ * fondo blanco de por sí — esto solo alinea la vista previa con lo que de verdad se imprime/descarga. */
 export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO - TRANSFERENCIA INTERNA (borrador)</title><style>body{background:#e2e8f0;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO - TRANSFERENCIA INTERNA (borrador)</title><style>body{background:#ffffff;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
 }
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para
