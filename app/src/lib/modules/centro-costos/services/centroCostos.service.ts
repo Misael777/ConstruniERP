@@ -159,7 +159,8 @@ const COLUMNA_POR_TIPO: Record<EntidadCentroCosto, 'id_proyecto' | 'id_cliente' 
 const PREFIJO_CODIGO_MANUAL: Record<string, string> = {
 	obra: 'OBRA',
 	consultoria: 'CONS',
-	'bolsa general': 'BG'
+	'bolsa general': 'BG',
+	prestamo: 'PREST'
 };
 
 /** Genera el código de un centro de costo creado a mano — a pedido del usuario, el campo 'codigo'
@@ -240,25 +241,23 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		: query.order(sortField, { ascending: sortDir === 'asc' });
 
 	if (params.vinculado === true) {
-		// "Cuentas Internas" — proyecto queda fuera a propósito, ver doc de ListParams.vinculado.
-		query = query.or('id_cliente.not.is.null,id_proveedor.not.is.null,id_empleado.not.is.null');
+		// "Cuentas Internas" — a pedido explícito del usuario, TODOS los tipos que NO se muestran en
+		// "Centros de Costos" (ver el branch de abajo): cliente/proveedor/empleado/subcontratista. Antes
+		// se filtraba por las columnas de vínculo (id_cliente/id_proveedor/id_empleado not null) — mismo
+		// resultado hoy (esos 4 tipos son justo los únicos que las usan), pero filtrar por `tipo`
+		// directo mantiene esta pestaña como el complemento EXACTO de "Centros de Costos" sin depender
+		// de que las columnas de vínculo estén siempre completas.
+		query = query.in('tipo', ['cliente', 'proveedor', 'empleado', 'subcontratista']);
 	} else if (params.vinculado === false) {
-		// "Centros de Costos" — todos los creados a mano desde "Nuevo Centro de Costo" (los 4 tipos de
-		// formOptions: obra/consultoría/bolsa general/otro — antes solo se dejaba pasar 'bolsa general'
-		// por error, dejando fuera obra/consultoría pese a que el propio formulario los ofrece como
-		// opción; 'otro' se sumó después, ver formOptions en centroCostos.config.ts — cualquier otro
-		// selector que filtre "centros creados a mano" debe incluir 'otro' también, ver nota en
-		// getCentroCostoOptionsSoloCentros en transacciones.service.ts) MÁS los vinculados a un proyecto que YA
-		// es una venta cerrada (estado_proyecto='venta_cerrada', a pedido del usuario: un proyecto todavía
-		// en negociación no cuenta como centro de costo activo todavía). PostgREST no permite mezclar en
-		// un solo .or() una condición de columna propia (tipo) con una del embed
-		// (proyecto.estado_proyecto), así que se resuelve en dos pasos: primero se traen los ids de
-		// proyecto ya cerrados, luego se filtra centro_costo por esos ids O tipo manual.
-		const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
-		if (errorCerrados) throw errorCerrados;
-		const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
-		const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
-		query = query.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,${idProyectoFilter}`);
+		// "Centros de Costos" — a pedido explícito del usuario, TODOS los tipos: proyecto/obra/
+		// consultoria/otro/prestamo/bolsa general (obra/consultoria y bolsa general son los creados a
+		// mano desde "Nuevo Centro de Costo", ver formOptions en centroCostos.config.ts; proyecto son los
+		// vinculados a una venta real, cualquiera sea su estado — antes se exigía
+		// estado_proyecto='venta_cerrada', se quitó a pedido explícito del usuario: ahora un proyecto
+		// todavía en negociación SÍ cuenta como centro de costo). Cualquier otro selector que filtre
+		// "Centros de Costos" (ver getCentroCostoOptionsSoloCentros en transacciones.service.ts) debe
+		// usar esta misma lista de tipos.
+		query = query.or('tipo.eq.proyecto,tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,tipo.eq.prestamo');
 		query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	}
 

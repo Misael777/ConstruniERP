@@ -540,6 +540,11 @@ export async function cerrarVentaAprobada(
 					fecha: params.adelantoFecha,
 					monto_total: Number(params.adelantoMonto),
 					tipo: 'ingreso',
+					// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+					// porque adelantoMonto siempre llega en Soles desde NuevaVentaModal.svelte. Sin esto,
+					// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
+					// transacción del adelanto ni el cierre de la venta se completaban.
+					tipo_moneda: 'soles',
 					estado: 'activo',
 					comprobante_url: params.comprobanteUrl,
 					descripcion: `Adelanto inicial - ${params.proyectoNombre} (proyecto #${params.idProyecto})`

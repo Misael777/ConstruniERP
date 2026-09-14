@@ -72,6 +72,14 @@
 		fieldErrors = validatePayload(FIELDS_CONFIG, formValues);
 	}
 
+	/** Símbolo de moneda a pedido explícito del usuario, para el prefijo de "Saldo Inicial" — Dólares
+	 * '$', Soles 'S/.'. 'otro' (o sin elegir todavía) no tiene un símbolo fijo, se deja vacío. */
+	function simboloMoneda(tipoMoneda: string): string {
+		if (tipoMoneda === 'dolares') return '$';
+		if (tipoMoneda === 'soles') return 'S/.';
+		return '';
+	}
+
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
 	const title = $derived(mode === 'create' ? 'Nueva Cuenta Bancaria' : 'Editar Cuenta Bancaria');
 
@@ -139,6 +147,28 @@
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
+							{:else if field.key === 'saldo_inicial'}
+								<!-- A pedido explícito del usuario: prefijo con el símbolo real de la moneda
+								     elegida en "Tipo de Moneda" (Dólares '$', Soles 'S/.') — antes este campo se
+								     mostraba sin ningún símbolo, sin importar la moneda de la cuenta. -->
+								<div class="relative">
+									{#if simboloMoneda(formValues.tipo_moneda)}
+										<span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 pointer-events-none">
+											{simboloMoneda(formValues.tipo_moneda)}
+										</span>
+									{/if}
+									<input
+										id={`cb-${field.key}`}
+										name={field.key}
+										type="text"
+										value={formValues[field.key]}
+										maxlength={field.maxLength}
+										placeholder={field.placeholder}
+										{disabled}
+										oninput={(e) => handleInput(field.key, (e.target as HTMLInputElement).value)}
+										class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${simboloMoneda(formValues.tipo_moneda) ? 'pl-9' : ''} ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+									/>
+								</div>
 							{:else}
 								<input
 									id={`cb-${field.key}`}

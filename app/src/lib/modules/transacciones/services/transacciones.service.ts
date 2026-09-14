@@ -323,10 +323,15 @@ async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: 
 	}, 0);
 }
 
-/** Punto de entrada único, llamado desde createTransaccion/updateTransaccion. Devuelve `ok:false` con
- * un mensaje accionable (qué recurso falla, cuánto hay vs. cuánto se pide, y el siguiente paso —
- * registrar un Financiamiento/Ingreso) apenas para no dejar al usuario con solo un "no se puede". */
-async function validarSaldoSuficiente(
+/** Llamado desde updateTransaccion (createTransaccion confía en el mismo chequeo que ya hace
+ * fn_crear_transaccion bajo lock, ver financial_integrity_rpc_migration.sql) y, exportada, también
+ * desde TransaccionModal.svelte para el flujo "Préstamo Otorgado" (ver esPrestamoOtorgadoEgreso): ahí
+ * se usa para avisar ANTES de redirigir a Cuentas por Cobrar — a pedido explícito del usuario, que
+ * llenaba toda esa Cuenta por Cobrar (cuotas, fechas, etc.) para recién enterarse del saldo
+ * insuficiente al guardar, muy tarde. Devuelve `ok:false` con un mensaje accionable (qué recurso
+ * falla, cuánto hay vs. cuánto se pide, y el siguiente paso — registrar un Financiamiento/Ingreso)
+ * apenas para no dejar al usuario con solo un "no se puede". */
+export async function validarSaldoSuficiente(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	excluirIdTransaccion?: number
@@ -882,17 +887,18 @@ export async function getCentroCostoOptionsClientes(client: SupabaseClient): Pro
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
-/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro' o 'bolsa general' (Corporativo) —
- * para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en Ingreso+Externa, a
- * pedido explícito del usuario. Versiones anteriores de este mismo campo mostraron: solo clientes:
- * todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el mismo grupo "Centros de
- * Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta cerrada, ver
- * getCentroCostoOptionsSoloCentros) — esta es la definición vigente. */
+/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro', 'bolsa general' (Corporativo) o
+ * 'prestamo' — para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en
+ * Ingreso+Externa, a pedido explícito del usuario. Versiones anteriores de este mismo campo
+ * mostraron: solo clientes; todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el
+ * mismo grupo "Centros de Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta
+ * cerrada, ver getCentroCostoOptionsSoloCentros); clientes+otro+bolsa general (sin 'prestamo', que
+ * todavía no existía como tipo) — esta es la definición vigente. */
 export async function getCentroCostoOptionsClientesYCorporativoUOtro(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
-		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general')
+		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general,tipo.eq.prestamo')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
@@ -934,23 +940,18 @@ export async function getCentroCostoProductoLookup(client: SupabaseClient): Prom
 
 /** Para "Destino de Transacción" en Externa + Egreso (a pedido del usuario) — misma definición
  * EXACTA de "Centro de Costos" (a diferencia de "Cuentas Internas") que ya usa el submódulo
- * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los 4 tipos creados a
- * mano (obra/consultoría/bolsa general/otro, ver formOptions en centroCostos.config.ts) MÁS los
- * vinculados a un proyecto que YA es una venta cerrada. Excluye "Cuentas Internas" (cliente/
- * proveedor/empleado), proyectos aún en negociación, y — a pedido explícito del usuario — cualquier
- * centro dado de baja (estado != 'activo', ver darDeBajaCentroCostoDeEntidad en
- * centroCostos.service.ts). */
+ * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los tipos creados a
+ * mano (obra/consultoría/bolsa general/otro/prestamo, ver formOptions en centroCostos.config.ts) MÁS
+ * TODOS los vinculados a un proyecto (tipo='proyecto'), sin importar su estado de venta — a pedido
+ * explícito del usuario ya no se exige venta_cerrada. Excluye "Cuentas Internas" (cliente/
+ * proveedor/empleado), y — a pedido explícito del usuario — cualquier centro dado de baja
+ * (estado != 'activo', ver darDeBajaCentroCostoDeEntidad en centroCostos.service.ts). */
 export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
-	if (errorCerrados) throw errorCerrados;
-	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
-	const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
-
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.eq('estado', 'activo')
-		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,${idProyectoFilter}`)
+		.or('tipo.eq.proyecto,tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,tipo.eq.prestamo')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));

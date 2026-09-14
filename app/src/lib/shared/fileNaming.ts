@@ -9,9 +9,18 @@
  */
 
 /** Sanitiza un segmento para usar en un nombre de archivo: solo letras, números, punto, guion y
- * guion bajo — espacios colapsados a "_", el resto de caracteres removidos. */
+ * guion bajo — espacios colapsados a "_", el resto de caracteres removidos.
+ *
+ * `.normalize('NFD').replace(/[̀-ͯ]/g, '')` separa cada letra acentuada en su letra base +
+ * su marca de acento como un carácter Unicode aparte, y luego borra solo esa marca — así "Ancón"
+ * queda "Ancon" (conserva la vocal) en vez de que el filtro `[^a-zA-Z0-9._-]` de abajo borre
+ * directamente la "ó" completa, dejando "Ancn". Bug real reportado por el usuario: "Código de
+ * proyecto" (ver codigoProyecto.ts, que usa esta misma función para el segmento de distrito) mostraba
+ * el distrito sin sus vocales acentuadas ni la "ñ". */
 export function sanitizeFileSegment(value: string): string {
 	return value
+		.normalize('NFD')
+		.replace(/[̀-ͯ]/g, '')
 		.trim()
 		.replace(/\s+/g, '_')
 		.replace(/[^a-zA-Z0-9._-]/g, '')

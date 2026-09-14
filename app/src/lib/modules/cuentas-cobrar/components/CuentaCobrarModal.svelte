@@ -270,6 +270,18 @@
 	// al campo "Valor de venta" y sus vecinos (Monto en Dólares/Tipo de Cambio).
 	const mostrarResumenVenta = $derived(!!formValues.monto && !fieldErrors.monto);
 
+	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo en el flujo "Préstamo Otorgado"
+	 * (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): a pedido explícito del usuario,
+	 * "Centro de Costo" pasa a llamarse "Prestamista" (quién presta, nuestro propio fondo) y "Proyecto"
+	 * a "Prestatario" (a quién se le presta — mismo criterio que labelFor en TransaccionModal.svelte). */
+	function labelFor(field: (typeof formFields)[number]): string {
+		if (clienteBloqueado) {
+			if (field.key === 'id_centro_costo') return 'Prestamista';
+			if (field.key === 'id_proyecto') return 'Prestatario';
+		}
+		return field.label;
+	}
+
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
 		// Flujo "Préstamo Otorgado" (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): "Centro
@@ -340,11 +352,26 @@
 					{#each formFields as field (field.key)}
 						<div>
 							<label for={`ccb-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
-								{field.label}
+								{labelFor(field)}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.tipo === 'select' || field.options}
+							{#if field.key === 'id_proyecto' && clienteBloqueado}
+								<!-- A pedido explícito del usuario: el campo "Prestatario" en sí debe MOSTRAR el
+								     nombre real del prestatario, no solo un texto de ayuda al costado — pero
+								     "Proyecto" (id_proyecto) es una FK real a la tabla `proyecto`, no a
+								     `centro_costo`, así que no puede GUARDAR ese valor (ver nota más abajo). Se
+								     reemplaza el <select> normal por un input de solo texto, deshabilitado, que
+								     muestra el nombre — nunca se envía como id_proyecto (formValues.id_proyecto
+								     se queda vacío/null, ver buildInitialValues/handleSubmit, sin tocar). -->
+								<input
+									id={`ccb-${field.key}`}
+									type="text"
+									value={prestamoDestinoNombre}
+									disabled
+									class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-slate-100 text-slate-600 disabled:cursor-not-allowed"
+								/>
+							{:else if field.tipo === 'select' || field.options}
 								<div class="relative">
 									{#if field.optionColors}
 										<span
@@ -389,12 +416,10 @@
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
 							{:else if field.key === 'id_proyecto' && clienteBloqueado && prestamoDestinoNombre}
-								<!-- A pedido explícito del usuario: "Proyecto" no puede guardar el Centro de Costo
-								     Destino real (el prestatario) — es una FK real a la tabla `proyecto`, no a
-								     `centro_costo` (ver la nota en finanzas/cuentas-cobrar/+page.svelte). Se muestra
-								     acá solo como texto informativo, junto con lo que ya queda guardado en
-								     Observaciones — no se guarda como valor de este campo. -->
-								<p class="mt-1 text-xs font-medium text-blue-600">Prestatario real: {prestamoDestinoNombre} (también en Observaciones)</p>
+								<!-- El input de arriba ya MUESTRA el nombre (a pedido explícito del usuario) — acá
+								     solo se aclara que ese valor no viaja como id_proyecto (sigue siendo una FK
+								     real a la tabla `proyecto`, no a `centro_costo`), sino en Observaciones. -->
+								<p class="mt-1 text-xs text-slate-400">También queda guardado en Observaciones.</p>
 							{:else if field.helpText}
 								<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
 							{/if}

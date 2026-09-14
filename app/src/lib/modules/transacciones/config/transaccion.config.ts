@@ -384,6 +384,59 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: true
 	},
 	{
+		// A pedido explícito del usuario: 'soles' por defecto (ver buildInitialValues en
+		// TransaccionModal.svelte) — requiere haber corrido transaccion_moneda_migration.sql (agrega esta
+		// columna, ver ese archivo) antes de poder guardarse de verdad.
+		key: 'tipo_moneda',
+		label: 'Tipo de Moneda',
+		tipo: 'select',
+		required: true,
+		options: [
+			{ value: 'soles', label: 'Soles' },
+			{ value: 'dolares', label: 'Dólares' }
+		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Solo aplica (visible y obligatorio) si Tipo de Moneda es Dólares — oculto por completo en
+		// Soles (ver TransaccionModal.svelte, esta condición de visibilidad vive ahí, no acá, porque
+		// este campo no se renderiza vía el motor genérico de fieldBlock).
+		key: 'tipo_cambio',
+		label: 'Tipo de Cambio',
+		tipo: 'number',
+		min: 0.01,
+		mask: (raw) => raw.replace(/[^\d.]/g, '').replace(/(\..{2}).+/, '$1'), // hasta 2 decimales
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '3.75',
+		disabledWhen: (values) => String(values.tipo_moneda ?? 'soles') !== 'dolares',
+		requiredWhen: (values) => String(values.tipo_moneda ?? 'soles') === 'dolares',
+		helpText: 'Tipo de cambio del día (S/ por US$). Obligatorio si la moneda es Dólares.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Calculado: Monto (reconocido) × Tipo de Cambio — a pedido explícito del usuario, solo tiene
+		// sentido (y solo se muestra) si Tipo de Moneda es Dólares. Se recalcula solo (ver el $effect en
+		// TransaccionModal.svelte, que no usa `computeValue` porque este campo no pasa por el motor
+		// genérico de fieldBlock, igual que tipo_cambio arriba) — no es editable a mano.
+		key: 'monto_convertido',
+		label: 'Monto Convertido',
+		tipo: 'currency',
+		// disabledValue como función (no un valor fijo): buildWritablePayload guarda EXACTAMENTE lo que
+		// ya haya en formValues.monto_convertido (calculado por el $effect en TransaccionModal.svelte),
+		// nunca null — a diferencia de un disabledWhen sin disabledValue, que sí pisaría a null.
+		disabledWhen: () => true,
+		disabledValue: (values) => (values.monto_convertido as string | number | null | undefined) ?? null,
+		helpText: 'Se calcula solo: Monto (reconocido) × Tipo de Cambio.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
 		// A pedido del usuario: se lee sola del boucher vía OCR + regex, sin IA (ver ocrComprobante.ts),
 		// mismo criterio que 'fecha'/'monto_total' — widget "reconocido" hecho a mano en
 		// TransaccionModal.svelte (no el <select>/<input> genérico), junto a esos dos.
