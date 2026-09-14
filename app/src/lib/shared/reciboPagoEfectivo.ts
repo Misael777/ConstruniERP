@@ -188,9 +188,13 @@ async function renderVoucherComoImagen(esCopia: boolean, datos: DatosReciboPago,
 /** Arma el recibo como HTML autocontenido, sin pasar por html2canvas/jsPDF — mismo criterio que
  * construirHtmlCompleto en comprobanteTransferenciaInterna.ts/reciboPagoProveedor.ts: mientras la
  * transacción sigue siendo un borrador, el recibo queda en HTML; recién se convierte a PDF de verdad al
- * guardar/cerrar (ver handleSubmit en TransaccionModal.svelte). */
+ * guardar/cerrar (ver handleSubmit en TransaccionModal.svelte). Fondo del body en blanco (antes gris-
+ * azulado #e2e8f0) — a pedido explícito del usuario: si alguien imprime directo desde esta vista previa
+ * (Ctrl+P sobre el popup), un fondo de página completo gasta tinta de sobra en cada impresión. El PDF
+ * real (generarReciboPagoBase64/renderHtmlToPngDataUrl) ya usaba fondo blanco de por sí — esto solo
+ * alinea la vista previa con lo que de verdad se imprime/descarga. */
 export function construirHtmlCompleto(datos: DatosReciboPago): string {
-	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO DE PAGO (borrador)</title><style>body{background:#e2e8f0;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>RECIBO DE PAGO (borrador)</title><style>body{background:#ffffff;margin:0;padding:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}${ESTILOS_VOUCHER_BASE}.voucher-copia{max-width:${ANCHO_PLANTILLA_PX}px;margin:0 auto 16px;}</style></head><body>${construirVoucherHtml(false, datos)}${construirVoucherHtml(true, datos)}</body></html>`;
 }
 
 /** Arma el PDF completo (Original + Copia en una sola hoja) y lo devuelve en base64, listo para

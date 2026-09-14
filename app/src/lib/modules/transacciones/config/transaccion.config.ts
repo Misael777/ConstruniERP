@@ -643,10 +643,17 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		// Ya NO es un <select> manual (a pedido del usuario) — se calcula solo server-side
-		// (resolveEstadoTransaccion en transacciones.service.ts): 'consulta' mientras el Alcance sea
-		// Interna, 'anulado'/'activo' vía los botones Anular/Reactivar (solo admin, ver
-		// TransaccionModal.svelte). showInForm:false lo saca de validatePayload/buildWritablePayload —
-		// el motor genérico ya no lo toca, solo lo hacen esas dos vías explícitas.
+		// (resolveEstadoTransaccion en transacciones.service.ts): 'activo' para cualquier transacción
+		// (incluida una Interna — bug real corregido: antes se forzaba 'consulta' para Interna, y como
+		// más de 25 consultas de saldo del ERP filtran estado='activo', su dinero nunca contaba en
+		// ningún saldo), 'anulado' vía los botones Anular/Reactivar (solo admin, ver
+		// TransaccionModal.svelte). El badge "Consulta" que distingue una Interna en la lista/el modal
+		// ya no se lee de este campo — se deriva de tipo_alcance='interna' directamente (ver
+		// tranzacciones/+page.svelte y estadoActual en TransaccionModal.svelte). 'consulta' se deja
+		// abajo como opción legal solo por si queda alguna fila vieja sin backfillear (ver
+		// transaccion_interna_estado_activo_migration.sql). showInForm:false lo saca de
+		// validatePayload/buildWritablePayload — el motor genérico ya no lo toca, solo lo hacen esas dos
+		// vías explícitas.
 		key: 'estado',
 		label: 'Estado',
 		tipo: 'select',

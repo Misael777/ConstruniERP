@@ -281,7 +281,14 @@
 				sortDir,
 				aprobado: filtroCriterio === 'aprobado' ? true : filtroCriterio === 'desaprobado' ? false : undefined,
 				fecha: filtroCriterio === 'fecha' ? filtroFecha || undefined : undefined,
-				estado: filtroCriterio === 'estado' ? filtroEstado || undefined : undefined,
+				// "Consulta" del dropdown de Estado siempre representó, en la práctica, "las Transacciones
+				// Internas" (antes eran la única fila con estado='consulta') — ahora que Interna cuenta
+				// como 'activo' igual que cualquier transacción (ver resolveEstadoTransaccion en
+				// transacciones.service.ts, bug real reportado por el usuario), esa opción filtra por
+				// tipo_alcance en vez de por estado; Activo/Anulado siguen filtrando por estado igual que
+				// siempre.
+				estado: filtroCriterio === 'estado' && filtroEstado !== 'consulta' ? filtroEstado || undefined : undefined,
+				tipoAlcance: filtroCriterio === 'estado' && filtroEstado === 'consulta' ? 'interna' : undefined,
 				tipo: filtroCriterio === 'ingreso' ? 'ingreso' : filtroCriterio === 'egreso' ? 'egreso' : undefined
 			});
 			items = result.items;
@@ -809,7 +816,17 @@
 								{getOptionLabel(tipoField, item.tipo)}
 							</span>
 						{/if}
-						{#if item.estado}
+						{#if item.tipo_alcance === 'interna' && item.estado !== 'anulado'}
+							<!-- "Consulta" es un badge puramente visual para distinguir una Transacción Interna —
+							     ya NO se lee de item.estado (ese campo pasó a significar solo activo/anulado, ver
+							     resolveEstadoTransaccion en transacciones.service.ts, bug real reportado por el
+							     usuario: antes item.estado SÍ era 'consulta' para toda Interna, y por eso su
+							     dinero quedaba excluido de todos los saldos del ERP). Mismo estilo gris que
+							     mostraba por default (estadoBadgeClass no tiene entrada propia para 'consulta'). -->
+							<span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">
+								Consulta
+							</span>
+						{:else if item.estado}
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
