@@ -8,7 +8,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import {
 		getSolicitudesPendientes,
 		getSolicitudesResueltas,
@@ -25,6 +25,15 @@
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
+	// Módulo de Tickets (ver Documentacion/PlanModuloTicketsYReleases.md) — a pedido explícito del
+	// usuario: los tickets nuevos deben avisar al rol developer. Se agrega como una sección
+	// INDEPENDIENTE dentro de esta misma campanita (propio estado, propio canal Realtime), sin tocar
+	// nada del mecanismo de solicitud_aprobacion de arriba — evita el riesgo de mezclar el bookkeeping
+	// de "visto" de ambos sistemas, que no comparten esquema. Simplificación consciente: a diferencia
+	// de arriba, esta sección no distingue "ya visto"/"no visto" ítem por ítem — solo agrupa por
+	// estado, suficiente para que developer/admin y el reportante SEPAN que hay algo pendiente sin
+	// tener que abrir el módulo de Tickets a cada rato.
+	import { getTicketsDeveloper, getMisTickets, type Ticket } from '$lib/modules/tickets/services/tickets.service';
 
 	// A pedido del usuario ("casi en tiempo real, sin saturar"): el mecanismo PRINCIPAL ya no es
 	// polling — es una suscripción de Supabase Realtime (websocket) a solicitud_aprobacion (ver
@@ -44,6 +53,27 @@
 	// Avisos informativos para el admin: ventas cerradas directo por su asesor, sin pasar por
 	// aprobación (a pedido del usuario) — de solo lectura, sin Aprobar/Rechazar.
 	let avisos = $state<SolicitudAprobacion[]>([]);
+
+	// Módulo de Tickets — ver import de arriba. ticketsPendientes: para developer/admin, lo que
+	// necesita su atención (recién reportado o ya resuelto y esperando aprobación). misTicketsAbiertos:
+	// para cualquier otro usuario, sus propios tickets que todavía no llegaron a 'cerrado'.
+	let ticketsPendientes = $state<Ticket[]>([]);
+	let misTicketsAbiertos = $state<Ticket[]>([]);
+	let ticketRealtimeChannel: RealtimeChannel | null = null;
+
+	async function cargarTickets() {
+		try {
+			if (hasPermiso('ver_soporte_developer')) {
+				const todos = await getTicketsDeveloper(supabase);
+				ticketsPendientes = todos.filter((t) => t.estado === 'abierto' || t.estado === 'resuelto');
+			} else {
+				const mios = await getMisTickets(supabase);
+				misTicketsAbiertos = mios.filter((t) => t.estado !== 'cerrado');
+			}
+		} catch (err) {
+			console.warn('[NotificacionesBell] No se pudieron cargar los tickets:', err);
+		}
+	}
 
 	let isLoading = $state(false);
 	let isOpen = $state(false);
@@ -344,6 +374,7 @@
 		try {
 			if (isAdmin()) await cargarAdmin();
 			else await cargarMias();
+			await cargarTickets();
 		} finally {
 			isCargando = false;
 		}
@@ -373,6 +404,15 @@
 		// Respaldo: si el websocket se corta (red inestable, el dispositivo estuvo dormido, etc.) esto
 		// igual termina trayendo lo que se perdió, aunque con más demora.
 		pollIntervalId = setInterval(cargar, POLL_INTERVAL_MS);
+
+		// Canal Realtime independiente para el módulo de Tickets (ver ticket_module_migration.sql,
+		// sección Realtime) — separado del de solicitud_aprobacion a propósito, mismo criterio de "no
+		// mezclar bookkeeping" del import de arriba.
+		ticketRealtimeChannel = supabase
+			.channel('ticket_changes')
+			.on('postgres_changes', { event: '*', schema: 'public', table: 'ticket' }, () => cargarTickets())
+			.on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_comentario' }, () => cargarTickets())
+			.subscribe();
 	});
 
 	onDestroy(() => {
@@ -382,6 +422,7 @@
 		logNotif('Campanita desmontada — se detiene el polling y la suscripción Realtime.');
 		if (pollIntervalId) clearInterval(pollIntervalId);
 		if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+		if (ticketRealtimeChannel) supabase.removeChannel(ticketRealtimeChannel);
 	});
 
 	// Admin: el badge suma pendientes (necesitan acción) + avisos informativos no vistos (no
@@ -489,6 +530,20 @@
 
 			{#if errorMsg}
 				<div class="mx-4 mt-3 p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">{errorMsg}</div>
+			{/if}
+
+			<!-- Módulo de Tickets (ver Documentacion/PlanModuloTicketsYReleases.md) — sección propia,
+			     independiente de solicitud_aprobacion de arriba/abajo, visible tanto para developer
+			     (que no es isAdmin()) como para admin, y para cualquier otro usuario con sus propios
+			     tickets. -->
+			{#if hasPermiso('ver_soporte_developer') && ticketsPendientes.length > 0}
+				<a href="/soporte/developer" class="block mx-4 mt-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 hover:bg-blue-100 transition-colors">
+					<span class="font-semibold">{ticketsPendientes.length} ticket{ticketsPendientes.length === 1 ? '' : 's'}</span> pendiente{ticketsPendientes.length === 1 ? '' : 's'} en el Panel Developer.
+				</a>
+			{:else if !hasPermiso('ver_soporte_developer') && misTicketsAbiertos.length > 0}
+				<a href="/soporte/tickets" class="block mx-4 mt-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 hover:bg-blue-100 transition-colors">
+					Tienes <span class="font-semibold">{misTicketsAbiertos.length} ticket{misTicketsAbiertos.length === 1 ? '' : 's'}</span> en seguimiento — clic para ver el progreso.
+				</a>
 			{/if}
 
 			{#if isLoading}

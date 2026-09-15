@@ -14,6 +14,8 @@
     "fs:default",
     "fs:allow-write-text-file",
     "fs:allow-write-file",
-    "share-target:default"
+    "share-target:default",
+    "os:default",
+    "opener:default"
   ]
 }

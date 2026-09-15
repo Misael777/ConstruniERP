@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-updater",
+  "description": "Auto-update (Windows/macOS/Linux) — el plugin de updater no compila para Android/iOS, ver Cargo.toml y lib.rs. Módulo de Tickets/Releases, ver Documentacion/MecanismoCICD.md.",
+  "platforms": ["windows", "macOS", "linux"],
+  "windows": ["main"],
+  "permissions": [
+    "updater:default",
+    "process:default"
+  ]
+}

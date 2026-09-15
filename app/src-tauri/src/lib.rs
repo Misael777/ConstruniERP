@@ -383,11 +383,28 @@ fn instanciar_plantilla(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_share_target::init())
+        // Módulo de Tickets/Releases (ver Documentacion/MecanismoCICD.md) — tauri-plugin-os es
+        // cross-platform, lo usa BotonActualizar.svelte para saber si mostrar el flujo de Windows
+        // (auto-update) o el de Android (descarga de Drive + instalación manual). tauri-plugin-opener
+        // (también cross-platform) es lo que en Android invoca el instalador nativo sobre el APK ya
+        // descargado.
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // El plugin de auto-update (tauri-plugin-updater) y el de relanzar la app tras instalar
+    // (tauri-plugin-process) son SOLO de escritorio — no compilan para Android/iOS, coincide con el
+    // diseño: Android nunca los necesita, usa el flujo de Drive en su lugar.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
