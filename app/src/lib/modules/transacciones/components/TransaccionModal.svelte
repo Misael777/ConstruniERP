@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
@@ -83,7 +83,8 @@
 		confirmTitle = null,
 		confirmButtonLabel = null,
 		lockedFields = [],
-		initialComprobanteFile = null
+		initialComprobanteFile = null,
+		forceReadOnly = false
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
@@ -111,6 +112,10 @@
 		 * dispara el reconocimiento automático de Fecha/Monto igual). Solo aplica al abrir el modal en
 		 * mode='create'; se ignora en cualquier otro caso. */
 		initialComprobanteFile?: File | null;
+		/** "Modo de consulta" (ver botón "Ver" en movimientos-caja/+page.svelte) — abre en `mode:'edit'`
+		 * con todos los campos deshabilitados y sin botón de Guardar, igual que una transacción aprobada
+		 * (ver bloqueadaPorAprobacion), pero sin depender de que `transaccion.aprobado` sea real. */
+		forceReadOnly?: boolean;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -182,7 +187,12 @@
 	// para volver a editarla hay que quitar la aprobación primero (ver handleDesaprobar más abajo, esa
 	// acción sigue siendo admin-only). Ver aprobarTransaccion/desaprobarTransaccion y
 	// BLOQUEADO_POR_APROBACION en transacciones.service.ts.
-	const bloqueadaPorAprobacion = $derived(mode === 'edit' && !!transaccion?.aprobado);
+	// forceReadOnly (ver prop más abajo): "modo de consulta" desde el botón "Ver" (ojito) en
+	// movimientos-caja/+page.svelte — a pedido explícito del usuario, cualquier transacción (aprobada o
+	// no) se puede abrir solo para verla, sin exponer el botón de Editar/Guardar. Se suma con el OR al
+	// bloqueo por aprobación en vez de reemplazarlo, así toda la cascada de `disabled={bloqueadaPorAprobacion}`
+	// que ya recorre el formulario entero queda gratis, sin tocar cada campo uno por uno.
+	const bloqueadaPorAprobacion = $derived(forceReadOnly || (mode === 'edit' && !!transaccion?.aprobado));
 
 	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, a pedido del usuario (ver texto de ayuda del dropzone)
 
@@ -1327,7 +1337,7 @@
 	}
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
-	const title = $derived(confirmTitle ?? (mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
+	const title = $derived(confirmTitle ?? (forceReadOnly ? 'Consultar Transacción' : mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
 	const bloqueadoPorInterna = $derived(formValues.tipo_alcance === 'interna');
 	// Estado ya no es un <select> manual (ver transaccion.config.ts) — se calcula acá PURAMENTE para el
 	// badge visual: 'consulta' mientras el Alcance sea Interna, si no, el valor persistido (anulado se
@@ -2752,13 +2762,22 @@
 									<ShieldCheck size={16} class="shrink-0" />
 									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
 									Esta transacción está bloqueada y no se puede editar mientras esté aprobada.
-									{#if isAdmin()}Para editarla, quita la aprobación primero.{/if}
+									{#if isAdmin() && !forceReadOnly}Para editarla, quita la aprobación primero.{/if}
 								</span>
-								{#if isAdmin()}
+								{#if isAdmin() && !forceReadOnly}
 									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
 										<ShieldOff size={14} /> Quitar aprobación
 									</button>
 								{/if}
+							</div>
+						{:else if forceReadOnly}
+							<!-- "Modo de consulta" (ver botón "Ver" en movimientos-caja/+page.svelte) — misma idea
+							     que el banner de "aprobada" de arriba, pero para una transacción que NO está
+							     aprobada: sin este aviso, el usuario vería todos los campos deshabilitados sin
+							     ninguna explicación de por qué (bloqueadaPorAprobacion no distingue el motivo). -->
+							<div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-center gap-1.5">
+								<Eye size={16} class="shrink-0" />
+								Estás viendo esta transacción en modo de consulta (solo lectura).
 							</div>
 						{:else if isAdmin()}
 							<button
@@ -3924,7 +3943,7 @@
 
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-						Cancelar
+						{forceReadOnly ? 'Cerrar' : 'Cancelar'}
 					</button>
 					{#if !bloqueadaPorAprobacion}
 						<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">

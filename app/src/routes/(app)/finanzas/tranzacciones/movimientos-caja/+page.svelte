@@ -3,11 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins } from '@lucide/svelte';
+	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins, Eye, ChevronDown } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { getCentroCostoOptions, labelPorCodigoMedioPago } from '$lib/modules/transacciones/services/transacciones.service';
+	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja, type FilaMovimiento, type TipoMovimiento } from '$lib/modules/transacciones/services/movimientosCaja.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	// Panel 100% sobre `transaccion` (Supabase anon key, client-side) — a pedido explícito del usuario:
@@ -83,7 +86,9 @@
 				desde: desde || '1970-01-01',
 				hasta: hasta || new Date().toISOString().slice(0, 10),
 				idCentroCosto: idCentroCosto ? Number(idCentroCosto) : undefined,
+				numeroCuentaBanco: numeroCuentaBanco || undefined,
 				tipo: tipoFiltro || undefined,
+				soloAprobado: estadoFiltro === 'aprobado' ? true : estadoFiltro === 'pendiente' ? false : undefined,
 				search: search || undefined
 			});
 			ingresosTotal = resultado.ingresosTotal;
@@ -112,13 +117,58 @@
 	}
 
 	let centroCostoOptions = $state<FieldOption[]>([]);
+	let cuentaBancoOptions = $state<FieldOption[]>([]);
 	let idCentroCosto = $state('');
+	/** N° de cuenta bancaria (cuenta_banco.numero_cuenta) — filtra por Origen O Destino, ver
+	 * numeroCuentaBanco en movimientosCaja.service.ts. Un solo estado alimenta DOS controles (el
+	 * selector prominente del encabezado y el filtro "Cuenta Bancaria" de la barra), a pedido explícito
+	 * del usuario — ambos quedan siempre sincronizados entre sí. */
+	let numeroCuentaBanco = $state('');
 	let tipoFiltro = $state<TipoMovimiento | ''>('');
+	/** Filtra por `transaccion.aprobado` (ver soloAprobado en movimientosCaja.service.ts) — a pedido
+	 * explícito del usuario, para encontrar rápido los movimientos con "documento de pago pendiente"
+	 * (Estado='Pendiente' en la columna de la tabla). */
+	let estadoFiltro = $state<'' | 'aprobado' | 'pendiente'>('');
 	let desde = $state('');
 	let hasta = $state('');
 	let search = $state('');
 	let searchInput = $state('');
 	let debounceTimer: ReturnType<typeof setTimeout>;
+
+	/** "Titular - N° cuenta" (ver getCuentaBancoOptions) partido en dos líneas para el selector
+	 * prominente del encabezado (título en negrita + N° de cuenta en verde debajo, a pedido explícito
+	 * del usuario) — mismo criterio de split que centroCostoNombre en tranzacciones/+page.svelte. */
+	const cuentaBancoSeleccionada = $derived(cuentaBancoOptions.find((o) => o.value === numeroCuentaBanco) ?? null);
+	function tituloCuentaBanco(opt: FieldOption): string {
+		const idx = opt.label.indexOf(' - ');
+		return idx === -1 ? opt.label : opt.label.slice(0, idx);
+	}
+
+	// Modal de "Ver" (ojito) — abre CUALQUIER transacción en modo de consulta (forceReadOnly, ver
+	// TransaccionModal.svelte), sin exponer Editar/Guardar. dynamicOptions reutiliza las listas COMPLETAS
+	// ya cargadas para los filtros de esta misma página (centroCostoOptions/cuentaBancoOptions) en vez de
+	// replicar las listas especializadas (por proyecto/externos) que sí necesita el alta/edición
+	// interactiva en tranzacciones/+page.svelte — de sobra para renderizar bien un formulario 100%
+	// deshabilitado, que nunca ofrece elegir un valor nuevo.
+	let viewModalOpen = $state(false);
+	let viewingTransaccion = $state<Transaccion | null>(null);
+	const viewDynamicOptions = $derived({
+		id_centro_costo_origen: centroCostoOptions,
+		id_centro_costo_destino: centroCostoOptions,
+		id_centro_costo_origen_externo: centroCostoOptions,
+		id_centro_costo_destino_externo: centroCostoOptions,
+		id_centro_costo_destino_solo_centros: centroCostoOptions,
+		cuenta_banco: cuentaBancoOptions
+	});
+	function verTransaccion(fila: FilaMovimiento) {
+		if (!fila.raw) return;
+		viewingTransaccion = fila.raw;
+		viewModalOpen = true;
+	}
+	function closeViewModal() {
+		viewModalOpen = false;
+		viewingTransaccion = null;
+	}
 
 	onMount(async () => {
 		if (!isAdmin()) {
@@ -126,16 +176,20 @@
 			return;
 		}
 		try {
-			centroCostoOptions = await getCentroCostoOptions(supabase);
+			const [centros, cuentas] = await Promise.all([getCentroCostoOptions(supabase), getCuentaBancoOptions(supabase)]);
+			centroCostoOptions = centros;
+			cuentaBancoOptions = cuentas;
 		} catch (err: any) {
-			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo');
+			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo/cuentas bancarias');
 		}
 		await fetchMovimientos();
 	});
 
 	$effect(() => {
 		void idCentroCosto;
+		void numeroCuentaBanco;
 		void tipoFiltro;
+		void estadoFiltro;
 		void desde;
 		void hasta;
 		void search;
@@ -150,7 +204,9 @@
 
 	function limpiarFiltros() {
 		idCentroCosto = '';
+		numeroCuentaBanco = '';
 		tipoFiltro = '';
+		estadoFiltro = '';
 		desde = '';
 		hasta = '';
 		searchInput = '';
@@ -212,6 +268,33 @@
 				<p class="text-sm text-slate-500">Ingresos, egresos y financiamiento reales, sobre las transacciones registradas</p>
 			</div>
 		</div>
+
+		<!-- Selector de Cuenta Bancaria prominente — a pedido explícito del usuario, además del filtro
+		     "Cuenta Bancaria" de la barra de abajo (mismo estado, numeroCuentaBanco, siempre sincronizados).
+		     El <select> real queda invisible (opacity-0) pero ENCIMA de toda la tarjeta (mismo truco que un
+		     <input type="file"> oculto): mantiene el picker nativo/teclado/accesibilidad de un <select> de
+		     verdad, mientras la tarjeta de abajo (título + N° de cuenta en verde, a dos líneas) es la que
+		     se ve — un <select> normal no puede mostrar dos líneas de texto en su propio valor elegido. -->
+		<div class="relative w-full sm:w-auto sm:min-w-[240px]">
+			<div class="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 shadow-sm">
+				<Landmark size={18} class="shrink-0 text-[#0f3b5e]" />
+				<div class="min-w-0 flex-1 leading-tight">
+					<p class="text-sm font-semibold text-slate-800 truncate">
+						{cuentaBancoSeleccionada ? tituloCuentaBanco(cuentaBancoSeleccionada) : 'Todas las cuentas'}
+					</p>
+					{#if cuentaBancoSeleccionada}
+						<p class="text-[11px] font-medium text-emerald-600 truncate">{cuentaBancoSeleccionada.value}</p>
+					{/if}
+				</div>
+				<ChevronDown size={16} class="shrink-0 text-slate-400" />
+			</div>
+			<select bind:value={numeroCuentaBanco} aria-label="Filtrar por cuenta bancaria" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+				<option value="">Todas las cuentas</option>
+				{#each cuentaBancoOptions as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
+		</div>
 	</div>
 
 	{#if loadError}
@@ -264,12 +347,12 @@
 
 	<!-- Filtros -->
 	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
 			<div>
-				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
-				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					{#each centroCostoOptions as opt}
+				<label for="mc-cuenta-banco" class="block text-xs font-medium text-slate-500 mb-1">Cuenta Bancaria</label>
+				<select id="mc-cuenta-banco" bind:value={numeroCuentaBanco} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todas</option>
+					{#each cuentaBancoOptions as opt}
 						<option value={opt.value}>{opt.label}</option>
 					{/each}
 				</select>
@@ -290,6 +373,23 @@
 			<div>
 				<label for="mc-hasta" class="block text-xs font-medium text-slate-500 mb-1">Fecha fin</label>
 				<input id="mc-hasta" type="date" bind:value={hasta} min={desde || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+			</div>
+			<div>
+				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
+				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					{#each centroCostoOptions as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="mc-estado" class="block text-xs font-medium text-slate-500 mb-1">Estado</label>
+				<select id="mc-estado" bind:value={estadoFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					<option value="aprobado">Aprobado</option>
+					<option value="pendiente">Pendiente</option>
+				</select>
 			</div>
 		</div>
 		<div class="flex flex-wrap items-end gap-3 mt-3">
@@ -322,7 +422,7 @@
 	<!-- Tabla / Tarjetas -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={9} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
+			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={10} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
 				{#snippet header()}
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Código</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
@@ -346,6 +446,7 @@
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Monto</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Saldo Acumulado</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Estado</th>
+					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Ver</th>
 				{/snippet}
 				{#snippet row(fila)}
 					{@const medioPago = medioPagoDe(fila)}
@@ -391,6 +492,13 @@
 							{fila.aprobado ? 'Aprobado' : 'Pendiente'}
 						</span>
 					</td>
+					<td class="px-3 py-3.5 text-right whitespace-nowrap">
+						{#if fila.raw}
+							<button type="button" onclick={() => verTransaccion(fila)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
+								<Eye size={16} />
+							</button>
+						{/if}
+					</td>
 				{/snippet}
 				{#snippet card(fila)}
 					{@const medioPago = medioPagoDe(fila)}
@@ -425,6 +533,11 @@
 							</span>
 						</span>
 					</div>
+					{#if fila.raw}
+						<button type="button" onclick={() => verTransaccion(fila)} class="mt-2 flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:underline">
+							<Eye size={14} /> Ver transacción
+						</button>
+					{/if}
 				{/snippet}
 			</ResponsiveDataView>
 		</div>
@@ -453,6 +566,16 @@
 		</div>
 	</div>
 </div>
+
+<TransaccionModal
+	open={viewModalOpen}
+	mode="edit"
+	transaccion={viewingTransaccion}
+	dynamicOptions={viewDynamicOptions}
+	forceReadOnly
+	onClose={closeViewModal}
+	onSaved={() => {}}
+/>
 
 <style>
 	/* Barrita de scroll fina para la celda "Centro de Costo" (ver arriba) — más discreta que la barra de

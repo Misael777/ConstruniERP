@@ -44,8 +44,16 @@ export interface MovimientosCajaParams {
 	/** Último día del período, 'YYYY-MM-DD' */
 	hasta: string;
 	idCentroCosto?: number | null;
+	/** N° de cuenta bancaria (cuenta_banco.numero_cuenta) — filtra movimientos donde esa cuenta sea
+	 * origen O destino (misma idea que idCentroCosto: acota "de qué cuenta real es este dinero", así
+	 * que también se aplica al saldo inicial, no solo al listado del período, ver getMovimientosCaja). */
+	numeroCuentaBanco?: string | null;
 	tipo?: TipoMovimiento | null;
 	categoria?: string | null;
+	/** Filtra por `transaccion.aprobado` — a diferencia de idCentroCosto/numeroCuentaBanco, es un
+	 * filtro de presentación (el estado de aprobación no cambia si el dinero es "de" esta cuenta/centro),
+	 * así que NO se aplica al saldo inicial, igual que tipo/categoria/search. */
+	soloAprobado?: boolean | null;
 	search?: string;
 }
 
@@ -83,6 +91,9 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	if (params.idCentroCosto) {
 		queryAntes = queryAntes.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
 	}
+	if (params.numeroCuentaBanco) {
+		queryAntes = queryAntes.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
+	}
 	const { data: previos, error: errorPrevios } = await queryAntes;
 	if (errorPrevios) throw errorPrevios;
 	const saldoInicial = (previos ?? []).reduce((sum: number, t: any) => sum + signoMonto(t.tipo, Number(t.monto_total)), 0);
@@ -99,8 +110,13 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	if (params.idCentroCosto) {
 		query = query.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
 	}
+	if (params.numeroCuentaBanco) {
+		query = query.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
+	}
 	if (params.tipo) query = query.eq('tipo', params.tipo);
 	if (params.categoria) query = query.eq('categoria', params.categoria);
+	if (params.soloAprobado === true) query = query.eq('aprobado', true);
+	else if (params.soloAprobado === false) query = query.eq('aprobado', false);
 	const search = params.search?.trim();
 	if (search) {
 		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
