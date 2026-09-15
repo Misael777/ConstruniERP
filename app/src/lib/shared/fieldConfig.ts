@@ -385,10 +385,11 @@ export function buildWritablePayload(fields: FieldConfig[], payload: Record<stri
 			// payload, ej. monto = monto_dolares * tipo_cambio), si no queda vacío. Nunca lo que tenga
 			// el formulario, sin importar lo que el usuario haya escrito antes de bloquearse.
 			const locked = typeof field.disabledValue === 'function' ? field.disabledValue(payload) : field.disabledValue;
+			const lockedVacio = locked === null || locked === undefined || locked === '';
 			result[field.key] =
-				locked !== null && locked !== undefined && locked !== '' && (field.tipo === 'number' || field.tipo === 'currency')
+				!lockedVacio && (field.tipo === 'number' || field.tipo === 'currency')
 					? Number(locked)
-					: (locked ?? null);
+					: (lockedVacio ? null : locked);
 			continue;
 		}
 		if (field.computeValue) {

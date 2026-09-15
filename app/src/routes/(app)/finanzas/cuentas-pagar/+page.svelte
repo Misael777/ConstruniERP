@@ -635,6 +635,11 @@
 			fecha: formValues.fecha_emision,
 			tipo: 'ingreso',
 			monto_total: formValues.monto_comprometido,
+			// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — mismo motivo que
+			// en el flujo espejo de Cuentas por Cobrar (ver guardarCuentaCobrarConTransaccionPrestamo):
+			// sin esto, crearTransaccionSistema fallaba con "Revisa los campos marcados" y no se guardaba
+			// ni la transacción ni la Cuenta por Pagar.
+			tipo_moneda: 'soles',
 			categoria: 'Préstamo',
 			descripcion: formValues.observacion || 'Préstamo recibido'
 		};

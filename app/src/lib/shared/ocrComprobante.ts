@@ -18,6 +18,10 @@ export interface ReconocerComprobanteResult {
 	fecha?: string | null;
 	monto?: number | null;
 	num_operacion?: string | null;
+	moneda?: 'dolares' | null;
+	/** Tipo de cambio (S/ por US$) — solo aplica a un boucher de CAMBIO DE MONEDA (ej. "¡Tipo de cambio
+	 * exitoso!" de BCP, ver extraerTipoCambio), no a un boucher de pago/transferencia normal. */
+	tipo_cambio?: number | null;
 	confianza?: 'alta' | 'media' | 'baja';
 	error?: string;
 }
@@ -84,6 +88,13 @@ function extraerFecha(texto: string): string | null {
  * reconocía el "5" suelto. Se usa tanto para la búsqueda con etiqueta como sin ella, ver extraerMonto. */
 const PATRON_MONTO = /S\/\.?\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
 
+/** Mismo patrón que PATRON_MONTO pero para un boucher en Dólares — símbolo "$"/"US$"/"U$S" en vez de
+ * "S/" (a pedido explícito del usuario: un boucher en Dólares no tiene "S/" en ningún lado, así que
+ * extraerMonto/extraerMontoOperacionExitosa devolvían null aunque el monto sí estuviera bien legible).
+ * "$" solo (sin "US"/"U$S" antes) también cuenta como Dólares acá: este archivo solo procesa boucher de
+ * pago (bancos peruanos), que nunca usan "$" para Soles. */
+const PATRON_MONTO_DOLARES = /(?:US\$|U\$S|\$)\s*(\d{1,3}(?:[,\s]\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/i;
+
 /** Quita los separadores de miles (coma o espacio, ver PATRON_MONTO) antes de convertir a número. */
 function limpiarMonto(valorCrudo: string): number | null {
 	const valor = Number(valorCrudo.replace(/[,\s]/g, ''));
@@ -103,7 +114,7 @@ function extraerMontoOperacionExitosa(texto: string): number | null {
 	const idx = texto.search(/operaci[oó]n\s+exitosa/i);
 	if (idx === -1) return null;
 	const ventana = texto.slice(idx, idx + 60);
-	const m = ventana.match(/(?:S\/\.?\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{2}|\d+\.\d{2})/);
+	const m = ventana.match(/(?:S\/\.?\s*|(?:US\$|U\$S|\$)\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{2}|\d+\.\d{2})/);
 	return m ? limpiarMonto(m[1]) : null;
 }
 
@@ -116,19 +127,27 @@ function extraerMontoOperacionExitosa(texto: string): number | null {
  *  3. Si tampoco hay ningún "S/" reconocible en todo el texto (Tesseract a veces no lee ese símbolo
  *     cuando el monto está en letra muy grande/estilizada — ver extraerMontoOperacionExitosa), se
  *     intenta ese último respaldo, acotado a boucher con el banner "¡Operación exitosa!".
- * null si ninguna de las tres pasadas encuentra nada.
+ * null si ninguna de las pasadas encuentra nada.
  * Tolerancia de 40 caracteres entre etiqueta y monto (antes 15) — a pedido explícito del usuario, con
  * nuevos formatos de referencia (ej. constancia de operación BCP con layout de tabla "etiqueta | valor"
  * en dos columnas): mismo motivo que el gap de 40 caracteres que ya usa extraerNumeroOperacion para
  * "N° DE RECIBO"/"FECHA DE EMISIÓN" — Tesseract puede linealizar un layout de dos columnas metiendo
  * texto de otro bloque entre la etiqueta y su valor. Ensanchar el gap es seguro: solo tolera más texto
- * SIN dígitos en el medio (\D), nunca deja que el patrón salte por encima de otro número real. */
+ * SIN dígitos en el medio (\D), nunca deja que el patrón salte por encima de otro número real.
+ * Cada intento con PATRON_MONTO (símbolo "S/") se repite con PATRON_MONTO_DOLARES (símbolo "$"/"US$") —
+ * a pedido explícito del usuario, un boucher en Dólares no tiene "S/" en ningún lado. */
 function extraerMonto(texto: string): number | null {
-	const conEtiqueta = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,40}?${PATRON_MONTO.source}`, 'i'));
-	if (conEtiqueta) return limpiarMonto(conEtiqueta[1]);
+	const conEtiquetaSoles = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,40}?${PATRON_MONTO.source}`, 'i'));
+	if (conEtiquetaSoles) return limpiarMonto(conEtiquetaSoles[1]);
 
-	const generico = texto.match(PATRON_MONTO);
-	if (generico) return limpiarMonto(generico[1]);
+	const conEtiquetaDolares = texto.match(new RegExp(`(?:monto|importe|total|pagaste|enviaste|pagado)\\D{0,40}?${PATRON_MONTO_DOLARES.source}`, 'i'));
+	if (conEtiquetaDolares) return limpiarMonto(conEtiquetaDolares[1]);
+
+	const genericoSoles = texto.match(PATRON_MONTO);
+	if (genericoSoles) return limpiarMonto(genericoSoles[1]);
+
+	const genericoDolares = texto.match(PATRON_MONTO_DOLARES);
+	if (genericoDolares) return limpiarMonto(genericoDolares[1]);
 
 	return extraerMontoOperacionExitosa(texto);
 }
@@ -215,6 +234,32 @@ function extraerNumeroOperacion(texto: string): string | null {
 	if (conEtiquetaRecibo) return conEtiquetaRecibo[1];
 
 	return extraerNumeroEncabezado(texto);
+}
+
+/** Detecta si el boucher está en Dólares — a pedido explícito del usuario, para autoseleccionar "Tipo
+ * de Moneda" en TransaccionModal.svelte (ver runOcr ahí) sin que el usuario tenga que cambiarlo a mano.
+ * Solo reporta 'dolares': el default del formulario ya es 'soles', así que no hace falta (ni conviene)
+ * detectarlo explícitamente — evita pisar una elección manual del usuario cuando el boucher no menciona
+ * ninguna moneda. Busca "dólares"/"dolares" (banco peruano, ej. "Moneda Dólares") o "US$"/"USD" (forma
+ * más típica de un boucher en dólares de banco extranjero o de una cuenta en USD) con límites de palabra,
+ * para no confundirse con un RUC/código que solo contenga esas letras seguidas. */
+function extraerMoneda(texto: string): 'dolares' | null {
+	const t = sinTildes(texto.toLowerCase());
+	return /\bdolares\b|\bus\$|\busd\b/.test(t) ? 'dolares' : null;
+}
+
+/** Tipo de cambio (S/ por US$) de un boucher de CAMBIO DE MONEDA — a pedido explícito del usuario, para
+ * autocompletar "Tipo de Cambio" en TransaccionModal.svelte (ver runOcr ahí) sin que el usuario tenga
+ * que copiarlo a mano. Confirmado con un boucher BCP real ("¡Tipo de cambio exitoso!"): el valor viene
+ * junto a la etiqueta "Tipo de cambio" con 4 decimales (ej. "S/ 3.4010"), no 2 como un monto normal —
+ * por eso usa su propio patrón de dígitos (\.\d{1,4}) en vez de reusar PATRON_MONTO (tope de 2). "S/" es
+ * OPCIONAL: algunos formatos escriben el número solo, sin el símbolo delante. Mismo gap de 40 caracteres
+ * tolerante a texto intermedio que el resto de extractores de este archivo (ver extraerMonto). null si
+ * no hay ninguna etiqueta "tipo de cambio" en el texto (boucher de pago/transferencia normal, no de
+ * cambio de moneda). */
+function extraerTipoCambio(texto: string): number | null {
+	const m = texto.match(/tipo\s+de\s+cambio\D{0,40}?(?:S\/\.?\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{1,4}|\d+\.\d{1,4})/i);
+	return m ? limpiarMonto(m[1]) : null;
 }
 
 function calcularConfianza(fecha: string | null, monto: number | null, numOperacion: string | null): 'alta' | 'media' | 'baja' {
@@ -335,12 +380,14 @@ export async function reconocerComprobante(file: File): Promise<ReconocerComprob
 		const fecha = extraerFecha(texto);
 		const monto = extraerMonto(texto);
 		const num_operacion = extraerNumeroOperacion(texto);
+		const moneda = extraerMoneda(texto);
+		const tipo_cambio = extraerTipoCambio(texto);
 
 		if (fecha === null && monto === null && num_operacion === null) {
-			return { success: false, error: 'No se pudo reconocer ningún dato del comprobante. Complétalos a mano.' };
+			return { success: false, moneda, tipo_cambio, error: 'No se pudo reconocer ningún dato del comprobante. Complétalos a mano.' };
 		}
 
-		return { success: true, fecha, monto, num_operacion, confianza: calcularConfianza(fecha, monto, num_operacion) };
+		return { success: true, fecha, monto, num_operacion, moneda, tipo_cambio, confianza: calcularConfianza(fecha, monto, num_operacion) };
 	} catch (err) {
 		console.error('[ocrComprobante] Error reconociendo comprobante:', err);
 		return { success: false, error: err instanceof Error ? err.message : String(err) };

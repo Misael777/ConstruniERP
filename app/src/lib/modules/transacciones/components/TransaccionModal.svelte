@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
@@ -35,9 +35,10 @@
 		getSiguienteNumeroReciboPagoNoEfectivo,
 		getSiguienteNumeroReciboPagoProveedor,
 		getSaldosCentroCosto,
-		getCuentasBancoUsadasEnIngresos
+		getCuentasBancoUsadasEnIngresos,
+		validarSaldoSuficiente
 	} from '$lib/modules/transacciones/services/transacciones.service';
-	import { getSaldosCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import { getSaldosCuentaBanco, getMonedasCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { formatearFechaCorta } from '$lib/shared/pdfFormatoUtil';
 	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
@@ -82,7 +83,8 @@
 		confirmTitle = null,
 		confirmButtonLabel = null,
 		lockedFields = [],
-		initialComprobanteFile = null
+		initialComprobanteFile = null,
+		forceReadOnly = false
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
@@ -110,6 +112,10 @@
 		 * dispara el reconocimiento automático de Fecha/Monto igual). Solo aplica al abrir el modal en
 		 * mode='create'; se ignora en cualquier otro caso. */
 		initialComprobanteFile?: File | null;
+		/** "Modo de consulta" (ver botón "Ver" en movimientos-caja/+page.svelte) — abre en `mode:'edit'`
+		 * con todos los campos deshabilitados y sin botón de Guardar, igual que una transacción aprobada
+		 * (ver bloqueadaPorAprobacion), pero sin depender de que `transaccion.aprobado` sea real. */
+		forceReadOnly?: boolean;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -144,6 +150,14 @@
 		// Transacción nueva sin Tipo elegido todavía -> por defecto Egreso, a pedido del usuario (el
 		// selector manual ahora solo ofrece Egreso/Ingreso, ver optionsWhen en transaccion.config.ts).
 		if (!transaccion && !values.tipo) values.tipo = 'egreso';
+		// A pedido explícito del usuario: "Tipo de Moneda" arranca en 'soles' — tanto al crear como al
+		// editar una transacción vieja de antes de agregar este campo (tipo_moneda llega vacío/null de
+		// la BD en ese caso), mismo criterio que el DEFAULT 'soles' de la propia columna (ver
+		// transaccion_moneda_migration.sql).
+		if (!values.tipo_moneda) values.tipo_moneda = 'soles';
+		// "Documento pendiente" arranca en 'no' — mismo criterio que tipo_moneda arriba (ver
+		// transaccion_documento_pendiente_migration.sql).
+		if (!values.documento_pendiente) values.documento_pendiente = 'no';
 		return values;
 	}
 
@@ -152,13 +166,36 @@
 	let submitting = $state(false);
 	let aprobando = $state(false);
 
+	// "Monto Convertido" (= Monto (reconocido) × Tipo de Cambio) — a pedido explícito del usuario, se
+	// calcula solo, no es editable a mano (ver disabledValue en transaccion.config.ts, que guarda este
+	// mismo valor tal cual). Solo aplica con Tipo de Moneda = Dólares; en Soles queda vacío (el campo ni
+	// siquiera se muestra, ver template más abajo).
+	$effect(() => {
+		if (formValues.tipo_moneda !== 'dolares') {
+			if (formValues.monto_convertido !== '') formValues.monto_convertido = '';
+			return;
+		}
+		const monto = Number(formValues.monto_total);
+		const cambio = Number(formValues.tipo_cambio);
+		// A pedido explícito del usuario: 4 decimales (no 2, como el resto de los montos en soles) — el
+		// tipo de cambio en sí ya trae hasta 2 decimales, así que el producto necesita más precisión
+		// para no perderla de más al redondear.
+		const nuevo = Number.isFinite(monto) && formValues.monto_total !== '' && Number.isFinite(cambio) && formValues.tipo_cambio !== '' ? (monto * cambio).toFixed(4) : '';
+		if (formValues.monto_convertido !== nuevo) formValues.monto_convertido = nuevo;
+	});
+
 	// Bloquea edición/borrado (todo el form, no solo el comprobante) una vez que un administrador aprobó
 	// el comprobante — a pedido explícito del usuario, sin excepción de administrador (antes un admin sí
 	// podía seguir editando). La transacción sigue siendo VISIBLE, con todos los campos deshabilitados;
 	// para volver a editarla hay que quitar la aprobación primero (ver handleDesaprobar más abajo, esa
 	// acción sigue siendo admin-only). Ver aprobarTransaccion/desaprobarTransaccion y
 	// BLOQUEADO_POR_APROBACION en transacciones.service.ts.
-	const bloqueadaPorAprobacion = $derived(mode === 'edit' && !!transaccion?.aprobado);
+	// forceReadOnly (ver prop más abajo): "modo de consulta" desde el botón "Ver" (ojito) en
+	// movimientos-caja/+page.svelte — a pedido explícito del usuario, cualquier transacción (aprobada o
+	// no) se puede abrir solo para verla, sin exponer el botón de Editar/Guardar. Se suma con el OR al
+	// bloqueo por aprobación en vez de reemplazarlo, así toda la cascada de `disabled={bloqueadaPorAprobacion}`
+	// que ya recorre el formulario entero queda gratis, sin tocar cada campo uno por uno.
+	const bloqueadaPorAprobacion = $derived(forceReadOnly || (mode === 'edit' && !!transaccion?.aprobado));
 
 	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, a pedido del usuario (ver texto de ayuda del dropzone)
 
@@ -525,6 +562,17 @@
 		try {
 			const result = await reconocerComprobante(file);
 			if (cacheIndex !== null) colaOcrCache = { ...colaOcrCache, [cacheIndex]: result };
+			// Moneda/Tipo de Cambio se aplican pase lo que pase con fecha/monto/N° de operación (incluso si
+			// el OCR no reconoció ninguno de esos tres y "success" viene false) — a pedido explícito del
+			// usuario: si el boucher dice "Dólares"/"USD" el Tipo de Moneda debe cambiar solo, y si además
+			// es un boucher de CAMBIO DE MONEDA (ej. "¡Tipo de cambio exitoso!" de BCP, ver
+			// extraerTipoCambio) el Tipo de Cambio también se completa solo.
+			if (result.moneda === 'dolares' && formValues.tipo_moneda !== 'dolares') {
+				formValues = { ...formValues, tipo_moneda: 'dolares' };
+			}
+			if (result.tipo_cambio !== null && result.tipo_cambio !== undefined) {
+				formValues = { ...formValues, tipo_cambio: String(result.tipo_cambio) };
+			}
 			if (result.success) {
 				const updates: Record<string, string> = {};
 				if (result.fecha) {
@@ -829,11 +877,16 @@
 	/** Abre el HTML del recibo (vista previa en vivo, ver reciboAutoHtml) en una pestaña nueva vía Blob
 	 * URL — sin generar ningún PDF. El navegador ya terminó de cargar el documento mucho antes de los
 	 * 30s, así que revocar el Blob URL recién ahí no corta la vista previa, solo libera memoria. */
-	function abrirPreviewHtml(html: string) {
-		const blob = new Blob([html], { type: 'text/html' });
-		const url = URL.createObjectURL(blob);
-		window.open(url, '_blank');
-		setTimeout(() => URL.revokeObjectURL(url), 30000);
+	// A pedido explícito del usuario: la vista previa de un recibo autogenerado por el ERP debe verse
+	// DENTRO del sistema (un modal propio, mismo criterio que DocumentPreviewModal para los comprobantes
+	// ya subidos a Drive), no solo "como web" — antes esto abría una pestaña nueva del navegador vía
+	// `window.open(blob:...)`, que no tiene un equivalente confiable en Tauri Windows/Android (no hay
+	// pestañas de navegador reales ahí). Renderiza el mismo HTML en un iframe a tamaño completo dentro
+	// de un popup propio (ver previewHtmlModalOpen/reciboAutoHtml más abajo) — funciona igual en
+	// navegador, Tauri Windows y Tauri Android, sin ninguna API específica de plataforma.
+	let previewHtmlModalOpen = $state(false);
+	function abrirPreviewHtml(_html: string) {
+		previewHtmlModalOpen = true;
 	}
 
 	/** Genera el PDF DE VERDAD (recién acá se paga el costo de html2canvas/jsPDF) del comprobante
@@ -1221,7 +1274,7 @@
 		const mantenerPrestamoOtorgado =
 			(key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') &&
 			formValues.tipo === 'egreso' &&
-			((claseDestino === 'otro' && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado');
+			((claseEsOtroOPrestamo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado');
 		if ((key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && !mantenerPrestamo && !mantenerPrestamoOtorgado) {
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
@@ -1292,7 +1345,7 @@
 	}
 
 	const hasErrors = $derived(Object.keys(fieldErrors).length > 0);
-	const title = $derived(confirmTitle ?? (mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
+	const title = $derived(confirmTitle ?? (forceReadOnly ? 'Consultar Transacción' : mode === 'create' ? 'Nueva Transacción' : 'Editar Transacción'));
 	const bloqueadoPorInterna = $derived(formValues.tipo_alcance === 'interna');
 	// Estado ya no es un <select> manual (ver transaccion.config.ts) — se calcula acá PURAMENTE para el
 	// badge visual: 'consulta' mientras el Alcance sea Interna, si no, el valor persistido (anulado se
@@ -1365,13 +1418,26 @@
 	// categoriaEsPrestamoOtorgado, justo abajo, ya necesita leerlo — TypeScript exige que un `let`
 	// exista antes de su primera referencia en el archivo, aunque sea dentro de un $derived que recién
 	// se evalúa después.
-	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo';
 	let claseDestino = $state<ClaseDestino>('');
+	// "Otro" y "Préstamo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
+	// optionsFor/catalogoDetalleActual más abajo) — la única diferencia entre ambos está en qué
+	// centros de costo ofrece "Centro de Costo Destino" (ver optionsFor: "Otro" muestra Obra/
+	// Consultoría/Corporativo/Otro, "Préstamo" muestra específicamente los de tipo 'prestamo', ej.
+	// "Persona Externa"). Se agrupan acá para no repetir la doble condición en cada sitio.
+	const claseEsOtroOPrestamo = $derived(claseDestino === 'otro' || claseDestino === 'prestamo');
 
 	// A pedido explícito del usuario: en Ingreso, apenas Categoría="Préstamo" (en Nueva Y en Editar) —
 	// ver optionsFor, que deja de acotar "Proyecto" a solo Corporativo y muestra TODOS los centros de
 	// costo agrupados por tipo (un préstamo puede terminar imputado a cualquier proyecto).
 	const categoriaEsPrestamo = $derived(formValues.tipo === 'ingreso' && formValues.categoria === 'Préstamo');
+	// A pedido explícito del usuario: en Ingreso, si "Persona/Empresa" (Origen) es un centro de costo de
+	// tipo 'prestamo' (ej. "Persona Externa", ver formOptions en centroCostos.config.ts) — sin importar
+	// qué Categoría se haya elegido todavía — "Proyecto" (Destino) también deja de acotarse y muestra
+	// TODOS los centros de costo agrupados por tipo, mismo criterio que categoriaEsPrestamo: un préstamo
+	// puede terminar imputado a cualquier proyecto.
+	const origenEsTipoPrestamo = $derived(formValues.tipo === 'ingreso' && centroCostoTipoMap[formValues.id_centro_costo_origen] === 'prestamo');
+	const destinoMuestraTodosLosCentros = $derived(categoriaEsPrestamo || origenEsTipoPrestamo);
 	// A pedido explícito del usuario: al CREAR (no al editar) una transacción Ingreso con Categoría
 	// "Préstamo", ya no se crea ninguna transacción — se registra directo como Cuenta por Pagar (ver
 	// handleSubmit, que corta ahí mismo, y el botón "Crear" que se convierte en "Cuentas por Pagar" más
@@ -1386,15 +1452,15 @@
 	// 1) Origen=Corporativo (esCorporativo), donde la Categoría "Préstamo Otorgado" es un valor DISTINTO
 	//    del "Préstamo" genérico de CATEGORIA_CORPORATIVO_EGRESO (que sigue siendo una categoría normal
 	//    de gasto, ej. pagar una cuota de un préstamo ya existente — no chocan).
-	// 2) Clase="Otro" en Destino (ver CATEGORIA_OTRO_EGRESO/optionsFor), donde el catálogo reducido usa
-	//    "Préstamo" directamente — sin ambigüedad ahí, esa lista no tiene ningún otro significado de
-	//    "Préstamo" con el que pueda confundirse.
+	// 2) Clase="Otro" o Clase="Préstamo" en Destino (ver CATEGORIA_OTRO_EGRESO/claseEsOtroOPrestamo/
+	//    optionsFor), donde el catálogo reducido usa "Préstamo" directamente — sin ambigüedad ahí, esa
+	//    lista no tiene ningún otro significado de "Préstamo" con el que pueda confundirse.
 	// A pedido explícito del usuario, al CREAR (no al editar) una transacción Egreso con cualquiera de
 	// las dos, tampoco se crea la transacción acá: se registra como Cuenta por Cobrar (ver handleSubmit
 	// y el botón "Cuentas por Cobrar" más abajo en el template).
 	const categoriaEsPrestamoOtorgado = $derived(
 		formValues.tipo === 'egreso' &&
-			((claseDestino === 'otro' && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
+			((claseEsOtroOPrestamo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
 	);
 	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && categoriaEsPrestamoOtorgado);
 
@@ -1550,14 +1616,37 @@
 	// getSaldosCuentaBanco/getSaldosCentroCosto) en vez de una consulta por opción del <select>.
 	let saldosCuentaBanco = $state<Record<string, number>>({});
 	let saldosCentroCosto = $state<Record<string, number>>({});
+	// A pedido explícito del usuario: el símbolo de moneda de "Saldo actual"/"Saldo en la lista" de
+	// Cuenta Origen/Destino debe ser el REAL de esa cuenta ('$' Dólares, 'S/.' Soles) — antes siempre se
+	// formateaba en Soles (ver formatCurrency), sin importar la moneda real. Ver getMonedasCuentaBanco/
+	// simboloMonedaCuenta más abajo.
+	let monedasCuentaBanco = $state<Record<string, string>>({});
 	async function cargarSaldos() {
 		try {
-			const [cuentas, centros] = await Promise.all([getSaldosCuentaBanco(supabase), getSaldosCentroCosto(supabase)]);
+			const [cuentas, centros, monedas] = await Promise.all([getSaldosCuentaBanco(supabase), getSaldosCentroCosto(supabase), getMonedasCuentaBanco(supabase)]);
 			saldosCuentaBanco = cuentas;
 			saldosCentroCosto = centros;
+			monedasCuentaBanco = monedas;
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudieron cargar los saldos de cuentas/centros de costo:', err);
 		}
+	}
+	/** '$' Dólares, 'S/.' Soles, '' si es 'otro' o no se conoce todavía la moneda de esa cuenta —
+	 * mismo criterio que simboloMoneda en CuentaBancoModal.svelte/finanzas/cuentas-bancarias/+page.svelte. */
+	function simboloMonedaCuenta(numeroCuenta: string): string {
+		const tipo = monedasCuentaBanco[numeroCuenta];
+		if (tipo === 'dolares') return '$';
+		if (tipo === 'soles') return 'S/.';
+		return '';
+	}
+	/** "Monto (reconocido)" formateado con el símbolo real de "Tipo de Moneda" ('$' Dólares, 'S/.'
+	 * Soles) — a pedido explícito del usuario, antes usaba formatCurrency (siempre Soles) sin importar
+	 * la moneda elegida para ESTA transacción. */
+	function formatMontoTotal(valor: string): string {
+		const num = Number(valor);
+		if (valor === '' || Number.isNaN(num)) return '';
+		const texto = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
+		return formValues.tipo_moneda === 'dolares' ? `$ ${texto}` : `S/. ${texto}`;
 	}
 	// A diferencia de centroCostoClientesCargado (listas relativamente estáticas, se cargan una sola vez
 	// por vida del componente), los saldos cambian con cada transacción — se recarga en CADA apertura
@@ -1628,18 +1717,21 @@
 		const clasePrevia = claseDestino;
 		claseDestino = value as ClaseDestino;
 		formValues = { ...formValues, id_centro_costo_destino: '' };
-		// Si se sale de "Otro" y la Categoría elegida era una de las de Corporativo (esas solo se
-		// ofrecen con Clase=Otro o esCorporativo, ver optionsFor) — se limpia, igual que el resto de
-		// campos que dependen de Destino en handleInput, para no dejar guardado un valor que ya no
-		// aparece en la lista de opciones. Si esCorporativo sigue siendo true (Origen=Corporativo), esa
+		// Si se sale de "Otro"/"Préstamo" y la Categoría elegida era una de las de Corporativo (esas solo
+		// se ofrecen con Clase=Otro/Préstamo o esCorporativo, ver optionsFor) — se limpia, igual que el
+		// resto de campos que dependen de Destino en handleInput, para no dejar guardado un valor que ya
+		// no aparece en la lista de opciones. Si esCorporativo sigue siendo true (Origen=Corporativo), esa
 		// lista sigue aplicando igual, no se limpia.
-		if (clasePrevia === 'otro' && value !== 'otro' && !esCorporativo) {
+		const clasePreviaEraOtroOPrestamo = clasePrevia === 'otro' || clasePrevia === 'prestamo';
+		const claseNuevaEsOtroOPrestamo = value === 'otro' || value === 'prestamo';
+		if (clasePreviaEraOtroOPrestamo && !claseNuevaEsOtroOPrestamo && !esCorporativo) {
 			formValues.categoria = '';
 		}
-		// Espejo, al ENTRAR a "Otro": si la Categoría ya elegida no es una de las 2 del catálogo reducido
-		// (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO) — ej. venía de las 8 de Corporativo — se
-		// limpia, para no dejar seleccionado un valor que ya no aparece en la lista que se va a mostrar.
-		if (value === 'otro' && !['Inyecciones', 'Préstamo'].includes(formValues.categoria)) {
+		// Espejo, al ENTRAR a "Otro"/"Préstamo": si la Categoría ya elegida no es una de las 2 del
+		// catálogo reducido (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO) — ej. venía de las 8 de
+		// Corporativo — se limpia, para no dejar seleccionado un valor que ya no aparece en la lista que
+		// se va a mostrar.
+		if (claseNuevaEsOtroOPrestamo && !['Inyecciones', 'Préstamo'].includes(formValues.categoria)) {
 			formValues.categoria = '';
 		}
 	}
@@ -1651,12 +1743,17 @@
 	// centros de costo sin restringir (ver optionsFor/centroCostoOptionsTodos) — para cubrir el caso de un
 	// Egreso cuyo destino no es proveedor/subcontratista/empleado/cliente (ej. un centro de costo de
 	// proyecto, Corporativo, o tipo 'otro' propiamente dicho).
+	// "Préstamo" (a pedido explícito del usuario) — a diferencia de "Otro" (que muestra Obra/
+	// Consultoría/Corporativo/Otro), esta filtra específicamente a los centros de costo de tipo
+	// 'prestamo' (ej. "Persona Externa", ver centroCostos.config.ts) — las cuentas creadas a mano
+	// justo para representar a quien recibe un préstamo otorgado.
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
 		{ value: 'proveedores', label: 'Proveedores' },
 		{ value: 'subcontratista', label: 'Subcontratista' },
 		{ value: 'empleados', label: 'Empleados' },
 		{ value: 'cliente', label: 'Cliente' },
-		{ value: 'otro', label: 'Otro' }
+		{ value: 'otro', label: 'Otro' },
+		{ value: 'prestamo', label: 'Préstamo' }
 	];
 	// Al editar una transacción de Egreso ya guardada, infiere la Clase a partir de a qué lista
 	// pertenece el Destino guardado — para no arrancar con el selector vacío y el campo Destino oculto.
@@ -1671,6 +1768,7 @@
 			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
+			else if (centroCostoTipoMap[destinoId] === 'prestamo') claseDestino = 'prestamo';
 			else claseDestino = 'otro';
 		}
 	});
@@ -1883,17 +1981,17 @@
 	// Solo aplica a Egreso — en Ingreso, Obra usa Adelanto/Valorización/Adenda y Corporativo usa
 	// Inyecciones/Préstamo (ambas listas planas, sin desglose de subcategorías), así que "Otros campos"
 	// debe seguir mostrando el selector normal de Categoría en vez de la vista de solo lectura.
-	// A pedido explícito del usuario: con Clase="Otro" (ver claseDestino/CATEGORIA_OTRO_EGRESO en
-	// optionsFor), basta esa sola condición para que la Categoría vuelva a ser el selector plano de
-	// solo 2 opciones (Inyecciones/Préstamo) — NO ninguna de las 3 cascadas Grupo→Subcategoría
-	// (TIPOS_GASTO_OBRA/CONSULTORIA/CORPORATIVO), sin importar de qué tipo sea el Centro de Costo
-	// Origen. Sin esta excepción, esProyectoDeObra/esProyectoDeConsultoria/esCorporativo por sí solos
-	// forzaban su cascada (ver el {#if catalogoDetalleActual.length > 0} del template) y el "Préstamo"
-	// elegido ahí terminaba siendo solo el GRUPO — la Categoría real quedaba en la Subcategoría elegida
-	// (ej. "Tarjeta de Crédito Pierina"), nunca el literal "Préstamo" que categoriaEsPrestamoOtorgado
-	// espera.
+	// A pedido explícito del usuario: con Clase="Otro" o Clase="Préstamo" (ver claseEsOtroOPrestamo/
+	// CATEGORIA_OTRO_EGRESO en optionsFor), basta esa sola condición para que la Categoría vuelva a ser
+	// el selector plano de solo 2 opciones (Inyecciones/Préstamo) — NO ninguna de las 3 cascadas
+	// Grupo→Subcategoría (TIPOS_GASTO_OBRA/CONSULTORIA/CORPORATIVO), sin importar de qué tipo sea el
+	// Centro de Costo Origen. Sin esta excepción, esProyectoDeObra/esProyectoDeConsultoria/esCorporativo
+	// por sí solos forzaban su cascada (ver el {#if catalogoDetalleActual.length > 0} del template) y el
+	// "Préstamo" elegido ahí terminaba siendo solo el GRUPO — la Categoría real quedaba en la
+	// Subcategoría elegida (ej. "Tarjeta de Crédito Pierina"), nunca el literal "Préstamo" que
+	// categoriaEsPrestamoOtorgado espera.
 	const catalogoDetalleActual = $derived(
-		formValues.tipo !== 'egreso' || claseDestino === 'otro'
+		formValues.tipo !== 'egreso' || claseEsOtroOPrestamo
 			? []
 			: esProyectoDeObra
 				? TIPOS_GASTO_OBRA
@@ -1957,6 +2055,21 @@
 	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
 		return opciones.filter((o) => /efectivo/i.test(o.label));
 	}
+	/** A pedido explícito del usuario: "Cuenta Origen"/"Cuenta Destino" solo ofrecen las cuentas
+	 * bancarias de la MISMA moneda que "Tipo de Moneda" (ver monedasCuentaBanco/getMonedasCuentaBanco)
+	 * — con Soles, solo cuentas en soles; con Dólares, solo cuentas en dólares. Si el valor ya elegido
+	 * (editando) no calza con la moneda actual, se agrega igual — mismo criterio de seguridad que
+	 * Clase=Otro/Préstamo en Centro de Costo Destino, para no dejar el campo con un valor que no
+	 * aparece en su propia lista. */
+	function filtrarCuentasPorMoneda(opciones: FieldOption[], valorActual?: string): FieldOption[] {
+		const monedaActual = formValues.tipo_moneda === 'dolares' ? 'dolares' : 'soles';
+		const filtradas = opciones.filter((o) => monedasCuentaBanco[o.value] === monedaActual);
+		if (valorActual && !filtradas.some((o) => o.value === valorActual)) {
+			const actual = opciones.find((o) => o.value === valorActual);
+			if (actual) filtradas.push(actual);
+		}
+		return filtradas;
+	}
 	// Campos que se bloquean cuando el Alcance es Interna — 'tipo' y 'estado' además se fuerzan a un
 	// valor fijo (ver handleInput); 'tipo_transaccion' (Número de Cuota) y 'forma_pago' solo se
 	// bloquean, sin forzarles ningún valor.
@@ -2013,9 +2126,10 @@
 			//   Corporativo u Otro, ninguno tiene proyectos propios — Destino pasa a mostrar directo el
 			//   propio Centro de Costo Corporativo (mismo criterio que el caso "Socio o Banca" que existía
 			//   antes de la cascada por cliente). OTRA EXCEPCIÓN, sobre la anterior: si Categoría="Préstamo"
-			//   (categoriaEsPrestamo), Destino deja de estar acotado y muestra TODOS los centros de costo,
-			//   agrupados por tipo (ver grupoParaOpcion) — un préstamo puede terminar imputado a cualquier
-			//   proyecto, no solo a Corporativo.
+			//   (categoriaEsPrestamo) O si Origen ya es un centro de costo de tipo 'prestamo' (ej. "Persona
+			//   Externa", ver origenEsTipoPrestamo/destinoMuestraTodosLosCentros), Destino deja de estar
+			//   acotado y muestra TODOS los centros de costo, agrupados por tipo (ver grupoParaOpcion) — un
+			//   préstamo puede terminar imputado a cualquier proyecto, no solo a Corporativo.
 			// - Egreso: "Centro de Costo Origen" usa "Centro de Costos" en su sentido estricto (proyectos
 			//   y corporativo — ver getCentroCostoOptionsSoloCentros, misma definición que el tab "Centro
 			//   de Costos" del submódulo Centro de Costos y Cuentas Internas) y "Centro de Costo Destino"
@@ -2024,7 +2138,7 @@
 			//   mientras no se haya elegido una Clase todavía.
 			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsPersonaEmpresa);
-				if (categoriaEsPrestamo) {
+				if (destinoMuestraTodosLosCentros) {
 					// Ordenado por grupo (tipo) — SelectConSaldo (ver grupoParaOpcion/fieldBlock) necesita
 					// las opciones de un mismo grupo CONSECUTIVAS para dibujar un solo encabezado por
 					// grupo, no las reordena por su cuenta.
@@ -2064,6 +2178,17 @@
 					}
 					return soloNombreCentro(opcionesOtro);
 				}
+				// "Préstamo" (a pedido explícito del usuario) — a diferencia de "Otro" de arriba, filtra
+				// específicamente a los centros de costo de tipo 'prestamo' (ej. "Persona Externa"), las
+				// cuentas creadas a mano justo para representar a quien recibe un préstamo otorgado.
+				if (claseDestino === 'prestamo') {
+					const opcionesPrestamo = centroCostoOptionsTodos.filter((o) => centroCostoTipoMap[o.value] === 'prestamo');
+					if (formValues.id_centro_costo_destino && !opcionesPrestamo.some((o) => o.value === formValues.id_centro_costo_destino)) {
+						const actual = centroCostoOptionsTodos.find((o) => o.value === formValues.id_centro_costo_destino);
+						if (actual) opcionesPrestamo.push(actual);
+					}
+					return soloNombreCentro(opcionesPrestamo);
+				}
 				return [];
 			}
 			// A pedido explícito del usuario: en Transacción Interna, "Centro de Costo Origen" y "Centro de
@@ -2076,11 +2201,17 @@
 			return soloNombreCentro(dynamicOptions[key] || []);
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) {
-			const todas = dynamicOptions.cuenta_banco || [];
+			// A pedido explícito del usuario: en Transacción Interna, "Cuenta destino" ofrece TODAS las
+			// cuentas bancarias (Soles Y Dólares mezcladas), a diferencia de "Cuenta origen" (ver más abajo),
+			// que sigue restringida a la moneda de "Tipo de Moneda" — la transferencia puede convertir de una
+			// moneda a otra al llegar (ver "Monto Convertido"/tipo_cambio), así que el destino no tiene por
+			// qué compartir la moneda del origen. Fuera de Interna (Externa+Ingreso), se mantiene el filtro
+			// por moneda de siempre.
+			const todas = bloqueadoPorInterna ? dynamicOptions.cuenta_banco || [] : filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_destino);
 			return medioPagoEsEfectivo ? filtrarCuentasEfectivo(todas) : todas;
 		}
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
-			const todas = dynamicOptions.cuenta_banco || [];
+			const todas = filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_origen);
 			// Efectivo: solo cuentas de caja chica/fondo (ver filtrarCuentasEfectivo) — manda sobre el
 			// filtro de "cuentas que recibieron algún Ingreso" de abajo, no se combinan.
 			if (medioPagoEsEfectivo) return filtrarCuentasEfectivo(todas);
@@ -2095,12 +2226,13 @@
 			return todas;
 		}
 		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
-		// A pedido explícito del usuario: en Egreso, basta con que Clase="Otro" para que "Categoría"
-		// ofrezca el catálogo reducido (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO) — manda por
-		// ENCIMA de esProyectoDeObra/esCorporativo (ambos basados en el Centro de Costo Origen, un eje
-		// independiente de Clase/Destino): aunque el Origen sea de Obra o Corporativo, con Clase="Otro"
-		// igual se muestra esta lista, no CATEGORIA_OBRA_EGRESO/CATEGORIA_CORPORATIVO_EGRESO.
-		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseDestino === 'otro') return CATEGORIA_OTRO_EGRESO;
+		// A pedido explícito del usuario: en Egreso, basta con que Clase="Otro" o Clase="Préstamo" para
+		// que "Categoría" ofrezca el catálogo reducido (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO)
+		// — manda por ENCIMA de esProyectoDeObra/esCorporativo (ambos basados en el Centro de Costo
+		// Origen, un eje independiente de Clase/Destino): aunque el Origen sea de Obra o Corporativo, con
+		// Clase="Otro"/"Préstamo" igual se muestra esta lista, no CATEGORIA_OBRA_EGRESO/
+		// CATEGORIA_CORPORATIVO_EGRESO.
+		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseEsOtroOPrestamo) return CATEGORIA_OTRO_EGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
 		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'ingreso') return CATEGORIA_CORPORATIVO_INGRESO;
@@ -2128,6 +2260,13 @@
 	 * getSaldosCuentaBanco. undefined = sin saldo conocido todavía (los mapas siguen cargando), el
 	 * componente simplemente no muestra nada al costado en vez de un "S/ 0.00" engañoso. */
 	function saldoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): number | undefined {
+		// A pedido explícito del usuario: un no-administrador (ej. Asesora de Ventas, que llega acá al
+		// cerrar una venta) no debe ver NINGÚN saldo — ni el de la lista desplegada (antes se veía en
+		// texto plano, sin el "clic para revelar" que sí protege el de la línea "Saldo actual" de abajo)
+		// ni el de la opción ya elegida. undefined esconde el saldo por completo en SelectConSaldo.svelte
+		// (no dibuja nada al costado) y hace desaparecer la línea "Saldo actual" entera (ver
+		// {#if saldoElegido !== undefined} en el template).
+		if (!isAdmin()) return undefined;
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
 			return opt.value in saldosCentroCosto ? saldosCentroCosto[opt.value] : undefined;
 		}
@@ -2137,12 +2276,23 @@
 		return undefined;
 	}
 
+	/** Símbolo de moneda para el saldo de una opción de Cuenta Origen/Destino (ver saldoParaOpcion) — a
+	 * pedido explícito del usuario, '$'/'S/.' según la moneda REAL de esa cuenta bancaria, en vez del
+	 * formatCurrency genérico (siempre Soles) que usaba SelectConSaldo por defecto. undefined para
+	 * Centro de Costo (esos no tienen una moneda propia distinta, siguen con formatCurrency). */
+	function simboloParaOpcion(field: (typeof formFields)[number], opt: FieldOption): string | undefined {
+		if ((field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)) {
+			return simboloMonedaCuenta(opt.value) || undefined;
+		}
+		return undefined;
+	}
+
 	/** Grupo (por tipo de centro de costo) para una opción de "Proyecto" (Destino), SOLO cuando
-	 * categoriaEsPrestamo (ver optionsFor, que en ese caso ya ordena la lista por grupo) — undefined en
-	 * cualquier otro campo/caso, para que SelectConSaldo no dibuje ningún encabezado (comportamiento
-	 * normal, sin agrupar). */
+	 * destinoMuestraTodosLosCentros (ver optionsFor, que en ese caso ya ordena la lista por grupo) —
+	 * undefined en cualquier otro campo/caso, para que SelectConSaldo no dibuje ningún encabezado
+	 * (comportamiento normal, sin agrupar). */
 	function grupoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): string | undefined {
-		if (field.key !== 'id_centro_costo_destino' || !categoriaEsPrestamo) return undefined;
+		if (field.key !== 'id_centro_costo_destino' || !destinoMuestraTodosLosCentros) return undefined;
 		return TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[opt.value]] ?? 'Otros';
 	}
 
@@ -2153,6 +2303,15 @@
 		const valor = formValues[field.key];
 		if (!valor) return undefined;
 		return saldoParaOpcion(field, { value: valor, label: '' });
+	}
+
+	/** Formatea el "Saldo actual" YA ELEGIDO (ver saldoSeleccionado) con el símbolo real de esa cuenta
+	 * bancaria ('$'/'S/.', ver simboloMonedaCuenta) en vez del formatCurrency genérico — a pedido
+	 * explícito del usuario, mismo criterio que simboloParaOpcion para la lista desplegada. */
+	function formatSaldoSeleccionado(field: (typeof formFields)[number], saldo: number): string {
+		const simbolo = simboloParaOpcion(field, { value: formValues[field.key], label: '' });
+		if (simbolo) return `${simbolo} ${new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(saldo)}`;
+		return formatCurrency(saldo);
 	}
 
 	/** "Saldo actual" de la opción ya elegida (ver saldoSeleccionado) — a pedido explícito del usuario,
@@ -2167,6 +2326,19 @@
 	 * como ahí muestran clientes/proyectos (ver optionsFor), a pedido explícito del usuario la etiqueta
 	 * también cambia para reflejar lo que de verdad se está eligiendo. */
 	function labelFor(field: (typeof formFields)[number]): string {
+		// A pedido explícito del usuario: con Categoría="Préstamo" (Ingreso, ver categoriaEsPrestamo) o
+		// "Préstamo"/"Préstamo Otorgado" (Egreso, ver categoriaEsPrestamoOtorgado), Origen pasa a
+		// llamarse "Prestamista" (quién presta) y Destino "Prestatario" (a quién se le presta) — manda
+		// por ENCIMA de "Persona/Empresa"/"Proyecto" de abajo (que sigue aplicando en Ingreso+Externa
+		// mientras la Categoría NO sea Préstamo).
+		if (formValues.tipo === 'ingreso' && categoriaEsPrestamo) {
+			if (field.key === 'id_centro_costo_origen') return 'Prestamista';
+			if (field.key === 'id_centro_costo_destino') return 'Prestatario';
+		}
+		if (formValues.tipo === 'egreso' && categoriaEsPrestamoOtorgado) {
+			if (field.key === 'id_centro_costo_origen') return 'Prestamista';
+			if (field.key === 'id_centro_costo_destino') return 'Prestatario';
+		}
 		if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
 			// A pedido explícito del usuario: ya no es necesariamente un cliente (el campo ahora ofrece
 			// TODOS los centros de costo, ver optionsFor), así que la etiqueta pasa a ser más genérica.
@@ -2231,6 +2403,23 @@
 		// recién se graba al guardar esa Cuenta por Cobrar (ver crearTransaccionPorPrestamoOtorgado en
 		// cuentas-cobrar/+page.svelte).
 		if (esPrestamoOtorgadoEgreso) {
+			// Chequeo de saldo del "Centro de costo origen" (quien presta) ANTES de redirigir — a pedido
+			// explícito del usuario: sin esto, el usuario llenaba toda la Cuenta por Cobrar (cuotas,
+			// fechas, etc.) para recién enterarse de un saldo insuficiente al guardar (ver
+			// crearTransaccionPorPrestamoOtorgado en cuentas-cobrar/+page.svelte, que hace el chequeo
+			// real/autoritativo vía fn_crear_transaccion bajo lock — este de acá es solo un aviso
+			// temprano con los mismos números, no reemplaza a ese). Mismo helper que ya usa
+			// updateTransaccion.
+			const saldoCheck = await validarSaldoSuficiente(supabase, {
+				tipo: 'egreso',
+				monto_total: formValues.monto_total,
+				id_centro_costo_origen: formValues.id_centro_costo_origen
+			});
+			if (!saldoCheck.ok) {
+				toast.error(saldoCheck.message);
+				return;
+			}
+
 			// "Proyecto" en Cuenta por Cobrar es una FK real a la tabla `proyecto` (no a `centro_costo`) —
 			// no se puede meter ahí el id del prestatario (ver el pedido del usuario en
 			// finanzas/cuentas-cobrar/+page.svelte). En su lugar, el nombre del prestatario real
@@ -2497,7 +2686,7 @@
 			<SelectConSaldo
 				id={`tr-${field.key}`}
 				value={formValues[field.key]}
-				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt) }))}
+				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }))}
 				disabled={isDisabled}
 				hasError={!!fieldErrors[field.key]}
 				onchange={(v) => handleInput(field.key, v)}
@@ -2509,7 +2698,7 @@
 					class={`mt-1 text-xs font-semibold text-left hover:underline w-fit ${saldoElegido >= 0 ? 'text-emerald-600' : 'text-red-600'}`}
 					title={saldosRevelados[field.key] ? 'Clic para ocultar el saldo' : 'Clic para ver el saldo'}
 				>
-					Saldo actual: {saldosRevelados[field.key] ? formatCurrency(saldoElegido) : '••••••••'}
+					Saldo actual: {saldosRevelados[field.key] ? formatSaldoSeleccionado(field, saldoElegido) : '••••••••'}
 				</button>
 			{/if}
 		{:else if field.tipo === 'select' || field.options}
@@ -2594,13 +2783,22 @@
 									<ShieldCheck size={16} class="shrink-0" />
 									Comprobante aprobado por {transaccion.aprobado_por ?? 'un administrador'} el {formatFecha(transaccion.aprobado_en)}.
 									Esta transacción está bloqueada y no se puede editar mientras esté aprobada.
-									{#if isAdmin()}Para editarla, quita la aprobación primero.{/if}
+									{#if isAdmin() && !forceReadOnly}Para editarla, quita la aprobación primero.{/if}
 								</span>
-								{#if isAdmin()}
+								{#if isAdmin() && !forceReadOnly}
 									<button type="button" onclick={handleDesaprobar} disabled={aprobando} class="shrink-0 flex items-center gap-1 text-emerald-700 hover:text-emerald-900 underline disabled:opacity-50">
 										<ShieldOff size={14} /> Quitar aprobación
 									</button>
 								{/if}
+							</div>
+						{:else if forceReadOnly}
+							<!-- "Modo de consulta" (ver botón "Ver" en movimientos-caja/+page.svelte) — misma idea
+							     que el banner de "aprobada" de arriba, pero para una transacción que NO está
+							     aprobada: sin este aviso, el usuario vería todos los campos deshabilitados sin
+							     ninguna explicación de por qué (bloqueadaPorAprobacion no distingue el motivo). -->
+							<div class="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-center gap-1.5">
+								<Eye size={16} class="shrink-0" />
+								Estás viendo esta transacción en modo de consulta (solo lectura).
 							</div>
 						{:else if isAdmin()}
 							<button
@@ -2854,9 +3052,29 @@
 									{@render fieldBlock(destinoField)}
 								</div>
 
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 									{@render fieldBlock(cuentaOrigenField)}
 									{@render fieldBlock(cuentaDestinoField)}
+									<!-- "Tipo de Moneda" movido acá arriba (a pedido explícito del usuario) — siempre
+									     visible (Soles por defecto); "Tipo de Cambio"/"Monto Convertido" siguen más
+									     abajo, junto a Fecha/Monto/N° de Operación (ver el $effect que calcula
+									     monto_convertido más arriba), solo aparecen si se elige Dólares. -->
+									<div>
+										<label for="tr-tipo-moneda" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Tipo de Moneda</label>
+										<div class="relative">
+											<select
+												id="tr-tipo-moneda"
+												value={formValues.tipo_moneda}
+												disabled={bloqueadaPorAprobacion}
+												onchange={(e) => handleInput('tipo_moneda', (e.target as HTMLSelectElement).value)}
+												class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+											>
+												<option value="soles">Soles</option>
+												<option value="dolares">Dólares</option>
+											</select>
+											<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+										</div>
+									</div>
 								</div>
 
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -2919,7 +3137,7 @@
 											</button>
 										</div>
 										{#if formValues.monto_total && !fieldErrors.monto_total}
-											<p class="mt-1 text-xs text-slate-500">{formatCurrency(formValues.monto_total)}</p>
+											<p class="mt-1 text-xs text-slate-500">{formatMontoTotal(formValues.monto_total)}</p>
 										{/if}
 										{#if fieldErrors.monto_total}
 											<p class="mt-1 text-xs text-red-600">{fieldErrors.monto_total}</p>
@@ -2962,6 +3180,117 @@
 										{/if}
 									</div>
 								</div>
+
+								<!-- Tipo de Cambio/Monto Convertido — "Tipo de Moneda" se movió arriba, junto a
+								     Cuenta origen/Cuenta destino (a pedido explícito del usuario). Estos dos
+								     (calculado solo el segundo, ver el $effect mas arriba) SOLO aparecen si se
+								     elige Dólares. -->
+								{#if formValues.tipo_moneda === 'dolares'}
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+										<div>
+											<label for="tr-tipo-cambio" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
+												Tipo de Cambio<span class="text-red-500">*</span>
+											</label>
+											<input
+												id="tr-tipo-cambio"
+												type="text"
+												inputmode="decimal"
+												value={formValues.tipo_cambio}
+												disabled={bloqueadaPorAprobacion}
+												oninput={(e) => handleInput('tipo_cambio', (e.target as HTMLInputElement).value)}
+												placeholder="3.75"
+												class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.tipo_cambio ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+											/>
+											{#if fieldErrors.tipo_cambio}
+												<p class="mt-1 text-xs text-red-600">{fieldErrors.tipo_cambio}</p>
+											{:else}
+												<p class="mt-1 text-xs text-slate-400">Tipo de cambio del día (S/ por US$).</p>
+											{/if}
+										</div>
+										<div>
+											<label for="tr-monto-convertido" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Monto Convertido</label>
+											<!-- A pedido explícito del usuario: siempre con el símbolo de Soles ('S/.') — este campo es
+											     justamente el equivalente en Soles del Monto (reconocido) en Dólares, sin importar nada más. -->
+											<div class="relative">
+												<span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500 pointer-events-none">S/.</span>
+												<input
+													id="tr-monto-convertido"
+													type="text"
+													value={formValues.monto_convertido}
+													disabled
+													class="w-full rounded-lg border border-slate-300 pl-9 pr-3 py-2 text-sm bg-slate-100 text-slate-600 disabled:cursor-not-allowed"
+												/>
+											</div>
+											<p class="mt-1 text-xs text-slate-400">Se calcula solo: Monto (reconocido) × Tipo de Cambio.</p>
+										</div>
+									</div>
+								{/if}
+
+								<!-- "Documento pendiente" (Sí/No) — a pedido explícito del usuario: solo aplica a
+								     Ingreso/Egreso, marca que todavía falta el documento de respaldo (factura/
+								     boleta) de esta transacción. "Responsable"/"Fecha de Vencimiento" SOLO
+								     aparecen si se elige Sí (ver transaccion_documento_pendiente_migration.sql). -->
+								{#if formValues.tipo === 'ingreso' || formValues.tipo === 'egreso'}
+									<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+										<div>
+											<label for="tr-documento-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Documento pendiente</label>
+											<div class="relative">
+												<select
+													id="tr-documento-pendiente"
+													value={formValues.documento_pendiente}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleInput('documento_pendiente', (e.target as HTMLSelectElement).value)}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="no">No</option>
+													<option value="si">Sí</option>
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+										</div>
+										{#if formValues.documento_pendiente === 'si'}
+											<div>
+												<label for="tr-responsable-doc-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
+													Responsable<span class="text-red-500">*</span>
+												</label>
+												<div class="relative">
+													<select
+														id="tr-responsable-doc-pendiente"
+														value={formValues.responsable_documento_pendiente}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('responsable_documento_pendiente', (e.target as HTMLSelectElement).value)}
+														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.responsable_documento_pendiente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+													>
+														<option value="" disabled>Selecciona una opción</option>
+														{#each dynamicOptions.responsable_documento_pendiente ?? [] as opt}
+															<option value={opt.value}>{opt.label}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												{#if fieldErrors.responsable_documento_pendiente}
+													<p class="mt-1 text-xs text-red-600">{fieldErrors.responsable_documento_pendiente}</p>
+												{/if}
+											</div>
+											<div>
+												<label for="tr-fecha-vencimiento-doc" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
+													Fecha de Vencimiento<span class="text-red-500">*</span>
+												</label>
+												<input
+													id="tr-fecha-vencimiento-doc"
+													type="date"
+													value={formValues.fecha_vencimiento_documento}
+													disabled={bloqueadaPorAprobacion}
+													oninput={(e) => handleInput('fecha_vencimiento_documento', (e.target as HTMLInputElement).value)}
+													class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.fecha_vencimiento_documento ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+												/>
+												{#if fieldErrors.fecha_vencimiento_documento}
+													<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
+												{/if}
+											</div>
+										{/if}
+									</div>
+								{/if}
 							</div>
 						</div>
 					</div>
@@ -3314,9 +3643,12 @@
 				     lectura), así que Detalle nunca llegaba a mostrarse para elegirla la primera vez.
 				     EXCEPTO cuando el tipo de transacción es Ingreso — a pedido explícito del usuario,
 				     bloqueada (oculta) por completo en Ingreso, sea cual sea el tipo de proyecto (antes
-				     solo se excluía Obra+Ingreso). Ver detalleCategoria/agregarFilaDetalleCategoria más
-				     arriba. -->
-				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && formValues.tipo !== 'ingreso'}
+				     solo se excluía Obra+Ingreso). TAMBIÉN excluida en Egreso+Categoría="Préstamo"
+				     (categoriaEsPrestamoOtorgado) — a pedido explícito del usuario: esa transacción ni
+				     siquiera se crea acá (se redirige a Cuentas por Cobrar, ver handleSubmit), así que un
+				     detalle de línea por línea no tiene sentido ahí. Ver detalleCategoria/
+				     agregarFilaDetalleCategoria más arriba. -->
+				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && formValues.tipo !== 'ingreso' && !categoriaEsPrestamoOtorgado}
 					<div class="rounded-2xl border border-slate-200 p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
@@ -3702,7 +4034,7 @@
 
 				<div class="sticky bottom-0 flex gap-2 justify-end bg-white px-6 py-4 border-t border-slate-200">
 					<button type="button" onclick={onClose} disabled={submitting} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-						Cancelar
+						{forceReadOnly ? 'Cerrar' : 'Cancelar'}
 					</button>
 					{#if !bloqueadaPorAprobacion}
 						<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
@@ -3761,4 +4093,28 @@
 	onCancel={() => (reciboPagoProveedorModalOpen = false)}
 	onGenerar={handleFirmarReciboPagoProveedor}
 />
+
+<!-- Vista previa a tamaño completo del recibo autogenerado por el ERP (ver abrirPreviewHtml más
+     arriba) — a pedido explícito del usuario, dentro del sistema (mismo srcdoc que la miniatura de
+     "Otros campos", solo más grande), no una pestaña nueva del navegador. -->
+{#if previewHtmlModalOpen && reciboAutoHtml}
+	<div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl h-[90vh] flex flex-col overflow-hidden">
+			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 shrink-0">
+				<h2 class="text-lg font-semibold text-slate-800">Vista previa del recibo</h2>
+				<button
+					type="button"
+					onclick={() => (previewHtmlModalOpen = false)}
+					class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
+					aria-label="Cerrar"
+				>
+					<X size={20} />
+				</button>
+			</div>
+			<div class="flex-1 overflow-auto bg-slate-100">
+				<iframe title="Vista previa del recibo" srcdoc={reciboAutoHtml} class="w-full h-full border-0 bg-white"></iframe>
+			</div>
+		</div>
+	</div>
+{/if}
 

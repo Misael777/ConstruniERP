@@ -135,6 +135,23 @@ export interface Transaccion {
 	 * queda bloqueado); 'externa' = con un tercero, el formulario funciona igual que siempre. Ver
 	 * TransaccionModal.svelte y transaccion_tipo_alcance_migration.sql. */
 	tipo_alcance: 'interna' | 'externa' | null;
+	/** 'soles' por defecto — ver transaccion_moneda_migration.sql y buildInitialValues en
+	 * TransaccionModal.svelte. monto_total SIEMPRE está en esta moneda (nunca en la otra). */
+	tipo_moneda: 'soles' | 'dolares' | null;
+	/** Solo aplica (no-null) si tipo_moneda='dolares' — S/ por US$ del día. */
+	tipo_cambio: number | null;
+	/** Solo aplica (no-null) si tipo_moneda='dolares' — monto_total × tipo_cambio, calculado y
+	 * guardado por TransaccionModal.svelte al crear/editar (nunca a mano). */
+	monto_convertido: number | null;
+	/** 'no' por defecto — ver transaccion_documento_pendiente_migration.sql. Solo aplica (visible en el
+	 * formulario) a Ingreso/Egreso; 'si' habilita responsable_documento_pendiente/
+	 * fecha_vencimiento_documento. */
+	documento_pendiente: 'si' | 'no' | null;
+	/** Solo aplica (no-null) si documento_pendiente='si' — nombre del empleado responsable de conseguir
+	 * el documento de respaldo (factura/boleta) pendiente. */
+	responsable_documento_pendiente: string | null;
+	/** Solo aplica (no-null) si documento_pendiente='si'. */
+	fecha_vencimiento_documento: string | null;
 }
 
 export interface TransDetalle {
@@ -245,13 +262,6 @@ async function esCentroCostoInterno(client: SupabaseClient, idCentroCosto: numbe
 	return data.id_cliente === null && data.id_proveedor === null && data.id_empleado === null;
 }
 
-/** true si el número de cuenta corresponde a una cuenta bancaria realmente registrada por la empresa
- * — un valor de texto libre que no matchea ninguna fila es la cuenta del tercero, no la nuestra. */
-async function esCuentaBancoRegistrada(client: SupabaseClient, numeroCuenta: string): Promise<boolean> {
-	const { data } = await client.from('cuenta_banco').select('id_cuenta_banco').eq('numero_cuenta', numeroCuenta).maybeSingle();
-	return !!data;
-}
-
 /** Saldo disponible de un centro de costo propio: suma de todo lo que entró a su favor (Ingreso o
  * Financiamiento como destino, o Transferencia como destino) menos todo lo que salió (Egreso o
  * Transferencia como origen), entre las transacciones activas. `excluirIdTransaccion` se usa al
@@ -317,31 +327,15 @@ export async function getCuentasBancoUsadasEnIngresos(client: SupabaseClient, id
 	return [...new Set((data ?? []).map((t: any) => t.cuente_destino as string))];
 }
 
-/** Mismo criterio que saldoDisponibleCentroCosto, pero para una cuenta bancaria registrada — suma por
- * cuente_origen (sale)/cuente_destino (entra) en vez de por centro de costo. */
-async function saldoDisponibleCuentaBanco(client: SupabaseClient, numeroCuenta: string, excluirIdTransaccion?: number): Promise<number> {
-	let query = client
-		.from(TABLE_NAME)
-		.select('cuente_origen, cuente_destino, monto_total')
-		.eq('estado', 'activo')
-		.or(`cuente_origen.eq.${numeroCuenta},cuente_destino.eq.${numeroCuenta}`);
-	if (excluirIdTransaccion) query = query.neq(PK_COLUMN, excluirIdTransaccion);
-
-	const { data, error } = await query;
-	if (error) throw error;
-
-	return (data ?? []).reduce((saldo: number, t: any) => {
-		const monto = Number(t.monto_total);
-		if (t.cuente_origen === numeroCuenta) saldo -= monto;
-		if (t.cuente_destino === numeroCuenta) saldo += monto;
-		return saldo;
-	}, 0);
-}
-
-/** Punto de entrada único, llamado desde createTransaccion/updateTransaccion. Devuelve `ok:false` con
- * un mensaje accionable (qué recurso falla, cuánto hay vs. cuánto se pide, y el siguiente paso —
- * registrar un Financiamiento/Ingreso) apenas para no dejar al usuario con solo un "no se puede". */
-async function validarSaldoSuficiente(
+/** Llamado desde updateTransaccion (createTransaccion confía en el mismo chequeo que ya hace
+ * fn_crear_transaccion bajo lock, ver financial_integrity_rpc_migration.sql) y, exportada, también
+ * desde TransaccionModal.svelte para el flujo "Préstamo Otorgado" (ver esPrestamoOtorgadoEgreso): ahí
+ * se usa para avisar ANTES de redirigir a Cuentas por Cobrar — a pedido explícito del usuario, que
+ * llenaba toda esa Cuenta por Cobrar (cuotas, fechas, etc.) para recién enterarse del saldo
+ * insuficiente al guardar, muy tarde. Devuelve `ok:false` con un mensaje accionable (qué recurso
+ * falla, cuánto hay vs. cuánto se pide, y el siguiente paso — registrar un Financiamiento/Ingreso)
+ * apenas para no dejar al usuario con solo un "no se puede". */
+export async function validarSaldoSuficiente(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	excluirIdTransaccion?: number
@@ -363,16 +357,9 @@ async function validarSaldoSuficiente(
 		}
 	}
 
-	const cuentaOrigen = payload.cuente_origen ? String(payload.cuente_origen).trim() : '';
-	if (cuentaOrigen && (await esCuentaBancoRegistrada(client, cuentaOrigen))) {
-		const saldoCuenta = await saldoDisponibleCuentaBanco(client, cuentaOrigen, excluirIdTransaccion);
-		if (saldoCuenta - monto < -0.01) {
-			return {
-				ok: false,
-				message: `Saldo insuficiente en la cuenta bancaria ${cuentaOrigen}: disponible ${formatCurrency(saldoCuenta)}, se requieren ${formatCurrency(monto)}. Registra un depósito o ingreso a esa cuenta antes de continuar.`
-			};
-		}
-	}
+	// A pedido explícito del usuario: las cuentas bancarias SÍ pueden quedar en saldo negativo al hacer
+	// una transacción (a diferencia del centro de costo, que sigue bloqueado arriba) — ya no se audita
+	// acá ni en fn_crear_transaccion (ver transaccion_permitir_saldo_negativo_cuenta_banco_migration.sql).
 
 	return { ok: true };
 }
@@ -898,17 +885,18 @@ export async function getCentroCostoOptionsClientes(client: SupabaseClient): Pro
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
-/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro' o 'bolsa general' (Corporativo) —
- * para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en Ingreso+Externa, a
- * pedido explícito del usuario. Versiones anteriores de este mismo campo mostraron: solo clientes:
- * todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el mismo grupo "Centros de
- * Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta cerrada, ver
- * getCentroCostoOptionsSoloCentros) — esta es la definición vigente. */
+/** Clientes (`id_cliente` no nulo) + centros de costo de tipo 'otro', 'bolsa general' (Corporativo) o
+ * 'prestamo' — para "Centro de Costo Origen" ("Persona/Empresa", ver TransaccionModal.svelte) en
+ * Ingreso+Externa, a pedido explícito del usuario. Versiones anteriores de este mismo campo
+ * mostraron: solo clientes; todos los centros de costo sin filtrar; solo tipo 'proyecto'/'otro'; el
+ * mismo grupo "Centros de Costos" del módulo (obra/consultoría/bolsa general/otro + proyectos de venta
+ * cerrada, ver getCentroCostoOptionsSoloCentros); clientes+otro+bolsa general (sin 'prestamo', que
+ * todavía no existía como tipo) — esta es la definición vigente. */
 export async function getCentroCostoOptionsClientesYCorporativoUOtro(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_CLIENTE_EMBED}`)
-		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general')
+		.or('id_cliente.not.is.null,tipo.eq.otro,tipo.eq.bolsa general,tipo.eq.prestamo')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
@@ -950,23 +938,18 @@ export async function getCentroCostoProductoLookup(client: SupabaseClient): Prom
 
 /** Para "Destino de Transacción" en Externa + Egreso (a pedido del usuario) — misma definición
  * EXACTA de "Centro de Costos" (a diferencia de "Cuentas Internas") que ya usa el submódulo
- * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los 4 tipos creados a
- * mano (obra/consultoría/bolsa general/otro, ver formOptions en centroCostos.config.ts) MÁS los
- * vinculados a un proyecto que YA es una venta cerrada. Excluye "Cuentas Internas" (cliente/
- * proveedor/empleado), proyectos aún en negociación, y — a pedido explícito del usuario — cualquier
- * centro dado de baja (estado != 'activo', ver darDeBajaCentroCostoDeEntidad en
- * centroCostos.service.ts). */
+ * homónimo (ver getCentroCostos en centroCostos.service.ts, vinculado=false): los tipos creados a
+ * mano (obra/consultoría/bolsa general/otro/prestamo, ver formOptions en centroCostos.config.ts) MÁS
+ * TODOS los vinculados a un proyecto (tipo='proyecto'), sin importar su estado de venta — a pedido
+ * explícito del usuario ya no se exige venta_cerrada. Excluye "Cuentas Internas" (cliente/
+ * proveedor/empleado), y — a pedido explícito del usuario — cualquier centro dado de baja
+ * (estado != 'activo', ver darDeBajaCentroCostoDeEntidad en centroCostos.service.ts). */
 export async function getCentroCostoOptionsSoloCentros(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data: cerrados, error: errorCerrados } = await client.from('proyecto').select('id_proyecto').eq('estado_proyecto', 'venta_cerrada');
-	if (errorCerrados) throw errorCerrados;
-	const idsCerrados = (cerrados ?? []).map((p: any) => p.id_proyecto);
-	const idProyectoFilter = idsCerrados.length > 0 ? `id_proyecto.in.(${idsCerrados.join(',')})` : 'id_proyecto.eq.-1';
-
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_PROYECTO_EMBED}`)
 		.eq('estado', 'activo')
-		.or(`tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,${idProyectoFilter}`)
+		.or('tipo.eq.proyecto,tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,tipo.eq.prestamo')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));

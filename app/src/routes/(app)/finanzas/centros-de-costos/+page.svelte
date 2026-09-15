@@ -347,6 +347,15 @@
 			return tipoObraLabel(item.proyecto.tipo_obra);
 		}
 		if (activeTab === 'centros' && field.key === 'monto_actual') {
+			// A pedido explícito del usuario: un centro manual puro (sin vínculo a proyecto/cliente/
+			// proveedor/empleado — obra/consultoría/corporativo/otro/préstamo creados desde "Nuevo Centro
+			// de Costo") muestra tal cual lo que se escribió en "Monto Actual" al crearlo/editarlo, no la
+			// ficha de caja en vivo (`saldos`, ver getSaldosPorCentroCosto) — esa función YA inicializa
+			// cada id en 0 (nunca queda `undefined`), así que el "?? item.monto_actual" de abajo nunca se
+			// disparaba en la práctica: por eso lo escrito acá parecía no guardarse. Los vinculados a una
+			// venta real (proyecto/consultoría) siguen mostrando su ficha de caja como hasta ahora — esos
+			// no tienen un campo "Monto Actual" editable en su propio flujo (se crean solos en 0).
+			if (esManualSinVincular(item)) return formatCurrency(item.monto_actual);
 			const saldo = esCentroDeVenta(item) ? saldosVenta[item.id_centro_costo] : saldos[item.id_centro_costo];
 			return formatCurrency(saldo ?? item.monto_actual);
 		}

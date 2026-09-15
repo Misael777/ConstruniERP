@@ -1177,6 +1177,11 @@ async function copiarCodigoGenerado() {
 						fecha: fechaInicio,
 						monto_total: Number(adelantoMonto),
 						tipo: 'ingreso',
+						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+						// porque adelantoMonto siempre se pide en Soles en este formulario. Sin esto,
+						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
+						// se creaba ni la transacción del adelanto ni la venta.
+						tipo_moneda: 'soles',
 						estado: 'activo',
 						comprobante_url: comprobanteUrl,
 						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`

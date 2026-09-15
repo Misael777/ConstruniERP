@@ -8,7 +8,7 @@
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { Landmark, Plus, Pencil, Trash2, Trash, RotateCcw, ChevronLeft, Search, ChevronUp, ChevronDown, X } from '@lucide/svelte';
-	import { getOptionLabel, formatCurrency } from '$lib/shared/fieldConfig';
+	import { getOptionLabel } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-bancarias/config/cuentaBanco.config';
 	import {
 		getCuentasBanco,
@@ -37,6 +37,17 @@
 		autorizada: 'bg-emerald-100 text-emerald-700',
 		no_autorizada: 'bg-red-100 text-red-700'
 	};
+	const NUMERO_FORMATTER = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	/** A pedido explícito del usuario: Saldo Inicial/Actual de una cuenta bancaria se muestran con el
+	 * símbolo real de SU moneda (Dólares '$', Soles 'S/.') — a diferencia de formatCurrency (usada en el
+	 * resto de la app), que siempre formatea en Soles sin importar la moneda real de la cuenta. */
+	function formatSaldo(valor: unknown, tipoMoneda: string): string {
+		const numero = Number(valor);
+		if (valor === null || valor === undefined || valor === '' || Number.isNaN(numero)) return '—';
+		const texto = NUMERO_FORMATTER.format(numero);
+		const simbolo = tipoMoneda === 'dolares' ? '$' : tipoMoneda === 'soles' ? 'S/.' : '';
+		return simbolo ? `${simbolo} ${texto}` : texto;
+	}
 
 	let items = $state<CuentaBanco[]>([]);
 	let total = $state(0);
@@ -322,8 +333,8 @@
 					<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 						{getOptionLabel(estadoField, item.estado)}
 					</span>
-					<p class={`text-sm font-bold mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatCurrency(item.saldo_inicial)}">
-						{formatCurrency(item.saldo_actual)}
+					<p class={`text-sm font-bold mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatSaldo(item.saldo_inicial, item.tipo_moneda)}">
+						{formatSaldo(item.saldo_actual, item.tipo_moneda)}
 					</p>
 					<p class="text-[11px] text-slate-400">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
 				</div>

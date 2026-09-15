@@ -212,12 +212,19 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		// selector que ofrezca "Centros de Costos creados a mano" (ej. getCentroCostoOptionsSoloCentros
 		// en transacciones.service.ts) debe incluir 'otro' en su filtro o un centro así queda invisible
 		// ahí aunque exista y se vea bien en su propia lista.
+		// A pedido explícito del usuario se agregó 'prestamo' acá — OJO: verificado con un insert de
+		// prueba real que `centro_costo_tipo_check` es una restricción real en la BD (rechazaba este
+		// valor, ninguna fila llegó a crearse) — requiere haber corrido
+		// centro_costo_tipo_prestamo_migration.sql (amplía esa restricción) ANTES de que este valor
+		// pueda guardarse de verdad; si no, el guardado falla con "El valor ingresado no cumple una
+		// regla de la base de datos".
 		options: [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
 			{ value: 'bolsa general', label: 'Corporativa' },
 			{ value: 'area', label: 'Área' },
 			{ value: 'otro', label: 'Otro' },
+			{ value: 'prestamo', label: 'Préstamo' },
 			{ value: 'proyecto', label: 'Proyecto (automático)' },
 			{ value: 'cliente', label: 'Cliente (automático)' },
 			{ value: 'proveedor', label: 'Proveedor (automático)' },
@@ -228,7 +235,8 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 			{ value: 'obra', label: 'Obra' },
 			{ value: 'consultoria', label: 'Consultoría' },
 			{ value: 'bolsa general', label: 'Corporativa' },
-			{ value: 'otro', label: 'Otro' }
+			{ value: 'otro', label: 'Otro' },
+			{ value: 'prestamo', label: 'Préstamo' }
 		],
 		helpText: 'Clasificación del centro de costo.',
 		showInTable: true,

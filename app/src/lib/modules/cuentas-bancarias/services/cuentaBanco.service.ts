@@ -173,6 +173,20 @@ export async function getSaldosCuentaBanco(client: SupabaseClient): Promise<Reco
 	return saldos;
 }
 
+/** Mapa numero_cuenta -> tipo_moneda de todas las cuentas activas — a pedido explícito del usuario,
+ * para mostrar el símbolo real de cada cuenta ('$' Dólares, 'S/.' Soles) junto al "Saldo actual" del
+ * selector de Cuenta Origen/Destino en TransaccionModal.svelte, en vez del formatCurrency genérico
+ * (que siempre formatea en Soles sin importar la moneda real de la cuenta). Mismo patrón que
+ * getSaldosCuentaBanco, función aparte para no cambiarle la forma a esa (ya la usa
+ * conciliacion.service.ts). */
+export async function getMonedasCuentaBanco(client: SupabaseClient): Promise<Record<string, string>> {
+	const { data, error } = await client.from(TABLE_NAME).select('numero_cuenta, tipo_moneda').eq('activo', true);
+	if (error) throw error;
+	const monedas: Record<string, string> = {};
+	for (const c of (data ?? []) as any[]) monedas[c.numero_cuenta] = c.tipo_moneda;
+	return monedas;
+}
+
 export async function deleteCuentaBanco(client: SupabaseClient, id: number): Promise<ServiceResult> {
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };

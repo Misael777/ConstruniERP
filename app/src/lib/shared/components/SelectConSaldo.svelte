@@ -43,6 +43,11 @@
 		 * detecta cuándo cambia el grupo entre una opción y la anterior). undefined = sin agrupar (el resto
 		 * de los usos de este componente, comportamiento sin cambios). */
 		grupo?: string;
+		/** Símbolo de moneda real de ESTA opción (ej. '$' para una cuenta bancaria en Dólares, 'S/.' en
+		 * Soles) — a pedido explícito del usuario: reemplaza a formatCurrency (que siempre formatea en
+		 * Soles) cuando viene definido. undefined = usa formatCurrency tal cual (comportamiento normal,
+		 * ej. saldos de Centro de Costo, que no tienen una moneda propia distinta). */
+		simbolo?: string;
 	}
 
 	let {
@@ -71,6 +76,17 @@
 	let busqueda = $state('');
 
 	const selected = $derived(options.find((o) => o.value === value) ?? null);
+
+	/** A pedido explícito del usuario: si la opción trae un `simbolo` propio (moneda real de una cuenta
+	 * bancaria, ej. '$' Dólares/'S/.' Soles), se usa ESE en vez de formatCurrency (que siempre formatea
+	 * en Soles) — el número en sí se formatea igual (separador de miles + 2 decimales), solo cambia el
+	 * símbolo de moneda. */
+	const NUMERO_FORMATTER = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	function formatSaldoOpcion(opt: OptionConSaldo): string {
+		if (opt.saldo === undefined) return '';
+		if (opt.simbolo) return `${opt.simbolo} ${NUMERO_FORMATTER.format(opt.saldo)}`;
+		return formatCurrency(opt.saldo);
+	}
 
 	/** Sin tildes ni mayúsculas, para que "peru" encuentre "Perú" — mismo criterio que sinTildes en
 	 * ocrComprobante.ts. */
@@ -202,7 +218,7 @@
 				>
 					<span class="flex-1 min-w-0 truncate">{opt.label}</span>
 					{#if opt.saldo !== undefined}
-						<span class={`shrink-0 font-semibold ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatCurrency(opt.saldo)}</span>
+						<span class={`shrink-0 font-semibold ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSaldoOpcion(opt)}</span>
 					{/if}
 				</button>
 			{:else}

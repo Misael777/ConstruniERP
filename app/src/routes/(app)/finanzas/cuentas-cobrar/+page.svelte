@@ -649,6 +649,12 @@
 			fecha: formValues.fecha_emision,
 			tipo: 'egreso',
 			monto_total: formValues.monto,
+			// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles' porque
+			// formValues.monto SIEMPRE es el equivalente en Soles, aun con la Cuenta por Cobrar en
+			// Dólares (ahí se autocalcula desde monto_dolares × tipo_cambio, ver disabledValue de 'monto'
+			// en cuentaCobrar.config.ts). Sin esto, crearTransaccionSistema fallaba con "Revisa los campos
+			// marcados" y ni la transacción ni la Cuenta por Cobrar se guardaban.
+			tipo_moneda: 'soles',
 			categoria: 'Préstamo Otorgado',
 			descripcion: formValues.observaciones || 'Préstamo otorgado'
 		};

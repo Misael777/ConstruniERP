@@ -3,12 +3,17 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins } from '@lucide/svelte';
+	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins, Eye, ChevronDown, Briefcase, HardHat, Ellipsis, DollarSign } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { getCentroCostoOptions, labelPorCodigoMedioPago } from '$lib/modules/transacciones/services/transacciones.service';
+	import { formatCurrency, emptyColumnFilters, isColumnFilterActive, type FieldConfig, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
+	import { getCentroCostoOptions, getCentroCostoTipoMap, labelPorCodigoMedioPago } from '$lib/modules/transacciones/services/transacciones.service';
+	import { FIELDS_CONFIG as TRANSACCION_FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
+	import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja, type FilaMovimiento, type TipoMovimiento } from '$lib/modules/transacciones/services/movimientosCaja.service';
+	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
+	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 
 	// Panel 100% sobre `transaccion` (Supabase anon key, client-side) — a pedido explícito del usuario:
 	// "Movimientos de Caja" debe ser solo sobre transacciones, sin ningún dato de cuentas_pagar/cobrar
@@ -38,6 +43,9 @@
 		'Depósito bancario': 'text-violet-600',
 		'Yape o Plin': 'text-rose-600'
 	};
+	// Reusa el catálogo real de `medio_pago` (código '1'-'4' -> label) para el filtro de columna "Método
+	// de Pago" (ver REPORT_FIELDS más abajo) — sin duplicar el catálogo a mano.
+	const MEDIO_PAGO_FIELD = TRANSACCION_FIELDS_CONFIG.find((f) => f.key === 'medio_pago');
 
 	let ingresosTotal = $state(0);
 	let ingresosCount = $state(0);
@@ -45,10 +53,32 @@
 	let financiamientoTotal = $state(0);
 	let financiamientoCount = $state(0);
 	let saldoActual = $state(0);
+	/** Saldo Actual, pero solo de transacciones en Dólares (ver saldoActualDolares en
+	 * movimientosCaja.service.ts) — a pedido explícito del usuario, cuadro aparte, nunca mezclado con
+	 * el saldo en Soles de arriba. */
+	let saldoActualDolares = $state(0);
 	let loading = $state(true);
 	let loadError = $state('');
 	// Excluye la fila sintética de "Saldo Inicial" (esSaldoInicial=true) — no es una transacción real.
 	let movimientosFilas = $state<FilaMovimiento[]>([]);
+
+	// Botones "Consultoria"/"Obra"/"Corporativo"/"Otros" — mismo diseño/lógica que ya usan Cuentas por
+	// Pagar/Cobrar (ver idsParaTipoFiltro ahí), filtran por el TIPO real del centro de costo de cada
+	// movimiento (origen O destino, ver idsCentroCosto en movimientosCaja.service.ts). "Otros" es el
+	// catch-all (cualquier tipo que no sea uno de los 3 conocidos).
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
+	let centroCostoTipoMap = $state<Record<string, string>>({});
+	let tipoFilterCC = $state<TipoFiltroCC | null>(null);
+	const TIPOS_CONOCIDOS_CC = ['proyecto', 'consultoria', 'bolsa general'];
+	function idsParaTipoFiltroCC(tipo: TipoFiltroCC): number[] {
+		const entries = Object.entries(centroCostoTipoMap);
+		const filtradas = tipo === 'otros' ? entries.filter(([, t]) => !TIPOS_CONOCIDOS_CC.includes(t)) : entries.filter(([, t]) => t === tipo);
+		return filtradas.map(([id]) => Number(id));
+	}
+	function toggleTipoFilterCC(tipo: TipoFiltroCC) {
+		tipoFilterCC = tipoFilterCC === tipo ? null : tipo;
+		fetchMovimientos();
+	}
 
 	// ── Barrita única de scroll para la columna "Centro de Costo" ──────────────────────────────────
 	// A pedido explícito del usuario: antes cada fila tenía su propia barrita de scroll (se veía
@@ -83,7 +113,10 @@
 				desde: desde || '1970-01-01',
 				hasta: hasta || new Date().toISOString().slice(0, 10),
 				idCentroCosto: idCentroCosto ? Number(idCentroCosto) : undefined,
+				idsCentroCosto: tipoFilterCC ? idsParaTipoFiltroCC(tipoFilterCC) : undefined,
+				numeroCuentaBanco: numeroCuentaBanco || undefined,
 				tipo: tipoFiltro || undefined,
+				soloAprobado: estadoFiltro === 'aprobado' ? true : estadoFiltro === 'pendiente' ? false : undefined,
 				search: search || undefined
 			});
 			ingresosTotal = resultado.ingresosTotal;
@@ -92,6 +125,7 @@
 			financiamientoTotal = resultado.financiamientosTotal;
 			financiamientoCount = resultado.financiamientosCount;
 			saldoActual = resultado.saldoActual;
+			saldoActualDolares = resultado.saldoActualDolares;
 			movimientosFilas = resultado.filas.filter((f) => !f.esSaldoInicial).reverse();
 			loadError = '';
 			pageNum = 1;
@@ -110,15 +144,134 @@
 	function medioPagoDe(fila: FilaMovimiento): string | null {
 		return fila.raw?.medio_pago ? labelPorCodigoMedioPago(fila.raw.medio_pago) : null;
 	}
+	/** Monto/Saldo Acumulado con el símbolo real de `fila.moneda` ('$' Dólares, 'S/' Soles) — a pedido
+	 * explícito del usuario: la tabla usaba formatCurrency (siempre Soles) sin importar la moneda real
+	 * de esa transacción. Mismo criterio que formatMontoTransaccion en tranzacciones/+page.svelte. */
+	function formatMontoFila(valor: number, fila: FilaMovimiento): string {
+		const texto = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(valor);
+		return fila.moneda === 'dolares' ? `$ ${texto}` : `S/ ${texto}`;
+	}
+
+	// ── Filtros de columna estilo Excel (ver ColumnFilterBar.svelte) ───────────────────────────────
+	// A diferencia de Cuentas por Pagar/Cobrar (que aplican el ColumnFilters a un query de Supabase vía
+	// applyColumnFilters), este reporte ya trae TODO el período a memoria (ver AJUSTAR en
+	// movimientosCaja.service.ts) y pagina client-side — así que los filtros de columna también se
+	// aplican client-side, con un FieldConfig "de mentira" (nunca se usa para un formulario, solo para
+	// que ColumnFilterBar sepa qué tipo de control mostrar por columna).
+	const REPORT_FIELDS: FieldConfig[] = [
+		{ key: 'codigo', label: 'Código', tipo: 'text', showInTable: true },
+		{ key: 'fecha', label: 'Fecha', tipo: 'date', showInTable: true },
+		{
+			key: 'tipo',
+			label: 'Tipo',
+			tipo: 'select',
+			showInTable: true,
+			options: Object.entries(TIPO_MOVIMIENTO_LABEL).map(([value, label]) => ({ value, label }))
+		},
+		{ key: 'concepto', label: 'Concepto', tipo: 'text', showInTable: true },
+		{ key: 'centroCosto', label: 'Centro de Costo', tipo: 'text', showInTable: true },
+		{ key: 'medioPago', label: 'Método de Pago', tipo: 'select', showInTable: true, options: MEDIO_PAGO_FIELD?.options ?? [] },
+		{ key: 'monto', label: 'Monto', tipo: 'currency', showInTable: true },
+		{ key: 'saldoAcumulado', label: 'Saldo Acumulado', tipo: 'currency', showInTable: true },
+		{
+			key: 'estado',
+			label: 'Estado',
+			tipo: 'select',
+			showInTable: true,
+			options: [
+				{ value: 'aprobado', label: 'Aprobado' },
+				{ value: 'pendiente', label: 'Pendiente' }
+			]
+		}
+	];
+	let columnFilters = $state<ColumnFilters>(emptyColumnFilters(REPORT_FIELDS));
+
+	/** true si `fila` pasa TODOS los filtros de columna activos (AND, igual que el autofiltro de
+	 * Excel) — evaluado campo por campo con el mismo `ColumnFilterValue` que arma ColumnFilterBar. */
+	function cumpleColumnFilters(fila: FilaMovimiento): boolean {
+		for (const field of REPORT_FIELDS) {
+			const filtro = columnFilters[field.key];
+			if (!isColumnFilterActive(filtro)) continue;
+			if (filtro.kind === 'text') {
+				const valor =
+					field.key === 'codigo'
+						? fila.codigo
+						: field.key === 'concepto'
+							? fila.concepto
+							: `${fila.centroCostoOrigenLabel} → ${fila.centroCostoDestinoLabel}`;
+				if (!valor.toLowerCase().includes(filtro.contains.trim().toLowerCase())) return false;
+			} else if (filtro.kind === 'select') {
+				const valor = field.key === 'tipo' ? fila.tipo : field.key === 'medioPago' ? (fila.raw?.medio_pago ?? '') : fila.aprobado ? 'aprobado' : 'pendiente';
+				if (!filtro.values.includes(valor)) return false;
+			} else if (filtro.kind === 'range') {
+				const valor = field.key === 'monto' ? montoMovimiento(fila) : fila.saldoAcumulado;
+				if (filtro.min.trim() !== '' && valor < Number(filtro.min)) return false;
+				if (filtro.max.trim() !== '' && valor > Number(filtro.max)) return false;
+			} else if (filtro.kind === 'daterange') {
+				if (filtro.from.trim() !== '' && fila.fecha < filtro.from) return false;
+				if (filtro.to.trim() !== '' && fila.fecha > filtro.to) return false;
+			}
+		}
+		return true;
+	}
+	const movimientosFiltrados = $derived(movimientosFilas.filter(cumpleColumnFilters));
+	function onColumnFiltersChange() {
+		pageNum = 1;
+	}
 
 	let centroCostoOptions = $state<FieldOption[]>([]);
+	let cuentaBancoOptions = $state<FieldOption[]>([]);
 	let idCentroCosto = $state('');
+	/** N° de cuenta bancaria (cuenta_banco.numero_cuenta) — filtra por Origen O Destino, ver
+	 * numeroCuentaBanco en movimientosCaja.service.ts. Un solo estado alimenta DOS controles (el
+	 * selector prominente del encabezado y el filtro "Cuenta Bancaria" de la barra), a pedido explícito
+	 * del usuario — ambos quedan siempre sincronizados entre sí. */
+	let numeroCuentaBanco = $state('');
 	let tipoFiltro = $state<TipoMovimiento | ''>('');
+	/** Filtra por `transaccion.aprobado` (ver soloAprobado en movimientosCaja.service.ts) — a pedido
+	 * explícito del usuario, para encontrar rápido los movimientos con "documento de pago pendiente"
+	 * (Estado='Pendiente' en la columna de la tabla). */
+	let estadoFiltro = $state<'' | 'aprobado' | 'pendiente'>('');
 	let desde = $state('');
 	let hasta = $state('');
 	let search = $state('');
 	let searchInput = $state('');
 	let debounceTimer: ReturnType<typeof setTimeout>;
+
+	/** "Titular - N° cuenta" (ver getCuentaBancoOptions) partido en dos líneas para el selector
+	 * prominente del encabezado (título en negrita + N° de cuenta en verde debajo, a pedido explícito
+	 * del usuario) — mismo criterio de split que centroCostoNombre en tranzacciones/+page.svelte. */
+	const cuentaBancoSeleccionada = $derived(cuentaBancoOptions.find((o) => o.value === numeroCuentaBanco) ?? null);
+	function tituloCuentaBanco(opt: FieldOption): string {
+		const idx = opt.label.indexOf(' - ');
+		return idx === -1 ? opt.label : opt.label.slice(0, idx);
+	}
+
+	// Modal de "Ver" (ojito) — abre CUALQUIER transacción en modo de consulta (forceReadOnly, ver
+	// TransaccionModal.svelte), sin exponer Editar/Guardar. dynamicOptions reutiliza las listas COMPLETAS
+	// ya cargadas para los filtros de esta misma página (centroCostoOptions/cuentaBancoOptions) en vez de
+	// replicar las listas especializadas (por proyecto/externos) que sí necesita el alta/edición
+	// interactiva en tranzacciones/+page.svelte — de sobra para renderizar bien un formulario 100%
+	// deshabilitado, que nunca ofrece elegir un valor nuevo.
+	let viewModalOpen = $state(false);
+	let viewingTransaccion = $state<Transaccion | null>(null);
+	const viewDynamicOptions = $derived({
+		id_centro_costo_origen: centroCostoOptions,
+		id_centro_costo_destino: centroCostoOptions,
+		id_centro_costo_origen_externo: centroCostoOptions,
+		id_centro_costo_destino_externo: centroCostoOptions,
+		id_centro_costo_destino_solo_centros: centroCostoOptions,
+		cuenta_banco: cuentaBancoOptions
+	});
+	function verTransaccion(fila: FilaMovimiento) {
+		if (!fila.raw) return;
+		viewingTransaccion = fila.raw;
+		viewModalOpen = true;
+	}
+	function closeViewModal() {
+		viewModalOpen = false;
+		viewingTransaccion = null;
+	}
 
 	onMount(async () => {
 		if (!isAdmin()) {
@@ -126,16 +279,21 @@
 			return;
 		}
 		try {
-			centroCostoOptions = await getCentroCostoOptions(supabase);
+			const [centros, cuentas, tipoMap] = await Promise.all([getCentroCostoOptions(supabase), getCuentaBancoOptions(supabase), getCentroCostoTipoMap(supabase)]);
+			centroCostoOptions = centros;
+			cuentaBancoOptions = cuentas;
+			centroCostoTipoMap = tipoMap;
 		} catch (err: any) {
-			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo');
+			toast.error(err?.message ?? 'No se pudieron cargar los centros de costo/cuentas bancarias');
 		}
 		await fetchMovimientos();
 	});
 
 	$effect(() => {
 		void idCentroCosto;
+		void numeroCuentaBanco;
 		void tipoFiltro;
+		void estadoFiltro;
 		void desde;
 		void hasta;
 		void search;
@@ -150,11 +308,21 @@
 
 	function limpiarFiltros() {
 		idCentroCosto = '';
+		numeroCuentaBanco = '';
 		tipoFiltro = '';
+		estadoFiltro = '';
 		desde = '';
 		hasta = '';
 		searchInput = '';
 		search = '';
+		tipoFilterCC = null;
+		columnFilters = emptyColumnFilters(REPORT_FIELDS);
+		pageNum = 1;
+		// tipoFilterCC no está entre las dependencias del $effect de abajo (se dispara a mano en
+		// toggleTipoFilterCC) — se refresca acá explícito para no quedarse con ese filtro aplicado sin
+		// ningún botón resaltado. Puede duplicar el fetch que dispare el $effect si además cambió algún
+		// otro filtro — inofensivo, es una consulta liviana.
+		fetchMovimientos();
 	}
 
 	function formatDate(value: string | null | undefined) {
@@ -166,8 +334,10 @@
 
 	const PAGE_SIZE = 10;
 	let pageNum = $state(1);
-	const totalPages = $derived(Math.max(1, Math.ceil(movimientosFilas.length / PAGE_SIZE)));
-	const filasPagina = $derived(movimientosFilas.slice((pageNum - 1) * PAGE_SIZE, pageNum * PAGE_SIZE));
+	// Filtrado client-side (columnFilters, ver más arriba) sobre movimientosFilas — la paginación y el
+	// export corren sobre el resultado YA filtrado, mismo criterio que "lo que ves es lo que exportas".
+	const totalPages = $derived(Math.max(1, Math.ceil(movimientosFiltrados.length / PAGE_SIZE)));
+	const filasPagina = $derived(movimientosFiltrados.slice((pageNum - 1) * PAGE_SIZE, pageNum * PAGE_SIZE));
 
 	function goToPage(p: number) {
 		if (p < 1 || p > totalPages) return;
@@ -175,9 +345,9 @@
 	}
 
 	function exportarCSV() {
-		if (movimientosFilas.length === 0) return;
-		const encabezados = ['Código', 'Fecha', 'Tipo', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Método de Pago', 'Monto', 'Saldo Acumulado', 'Estado'];
-		const filas = movimientosFilas.map((f) => [
+		if (movimientosFiltrados.length === 0) return;
+		const encabezados = ['Código', 'Fecha', 'Tipo', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Método de Pago', 'Monto', 'Moneda', 'Saldo Acumulado', 'Estado'];
+		const filas = movimientosFiltrados.map((f) => [
 			f.codigo,
 			formatDate(f.fecha),
 			TIPO_MOVIMIENTO_LABEL[f.tipo] ?? f.tipo,
@@ -186,6 +356,7 @@
 			f.centroCostoDestinoLabel,
 			medioPagoDe(f) ?? '',
 			montoMovimiento(f),
+			f.moneda === 'dolares' ? 'Dólares' : 'Soles',
 			f.saldoAcumulado,
 			f.aprobado ? 'Aprobado' : 'Pendiente'
 		]);
@@ -212,14 +383,87 @@
 				<p class="text-sm text-slate-500">Ingresos, egresos y financiamiento reales, sobre las transacciones registradas</p>
 			</div>
 		</div>
+
+		<!-- Selector de Cuenta Bancaria prominente — a pedido explícito del usuario, además del filtro
+		     "Cuenta Bancaria" de la barra de abajo (mismo estado, numeroCuentaBanco, siempre sincronizados).
+		     El <select> real queda invisible (opacity-0) pero ENCIMA de toda la tarjeta (mismo truco que un
+		     <input type="file"> oculto): mantiene el picker nativo/teclado/accesibilidad de un <select> de
+		     verdad, mientras la tarjeta de abajo (título + N° de cuenta en verde, a dos líneas) es la que
+		     se ve — un <select> normal no puede mostrar dos líneas de texto en su propio valor elegido. -->
+		<div class="relative w-full sm:w-auto sm:min-w-[240px]">
+			<div class="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 shadow-sm">
+				<Landmark size={18} class="shrink-0 text-[#0f3b5e]" />
+				<div class="min-w-0 flex-1 leading-tight">
+					<p class="text-sm font-semibold text-slate-800 truncate">
+						{cuentaBancoSeleccionada ? tituloCuentaBanco(cuentaBancoSeleccionada) : 'Todas las cuentas'}
+					</p>
+					{#if cuentaBancoSeleccionada}
+						<p class="text-[11px] font-medium text-emerald-600 truncate">{cuentaBancoSeleccionada.value}</p>
+					{/if}
+				</div>
+				<ChevronDown size={16} class="shrink-0 text-slate-400" />
+			</div>
+			<select bind:value={numeroCuentaBanco} aria-label="Filtrar por cuenta bancaria" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+				<option value="">Todas las cuentas</option>
+				{#each cuentaBancoOptions as opt}
+					<option value={opt.value}>{opt.label}</option>
+				{/each}
+			</select>
+		</div>
 	</div>
 
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
+	<!-- Botones "Consultoria"/"Obra"/"Corporativo"/"Otros" — mismo diseño/lógica que ya usan Cuentas por
+	     Pagar/Cobrar (ver toggleTipoFilterCC más arriba), filtran por el TIPO real del centro de costo
+	     de cada movimiento (origen O destino). -->
+	<div class="flex flex-wrap gap-3 mb-6">
+		<button
+			type="button"
+			onclick={() => toggleTipoFilterCC('consultoria')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+				<Briefcase size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilterCC('proyecto')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+				<HardHat size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Obra</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilterCC('bolsa general')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+				<Building2 size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilterCC('otros')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
+				<Ellipsis size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Otros</span>
+		</button>
+	</div>
+
 	<!-- KPIs — 100% sobre `transaccion`, sin ningún dato de cuentas_pagar/cobrar. -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-6">
+	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4 mb-6">
 		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
 			<div class="w-12 h-12 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={22} /></div>
 			<div class="min-w-0">
@@ -260,16 +504,26 @@
 				<p class="text-[11px] text-slate-400 truncate">Al {formatDate(hasta || new Date().toISOString().slice(0, 10))}</p>
 			</div>
 		</div>
+		<!-- Saldo Actual en Dólares — a pedido explícito del usuario, cuadro aparte del Saldo Actual en
+		     Soles de arriba (nunca mezclados, ver saldoActualDolares en movimientosCaja.service.ts). -->
+		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
+			<div class={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${saldoActualDolares >= 0 ? 'bg-teal-100 text-teal-600' : 'bg-red-100 text-red-600'}`}><DollarSign size={22} /></div>
+			<div class="min-w-0">
+				<p class="text-xs font-medium text-slate-500 truncate">Saldo Actual en Dólares</p>
+				<p class={`text-2xl font-bold truncate ${saldoActualDolares >= 0 ? 'text-slate-800' : 'text-red-700'}`}>{loading ? '…' : `$ ${new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(saldoActualDolares)}`}</p>
+				<p class="text-[11px] text-slate-400 truncate">Al {formatDate(hasta || new Date().toISOString().slice(0, 10))}</p>
+			</div>
+		</div>
 	</div>
 
 	<!-- Filtros -->
 	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
+		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
 			<div>
-				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
-				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					{#each centroCostoOptions as opt}
+				<label for="mc-cuenta-banco" class="block text-xs font-medium text-slate-500 mb-1">Cuenta Bancaria</label>
+				<select id="mc-cuenta-banco" bind:value={numeroCuentaBanco} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todas</option>
+					{#each cuentaBancoOptions as opt}
 						<option value={opt.value}>{opt.label}</option>
 					{/each}
 				</select>
@@ -290,6 +544,23 @@
 			<div>
 				<label for="mc-hasta" class="block text-xs font-medium text-slate-500 mb-1">Fecha fin</label>
 				<input id="mc-hasta" type="date" bind:value={hasta} min={desde || undefined} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200" />
+			</div>
+			<div>
+				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
+				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					{#each centroCostoOptions as opt}
+						<option value={opt.value}>{opt.label}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="mc-estado" class="block text-xs font-medium text-slate-500 mb-1">Estado</label>
+				<select id="mc-estado" bind:value={estadoFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					<option value="aprobado">Aprobado</option>
+					<option value="pendiente">Pendiente</option>
+				</select>
 			</div>
 		</div>
 		<div class="flex flex-wrap items-end gap-3 mt-3">
@@ -319,10 +590,15 @@
 		</div>
 	</div>
 
+	<!-- Filtros de columna estilo Excel — a pedido explícito del usuario, mismo componente/patrón que ya
+	     usan Cuentas por Pagar/Cobrar (ColumnFilterBar), aplicado client-side sobre movimientosFilas (ver
+	     cumpleColumnFilters/movimientosFiltrados más arriba). -->
+	<ColumnFilterBar fields={REPORT_FIELDS} bind:filters={columnFilters} onChange={onColumnFiltersChange} />
+
 	<!-- Tabla / Tarjetas -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={9} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
+			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={10} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
 				{#snippet header()}
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Código</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
@@ -346,6 +622,7 @@
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Monto</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Saldo Acumulado</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Estado</th>
+					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Ver</th>
 				{/snippet}
 				{#snippet row(fila)}
 					{@const medioPago = medioPagoDe(fila)}
@@ -378,18 +655,25 @@
 					</td>
 					<td class="px-3 py-3.5 text-right whitespace-nowrap font-semibold">
 						{#if fila.tipo === 'egreso'}
-							<span class="text-red-700">-{formatCurrency(montoMovimiento(fila))}</span>
+							<span class="text-red-700">-{formatMontoFila(montoMovimiento(fila), fila)}</span>
 						{:else if fila.tipo === 'ingreso'}
-							<span class="text-emerald-700">+{formatCurrency(montoMovimiento(fila))}</span>
+							<span class="text-emerald-700">+{formatMontoFila(montoMovimiento(fila), fila)}</span>
 						{:else}
-							<span class="text-amber-700">+{formatCurrency(montoMovimiento(fila))}</span>
+							<span class="text-amber-700">+{formatMontoFila(montoMovimiento(fila), fila)}</span>
 						{/if}
 					</td>
-					<td class={`px-3 py-3.5 text-right whitespace-nowrap ${fila.saldoAcumulado >= 0 ? 'text-slate-700' : 'text-red-700'}`}>{formatCurrency(fila.saldoAcumulado)}</td>
+					<td class={`px-3 py-3.5 text-right whitespace-nowrap ${fila.saldoAcumulado >= 0 ? 'text-slate-700' : 'text-red-700'}`}>{formatMontoFila(fila.saldoAcumulado, fila)}</td>
 					<td class="px-3 py-3.5 whitespace-nowrap">
 						<span class={`inline-block px-2.5 py-1 rounded-full text-[11px] font-medium ${fila.aprobado ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
 							{fila.aprobado ? 'Aprobado' : 'Pendiente'}
 						</span>
+					</td>
+					<td class="px-3 py-3.5 text-right whitespace-nowrap">
+						{#if fila.raw}
+							<button type="button" onclick={() => verTransaccion(fila)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
+								<Eye size={16} />
+							</button>
+						{/if}
 					</td>
 				{/snippet}
 				{#snippet card(fila)}
@@ -404,11 +688,11 @@
 						</div>
 						<div class="text-right shrink-0">
 							{#if fila.tipo === 'egreso'}
-								<div class="font-bold text-red-700">-{formatCurrency(montoMovimiento(fila))}</div>
+								<div class="font-bold text-red-700">-{formatMontoFila(montoMovimiento(fila), fila)}</div>
 							{:else if fila.tipo === 'ingreso'}
-								<div class="font-bold text-emerald-700">+{formatCurrency(montoMovimiento(fila))}</div>
+								<div class="font-bold text-emerald-700">+{formatMontoFila(montoMovimiento(fila), fila)}</div>
 							{:else}
-								<div class="font-bold text-amber-700">+{formatCurrency(montoMovimiento(fila))}</div>
+								<div class="font-bold text-amber-700">+{formatMontoFila(montoMovimiento(fila), fila)}</div>
 							{/if}
 							<div class="text-[11px] text-slate-400">{formatDate(fila.fecha)}</div>
 						</div>
@@ -417,7 +701,7 @@
 						<span class="text-slate-400">Método de Pago</span>
 						<span class="text-right text-slate-700">{medioPago ?? '—'}</span>
 						<span class="text-slate-400">Saldo Acumulado</span>
-						<span class={`text-right ${fila.saldoAcumulado >= 0 ? 'text-slate-700' : 'text-red-700'}`}>{formatCurrency(fila.saldoAcumulado)}</span>
+						<span class={`text-right ${fila.saldoAcumulado >= 0 ? 'text-slate-700' : 'text-red-700'}`}>{formatMontoFila(fila.saldoAcumulado, fila)}</span>
 						<span class="text-slate-400">Estado</span>
 						<span class="text-right">
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${fila.aprobado ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
@@ -425,13 +709,18 @@
 							</span>
 						</span>
 					</div>
+					{#if fila.raw}
+						<button type="button" onclick={() => verTransaccion(fila)} class="mt-2 flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:underline">
+							<Eye size={14} /> Ver transacción
+						</button>
+					{/if}
 				{/snippet}
 			</ResponsiveDataView>
 		</div>
 
 		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 text-sm text-slate-500">
 			<span>
-				Mostrando {movimientosFilas.length === 0 ? 0 : (pageNum - 1) * PAGE_SIZE + 1} a {Math.min(pageNum * PAGE_SIZE, movimientosFilas.length)} de {movimientosFilas.length} registros
+				Mostrando {movimientosFiltrados.length === 0 ? 0 : (pageNum - 1) * PAGE_SIZE + 1} a {Math.min(pageNum * PAGE_SIZE, movimientosFiltrados.length)} de {movimientosFiltrados.length} registros
 			</span>
 			<div class="flex items-center gap-2">
 				<button type="button" onclick={() => goToPage(pageNum - 1)} disabled={pageNum <= 1} class="px-3 py-1.5 rounded-lg border border-slate-300 disabled:opacity-40 hover:bg-slate-50">Anterior</button>
@@ -453,6 +742,16 @@
 		</div>
 	</div>
 </div>
+
+<TransaccionModal
+	open={viewModalOpen}
+	mode="edit"
+	transaccion={viewingTransaccion}
+	dynamicOptions={viewDynamicOptions}
+	forceReadOnly
+	onClose={closeViewModal}
+	onSaved={() => {}}
+/>
 
 <style>
 	/* Barrita de scroll fina para la celda "Centro de Costo" (ver arriba) — más discreta que la barra de
