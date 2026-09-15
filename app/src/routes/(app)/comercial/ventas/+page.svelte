@@ -247,7 +247,13 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			aprobado: false,
 			aprobado_por: null,
 			aprobado_en: null,
-			tipo_alcance: 'externa'
+			tipo_alcance: 'externa',
+			tipo_moneda: 'soles',
+			tipo_cambio: null,
+			monto_convertido: null,
+			documento_pendiente: 'no',
+			responsable_documento_pendiente: null,
+			fecha_vencimiento_documento: null
 		};
 		transaccionModalMode = 'create';
 		transaccionModalOpen = true;

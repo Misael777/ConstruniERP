@@ -19,6 +19,9 @@ export interface ReconocerComprobanteResult {
 	monto?: number | null;
 	num_operacion?: string | null;
 	moneda?: 'dolares' | null;
+	/** Tipo de cambio (S/ por US$) — solo aplica a un boucher de CAMBIO DE MONEDA (ej. "¡Tipo de cambio
+	 * exitoso!" de BCP, ver extraerTipoCambio), no a un boucher de pago/transferencia normal. */
+	tipo_cambio?: number | null;
 	confianza?: 'alta' | 'media' | 'baja';
 	error?: string;
 }
@@ -245,6 +248,20 @@ function extraerMoneda(texto: string): 'dolares' | null {
 	return /\bdolares\b|\bus\$|\busd\b/.test(t) ? 'dolares' : null;
 }
 
+/** Tipo de cambio (S/ por US$) de un boucher de CAMBIO DE MONEDA — a pedido explícito del usuario, para
+ * autocompletar "Tipo de Cambio" en TransaccionModal.svelte (ver runOcr ahí) sin que el usuario tenga
+ * que copiarlo a mano. Confirmado con un boucher BCP real ("¡Tipo de cambio exitoso!"): el valor viene
+ * junto a la etiqueta "Tipo de cambio" con 4 decimales (ej. "S/ 3.4010"), no 2 como un monto normal —
+ * por eso usa su propio patrón de dígitos (\.\d{1,4}) en vez de reusar PATRON_MONTO (tope de 2). "S/" es
+ * OPCIONAL: algunos formatos escriben el número solo, sin el símbolo delante. Mismo gap de 40 caracteres
+ * tolerante a texto intermedio que el resto de extractores de este archivo (ver extraerMonto). null si
+ * no hay ninguna etiqueta "tipo de cambio" en el texto (boucher de pago/transferencia normal, no de
+ * cambio de moneda). */
+function extraerTipoCambio(texto: string): number | null {
+	const m = texto.match(/tipo\s+de\s+cambio\D{0,40}?(?:S\/\.?\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{1,4}|\d+\.\d{1,4})/i);
+	return m ? limpiarMonto(m[1]) : null;
+}
+
 function calcularConfianza(fecha: string | null, monto: number | null, numOperacion: string | null): 'alta' | 'media' | 'baja' {
 	const encontrados = [fecha, monto, numOperacion].filter((v) => v !== null && v !== undefined).length;
 	if (encontrados === 3) return 'alta';
@@ -364,12 +381,13 @@ export async function reconocerComprobante(file: File): Promise<ReconocerComprob
 		const monto = extraerMonto(texto);
 		const num_operacion = extraerNumeroOperacion(texto);
 		const moneda = extraerMoneda(texto);
+		const tipo_cambio = extraerTipoCambio(texto);
 
 		if (fecha === null && monto === null && num_operacion === null) {
-			return { success: false, moneda, error: 'No se pudo reconocer ningún dato del comprobante. Complétalos a mano.' };
+			return { success: false, moneda, tipo_cambio, error: 'No se pudo reconocer ningún dato del comprobante. Complétalos a mano.' };
 		}
 
-		return { success: true, fecha, monto, num_operacion, moneda, confianza: calcularConfianza(fecha, monto, num_operacion) };
+		return { success: true, fecha, monto, num_operacion, moneda, tipo_cambio, confianza: calcularConfianza(fecha, monto, num_operacion) };
 	} catch (err) {
 		console.error('[ocrComprobante] Error reconociendo comprobante:', err);
 		return { success: false, error: err instanceof Error ? err.message : String(err) };

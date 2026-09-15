@@ -32,6 +32,10 @@ export interface FilaMovimiento {
 	egreso: number | null;
 	financiamiento: number | null;
 	saldoAcumulado: number;
+	/** 'soles' (default) o 'dolares' — ver transaccion.tipo_moneda. `ingreso`/`egreso`/`financiamiento`
+	 * y `saldoAcumulado` de esta fila están en ESTA moneda (el saldo acumulado corre por separado para
+	 * cada moneda, nunca se suman entre sí — ver getMovimientosCaja). */
+	moneda: 'soles' | 'dolares';
 	aprobado: boolean;
 	/** Fila completa de `transaccion` (null para la fila sintética de Saldo Inicial) — se usa para
 	 * abrir TransaccionModal en modo edición directo desde la tabla (botón "Ver"), sin refetch. */
@@ -44,6 +48,14 @@ export interface MovimientosCajaParams {
 	/** Último día del período, 'YYYY-MM-DD' */
 	hasta: string;
 	idCentroCosto?: number | null;
+	/** Lista de ids de centro de costo (ej. todos los de tipo 'obra') — a diferencia de idCentroCosto
+	 * (un centro puntual, elegido a mano en el filtro "Proyecto/Servicio"), esto es para los botones
+	 * "Consultoría"/"Obra"/"Corporativo"/"Otros" (mismo patrón que idsCentroCosto en
+	 * cuentasPagar.service.ts/cuentasCobrar.service.ts) — filtra por el TIPO real del centro de costo,
+	 * en cualquiera de los dos lados (origen o destino). Ambos filtros (idCentroCosto/idsCentroCosto)
+	 * se pueden combinar; si ambos vienen, se combinan con AND (mismo criterio que el resto de filtros).
+	 */
+	idsCentroCosto?: number[] | null;
 	/** N° de cuenta bancaria (cuenta_banco.numero_cuenta) — filtra movimientos donde esa cuenta sea
 	 * origen O destino (misma idea que idCentroCosto: acota "de qué cuenta real es este dinero", así
 	 * que también se aplica al saldo inicial, no solo al listado del período, ver getMovimientosCaja). */
@@ -60,6 +72,11 @@ export interface MovimientosCajaParams {
 export interface MovimientosCajaResult {
 	saldoInicial: number;
 	saldoActual: number;
+	/** Mismo saldo, pero solo de transacciones en Dólares — corre por separado del saldo en Soles de
+	 * arriba, nunca mezclados (a pedido explícito del usuario, "un cuadro más para Saldo Actual en
+	 * Dólares"). Antes esta función sumaba monto_total de TODAS las transacciones sin mirar la moneda,
+	 * mezclando Soles y Dólares en una sola cifra sin sentido — bug real corregido de paso. */
+	saldoActualDolares: number;
 	ingresosTotal: number;
 	ingresosCount: number;
 	egresosTotal: number;
@@ -81,22 +98,39 @@ export function codigoMovimiento(tipo: string | null, id: number): string {
 	return `${prefijo}-${String(id).padStart(4, '0')}`;
 }
 
+/** Filtro OR "esta lista de ids como origen O como destino" — extraído porque se repite para
+ * idCentroCosto (una lista de 1) e idsCentroCosto (una lista de N, ver Consultoría/Obra/Corporativo/
+ * Otros en +page.svelte). PostgREST necesita el .in.(...) con paréntesis dentro del propio .or(). */
+function filtroOrigenODestino(ids: number[]): string {
+	const lista = ids.join(',');
+	return `id_centro_costo_origen.in.(${lista}),id_centro_costo_destino.in.(${lista})`;
+}
+
 export async function getMovimientosCaja(client: SupabaseClient, params: MovimientosCajaParams): Promise<MovimientosCajaResult> {
 	const centroCostoOptions = await getCentroCostoOptions(client);
 	const centroCostoMap = new Map(centroCostoOptions.map((o) => [o.value, o.label]));
 
-	// 1. Saldo inicial: neto de todo lo anterior a `desde` (mismos filtros de centro de costo, para
-	// que el saldo tenga sentido cuando se filtra por un centro específico).
-	let queryAntes = client.from('transaccion').select('tipo, monto_total').eq('estado', 'activo').lt('fecha', params.desde);
+	// 1. Saldo inicial: neto de todo lo anterior a `desde` (mismos filtros de centro de costo/cuenta,
+	// para que el saldo tenga sentido cuando se filtra por uno específico) — separado por moneda (ver
+	// FilaMovimiento.moneda): Soles y Dólares nunca se suman entre sí.
+	let queryAntes = client.from('transaccion').select('tipo, monto_total, tipo_moneda').eq('estado', 'activo').lt('fecha', params.desde);
 	if (params.idCentroCosto) {
 		queryAntes = queryAntes.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
+	}
+	if (params.idsCentroCosto && params.idsCentroCosto.length > 0) {
+		queryAntes = queryAntes.or(filtroOrigenODestino(params.idsCentroCosto));
 	}
 	if (params.numeroCuentaBanco) {
 		queryAntes = queryAntes.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
 	}
 	const { data: previos, error: errorPrevios } = await queryAntes;
 	if (errorPrevios) throw errorPrevios;
-	const saldoInicial = (previos ?? []).reduce((sum: number, t: any) => sum + signoMonto(t.tipo, Number(t.monto_total)), 0);
+	let saldoInicial = 0;
+	let saldoInicialDolares = 0;
+	for (const t of (previos ?? []) as any[]) {
+		if (t.tipo_moneda === 'dolares') saldoInicialDolares += signoMonto(t.tipo, Number(t.monto_total));
+		else saldoInicial += signoMonto(t.tipo, Number(t.monto_total));
+	}
 
 	// 2. Movimientos del período, con el resto de los filtros (tipo/categoría/búsqueda).
 	let query = client
@@ -109,6 +143,9 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 		.order('id_transaccion', { ascending: true });
 	if (params.idCentroCosto) {
 		query = query.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
+	}
+	if (params.idsCentroCosto && params.idsCentroCosto.length > 0) {
+		query = query.or(filtroOrigenODestino(params.idsCentroCosto));
 	}
 	if (params.numeroCuentaBanco) {
 		query = query.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
@@ -126,7 +163,10 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	const { data: rows, error } = await query;
 	if (error) throw error;
 
+	// Saldo acumulado corre por separado en cada moneda — una transacción en Dólares nunca mueve el
+	// acumulado en Soles, y viceversa (ver FilaMovimiento.moneda/saldoActualDolares).
 	let acumulado = saldoInicial;
+	let acumuladoDolares = saldoInicialDolares;
 	let ingresosTotal = 0;
 	let ingresosCount = 0;
 	let egresosTotal = 0;
@@ -149,6 +189,7 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 			egreso: null,
 			financiamiento: null,
 			saldoAcumulado: saldoInicial,
+			moneda: 'soles',
 			aprobado: true,
 			raw: null
 		}
@@ -156,17 +197,25 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 
 	for (const t of (rows ?? []) as any[]) {
 		const monto = Number(t.monto_total);
-		acumulado += signoMonto(t.tipo, monto);
+		const esDolares = t.tipo_moneda === 'dolares';
+		if (esDolares) acumuladoDolares += signoMonto(t.tipo, monto);
+		else acumulado += signoMonto(t.tipo, monto);
 
-		if (t.tipo === 'ingreso') {
-			ingresosTotal += monto;
-			ingresosCount++;
-		} else if (t.tipo === 'egreso') {
-			egresosTotal += monto;
-			egresosCount++;
-		} else if (t.tipo === 'financiamiento') {
-			financiamientosTotal += monto;
-			financiamientosCount++;
+		// Los KPIs "Total Ingresos"/"Pagado (Egresos)"/"Total Financiamiento" son SOLO en Soles (a
+		// pedido explícito del usuario, ver "Saldo Actual en Dólares" como cuadro aparte) — antes
+		// sumaban monto_total de TODAS las transacciones sin mirar la moneda, mezclando Soles y
+		// Dólares en una sola cifra sin sentido.
+		if (!esDolares) {
+			if (t.tipo === 'ingreso') {
+				ingresosTotal += monto;
+				ingresosCount++;
+			} else if (t.tipo === 'egreso') {
+				egresosTotal += monto;
+				egresosCount++;
+			} else if (t.tipo === 'financiamiento') {
+				financiamientosTotal += monto;
+				financiamientosCount++;
+			}
 		}
 
 		filas.push({
@@ -182,7 +231,8 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 			ingreso: t.tipo === 'ingreso' ? monto : null,
 			egreso: t.tipo === 'egreso' ? monto : null,
 			financiamiento: t.tipo === 'financiamiento' ? monto : null,
-			saldoAcumulado: acumulado,
+			saldoAcumulado: esDolares ? acumuladoDolares : acumulado,
+			moneda: esDolares ? 'dolares' : 'soles',
 			aprobado: !!t.aprobado,
 			raw: t as Transaccion
 		});
@@ -191,6 +241,7 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	return {
 		saldoInicial,
 		saldoActual: acumulado,
+		saldoActualDolares: acumuladoDolares,
 		ingresosTotal,
 		ingresosCount,
 		egresosTotal,

@@ -155,6 +155,9 @@
 		// la BD en ese caso), mismo criterio que el DEFAULT 'soles' de la propia columna (ver
 		// transaccion_moneda_migration.sql).
 		if (!values.tipo_moneda) values.tipo_moneda = 'soles';
+		// "Documento pendiente" arranca en 'no' — mismo criterio que tipo_moneda arriba (ver
+		// transaccion_documento_pendiente_migration.sql).
+		if (!values.documento_pendiente) values.documento_pendiente = 'no';
 		return values;
 	}
 
@@ -559,11 +562,16 @@
 		try {
 			const result = await reconocerComprobante(file);
 			if (cacheIndex !== null) colaOcrCache = { ...colaOcrCache, [cacheIndex]: result };
-			// Moneda se aplica pase lo que pase con fecha/monto/N° de operación (incluso si el OCR no
-			// reconoció ninguno de esos tres y "success" viene false) — a pedido explícito del usuario, si
-			// el boucher dice "Dólares"/"USD" el Tipo de Moneda debe cambiar solo.
+			// Moneda/Tipo de Cambio se aplican pase lo que pase con fecha/monto/N° de operación (incluso si
+			// el OCR no reconoció ninguno de esos tres y "success" viene false) — a pedido explícito del
+			// usuario: si el boucher dice "Dólares"/"USD" el Tipo de Moneda debe cambiar solo, y si además
+			// es un boucher de CAMBIO DE MONEDA (ej. "¡Tipo de cambio exitoso!" de BCP, ver
+			// extraerTipoCambio) el Tipo de Cambio también se completa solo.
 			if (result.moneda === 'dolares' && formValues.tipo_moneda !== 'dolares') {
 				formValues = { ...formValues, tipo_moneda: 'dolares' };
+			}
+			if (result.tipo_cambio !== null && result.tipo_cambio !== undefined) {
+				formValues = { ...formValues, tipo_cambio: String(result.tipo_cambio) };
 			}
 			if (result.success) {
 				const updates: Record<string, string> = {};
@@ -2193,7 +2201,13 @@
 			return soloNombreCentro(dynamicOptions[key] || []);
 		}
 		if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) {
-			const todas = filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_destino);
+			// A pedido explícito del usuario: en Transacción Interna, "Cuenta destino" ofrece TODAS las
+			// cuentas bancarias (Soles Y Dólares mezcladas), a diferencia de "Cuenta origen" (ver más abajo),
+			// que sigue restringida a la moneda de "Tipo de Moneda" — la transferencia puede convertir de una
+			// moneda a otra al llegar (ver "Monto Convertido"/tipo_cambio), así que el destino no tiene por
+			// qué compartir la moneda del origen. Fuera de Interna (Externa+Ingreso), se mantiene el filtro
+			// por moneda de siempre.
+			const todas = bloqueadoPorInterna ? dynamicOptions.cuenta_banco || [] : filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_destino);
 			return medioPagoEsEfectivo ? filtrarCuentasEfectivo(todas) : todas;
 		}
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
@@ -2246,6 +2260,13 @@
 	 * getSaldosCuentaBanco. undefined = sin saldo conocido todavía (los mapas siguen cargando), el
 	 * componente simplemente no muestra nada al costado en vez de un "S/ 0.00" engañoso. */
 	function saldoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): number | undefined {
+		// A pedido explícito del usuario: un no-administrador (ej. Asesora de Ventas, que llega acá al
+		// cerrar una venta) no debe ver NINGÚN saldo — ni el de la lista desplegada (antes se veía en
+		// texto plano, sin el "clic para revelar" que sí protege el de la línea "Saldo actual" de abajo)
+		// ni el de la opción ya elegida. undefined esconde el saldo por completo en SelectConSaldo.svelte
+		// (no dibuja nada al costado) y hace desaparecer la línea "Saldo actual" entera (ver
+		// {#if saldoElegido !== undefined} en el template).
+		if (!isAdmin()) return undefined;
 		if (field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino') {
 			return opt.value in saldosCentroCosto ? saldosCentroCosto[opt.value] : undefined;
 		}
@@ -3031,9 +3052,29 @@
 									{@render fieldBlock(destinoField)}
 								</div>
 
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 									{@render fieldBlock(cuentaOrigenField)}
 									{@render fieldBlock(cuentaDestinoField)}
+									<!-- "Tipo de Moneda" movido acá arriba (a pedido explícito del usuario) — siempre
+									     visible (Soles por defecto); "Tipo de Cambio"/"Monto Convertido" siguen más
+									     abajo, junto a Fecha/Monto/N° de Operación (ver el $effect que calcula
+									     monto_convertido más arriba), solo aparecen si se elige Dólares. -->
+									<div>
+										<label for="tr-tipo-moneda" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Tipo de Moneda</label>
+										<div class="relative">
+											<select
+												id="tr-tipo-moneda"
+												value={formValues.tipo_moneda}
+												disabled={bloqueadaPorAprobacion}
+												onchange={(e) => handleInput('tipo_moneda', (e.target as HTMLSelectElement).value)}
+												class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+											>
+												<option value="soles">Soles</option>
+												<option value="dolares">Dólares</option>
+											</select>
+											<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+										</div>
+									</div>
 								</div>
 
 								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -3140,28 +3181,12 @@
 									</div>
 								</div>
 
-								<!-- Tipo de Moneda/Tipo de Cambio/Monto Convertido — a pedido explicito del
-								     usuario: "Tipo de Moneda" siempre visible (Soles por defecto); "Tipo de
-								     Cambio" y "Monto Convertido" (calculado solo, ver el $effect mas arriba)
-								     SOLO aparecen si se elige Dolares. -->
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-									<div>
-										<label for="tr-tipo-moneda" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Tipo de Moneda</label>
-										<div class="relative">
-											<select
-												id="tr-tipo-moneda"
-												value={formValues.tipo_moneda}
-												disabled={bloqueadaPorAprobacion}
-												onchange={(e) => handleInput('tipo_moneda', (e.target as HTMLSelectElement).value)}
-												class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-											>
-												<option value="soles">Soles</option>
-												<option value="dolares">Dólares</option>
-											</select>
-											<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-										</div>
-									</div>
-									{#if formValues.tipo_moneda === 'dolares'}
+								<!-- Tipo de Cambio/Monto Convertido — "Tipo de Moneda" se movió arriba, junto a
+								     Cuenta origen/Cuenta destino (a pedido explícito del usuario). Estos dos
+								     (calculado solo el segundo, ver el $effect mas arriba) SOLO aparecen si se
+								     elige Dólares. -->
+								{#if formValues.tipo_moneda === 'dolares'}
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 										<div>
 											<label for="tr-tipo-cambio" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
 												Tipo de Cambio<span class="text-red-500">*</span>
@@ -3198,8 +3223,74 @@
 											</div>
 											<p class="mt-1 text-xs text-slate-400">Se calcula solo: Monto (reconocido) × Tipo de Cambio.</p>
 										</div>
-									{/if}
-								</div>
+									</div>
+								{/if}
+
+								<!-- "Documento pendiente" (Sí/No) — a pedido explícito del usuario: solo aplica a
+								     Ingreso/Egreso, marca que todavía falta el documento de respaldo (factura/
+								     boleta) de esta transacción. "Responsable"/"Fecha de Vencimiento" SOLO
+								     aparecen si se elige Sí (ver transaccion_documento_pendiente_migration.sql). -->
+								{#if formValues.tipo === 'ingreso' || formValues.tipo === 'egreso'}
+									<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+										<div>
+											<label for="tr-documento-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Documento pendiente</label>
+											<div class="relative">
+												<select
+													id="tr-documento-pendiente"
+													value={formValues.documento_pendiente}
+													disabled={bloqueadaPorAprobacion}
+													onchange={(e) => handleInput('documento_pendiente', (e.target as HTMLSelectElement).value)}
+													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+												>
+													<option value="no">No</option>
+													<option value="si">Sí</option>
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+											</div>
+										</div>
+										{#if formValues.documento_pendiente === 'si'}
+											<div>
+												<label for="tr-responsable-doc-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
+													Responsable<span class="text-red-500">*</span>
+												</label>
+												<div class="relative">
+													<select
+														id="tr-responsable-doc-pendiente"
+														value={formValues.responsable_documento_pendiente}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('responsable_documento_pendiente', (e.target as HTMLSelectElement).value)}
+														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.responsable_documento_pendiente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+													>
+														<option value="" disabled>Selecciona una opción</option>
+														{#each dynamicOptions.responsable_documento_pendiente ?? [] as opt}
+															<option value={opt.value}>{opt.label}</option>
+														{/each}
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												{#if fieldErrors.responsable_documento_pendiente}
+													<p class="mt-1 text-xs text-red-600">{fieldErrors.responsable_documento_pendiente}</p>
+												{/if}
+											</div>
+											<div>
+												<label for="tr-fecha-vencimiento-doc" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
+													Fecha de Vencimiento<span class="text-red-500">*</span>
+												</label>
+												<input
+													id="tr-fecha-vencimiento-doc"
+													type="date"
+													value={formValues.fecha_vencimiento_documento}
+													disabled={bloqueadaPorAprobacion}
+													oninput={(e) => handleInput('fecha_vencimiento_documento', (e.target as HTMLInputElement).value)}
+													class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.fecha_vencimiento_documento ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+												/>
+												{#if fieldErrors.fecha_vencimiento_documento}
+													<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
+												{/if}
+											</div>
+										{/if}
+									</div>
+								{/if}
 							</div>
 						</div>
 					</div>

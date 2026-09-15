@@ -133,7 +133,14 @@
 	// recibido) o se abre el modal.
 	let montoRecibidoCentro = $state(0);
 	$effect(() => {
-		if (!open || !formValues.id_centro_costo) {
+		// En el flujo "Préstamo Otorgado" (clienteBloqueado), "Centro de Costo" ya NO es el proyecto
+		// vendido — es "Prestamista", NUESTRO propio centro que financia el préstamo (ver labelFor/
+		// optionsFor más abajo). Ese centro puede tener montones de ingresos reales sin ninguna relación
+		// con ESTE préstamo puntual (es un centro de costo interno de uso normal) — restarlos acá hacía
+		// que Saldo Pendiente diera 0 (y Estado "Pagado") para un préstamo recién creado, que todavía no
+		// cobró nada. Bug real reportado por el usuario: se fuerza a 0 en este flujo, Saldo Pendiente
+		// queda igual al Valor de préstamo hasta que se registren cobros de verdad sobre ESTA cuenta.
+		if (!open || !formValues.id_centro_costo || clienteBloqueado) {
 			montoRecibidoCentro = 0;
 			return;
 		}
@@ -446,10 +453,10 @@
 
 				{#if mostrarResumenVenta}
 					<div class="w-full lg:w-60 shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-4">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">Resumen de venta</h3>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">{clienteBloqueado ? 'Resumen de préstamo' : 'Resumen de venta'}</h3>
 						<div class="flex flex-col gap-3">
 							<div>
-								<span class="block text-xs text-slate-500 mb-1">Valor de venta</span>
+								<span class="block text-xs text-slate-500 mb-1">{clienteBloqueado ? 'Valor de préstamo' : 'Valor de venta'}</span>
 								<input
 									type="text"
 									readonly

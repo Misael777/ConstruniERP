@@ -27,7 +27,8 @@
 		getCentroCostoOptionsSoloCentros,
 		getCentroCostoProductoLookup,
 		getPartidaOptions,
-		getComprobantesPago
+		getComprobantesPago,
+		getEmpleadoOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -331,14 +332,15 @@
 			return;
 		}
 		try {
-			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, centroCostoSoloCentros, cuentaBancoOptions, productoLookup] = await Promise.all([
+			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, centroCostoSoloCentros, cuentaBancoOptions, productoLookup, empleadoOptions] = await Promise.all([
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsProyectos(supabase),
 				getCentroCostoOptionsExternos(supabase),
 				getCentroCostoOptionsExternosOrigen(supabase),
 				getCentroCostoOptionsSoloCentros(supabase),
 				getCuentaBancoOptions(supabase),
-				getCentroCostoProductoLookup(supabase)
+				getCentroCostoProductoLookup(supabase),
+				getEmpleadoOptions(supabase)
 			]);
 			centroCostoOptionsCompleto = centroCostoCompleto;
 			centroCostoProductoLookup = productoLookup;
@@ -348,7 +350,10 @@
 				id_centro_costo_origen_externo: centroCostoExternosOrigen,
 				id_centro_costo_destino_externo: centroCostoExternosDestino,
 				id_centro_costo_destino_solo_centros: centroCostoSoloCentros,
-				cuenta_banco: cuentaBancoOptions
+				cuenta_banco: cuentaBancoOptions,
+				// "Responsable" de "Documento pendiente" (ver transaccion_documento_pendiente_migration.sql) —
+				// mismo catálogo de empleados que ya usan cuentas por pagar/cobrar.
+				responsable_documento_pendiente: empleadoOptions
 			};
 			detalleDynamicOptions = { id_partida: await getPartidaOptions(supabase) };
 		} catch (err: any) {
@@ -401,6 +406,17 @@
 		// timeZone: 'UTC' evita el corrimiento de un día que 'new Date("YYYY-MM-DD")' produce en husos
 		// horarios detrás de UTC (Perú, UTC-5) al leerse de vuelta en hora local.
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+	}
+
+	/** Monto formateado con el símbolo real de `item.tipo_moneda` ('$' Dólares, 'S/' Soles) — a pedido
+	 * explícito del usuario: la lista usaba formatCurrency (siempre Soles, ver CURRENCY_FORMATTER en
+	 * fieldConfig.ts) sin importar la moneda real de la transacción. Mismo criterio que formatMontoTotal
+	 * en TransaccionModal.svelte. */
+	function formatMontoTransaccion(item: Transaccion): string {
+		const num = Number(item.monto_total);
+		if (!Number.isFinite(num)) return '—';
+		const texto = new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
+		return item.tipo_moneda === 'dolares' ? `$ ${texto}` : `S/ ${texto}`;
 	}
 
 	function centroCostoLabel(id: number | null): string {
@@ -482,20 +498,36 @@
 		}
 	}
 
+	// "Ver" (ojito) — a pedido explícito del usuario, disponible en CUALQUIER transacción (Ingreso,
+	// Egreso o Préstamo, tenga o no comprobante adjunto), a diferencia del ojito de "Ver documentos"
+	// (openComprobantePreview más arriba, que solo aparece si hay comprobante_url/factura_url y muestra
+	// el archivo en sí, no los datos de la transacción). Abre el mismo TransaccionModal en modo 'edit'
+	// pero con forceReadOnly (ver TransaccionModal.svelte) — mismo mecanismo de "modo de consulta" ya
+	// usado en movimientos-caja/+page.svelte.
+	let viewOnly = $state(false);
 	function openCreate() {
 		modalMode = 'create';
 		editingTransaccion = null;
+		viewOnly = false;
 		modalOpen = true;
 	}
 	function openEdit(item: Transaccion) {
 		modalMode = 'edit';
 		editingTransaccion = item;
+		viewOnly = false;
+		modalOpen = true;
+	}
+	function openView(item: Transaccion) {
+		modalMode = 'edit';
+		editingTransaccion = item;
+		viewOnly = true;
 		modalOpen = true;
 	}
 	function closeModal() {
 		modalOpen = false;
 		editingTransaccion = null;
 		sharedComprobanteFile = null;
+		viewOnly = false;
 	}
 
 	/** Abre "Nueva Transacción" con un comprobante ya adjunto (ver ingreso rápido desde el Share Sheet
@@ -809,7 +841,7 @@
 				     apilan verticalmente en móvil (a pedido del usuario) y vuelven a la fila horizontal de
 				     siempre desde sm: en adelante. -->
 				<div class="flex items-center justify-between gap-3 sm:flex-col sm:items-end sm:justify-start sm:shrink-0 sm:gap-0">
-					<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_total)}</p>
+					<p class="font-bold text-slate-800 text-sm">{formatMontoTransaccion(item)}</p>
 					<div class="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-1 sm:mt-1">
 						{#if item.tipo}
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${tipoBadgeClass[item.tipo] ?? 'bg-slate-100 text-slate-600'}`}>
@@ -838,9 +870,14 @@
 						{/if}
 					</div>
 				</div>
-				<!-- Columna de acciones apilada verticalmente: Ver documentos (ojito), Msje justo debajo (a
-				     pedido del usuario) y luego Editar/Bloqueado. -->
+				<!-- Columna de acciones apilada verticalmente: Ver transacción (ojito, SIEMPRE disponible —
+				     a pedido explícito del usuario, para cualquier transacción sea Ingreso/Egreso/Préstamo,
+				     tenga o no comprobante adjunto), Ver documentos (ojito, solo si hay archivo), Msje justo
+				     debajo (a pedido del usuario) y luego Editar/Bloqueado. -->
 				<div class="flex flex-row items-center justify-end gap-1 sm:flex-col sm:shrink-0 sm:ml-2">
+					<button type="button" onclick={(e) => { e.stopPropagation(); openView(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
+						<Eye size={16} />
+					</button>
 					{#if item.comprobante_url || item.factura_url}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 							<Eye size={16} />
@@ -894,7 +931,7 @@
 					<h2 class="text-lg font-semibold text-[#0f3b5e]">
 						Detalle de la Transacción #{selectedTransaccion.id_transaccion}
 						{#if selectedTransaccion.num_documento}— {selectedTransaccion.num_documento}{/if}
-						— {formatCurrency(selectedTransaccion.monto_total)}
+						— {formatMontoTransaccion(selectedTransaccion)}
 					</h2>
 				</div>
 				<button type="button" onclick={openCreateDetalle} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
@@ -950,6 +987,7 @@
 	transaccion={editingTransaccion}
 	dynamicOptions={dynamicOptions}
 	initialComprobanteFile={sharedComprobanteFile}
+	forceReadOnly={viewOnly}
 	onClose={closeModal}
 	onSaved={handleSaved}
 />

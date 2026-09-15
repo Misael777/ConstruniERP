@@ -437,6 +437,49 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		// "Documento pendiente" (Sí/No) — a pedido explícito del usuario, solo aplica (visible) a
+		// Ingreso/Egreso: marca que todavía falta el documento de respaldo (factura/boleta) de esa
+		// transacción. 'no' por defecto, ver buildInitialValues en TransaccionModal.svelte. Widget
+		// hecho a mano ahí (no el <select> genérico), junto a Responsable/Fecha de Vencimiento de abajo.
+		key: 'documento_pendiente',
+		label: 'Documento pendiente',
+		tipo: 'select',
+		options: [
+			{ value: 'no', label: 'No' },
+			{ value: 'si', label: 'Sí' }
+		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — oculto por completo si es
+		// No (ver TransaccionModal.svelte). La columna sigue siendo VARCHAR de texto libre (no una FK) —
+		// el valor guardado es el nombre del empleado elegido, mismo criterio que 'responsable' en
+		// cuentaPagar.config.ts/cuentaCobrar.config.ts.
+		key: 'responsable_documento_pendiente',
+		label: 'Responsable',
+		tipo: 'select',
+		optionsSource: 'empleado',
+		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
+		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — mismo criterio que
+		// responsable_documento_pendiente de arriba.
+		key: 'fecha_vencimiento_documento',
+		label: 'Fecha de Vencimiento',
+		tipo: 'date',
+		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
+		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
 		// A pedido del usuario: se lee sola del boucher vía OCR + regex, sin IA (ver ocrComprobante.ts),
 		// mismo criterio que 'fecha'/'monto_total' — widget "reconocido" hecho a mano en
 		// TransaccionModal.svelte (no el <select>/<input> genérico), junto a esos dos.
