@@ -55,6 +55,14 @@
 				{ key: 'ver_iam', label: 'Control de Accesos' },
 				{ key: 'ver_roles_permisos', label: 'Roles y Permisos' }
 			]
+		},
+		{
+			id: 'soporte', name: 'Soporte', icon: 'fas fa-life-ring', colorClass: 'text-cyan-600 bg-cyan-50 border-cyan-100',
+			submodules: [
+				{ key: 'ver_soporte', label: 'General Soporte' },
+				{ key: 'ver_soporte_tickets', label: 'Mis Tickets (reportar reclamos/incidencias)' },
+				{ key: 'ver_soporte_developer', label: 'Panel Developer (bandeja completa, aprobar/rechazar)' }
+			]
 		}
 	];
 

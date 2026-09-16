@@ -1,0 +1,30 @@
+# CI (Integración Continua) — ver Documentacion/MecanismoCICD.md.
+#
+# Corre automáticamente en cada push/PR: npm run check + npx vitest run. NO publica nada ni toca la
+# app de los usuarios — eso lo hace el script scripts/release.mjs, a mano, cuando el developer decide
+# publicar (ver Documentacion/MecanismoCICD.md, "Camino de evolución" para mover ESE paso acá también
+# más adelante).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npx vitest run

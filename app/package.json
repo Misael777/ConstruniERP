@@ -11,7 +11,8 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
-		"tauri": "tauri"
+		"tauri": "tauri",
+		"release": "node --env-file=.env scripts/release.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",
@@ -34,6 +35,10 @@
 		"@tauri-apps/plugin-dialog": "^2.7.2",
 		"@tauri-apps/plugin-fs": "^2.5.1",
 		"@tauri-apps/plugin-notification": "^2.3.3",
+		"@tauri-apps/plugin-opener": "^2.5.5",
+		"@tauri-apps/plugin-os": "^2.3.2",
+		"@tauri-apps/plugin-process": "^2.3.1",
+		"@tauri-apps/plugin-updater": "^2.11.0",
 		"chart.js": "^4.5.1",
 		"exceljs": "^4.4.0",
 		"html2canvas-pro": "^2.4.0",

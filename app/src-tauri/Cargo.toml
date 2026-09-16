@@ -29,3 +29,17 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-share-target = { path = "plugins/tauri-plugin-share-target" }
 chrono = { version = "0.4", features = ["serde"] }
+# Módulo de Tickets/Releases (ver Documentacion/MecanismoCICD.md): tauri-plugin-os para que el
+# frontend sepa si corre en Windows o Android (BotonActualizar.svelte) — funciona en ambos.
+tauri-plugin-os = "2"
+# En Android, BotonActualizar.svelte usa openPath() de este plugin para invocar el instalador nativo
+# de APK sobre el archivo ya descargado de Drive — plugin oficial de Tauri, soporta Android/iOS
+# (a diferencia de tauri-plugin-updater, que es solo de escritorio).
+tauri-plugin-opener = "2"
+
+# El plugin de auto-update de Tauri es SOLO de escritorio (no compila para Android/iOS) — coincide
+# con el diseño ya decidido: Windows se actualiza solo vía este plugin, Android descarga el APK
+# desde Drive y el usuario lo instala a mano (ver BotonActualizar.svelte).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"

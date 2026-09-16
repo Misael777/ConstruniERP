@@ -60,6 +60,20 @@ export const MODULE_REGISTRY: ModuleItem[] = [
       { path: '/finanzas/cuentas-bancarias', label: 'Cuentas Bancarias', permiso: 'ver_finanzas_cuentas_bancarias' },
       { path: '/finanzas/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }
     ]
+  },
+  {
+    path: '/soporte',
+    label: 'Soporte',
+    icon: 'fas fa-life-ring',
+    permiso: 'ver_soporte',
+    subItems: [
+      // 'ver_soporte_tickets' se otorga a TODOS los roles en ticket_module_migration.sql — cualquier
+      // usuario debe poder reportar un reclamo/incidencia/sugerencia/requerimiento, no solo
+      // developer/admin.
+      { path: '/soporte/tickets', label: 'Mis Tickets', permiso: 'ver_soporte_tickets' },
+      // Bandeja completa (todos los tickets, aprobar/rechazar, releases) — solo developer/admin.
+      { path: '/soporte/developer', label: 'Panel Developer', permiso: 'ver_soporte_developer' }
+    ]
   }
 ];
 
