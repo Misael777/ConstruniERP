@@ -1194,7 +1194,12 @@ async function copiarCodigoGenerado() {
 			}
 		} catch (uploadError) {
 			console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
-			saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
+			// Antes: String(uploadError instanceof Error ? uploadError.message : uploadError) — un
+			// PostgrestError (ej. el docError de más arriba) NO es instanceof Error, así que
+			// String(objetoPlano) daba literalmente "[object Object]" en el banner. describeError ya
+			// extrae message/code/details/hint de un error de Supabase, mismo criterio que el resto de
+			// este archivo.
+			saveError = describeError(uploadError);
 			return null;
 		}
 
