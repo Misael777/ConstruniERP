@@ -13,6 +13,94 @@
 import { recognize } from 'tesseract.js';
 import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
 
+/**
+ * "Filtros de realce" — a pedido explícito del usuario, mejora la imagen ANTES de pasarla a Tesseract
+ * (fotos de boucher con el celular: luz pareja/baja, compresión de WhatsApp, texto chico) vía <canvas>
+ * 2D puro, mismo mecanismo ya usado en pdfPreview.ts — sin librería nueva, funciona igual en browser/
+ * Tauri Windows/Android. Pipeline (orden estándar en la industria para OCR de fotos de documentos):
+ *   1. Escala de grises (luminancia perceptual) — el color no aporta nada al texto, solo ruido.
+ *   2. Umbral de Otsu, calculado del propio histograma de la imagen (no un número fijo) — separa texto
+ *      de fondo automáticamente sin importar si la foto salió más clara/oscura de lo normal.
+ *   3. Binarización pura blanco/negro con ese umbral — Tesseract internamente ya intenta algo parecido,
+ *      pero hacerlo antes con buen contraste da mejores resultados en fotos reales (no en PDFs ya
+ *      limpios, pero tampoco les hace daño — se aplica parejo a ambas fuentes, más simple que ramificar).
+ *   4. Si la imagen es más chica que UMBRAL_UPSCALE de ancho, se escala 2x — un texto muy chico en
+ *      píxeles reales es el otro gran enemigo de Tesseract, aparte del contraste.
+ * Nunca lanza — si algo falla (imagen corrupta, canvas no soportado), devuelve la fuente ORIGINAL sin
+ * tocar, para no bloquear el OCR entero por un problema del preprocesamiento en sí.
+ */
+const UMBRAL_UPSCALE_PX = 1200;
+
+function cargarImagen(fuente: File | string): Promise<HTMLImageElement> {
+	return new Promise((resolve, reject) => {
+		const img = new Image();
+		img.onload = () => resolve(img);
+		img.onerror = () => reject(new Error('No se pudo cargar la imagen para preprocesarla.'));
+		img.src = typeof fuente === 'string' ? fuente : URL.createObjectURL(fuente);
+	});
+}
+
+/** Maximiza la varianza entre la clase "texto" (oscura) y "fondo" (clara) del histograma de grises —
+ * método estándar de Otsu para binarización adaptativa. */
+function calcularUmbralOtsu(histograma: number[], total: number): number {
+	let sumaTotal = 0;
+	for (let i = 0; i < 256; i++) sumaTotal += i * histograma[i];
+	let sumaB = 0;
+	let pesoB = 0;
+	let varianzaMax = 0;
+	let umbral = 128;
+	for (let i = 0; i < 256; i++) {
+		pesoB += histograma[i];
+		if (pesoB === 0) continue;
+		const pesoF = total - pesoB;
+		if (pesoF === 0) break;
+		sumaB += i * histograma[i];
+		const mediaB = sumaB / pesoB;
+		const mediaF = (sumaTotal - sumaB) / pesoF;
+		const varianzaEntre = pesoB * pesoF * (mediaB - mediaF) * (mediaB - mediaF);
+		if (varianzaEntre > varianzaMax) {
+			varianzaMax = varianzaEntre;
+			umbral = i;
+		}
+	}
+	return umbral;
+}
+
+async function preprocesarImagenParaOcr(fuente: File | string): Promise<File | string> {
+	try {
+		const img = await cargarImagen(fuente);
+		const escala = img.width < UMBRAL_UPSCALE_PX ? 2 : 1;
+		const canvas = document.createElement('canvas');
+		canvas.width = img.width * escala;
+		canvas.height = img.height * escala;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return fuente;
+		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+		const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+		const pixeles = imageData.data;
+		const cantidadPixeles = pixeles.length / 4;
+		const histograma = new Array(256).fill(0);
+		const grises = new Uint8ClampedArray(cantidadPixeles);
+		for (let i = 0; i < pixeles.length; i += 4) {
+			const gris = Math.round(0.299 * pixeles[i] + 0.587 * pixeles[i + 1] + 0.114 * pixeles[i + 2]);
+			grises[i / 4] = gris;
+			histograma[gris]++;
+		}
+
+		const umbral = calcularUmbralOtsu(histograma, cantidadPixeles);
+		for (let i = 0; i < pixeles.length; i += 4) {
+			const valor = grises[i / 4] > umbral ? 255 : 0;
+			pixeles[i] = pixeles[i + 1] = pixeles[i + 2] = valor;
+		}
+		ctx.putImageData(imageData, 0, 0);
+		return canvas.toDataURL('image/png');
+	} catch (err) {
+		console.warn('[ocrComprobante] No se pudo preprocesar la imagen, se usa el original:', err);
+		return fuente;
+	}
+}
+
 export interface ReconocerComprobanteResult {
 	success: boolean;
 	fecha?: string | null;
@@ -251,14 +339,23 @@ function extraerMoneda(texto: string): 'dolares' | null {
 /** Tipo de cambio (S/ por US$) de un boucher de CAMBIO DE MONEDA — a pedido explícito del usuario, para
  * autocompletar "Tipo de Cambio" en TransaccionModal.svelte (ver runOcr ahí) sin que el usuario tenga
  * que copiarlo a mano. Confirmado con un boucher BCP real ("¡Tipo de cambio exitoso!"): el valor viene
- * junto a la etiqueta "Tipo de cambio" con 4 decimales (ej. "S/ 3.4010"), no 2 como un monto normal —
- * por eso usa su propio patrón de dígitos (\.\d{1,4}) en vez de reusar PATRON_MONTO (tope de 2). "S/" es
+ * junto a la etiqueta "Tipo de cambio" con 3-4 decimales (ej. "S/ 3.4010"), no 2 como un monto normal —
+ * por eso exige {3,4} decimales exactos (\.\d{3,4}) en vez de reusar PATRON_MONTO (tope de 2). "S/" es
  * OPCIONAL: algunos formatos escriben el número solo, sin el símbolo delante. Mismo gap de 40 caracteres
  * tolerante a texto intermedio que el resto de extractores de este archivo (ver extraerMonto). null si
  * no hay ninguna etiqueta "tipo de cambio" en el texto (boucher de pago/transferencia normal, no de
- * cambio de moneda). */
+ * cambio de moneda).
+ *
+ * Bug real reportado por el usuario: el propio banner del boucher dice "¡Tipo de cambio exitoso!"
+ * justo ANTES del monto YA CONVERTIDO (ej. "S/ 34,008.30", con separador de miles y 2 decimales) —
+ * como esa frase también matchea "tipo de cambio" y el monto convertido aparece a pocos caracteres,
+ * una versión anterior de este regex (que aceptaba 1-4 decimales Y separador de miles) enganchaba ESE
+ * número por error en vez del tipo de cambio real, unas líneas más abajo ("Tipo de cambio  S/ 3.4010").
+ * Exigir 3-4 decimales exactos y sin separador de miles (un tipo de cambio real nunca los necesita, es
+ * un número chico) hace que el banner falle su intento de match y el regex avance solo hasta la
+ * segunda ocurrencia real de la etiqueta. */
 function extraerTipoCambio(texto: string): number | null {
-	const m = texto.match(/tipo\s+de\s+cambio\D{0,40}?(?:S\/\.?\s*)?(\d{1,3}(?:[,\s]\d{3})*\.\d{1,4}|\d+\.\d{1,4})/i);
+	const m = texto.match(/tipo\s+de\s+cambio\D{0,40}?(?:S\/\.?\s*)?(\d{1,3}\.\d{3,4})\b/i);
 	return m ? limpiarMonto(m[1]) : null;
 }
 
@@ -338,7 +435,8 @@ export async function reconocerComprobantePago(file: File): Promise<ReconocerCom
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
-		const { data } = await recognize(fuente, 'spa');
+		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
+		const { data } = await recognize(fuenteRealzada, 'spa');
 		const texto = data.text || '';
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada factura/boleta
 		// (en vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un archivo.
@@ -371,7 +469,8 @@ export async function reconocerComprobante(file: File): Promise<ReconocerComprob
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
-		const { data } = await recognize(fuente, 'spa');
+		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
+		const { data } = await recognize(fuenteRealzada, 'spa');
 		const texto = data.text || '';
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada boucher (en
 		// vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un boucher.
