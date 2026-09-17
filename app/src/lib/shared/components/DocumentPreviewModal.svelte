@@ -42,6 +42,11 @@
 
 	const activeDoc = $derived(documents.length > 0 ? documents[Math.min(selectedIndex, documents.length - 1)] : null);
 	const effectiveUrl = $derived(activeDoc ? activeDoc.url : url);
+	// A pedido explícito del usuario: distingue "no hay ningún documento" (ej. una transacción de
+	// Préstamo, que se autogenera sin ningún archivo adjunto) de un error real de carga — antes ambos
+	// casos mostraban el mismo aviso genérico "No se pudo cargar la vista previa", que suena a fallo
+	// aunque acá simplemente no hay nada que mostrar.
+	const sinDocumentos = $derived(documents.length === 0 && !url);
 	const downloadTitle = $derived(activeDoc?.filename ? activeDoc.filename : documents.length > 1 && activeDoc ? `${title} - ${activeDoc.label}` : title);
 	let previewUrl = $derived(toDrivePreviewUrl(effectiveUrl));
 
@@ -144,19 +149,21 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-2 shrink-0">
-					<button
-						onclick={requestDownload}
-						disabled={isDownloading}
-						class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-						aria-label="Descargar"
-						title="Descargar"
-					>
-						{#if isDownloading}
-							<i class="fas fa-spinner fa-spin text-lg"></i>
-						{:else}
-							<i class="fas fa-download text-lg"></i>
-						{/if}
-					</button>
+					{#if !sinDocumentos}
+						<button
+							onclick={requestDownload}
+							disabled={isDownloading}
+							class="text-slate-500 hover:text-slate-700 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+							aria-label="Descargar"
+							title="Descargar"
+						>
+							{#if isDownloading}
+								<i class="fas fa-spinner fa-spin text-lg"></i>
+							{:else}
+								<i class="fas fa-download text-lg"></i>
+							{/if}
+						</button>
+					{/if}
 					<button
 						onclick={onClose}
 						class="text-slate-400 hover:text-slate-600 transition-colors w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg"
@@ -175,6 +182,14 @@
 						class="w-full h-full border-none"
 						allowfullscreen
 					></iframe>
+				{:else if sinDocumentos}
+					<div class="w-full h-full flex items-center justify-center">
+						<div class="text-center text-slate-500">
+							<i class="fas fa-folder-open text-4xl mb-3"></i>
+							<p class="font-medium">Sin documentos</p>
+							<p class="text-sm mt-1">Esta transacción no tiene documentos adjuntos.</p>
+						</div>
+					</div>
 				{:else}
 					<div class="w-full h-full flex items-center justify-center">
 						<div class="text-center text-slate-500">

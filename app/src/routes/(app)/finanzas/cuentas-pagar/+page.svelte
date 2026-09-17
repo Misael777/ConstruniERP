@@ -36,6 +36,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getOrCrearProveedorPrestamos } from '$lib/modules/proveedores/services/proveedores.service';
+	import type { Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
@@ -296,6 +297,7 @@
 			toast.error(err?.message ?? 'No se pudieron cargar proveedores/centros de costo');
 		}
 		abrirCreacionPrecargadaDesdeTransaccion();
+		abrirEdicionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -376,6 +378,39 @@
 		proveedorBloqueado = false;
 		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+
+	// A pedido explícito del usuario: al EDITAR (no crear) una transacción de Ingreso con
+	// Categoría="Préstamo" y darle "Actualizar" (ver TransaccionModal.svelte), esta Cuenta por Pagar YA
+	// EXISTE (se creó junto con esa transacción, ver id_transaccion en cuentasPagar.service.ts) — no se
+	// crea una nueva, se abre esta misma en modo Editar con Monto Comprometido/Fecha Emisión/Observación
+	// ya actualizados a lo que el usuario acaba de cambiar en la transacción, para que los confirme con
+	// un segundo "Actualizar" acá. Mismo mecanismo cross-page (sessionStorage + query param + limpieza
+	// inmediata) que abrirCreacionPrecargadaDesdeTransaccion, clave distinta para no pisarse entre sí.
+	async function abrirEdicionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('editarCuentaPagarDesdeTransaccion') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaPagarEditarPrefill');
+		sessionStorage.removeItem('cuentaPagarEditarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-pagar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			const { data: cuenta, error } = await supabase.from('cuentas_pagar').select('*, proveedor(razon_social)').eq('id_cuenta_pagar', datos.id_cuenta_pagar).single();
+			if (error || !cuenta) {
+				console.error('[CuentasPagar] No se encontró la Cuenta por Pagar vinculada a la transacción:', error);
+				toast.error('No se encontró la Cuenta por Pagar vinculada a esa transacción.');
+				return;
+			}
+			modalMode = 'edit';
+			editingCuenta = { ...(cuenta as CuentaPagar), monto_comprometido: datos.monto_comprometido, fecha_emision: datos.fecha_emision, observacion: datos.observacion ?? cuenta.observacion };
+			proveedorBloqueado = false;
+			prestamoPrefillDatos = null;
+			modalOpen = true;
+			toast.info('Revisa y confirma "Actualizar" para reflejar acá los cambios de la transacción.');
+		} catch (err) {
+			console.error('[CuentasPagar] No se pudo leer la precarga de edición de la transacción:', err);
+			toast.error('No se pudo precargar la Cuenta por Pagar — actualízala a mano.');
+		}
 	}
 	function closeModal() {
 		modalOpen = false;
@@ -614,12 +649,12 @@
 	// CuentaPagarModal (ver ahí), que lo usa en vez de createCuentaPagar directo — recibe los mismos
 	// `formValues` que el modal ya validó, así que arma el payload de la transacción a partir de esos
 	// valores (no de la cuenta ya creada, que en este orden todavía no existe).
-	async function guardarCuentaPagarConTransaccionPrestamo(formValues: Record<string, string>): Promise<ServiceResult<CuentaPagar>> {
+	async function guardarCuentaPagarConTransaccionPrestamo(formValues: Record<string, string>, fracciones: Fraccion[] = []): Promise<ServiceResult<CuentaPagar>> {
 		if (!prestamoPrefillDatos) {
 			// Salvaguarda: este override solo debería pasarse mientras el flujo de préstamo está activo
 			// (ver el prop condicional más abajo) — si por lo que sea se llama sin eso, cae al alta normal.
 			const { data: userData } = await supabase.auth.getUser();
-			return createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+			return createCuentaPagar(supabase, formValues, userData?.user?.email ?? null, fracciones);
 		}
 		// Un préstamo recibido es un evento único — este flujo no soporta "Frecuencia de Pago" periódica
 		// (generaría varias Cuentas por Pagar para UNA sola transacción de ingreso, sin sentido acá). El
@@ -655,7 +690,11 @@
 			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${resultTransaccion.message}. La Cuenta por Pagar no se guardó.` };
 		}
 
-		const resultCuenta = await createCuentaPagar(supabase, formValues, userData?.user?.email ?? null);
+		// id_transaccion (ver cuentas_pagar_cobrar_id_transaccion_migration.sql) vincula esta cuenta con la
+		// transacción recién creada — así, si el usuario más tarde EDITA esa transacción, TransaccionModal
+		// puede encontrar esta misma Cuenta por Pagar y abrirla para actualizarla también (ver
+		// getCuentaPagarPorTransaccion).
+		const resultCuenta = await createCuentaPagar(supabase, { ...formValues, id_transaccion: String(resultTransaccion.data!.id_transaccion) }, userData?.user?.email ?? null, fracciones);
 		if (!resultCuenta.success) {
 			// La transacción ya se creó pero la cuenta no — se revierte para no dejar un movimiento de
 			// caja real sin la Cuenta por Pagar que lo respalda.

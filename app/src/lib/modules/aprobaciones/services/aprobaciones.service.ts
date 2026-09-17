@@ -545,6 +545,11 @@ export async function cerrarVentaAprobada(
 					// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
 					// transacción del adelanto ni el cierre de la venta se completaban.
 					tipo_moneda: 'soles',
+					// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+					// 'Adelanto' es la categoría de Ingreso correcta para este movimiento (ver el catálogo
+					// de esa config). Sin esto, cerrar una venta con un adelanto todavía no registrado
+					// volvía a fallar con "Revisa los campos marcados", esta vez por falta de categoria.
+					categoria: 'Adelanto',
 					estado: 'activo',
 					comprobante_url: params.comprobanteUrl,
 					descripcion: `Adelanto inicial - ${params.proyectoNombre} (proyecto #${params.idProyecto})`

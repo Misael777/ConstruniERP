@@ -49,7 +49,7 @@
 		 * ServiceResult<CuentaPagar> que createCuentaPagar devolvería, para que el resto de handleSubmit
 		 * (toast, onSaved, onClose) no tenga que saber nada de esto. null en cualquier otro flujo (crear/
 		 * editar normal, mode='edit' nunca lo usa). Mismo patrón que CuentaCobrarModal.svelte. */
-		onSubmitOverride?: ((formValues: Record<string, string>) => Promise<ServiceResult<CuentaPagar>>) | null;
+		onSubmitOverride?: ((formValues: Record<string, string>, fracciones: Fraccion[]) => Promise<ServiceResult<CuentaPagar>>) | null;
 		onClose: () => void;
 		onSaved: (cuenta?: CuentaPagar | CuentaPagar[]) => void | Promise<void>;
 	} = $props();
@@ -282,7 +282,15 @@
 	const gridColsClass = $derived(formFields.length <= 4 ? 'grid-cols-1' : formFields.length <= 8 ? 'grid-cols-2' : 'grid-cols-3');
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
-		return (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// A pedido explícito del usuario: "Responsable" se veía vacío (el <select> nativo no muestra
+		// ningún texto cuando su value no calza con NINGUNA <option> de la lista) — mismo bug/fix que
+		// CuentaCobrarModal.svelte: si el valor ya elegido no aparece en la lista, se agrega igual (con
+		// su propio nombre como label) para que el campo nunca se vea en blanco.
+		if (field.key === 'responsable' && formValues.responsable && !base.some((o) => o.value === formValues.responsable)) {
+			return [...base, { value: formValues.responsable, label: formValues.responsable }];
+		}
+		return base;
 	}
 
 	async function handleSubmit(event: SubmitEvent) {
@@ -306,7 +314,7 @@
 			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
 			if (onSubmitOverride) {
-				result = await onSubmitOverride(formValues);
+				result = await onSubmitOverride(formValues, fraccionesAEnviar);
 			} else if (mode === 'edit' && cuenta) {
 				result = await updateCuentaPagar(supabase, cuenta.id_cuenta_pagar, formValues, isAdmin(), fraccionesAEnviar);
 			} else if (esPeriodico) {

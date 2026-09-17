@@ -57,6 +57,12 @@ export interface CuentaCobrar {
 	estado: string;
 	usuario_registro: string | null;
 	created_at: string;
+	/** Transacción de "Préstamo Otorgado" (Egreso) que originó esta cuenta — ver
+	 * cuentas_pagar_cobrar_id_transaccion_migration.sql. Solo no-null para préstamos creados desde esa
+	 * migración en adelante (ver guardarCuentaCobrarConTransaccionPrestamo en
+	 * finanzas/cuentas-cobrar/+page.svelte); null para cualquier cuenta creada antes, o que no viene de
+	 * ese flujo. Permite que TransaccionModal.svelte encuentre esta cuenta al editar esa transacción. */
+	id_transaccion: number | null;
 	cliente?: { nombre: string } | null;
 	proyecto?: { nombre_proyecto: string } | null;
 }
@@ -182,15 +188,26 @@ export function computeEstadoCuentaCobrar(saldoPendiente: number, fechaVencimien
 /** Único punto que calcula monto_cobrado/saldo_pendiente/estado de una cuenta a partir de la plata
  * REAL ya recibida (transacción de ingreso activa en el centro de costo vinculado) — usado tanto al
  * crear/editar como al recalcular tras un cobro. Sin centro de costo vinculado no hay forma de saber
- * cuánto se recibió, así que queda en 0 (pendiente/vencido según fecha). */
+ * cuánto se recibió, así que queda en 0 (pendiente/vencido según fecha).
+ *
+ * `esPrestamo` (true si la cuenta tiene id_transaccion, ver esa columna en la interfaz CuentaCobrar):
+ * en el flujo "Préstamo Otorgado", `idCentroCosto` NO es el proyecto vendido — es "Prestamista",
+ * NUESTRO propio centro que financia el préstamo (ver CuentaCobrarModal.svelte) — ese centro puede
+ * tener montones de ingresos reales sin ninguna relación con ESTE préstamo puntual. Sumarlos acá daba
+ * saldo_pendiente=0 (estado "Pagado" guardado de verdad en BD) para un préstamo que todavía no cobró
+ * nada — mismo bug ya corregido del lado cliente en CuentaCobrarModal.svelte (saldoPendienteReal, solo
+ * una vista previa), pero que seguía escribiéndose mal al guardar porque este cálculo del servidor es
+ * el que de verdad se persiste. Con esPrestamo=true, monto_cobrado queda en 0 (Pendiente) hasta que se
+ * registren cobros reales sobre ESTA cuenta puntual (ver getCobros/sincronizarCuotasProgramadas). */
 async function calcularMontoCobradoYEstado(
 	client: SupabaseClient,
 	idCentroCosto: number | null,
 	monto: number,
-	fechaVencimiento: string | null
+	fechaVencimiento: string | null,
+	esPrestamo: boolean = false
 ): Promise<{ montoCobrado: number; saldoPendiente: number; estado: string }> {
 	let montoCobrado = 0;
-	if (idCentroCosto != null && Number.isFinite(idCentroCosto)) {
+	if (!esPrestamo && idCentroCosto != null && Number.isFinite(idCentroCosto)) {
 		const montos = await getMontoRecibidoPorCentroCosto(client, [idCentroCosto]);
 		montoCobrado = montos[idCentroCosto] ?? 0;
 	}
@@ -206,7 +223,12 @@ async function calcularMontoCobradoYEstado(
  * ya corregida. Mismo patrón que autoCorregirVencidos en cuentasPagar.service.ts.
  */
 async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCobrar[]): Promise<CuentaCobrar[]> {
-	const conCentro = items.filter((item) => item.id_centro_costo != null);
+	// Cuentas de "Préstamo Otorgado" (id_transaccion no-null, ver esPrestamo en
+	// calcularMontoCobradoYEstado) quedan FUERA de esta auto-corrección: su id_centro_costo es
+	// "Prestamista" (nuestro propio fondo), no un proyecto vendido, y sumar sus ingresos reales acá
+	// volvía a marcar "Pagado" una cuenta de préstamo que nunca cobró nada — mismo bug, esta vez en la
+	// pasada que corre cada vez que se lista Cuentas por Cobrar, no solo al crear/editar una puntual.
+	const conCentro = items.filter((item) => item.id_centro_costo != null && item.id_transaccion == null);
 	if (conCentro.length === 0) return items;
 
 	const ids = [...new Set(conCentro.map((item) => item.id_centro_costo as number))];
@@ -214,7 +236,7 @@ async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCo
 
 	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
 	const resultado = items.map((item) => {
-		if (item.id_centro_costo == null) return item;
+		if (item.id_centro_costo == null || item.id_transaccion != null) return item;
 		const recibido = montoRecibidoMap[item.id_centro_costo] ?? 0;
 		const saldo = Math.max(Number(item.monto) - recibido, 0);
 		const estado = computeEstadoCuentaCobrar(saldo, item.fecha_vencimiento);
@@ -323,13 +345,18 @@ export async function createCuentaCobrar(
 	const saldoInicial = Number(payload.monto);
 	const idCentroCosto = payload.id_centro_costo != null && payload.id_centro_costo !== '' ? Number(payload.id_centro_costo) : null;
 	const fechaVencimiento = (payload.fecha_vencimiento as string) || null;
-	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCosto, saldoInicial, fechaVencimiento);
+	const esPrestamo = payload.id_transaccion != null;
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCosto, saldoInicial, fechaVencimiento, esPrestamo);
 	const insertData: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		monto_cobrado: montoCobrado,
 		saldo_pendiente: saldoPendiente,
 		estado,
-		usuario_registro: usuarioRegistro
+		usuario_registro: usuarioRegistro,
+		// No es un campo de FIELDS_CONFIG (nunca se edita a mano, ver cuentas_pagar_cobrar_id_transaccion_migration.sql)
+		// — solo llega poblado cuando guardarCuentaCobrarConTransaccionPrestamo (finanzas/cuentas-cobrar/+page.svelte)
+		// lo agrega a mano al payload, justo después de crear la transacción del préstamo.
+		id_transaccion: payload.id_transaccion != null ? Number(payload.id_transaccion) : null
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto)').single();
@@ -338,6 +365,17 @@ export async function createCuentaCobrar(
 	await sincronizarCuotasProgramadas(client, data.id_cuenta_cobrar, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por cobrar creada correctamente', data: data as CuentaCobrar };
+}
+
+/** Cuenta por Cobrar vinculada a una transacción de "Préstamo Otorgado" (ver id_transaccion en la
+ * interfaz CuentaCobrar) — usado por TransaccionModal.svelte al editar esa transacción, para abrir
+ * esta cuenta también en edición con los valores actualizados. null si esa transacción no tiene
+ * ninguna cuenta vinculada (préstamo creado antes de cuentas_pagar_cobrar_id_transaccion_migration.sql,
+ * o no viene de ese flujo). */
+export async function getCuentaCobrarPorTransaccion(client: SupabaseClient, idTransaccion: number): Promise<CuentaCobrar | null> {
+	const { data, error } = await client.from(TABLE_NAME).select('*, cliente(nombre), proyecto(nombre_proyecto)').eq('id_transaccion', idTransaccion).maybeSingle();
+	if (error) throw error;
+	return (data as CuentaCobrar) ?? null;
 }
 
 /**
@@ -406,7 +444,10 @@ export async function updateCuentaCobrar(
 			? Number(updateData.id_centro_costo)
 			: ((current?.id_centro_costo ?? null) as number | null);
 	const fechaVencimientoFinal = (typeof updateData.fecha_vencimiento === 'string' ? updateData.fecha_vencimiento : current?.fecha_vencimiento) || null;
-	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCostoFinal, montoFinal, fechaVencimientoFinal);
+	// id_transaccion no es editable a mano (no está en FIELDS_CONFIG) — se lee del registro actual, no
+	// del formulario, mismo motivo que esPrestamo en createCuentaCobrar.
+	const esPrestamo = current?.id_transaccion != null;
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCostoFinal, montoFinal, fechaVencimientoFinal, esPrestamo);
 	updateData.monto_cobrado = montoCobrado;
 	updateData.saldo_pendiente = saldoPendiente;
 	updateData.estado = estado;
@@ -434,6 +475,17 @@ export async function updateCuentaCobrar(
  * cobro tiene una transacción ya aprobada (ver BLOQUEADO_POR_APROBACION).
  */
 export async function deleteCuentaCobrar(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
+	// A pedido explícito del usuario: una Cuenta por Cobrar generada por una transacción de "Préstamo
+	// Otorgado" (id_transaccion, ver cuentas_pagar_cobrar_id_transaccion_migration.sql) NUNCA se puede
+	// eliminar, ni siquiera un administrador — a diferencia del caso de abajo (cobros/transacciones
+	// vinculadas vía la tabla `cobros`, que sí se borran en cadena), acá la transacción es la fuente
+	// real del dinero que salió y borrar la cuenta la dejaría sin ningún registro contable que la
+	// respalde.
+	const { data: cuentaActual } = await client.from(TABLE_NAME).select('id_transaccion').eq(PK_COLUMN, id).maybeSingle();
+	if (cuentaActual?.id_transaccion != null) {
+		return { success: false, message: 'No se puede eliminar: esta Cuenta por Cobrar está vinculada a una transacción de Préstamo.' };
+	}
+
 	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}

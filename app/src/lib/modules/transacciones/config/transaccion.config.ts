@@ -155,6 +155,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'categoria',
 		label: 'Categoría',
 		tipo: 'select',
+		// A pedido explícito del usuario: obligatoria para crear/actualizar cualquier transacción — antes
+		// se podía guardar sin elegir ninguna. El asterisco aparece solo (ver fieldBlock, que ya muestra
+		// "*" para cualquier field.required:true) y validatePayload ya la exige sin ningún cambio aparte.
+		required: true,
 		options: [
 			// Catálogo vigente (a pedido explícito del usuario) — Ingreso: Adelanto/Valorización/Abonos;
 			// Egreso: Honorarios/Alquileres/Servicios/Subcontrata/Compras/Movilidad/Impuestos/Préstamo.

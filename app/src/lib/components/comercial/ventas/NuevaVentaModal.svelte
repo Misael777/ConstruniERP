@@ -1182,6 +1182,10 @@ async function copiarCodigoGenerado() {
 						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
 						// se creaba ni la transacción del adelanto ni la venta.
 						tipo_moneda: 'soles',
+						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento. Mismo bug que
+						// tipo_moneda arriba, esta vez por falta de categoria.
+						categoria: 'Adelanto',
 						estado: 'activo',
 						comprobante_url: comprobanteUrl,
 						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
