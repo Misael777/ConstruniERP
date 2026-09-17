@@ -64,6 +64,12 @@ export interface CuentaPagar {
 	 * se detiene solo cuando la siguiente generación pasaría de fin_periodo_pago) — apunta a la cuenta
 	 * anterior de la que salió. null = creada a mano, o primera de una cadena recurrente. */
 	id_cuenta_pagar_padre: number | null;
+	/** Transacción de "Préstamo" (Ingreso) que originó esta cuenta — ver
+	 * cuentas_pagar_cobrar_id_transaccion_migration.sql. Solo no-null para préstamos creados desde esa
+	 * migración en adelante (ver guardarCuentaPagarConTransaccionPrestamo en
+	 * finanzas/cuentas-pagar/+page.svelte); null para cualquier cuenta creada antes, o que no viene de
+	 * ese flujo. Permite que TransaccionModal.svelte encuentre esta cuenta al editar esa transacción. */
+	id_transaccion: number | null;
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
 	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. `ruc` (8
 	 * dígitos ≈ DNI, 11 ≈ RUC — no hay columna DNI separada) solo viene poblado en getResumenPagosDashboard. */
@@ -456,7 +462,11 @@ export async function createCuentaPagar(
 		monto_pagado: 0,
 		saldo_pendiente: saldoInicial,
 		estado: computeEstadoCuentaPagar(saldoInicial, (payload.fecha_vencimiento as string) || null, (payload.fecha_pago_programada as string) || null),
-		usuario_registro: usuarioRegistro
+		usuario_registro: usuarioRegistro,
+		// No es un campo de FIELDS_CONFIG (nunca se edita a mano, ver cuentas_pagar_cobrar_id_transaccion_migration.sql)
+		// — solo llega poblado cuando guardarCuentaPagarConTransaccionPrestamo (finanzas/cuentas-pagar/+page.svelte)
+		// lo agrega a mano al payload, justo después de crear la transacción del préstamo.
+		id_transaccion: payload.id_transaccion != null ? Number(payload.id_transaccion) : null
 	};
 
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, proveedor(razon_social)').single();
@@ -465,6 +475,17 @@ export async function createCuentaPagar(
 	await sincronizarCuotasProgramadas(client, data.id_cuenta_pagar, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por pagar creada correctamente', data: data as CuentaPagar };
+}
+
+/** Cuenta por Pagar vinculada a una transacción de "Préstamo" (ver id_transaccion en la interfaz
+ * CuentaPagar) — usado por TransaccionModal.svelte al editar esa transacción, para abrir esta cuenta
+ * también en edición con los valores actualizados. null si esa transacción no tiene ninguna cuenta
+ * vinculada (préstamo creado antes de cuentas_pagar_cobrar_id_transaccion_migration.sql, o no viene
+ * de ese flujo). */
+export async function getCuentaPagarPorTransaccion(client: SupabaseClient, idTransaccion: number): Promise<CuentaPagar | null> {
+	const { data, error } = await client.from(TABLE_NAME).select('*, proveedor(razon_social)').eq('id_transaccion', idTransaccion).maybeSingle();
+	if (error) throw error;
+	return (data as CuentaPagar) ?? null;
 }
 
 /** Tope de seguridad ante un rango mal puesto (ej. Fin de Periodo de Pago varios años después de Fecha
@@ -681,6 +702,16 @@ export async function updateCuentaPagar(
  * tiene una transacción ya aprobada (ver BLOQUEADO_POR_APROBACION).
  */
 export async function deleteCuentaPagar(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
+	// A pedido explícito del usuario: una Cuenta por Pagar generada por una transacción de "Préstamo"
+	// (id_transaccion, ver cuentas_pagar_cobrar_id_transaccion_migration.sql) NUNCA se puede eliminar,
+	// ni siquiera un administrador — a diferencia del caso de abajo (pagos/transacciones vinculadas vía
+	// la tabla `pagos`, que sí se borran en cadena), acá la transacción es la fuente real del dinero que
+	// entró y borrar la cuenta la dejaría sin ningún registro contable que la respalde.
+	const { data: cuentaActual } = await client.from(TABLE_NAME).select('id_transaccion').eq(PK_COLUMN, id).maybeSingle();
+	if (cuentaActual?.id_transaccion != null) {
+		return { success: false, message: 'No se puede eliminar: esta Cuenta por Pagar está vinculada a una transacción de Préstamo.' };
+	}
+
 	if (!esAdmin && (await cuentaTieneTransaccionAprobada(client, id))) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}

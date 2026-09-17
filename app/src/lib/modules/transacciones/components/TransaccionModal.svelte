@@ -54,8 +54,8 @@
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
-	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
-	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables, getCuentaPagarPorTransaccion } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables, getCuentaCobrarPorTransaccion } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
 
 	/** Algunos orígenes de archivo (ej. selector de galería en el WebView de Android) no informan bien
@@ -463,6 +463,9 @@
 
 	// A pedido del usuario: "Otros campos (opcionales)" arranca colapsada — antes arrancaba abierta.
 	let otrosCamposAbierto = $state(false);
+	// A pedido explícito del usuario: "Comprobante autogenerado por el ERP" arranca colapsada, mismo
+	// criterio/patrón que "Otros campos" de arriba — se abre con un clic solo cuando hace falta usarla.
+	let comprobanteAutoAbierto = $state(false);
 
 	// Idempotency key para fn_crear_transaccion/fn_confirmar_pago/fn_confirmar_cobro (ver
 	// financial_integrity_rpc_migration.sql) — se genera UNA vez al abrir el modal y viaja tal cual en
@@ -494,6 +497,7 @@
 			claseDestino = '';
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
+			comprobanteAutoAbierto = false;
 			detalleCategoria = [];
 			detalleCategoriaAbierto = false;
 			detalleCategoriaCargadoParaId = null;
@@ -1463,6 +1467,57 @@
 			((claseEsOtroOPrestamo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
 	);
 	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && categoriaEsPrestamoOtorgado);
+
+	// A pedido explícito del usuario: al EDITAR (no crear) una transacción de Préstamo y darle
+	// "Actualizar", además de guardar la transacción en sí, debe abrirse la Cuenta por Pagar/Cobrar que
+	// se creó junto con ella para actualizarla también con los nuevos valores — esta ya existe (a
+	// diferencia del alta, que la crea de cero), se busca por id_transaccion (ver
+	// cuentas_pagar_cobrar_id_transaccion_migration.sql/getCuentaPagarPorTransaccion/
+	// getCuentaCobrarPorTransaccion). Si la transacción es de ANTES de esa migración (sin vínculo
+	// guardado), no hay forma confiable de encontrar la cuenta — se avisa y se guarda solo la
+	// transacción, sin redirigir a ningún lado.
+	const editandoPrestamo = $derived(mode === 'edit' && (categoriaEsPrestamo || categoriaEsPrestamoOtorgado));
+	async function redirigirAEditarCuentaPrestamo(): Promise<void> {
+		if (!transaccion) return;
+		try {
+			if (categoriaEsPrestamo) {
+				const cuenta = await getCuentaPagarPorTransaccion(supabase, transaccion.id_transaccion);
+				if (!cuenta) {
+					toast.info('No se encontró la Cuenta por Pagar vinculada (es de antes de este cambio) — actualízala a mano si hace falta.');
+					return;
+				}
+				sessionStorage.setItem(
+					'cuentaPagarEditarPrefill',
+					JSON.stringify({
+						id_cuenta_pagar: cuenta.id_cuenta_pagar,
+						monto_comprometido: formValues.monto_total,
+						fecha_emision: formValues.fecha,
+						observacion: formValues.descripcion || cuenta.observacion
+					})
+				);
+				goto('/finanzas/cuentas-pagar?editarCuentaPagarDesdeTransaccion=1');
+			} else if (categoriaEsPrestamoOtorgado) {
+				const cuenta = await getCuentaCobrarPorTransaccion(supabase, transaccion.id_transaccion);
+				if (!cuenta) {
+					toast.info('No se encontró la Cuenta por Cobrar vinculada (es de antes de este cambio) — actualízala a mano si hace falta.');
+					return;
+				}
+				sessionStorage.setItem(
+					'cuentaCobrarEditarPrefill',
+					JSON.stringify({
+						id_cuenta_cobrar: cuenta.id_cuenta_cobrar,
+						monto: formValues.monto_total,
+						fecha_emision: formValues.fecha,
+						observaciones: formValues.descripcion || cuenta.observaciones
+					})
+				);
+				goto('/finanzas/cuentas-cobrar?editarCuentaCobrarDesdeTransaccion=1');
+			}
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo buscar la Cuenta por Pagar/Cobrar vinculada:', err);
+			toast.error('No se pudo buscar la Cuenta por Pagar/Cobrar vinculada — actualízala a mano si hace falta.');
+		}
+	}
 
 	// Etiqueta corta por tipo de centro de costo — solo para agrupar visualmente "Proyecto" cuando
 	// categoriaEsPrestamo (ver grupoParaOpcion/optionsFor). Mismos valores que TIPO_CENTRO_COSTO_OPTIONS
@@ -2654,6 +2709,10 @@
 					toast.success(result.message ?? 'Operación realizada con éxito');
 					onSaved();
 					onClose();
+					// Ver editandoPrestamo/redirigirAEditarCuentaPrestamo más arriba — la transacción ya se
+					// actualizó, esto solo abre (mejor esfuerzo, nunca bloquea ni deshace lo ya guardado) la
+					// Cuenta por Pagar/Cobrar vinculada para que el usuario confirme el mismo cambio ahí.
+					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 				}
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
@@ -3305,8 +3364,17 @@
 					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 						<div class="rounded-2xl border border-slate-200 p-5">
-							<span class="block text-sm font-bold text-[#0f3b5e] mb-4">Comprobante autogenerado por el ERP</span>
-							<p class="text-xs text-slate-500 mb-4">
+							<button
+								type="button"
+								onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
+								class="flex items-center gap-1.5 text-sm font-bold text-blue-600"
+							>
+								Comprobante autogenerado por el ERP
+								{#if comprobanteAutoAbierto}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+							</button>
+
+							{#if comprobanteAutoAbierto}
+							<p class="text-xs text-slate-500 mt-4 mb-4">
 								Este comprobante lo emite el propio sistema — no hace falta adjuntarlo a mano en "Adjuntar
 								boucher de pago" ni en "Comprobantes de pago". Se actualiza en tiempo real con el formulario.
 							</p>
@@ -3425,6 +3493,7 @@
 									</div>
 								{/if}
 							</div>
+							{/if}
 						</div>
 					{/if}
 

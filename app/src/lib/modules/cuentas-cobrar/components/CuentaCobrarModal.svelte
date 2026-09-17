@@ -67,7 +67,7 @@
 		 * cuenta terminara fallando) y devuelve el mismo ServiceResult<CuentaCobrar> que createCuentaCobrar,
 		 * para que el resto de handleSubmit (toast, onSaved, onClose) no tenga que saber nada de esto.
 		 * null en cualquier otro flujo (crear/editar normal, mode='edit' nunca lo usa). */
-		onSubmitOverride?: ((formValues: Record<string, string>) => Promise<ServiceResult<CuentaCobrar>>) | null;
+		onSubmitOverride?: ((formValues: Record<string, string>, fracciones: Fraccion[]) => Promise<ServiceResult<CuentaCobrar>>) | null;
 		onClose: () => void;
 		// Recibe la fila (o filas, si es una serie) recién creada/actualizada — a pedido explícito del
 		// usuario, finanzas/cuentas-cobrar/+page.svelte lo usa para grabar recién ahí la transacción del
@@ -133,14 +133,20 @@
 	// recibido) o se abre el modal.
 	let montoRecibidoCentro = $state(0);
 	$effect(() => {
-		// En el flujo "Préstamo Otorgado" (clienteBloqueado), "Centro de Costo" ya NO es el proyecto
-		// vendido — es "Prestamista", NUESTRO propio centro que financia el préstamo (ver labelFor/
-		// optionsFor más abajo). Ese centro puede tener montones de ingresos reales sin ninguna relación
-		// con ESTE préstamo puntual (es un centro de costo interno de uso normal) — restarlos acá hacía
-		// que Saldo Pendiente diera 0 (y Estado "Pagado") para un préstamo recién creado, que todavía no
-		// cobró nada. Bug real reportado por el usuario: se fuerza a 0 en este flujo, Saldo Pendiente
-		// queda igual al Valor de préstamo hasta que se registren cobros de verdad sobre ESTA cuenta.
-		if (!open || !formValues.id_centro_costo || clienteBloqueado) {
+		// En el flujo "Préstamo Otorgado", "Centro de Costo" ya NO es el proyecto vendido — es
+		// "Prestamista", NUESTRO propio centro que financia el préstamo (ver labelFor/optionsFor más
+		// abajo). Ese centro puede tener montones de ingresos reales sin ninguna relación con ESTE
+		// préstamo puntual (es un centro de costo interno de uso normal) — restarlos acá hacía que Saldo
+		// Pendiente diera 0 (y Estado "Pagado") para un préstamo que todavía no cobró nada. Bug real
+		// reportado por el usuario, dos veces: primero al CREAR (clienteBloqueado=true ahí, ya cubierto);
+		// después también al EDITAR una transacción de préstamo desde TransaccionModal.svelte (ver
+		// abrirEdicionPrecargadaDesdeTransaccion en finanzas/cuentas-cobrar/+page.svelte), que abre esta
+		// misma cuenta en modo Editar con clienteBloqueado=false (el Cliente sí se puede tocar libremente
+		// ahí) — clienteBloqueado por sí solo ya no alcanza para detectar "esto es un préstamo" en TODOS
+		// los casos. cuenta?.id_transaccion (real desde cuentas_pagar_cobrar_id_transaccion_migration.sql)
+		// es la señal confiable: no-null únicamente en una cuenta que se creó junto con una transacción de
+		// préstamo, sin importar por qué puerta se llegó a editarla.
+		if (!open || !formValues.id_centro_costo || clienteBloqueado || cuenta?.id_transaccion != null) {
 			montoRecibidoCentro = 0;
 			return;
 		}
@@ -277,14 +283,25 @@
 	// al campo "Valor de venta" y sus vecinos (Monto en Dólares/Tipo de Cambio).
 	const mostrarResumenVenta = $derived(!!formValues.monto && !fieldErrors.monto);
 
-	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo en el flujo "Préstamo Otorgado"
-	 * (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): a pedido explícito del usuario,
-	 * "Centro de Costo" pasa a llamarse "Prestamista" (quién presta, nuestro propio fondo) y "Proyecto"
-	 * a "Prestatario" (a quién se le presta — mismo criterio que labelFor en TransaccionModal.svelte). */
+	/** true si esta cuenta es (o está por convertirse en) una de "Préstamo Otorgado" — a diferencia de
+	 * usar solo `clienteBloqueado` (que únicamente es true mientras se está CREANDO desde ese flujo,
+	 * ver finanzas/cuentas-cobrar/+page.svelte), esto también cubre EDITAR una cuenta de préstamo ya
+	 * existente (abrirEdicionPrecargadaDesdeTransaccion abre con clienteBloqueado=false a propósito,
+	 * porque ahí el Cliente SÍ se puede volver a tocar) — `cuenta?.id_transaccion` (real desde
+	 * cuentas_pagar_cobrar_id_transaccion_migration.sql) es la señal confiable de "esto es un préstamo"
+	 * sin importar por qué puerta se llegó a editarlo. Usado solo para ETIQUETAS/textos (ver
+	 * saldoPendienteReal más arriba para el mismo criterio aplicado al cálculo de saldo). */
+	const esPrestamo = $derived(clienteBloqueado || cuenta?.id_transaccion != null);
+
+	/** Etiqueta del campo — normalmente `field.label` tal cual, salvo en un préstamo (ver esPrestamo):
+	 * a pedido explícito del usuario, "Centro de Costo" pasa a llamarse "Prestamista" (quién presta,
+	 * nuestro propio fondo), "Proyecto" a "Prestatario" (a quién se le presta) y "Valor de venta" a
+	 * "Valor de Préstamo" — mismo criterio que labelFor en TransaccionModal.svelte. */
 	function labelFor(field: (typeof formFields)[number]): string {
-		if (clienteBloqueado) {
+		if (esPrestamo) {
 			if (field.key === 'id_centro_costo') return 'Prestamista';
 			if (field.key === 'id_proyecto') return 'Prestatario';
+			if (field.key === 'monto') return 'Valor de Préstamo';
 		}
 		return field.label;
 	}
@@ -301,6 +318,16 @@
 		// costos activos que tengan ese cliente"). Sin Cliente elegido se muestran todos (sin filtrar).
 		if (field.key === 'id_centro_costo' && formValues.id_cliente) {
 			return base.filter((opt) => centroCostoClienteMap[opt.value] === formValues.id_cliente);
+		}
+		// A pedido explícito del usuario: "Responsable" se veía vacío (el <select> nativo no muestra
+		// ningún texto cuando su value no calza con NINGUNA <option> de la lista) — pasaba en la cuenta
+		// que autogenera el flujo de préstamo, donde el valor precargado puede llegar antes de que
+		// dynamicOptions.responsable termine de cargar, o ya no calzar exactamente con el catálogo de
+		// empleados actual. Mismo criterio de seguridad que ya usa este archivo para Centro de Costo/
+		// Moneda: si el valor ya elegido no aparece en la lista, se agrega igual (con su propio nombre
+		// como label) para que el campo nunca se vea en blanco.
+		if (field.key === 'responsable' && formValues.responsable && !base.some((o) => o.value === formValues.responsable)) {
+			return [...base, { value: formValues.responsable, label: formValues.responsable }];
 		}
 		return base;
 	}
@@ -319,7 +346,7 @@
 			const fraccionesAEnviar = esFraccionable ? fracciones : [];
 			let result;
 			if (onSubmitOverride) {
-				result = await onSubmitOverride(formValues);
+				result = await onSubmitOverride(formValues, fraccionesAEnviar);
 			} else if (mode === 'edit' && cuenta) {
 				result = await updateCuentaCobrar(supabase, cuenta.id_cuenta_cobrar, formValues, isAdmin(), fraccionesAEnviar);
 			} else {
@@ -453,10 +480,10 @@
 
 				{#if mostrarResumenVenta}
 					<div class="w-full lg:w-60 shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-4">
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">{clienteBloqueado ? 'Resumen de préstamo' : 'Resumen de venta'}</h3>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">{esPrestamo ? 'Resumen de préstamo' : 'Resumen de venta'}</h3>
 						<div class="flex flex-col gap-3">
 							<div>
-								<span class="block text-xs text-slate-500 mb-1">{clienteBloqueado ? 'Valor de préstamo' : 'Valor de venta'}</span>
+								<span class="block text-xs text-slate-500 mb-1">{esPrestamo ? 'Valor de Préstamo' : 'Valor de venta'}</span>
 								<input
 									type="text"
 									readonly

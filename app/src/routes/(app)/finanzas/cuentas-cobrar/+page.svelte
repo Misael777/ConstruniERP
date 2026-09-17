@@ -39,6 +39,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { getOrCrearClientePrestamos } from '$lib/modules/clientes/services/clientes.service';
+	import type { Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 	import { getResumenCobros, getCobradoEnRango, type ResumenCobros } from '$lib/modules/panoramas/services/panoramas.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import CobroModal from '$lib/modules/cuentas-cobrar/components/CobroModal.svelte';
@@ -326,6 +327,7 @@
 			toast.error(err?.message ?? 'No se pudieron cargar clientes/proyectos/centros de costo');
 		}
 		abrirCreacionPrecargadaDesdeTransaccion();
+		abrirEdicionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 
@@ -404,6 +406,40 @@
 		clienteBloqueado = false;
 		prestamoPrefillDatos = null;
 		modalOpen = true;
+	}
+
+	// A pedido explícito del usuario: al EDITAR (no crear) una transacción de Egreso con
+	// Categoría="Préstamo Otorgado" y darle "Actualizar" (ver TransaccionModal.svelte), esta Cuenta por
+	// Cobrar YA EXISTE (se creó junto con esa transacción, ver id_transaccion en
+	// cuentasCobrar.service.ts) — no se crea una nueva, se abre esta misma en modo Editar con Valor de
+	// venta/Fecha Emisión/Observaciones ya actualizados a lo que el usuario acaba de cambiar en la
+	// transacción, para que los confirme con un segundo "Actualizar" acá. Mismo mecanismo cross-page
+	// (sessionStorage + query param + limpieza inmediata) que abrirCreacionPrecargadaDesdeTransaccion,
+	// clave distinta para no pisarse entre sí.
+	async function abrirEdicionPrecargadaDesdeTransaccion() {
+		if (page.url.searchParams.get('editarCuentaCobrarDesdeTransaccion') !== '1') return;
+		const crudo = sessionStorage.getItem('cuentaCobrarEditarPrefill');
+		sessionStorage.removeItem('cuentaCobrarEditarPrefill');
+		window.history.replaceState({}, '', '/finanzas/cuentas-cobrar');
+		if (!crudo) return;
+		try {
+			const datos = JSON.parse(crudo);
+			const { data: cuenta, error } = await supabase.from('cuentas_cobrar').select('*, cliente(nombre), proyecto(nombre_proyecto)').eq('id_cuenta_cobrar', datos.id_cuenta_cobrar).single();
+			if (error || !cuenta) {
+				console.error('[CuentasCobrar] No se encontró la Cuenta por Cobrar vinculada a la transacción:', error);
+				toast.error('No se encontró la Cuenta por Cobrar vinculada a esa transacción.');
+				return;
+			}
+			modalMode = 'edit';
+			editingCuenta = { ...(cuenta as CuentaCobrar), monto: datos.monto, fecha_emision: datos.fecha_emision, observaciones: datos.observaciones ?? cuenta.observaciones };
+			clienteBloqueado = false;
+			prestamoPrefillDatos = null;
+			modalOpen = true;
+			toast.info('Revisa y confirma "Actualizar" para reflejar acá los cambios de la transacción.');
+		} catch (err) {
+			console.error('[CuentasCobrar] No se pudo leer la precarga de edición de la transacción:', err);
+			toast.error('No se pudo precargar la Cuenta por Cobrar — actualízala a mano.');
+		}
 	}
 	function closeModal() {
 		modalOpen = false;
@@ -634,12 +670,12 @@
 	// transacción a partir de esos valores (no de la cuenta ya creada, que en este orden todavía no
 	// existe) y devuelve un ServiceResult<CuentaCobrar> idéntico al que createCuentaCobrar devolvería,
 	// para que el resto del modal (toast, onSaved, onClose) siga funcionando sin cambios.
-	async function guardarCuentaCobrarConTransaccionPrestamo(formValues: Record<string, string>): Promise<ServiceResult<CuentaCobrar>> {
+	async function guardarCuentaCobrarConTransaccionPrestamo(formValues: Record<string, string>, fracciones: Fraccion[] = []): Promise<ServiceResult<CuentaCobrar>> {
 		if (!prestamoPrefillDatos) {
 			// Salvaguarda: este override solo debería pasarse mientras el flujo de préstamo está activo
 			// (ver el prop condicional más abajo) — si por lo que sea se llama sin eso, cae al alta normal.
 			const { data: userData } = await supabase.auth.getUser();
-			return createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);
+			return createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null, fracciones);
 		}
 		const { data: userData } = await supabase.auth.getUser();
 		const payloadTransaccion = {
@@ -670,7 +706,11 @@
 			return { success: false, message: `No se pudo registrar la transacción del préstamo: ${resultTransaccion.message}. La Cuenta por Cobrar no se guardó.` };
 		}
 
-		const resultCuenta = await createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null);
+		// id_transaccion (ver cuentas_pagar_cobrar_id_transaccion_migration.sql) vincula esta cuenta con la
+		// transacción recién creada — así, si el usuario más tarde EDITA esa transacción, TransaccionModal
+		// puede encontrar esta misma Cuenta por Cobrar y abrirla para actualizarla también (ver
+		// getCuentaCobrarPorTransaccion).
+		const resultCuenta = await createCuentaCobrar(supabase, { ...formValues, id_transaccion: String(resultTransaccion.data!.id_transaccion) }, userData?.user?.email ?? null, fracciones);
 		if (!resultCuenta.success) {
 			// La transacción ya se creó pero la cuenta no — se revierte para no dejar un movimiento de
 			// caja real sin la Cuenta por Cobrar que lo respalda (mismo criterio de "todo o nada" que

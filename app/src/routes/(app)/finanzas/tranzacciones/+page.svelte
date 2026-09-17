@@ -870,19 +870,20 @@
 						{/if}
 					</div>
 				</div>
-				<!-- Columna de acciones apilada verticalmente: Ver transacción (ojito, SIEMPRE disponible —
-				     a pedido explícito del usuario, para cualquier transacción sea Ingreso/Egreso/Préstamo,
-				     tenga o no comprobante adjunto), Ver documentos (ojito, solo si hay archivo), Msje justo
-				     debajo (a pedido del usuario) y luego Editar/Bloqueado. -->
+				<!-- Columna de acciones apilada verticalmente: Ver transacción y Ver documentos (los dos
+				     ojitos, SIEMPRE disponibles ambos — a pedido explícito del usuario, para cualquier
+				     transacción sea Ingreso/Egreso/Préstamo, tenga o no comprobante adjunto: antes "Ver
+				     documentos" se ocultaba sin comprobante_url/factura_url, dejando a las transacciones de
+				     Préstamo — que se autogeneran sin ningún archivo — sin este botón; openComprobantePreview
+				     ya maneja el caso sin ningún documento, ver el aviso "Sin documentos" en
+				     DocumentPreviewModal), Msje justo debajo (a pedido del usuario) y luego Editar/Bloqueado. -->
 				<div class="flex flex-row items-center justify-end gap-1 sm:flex-col sm:shrink-0 sm:ml-2">
 					<button type="button" onclick={(e) => { e.stopPropagation(); openView(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
 						<Eye size={16} />
 					</button>
-					{#if item.comprobante_url || item.factura_url}
-						<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
-							<Eye size={16} />
-						</button>
-					{/if}
+					<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
+						<Eye size={16} />
+					</button>
 					{#if item.tipo_alcance === 'externa' && (item.tipo === 'egreso' || item.tipo === 'ingreso')}
 						<button
 							type="button"

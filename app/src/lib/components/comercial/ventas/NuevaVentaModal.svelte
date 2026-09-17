@@ -1182,6 +1182,10 @@ async function copiarCodigoGenerado() {
 						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
 						// se creaba ni la transacción del adelanto ni la venta.
 						tipo_moneda: 'soles',
+						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento. Mismo bug que
+						// tipo_moneda arriba, esta vez por falta de categoria.
+						categoria: 'Adelanto',
 						estado: 'activo',
 						comprobante_url: comprobanteUrl,
 						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
@@ -1194,7 +1198,12 @@ async function copiarCodigoGenerado() {
 			}
 		} catch (uploadError) {
 			console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
-			saveError = String(uploadError instanceof Error ? uploadError.message : uploadError);
+			// Antes: String(uploadError instanceof Error ? uploadError.message : uploadError) — un
+			// PostgrestError (ej. el docError de más arriba) NO es instanceof Error, así que
+			// String(objetoPlano) daba literalmente "[object Object]" en el banner. describeError ya
+			// extrae message/code/details/hint de un error de Supabase, mismo criterio que el resto de
+			// este archivo.
+			saveError = describeError(uploadError);
 			return null;
 		}
 
