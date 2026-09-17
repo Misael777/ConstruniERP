@@ -8,13 +8,16 @@ export const googleDriveConfig = {
 	folderIdContratos: env.GOOGLE_DRIVE_FOLDER_ID_CONTRATOS || '',
 	folderIdProformas: env.GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || '',
 	folderIdDocumentos: env.GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || '',
-	folderIdComprobantes: env.GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES || ''
+	folderIdComprobantes: env.GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES || '',
+	// Módulo de Tickets — adjuntos de imagen (ver ticket_imagenes_migration.sql).
+	folderIdTickets: env.GOOGLE_DRIVE_FOLDER_ID_TICKETS || ''
 };
 
-function getDriveFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante') {
+function getDriveFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket') {
 	if (type === 'contrato') return googleDriveConfig.folderIdContratos;
 	if (type === 'documento') return googleDriveConfig.folderIdDocumentos;
 	if (type === 'comprobante') return googleDriveConfig.folderIdComprobantes;
+	if (type === 'ticket') return googleDriveConfig.folderIdTickets;
 	return googleDriveConfig.folderIdProformas;
 }
 
@@ -53,7 +56,7 @@ async function getDriveAccessToken() {
 export async function uploadToDrive(
 	file: File | Blob,
 	fileName: string,
-	type: 'contrato' | 'proforma' | 'documento' | 'comprobante'
+	type: 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket'
 ): Promise<{ url: string; fileId: string }> {
 	const folderId = getDriveFolderId(type);
 	if (!folderId) {

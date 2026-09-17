@@ -9,7 +9,11 @@ REM   deploy.bat minor
 REM   deploy.bat major
 REM
 REM Qué hace, en orden (se detiene si cualquier paso falla):
-REM   1. Compila el APK de Android (debug) con `npm run tauri android build -- --debug`.
+REM   1. Compila el APK de Android (debug) con `npm run tauri android build -- --debug --target aarch64`.
+REM      Solo arm64 (cubre prácticamente cualquier Android real de los últimos ~8 años, incluido el del
+REM      cliente) en vez del "universal" (las 4 arquitecturas juntas, ~794MB en una prueba real — mucho
+REM      más lento de compilar/subir/descargar y probablemente la causa real de un ENOBUFS visto en un
+REM      deploy real al subir un archivo tan grande a Drive).
 REM   2. Busca el .apk recién generado bajo src-tauri\gen\android\...\outputs\apk\ (el nombre/carpeta
 REM      exacta depende de tu config de Gradle — se toma el más reciente, no un nombre fijo).
 REM   3. Corre `npm run release -- --<bump> --apk "<ese .apk>"` — ese script hace TODO lo demás:
@@ -48,8 +52,8 @@ IF /I NOT "%CONFIRMAR%"=="S" (
 )
 
 ECHO.
-ECHO [deploy] Paso 1/3 — Compilando APK de Android (debug)...
-CALL npm run tauri android build -- --debug
+ECHO [deploy] Paso 1/3 — Compilando APK de Android (debug, solo arm64)...
+CALL npm run tauri android build -- --debug --target aarch64
 IF ERRORLEVEL 1 (
 	ECHO [deploy] ERROR: fallo la compilacion de Android. Se aborta antes de tocar Windows/GitHub/Drive.
 	EXIT /B 1

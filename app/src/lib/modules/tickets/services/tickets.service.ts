@@ -36,6 +36,7 @@ export interface Ticket {
 	motivo_rechazo: string | null;
 	id_release: number | null;
 	created_at: string;
+	imagen_url: string | null;
 }
 
 export interface TicketComentario {
@@ -45,6 +46,7 @@ export interface TicketComentario {
 	autor_id: string | null;
 	mensaje: string;
 	created_at: string;
+	imagen_url: string | null;
 }
 
 export interface ServiceResult<T = undefined> {
@@ -87,7 +89,7 @@ async function registrarEvento(
  * aprobaciones.service.ts. */
 export async function crearTicket(
 	client: SupabaseClient,
-	params: { tipo: TipoTicket; modulo: string | null; titulo: string; descripcion: string; prioridad: PrioridadTicket }
+	params: { tipo: TipoTicket; modulo: string | null; titulo: string; descripcion: string; prioridad: PrioridadTicket; imagenUrl?: string | null }
 ): Promise<ServiceResult<Ticket>> {
 	try {
 		const { data: userData } = await client.auth.getUser();
@@ -102,7 +104,8 @@ export async function crearTicket(
 				prioridad: params.prioridad,
 				estado: 'abierto',
 				creado_por: creadoPor,
-				creado_por_id: userData?.user?.id ?? null
+				creado_por_id: userData?.user?.id ?? null,
+				imagen_url: params.imagenUrl ?? null
 			})
 			.select('*')
 			.single();
@@ -162,7 +165,7 @@ export async function getComentarios(client: SupabaseClient, idTicket: number): 
 
 /** Agrega un comentario al hilo de un ticket ("el foro") — lo puede usar tanto el reportante como
  * developer/admin, sin restricción adicional (la visibilidad del ticket en sí ya la gatea la UI). */
-export async function agregarComentario(client: SupabaseClient, idTicket: number, mensaje: string): Promise<ServiceResult<TicketComentario>> {
+export async function agregarComentario(client: SupabaseClient, idTicket: number, mensaje: string, imagenUrl?: string | null): Promise<ServiceResult<TicketComentario>> {
 	if (!mensaje.trim()) return { success: false, message: 'El mensaje no puede estar vacío.' };
 	try {
 		const { data: userData } = await client.auth.getUser();
@@ -172,7 +175,8 @@ export async function agregarComentario(client: SupabaseClient, idTicket: number
 				id_ticket: idTicket,
 				autor: permisosState.userName || null,
 				autor_id: userData?.user?.id ?? null,
-				mensaje: mensaje.trim()
+				mensaje: mensaje.trim(),
+				imagen_url: imagenUrl ?? null
 			})
 			.select('*')
 			.single();

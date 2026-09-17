@@ -2,11 +2,14 @@ import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 import { generateUniqueFileName } from '$lib/shared/fileNaming';
 
-export type ProjectDocumentType = 'contrato' | 'proforma' | 'documento' | 'comprobante';
+// 'ticket': adjuntos de imagen del módulo de Tickets (ver ticket_imagenes_migration.sql) — a
+// diferencia de los otros 4 tipos, no pertenece a ningún proyecto, por eso projectId es opcional acá.
+export type ProjectDocumentType = 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket';
 
 export interface UploadProjectDocumentOptions {
 	type: ProjectDocumentType;
-	projectId: number | string;
+	/** Opcional solo para type: 'ticket' — el resto de los tipos sí pertenecen a un proyecto real. */
+	projectId?: number | string;
 	/** Solo aplica a type: 'documento' — subtipo de negocio (ej. 'Proforma', 'Planos Estructurales'). */
 	documentType?: string;
 	documentName?: string;
@@ -41,7 +44,7 @@ export async function uploadProjectDocument(
 	const formData = new FormData();
 	formData.append('file', file);
 	formData.append('type', type);
-	formData.append('projectId', String(projectId));
+	if (projectId !== undefined) formData.append('projectId', String(projectId));
 	if (documentType) formData.append('documentType', documentType);
 	if (documentName) formData.append('documentName', documentName);
 	if (projectName) formData.append('projectName', projectName);

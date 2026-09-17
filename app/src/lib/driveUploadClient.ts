@@ -30,10 +30,11 @@ export function isRunningInTauri(): boolean {
 	return false;
 }
 
-function getFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante'): string {
+function getFolderId(type: 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket'): string {
 	if (type === 'contrato') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_CONTRATOS || '';
 	if (type === 'documento') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_DOCUMENTOS || '';
 	if (type === 'comprobante') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_COMPROBANTES || '';
+	if (type === 'ticket') return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_TICKETS || '';
 	return env.PUBLIC_GOOGLE_DRIVE_FOLDER_ID_PROFORMAS || '';
 }
 
@@ -80,7 +81,7 @@ async function getAccessToken(): Promise<string> {
 export async function uploadToDriveClient(
 	file: File | Blob,
 	fileName: string,
-	type: 'contrato' | 'proforma' | 'documento' | 'comprobante'
+	type: 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket'
 ): Promise<{ url: string; fileId: string }> {
 	const folderId = getFolderId(type);
 	if (!folderId) {

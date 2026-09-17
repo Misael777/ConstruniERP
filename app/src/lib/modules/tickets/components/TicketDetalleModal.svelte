@@ -3,10 +3,11 @@
 	// usuario) y, si ya tiene un release asignado, el banner "Incluido en la vX.Y.Z" con el botón de
 	// actualizar. Compartido entre "Mis Tickets" (solo comenta) y "Panel Developer" (además puede
 	// cambiar el estado) — `permitirAcciones` decide si se muestran los botones de transición.
-	import { X, Send, ShieldCheck, ShieldOff, Loader2, PlayCircle, CheckCircle2 } from '@lucide/svelte';
+	import { X, Send, ShieldCheck, ShieldOff, Loader2, PlayCircle, CheckCircle2, Paperclip, Trash2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
 	import {
 		getTicket,
 		getComentarios,
@@ -20,6 +21,9 @@
 	} from '../services/tickets.service';
 	import { getReleaseDeTicket, type AppRelease } from '../services/releases.service';
 	import BotonActualizar from '$lib/shared/components/BotonActualizar.svelte';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+
+	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, mismo tope que el resto de adjuntos del ERP
 
 	let {
 		open = false,
@@ -47,6 +51,9 @@
 	let procesando = $state(false);
 	let mostrarMotivoRechazo = $state(false);
 	let motivoRechazo = $state('');
+	let comentarioImagenFile = $state<File | null>(null);
+	let comentarioImagenPreviewUrl = $state<string | null>(null);
+	let previewImagenUrl = $state<string | null>(null);
 
 	async function cargar() {
 		if (!idTicket) return;
@@ -71,18 +78,45 @@
 		}
 	});
 
+	function onComentarioImagenChange(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		(e.target as HTMLInputElement).value = '';
+		if (!file) return;
+		if (file.size > MAX_FILE_SIZE) {
+			toast.error('La imagen supera el máximo de 5MB.');
+			return;
+		}
+		comentarioImagenFile = file;
+		if (comentarioImagenPreviewUrl) URL.revokeObjectURL(comentarioImagenPreviewUrl);
+		comentarioImagenPreviewUrl = URL.createObjectURL(file);
+	}
+
+	function quitarComentarioImagen() {
+		comentarioImagenFile = null;
+		if (comentarioImagenPreviewUrl) URL.revokeObjectURL(comentarioImagenPreviewUrl);
+		comentarioImagenPreviewUrl = null;
+	}
+
 	async function handleComentar(e: Event) {
 		e.preventDefault();
-		if (!idTicket || !nuevoMensaje.trim()) return;
+		if (!idTicket || (!nuevoMensaje.trim() && !comentarioImagenFile)) return;
 		enviandoComentario = true;
 		try {
-			const result = await agregarComentario(supabase, idTicket, nuevoMensaje);
+			let imagenUrl: string | null = null;
+			if (comentarioImagenFile) {
+				const { url } = await uploadProjectDocument(comentarioImagenFile, { type: 'ticket' });
+				imagenUrl = url;
+			}
+			const result = await agregarComentario(supabase, idTicket, nuevoMensaje || '(imagen adjunta)', imagenUrl);
 			if (result.success) {
 				nuevoMensaje = '';
+				quitarComentarioImagen();
 				await cargar();
 			} else {
 				toast.error(result.message || 'No se pudo enviar el comentario.');
 			}
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo subir la imagen del comentario.');
 		} finally {
 			enviandoComentario = false;
 		}
@@ -150,6 +184,11 @@
 						<span class="text-[11px] text-slate-400">Reportado por {ticket.creado_por ?? 'Usuario'} · {fmt(ticket.created_at)}</span>
 					</div>
 					<p class="text-sm text-slate-700 whitespace-pre-wrap">{ticket.descripcion}</p>
+					{#if ticket.imagen_url}
+						<button type="button" onclick={() => (previewImagenUrl = ticket!.imagen_url)} class="block w-32 h-24 rounded-lg border border-slate-200 overflow-hidden hover:border-blue-300">
+							<img src={ticket.imagen_url} alt="Adjunto del ticket" class="w-full h-full object-cover" />
+						</button>
+					{/if}
 
 					{#if release}
 						<div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800 flex items-center justify-between gap-3 flex-wrap">
@@ -216,10 +255,29 @@
 											<span class="text-[10px] text-slate-400">{fmt(c.created_at)}</span>
 										</div>
 										<p class="text-xs text-slate-600 whitespace-pre-wrap">{c.mensaje}</p>
+										{#if c.imagen_url}
+											<button type="button" onclick={() => (previewImagenUrl = c.imagen_url)} class="block w-20 h-16 mt-1.5 rounded-lg border border-slate-200 overflow-hidden hover:border-blue-300">
+												<img src={c.imagen_url} alt="Adjunto del comentario" class="w-full h-full object-cover" />
+											</button>
+										{/if}
 									</div>
 								{/each}
 							{/if}
 						</div>
+						{#if comentarioImagenPreviewUrl}
+							<div class="relative w-20 h-16 mb-2 rounded-lg border border-slate-200 overflow-hidden group">
+								<img src={comentarioImagenPreviewUrl} alt="Vista previa del adjunto" class="w-full h-full object-cover" />
+								<button
+									type="button"
+									onclick={quitarComentarioImagen}
+									class="absolute top-0.5 right-0.5 p-1 rounded-full bg-white/90 text-red-600 hover:bg-white shadow"
+									aria-label="Quitar imagen"
+									title="Quitar imagen"
+								>
+									<Trash2 size={12} />
+								</button>
+							</div>
+						{/if}
 						<form onsubmit={handleComentar} class="flex gap-2">
 							<input
 								type="text"
@@ -227,8 +285,12 @@
 								placeholder="Escribe un comentario..."
 								class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
 							/>
-							<button type="submit" disabled={enviandoComentario || !nuevoMensaje.trim()} class="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
-								<Send size={16} />
+							<label for="comentario-imagen" class="flex items-center justify-center px-2.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 cursor-pointer" title="Adjuntar imagen">
+								<Paperclip size={16} />
+							</label>
+							<input id="comentario-imagen" type="file" accept="image/*" class="hidden" onchange={onComentarioImagenChange} />
+							<button type="submit" disabled={enviandoComentario || (!nuevoMensaje.trim() && !comentarioImagenFile)} class="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
+								{#if enviandoComentario}<Loader2 size={16} class="animate-spin" />{:else}<Send size={16} />{/if}
 							</button>
 						</form>
 					</div>
@@ -237,3 +299,5 @@
 		</div>
 	</div>
 {/if}
+
+<DocumentPreviewModal open={!!previewImagenUrl} url={previewImagenUrl} title="Adjunto" onClose={() => (previewImagenUrl = null)} />
