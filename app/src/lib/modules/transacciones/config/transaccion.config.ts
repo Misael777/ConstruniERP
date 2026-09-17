@@ -457,28 +457,28 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
-		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — oculto por completo si es
-		// No (ver TransaccionModal.svelte). La columna sigue siendo VARCHAR de texto libre (no una FK) —
-		// el valor guardado es el nombre del empleado elegido, mismo criterio que 'responsable' en
+		// Solo aplica (visible) si "Documento pendiente" es Sí — oculto por completo si es No (ver
+		// TransaccionModal.svelte). Opcional a pedido explícito del usuario (antes era obligatorio en
+		// ese caso) — la columna sigue siendo VARCHAR de texto libre (no una FK), el valor guardado es
+		// el nombre del empleado elegido, mismo criterio que 'responsable' en
 		// cuentaPagar.config.ts/cuentaCobrar.config.ts.
 		key: 'responsable_documento_pendiente',
 		label: 'Responsable',
 		tipo: 'select',
 		optionsSource: 'empleado',
 		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
-		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
-		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — mismo criterio que
-		// responsable_documento_pendiente de arriba.
+		// Solo aplica (visible) si "Documento pendiente" es Sí — mismo criterio que
+		// responsable_documento_pendiente de arriba. Opcional a pedido explícito del usuario (antes era
+		// obligatorio en ese caso).
 		key: 'fecha_vencimiento_documento',
 		label: 'Fecha de Vencimiento',
 		tipo: 'date',
 		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
-		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
