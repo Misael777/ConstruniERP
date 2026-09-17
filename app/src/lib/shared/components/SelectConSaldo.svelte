@@ -117,7 +117,15 @@
 		panelStyle = `position:fixed; top:${rect.bottom + 4}px; left:${left}px; width:${ancho}px; max-height:${alturaMax}px;`;
 	}
 
-	function toggle() {
+	/** Bug real reportado por el usuario: en algunos WebView de Android (confirmado en un teléfono con
+	 * chip económico, MediaTek Helio G36) el mismo toque que ABRE el panel podía, al seguir burbujeando
+	 * hasta `window`, disparar también handleClickFuera y cerrarlo casi al instante — dependía de que
+	 * `target` calzara exacto con buttonEl/panelEl, algo que la traducción touch→click de algunos
+	 * WebView no garantiza tan preciso como el click de mouse (con el que sí funcionaba bien). Cortar la
+	 * propagación acá saca por completo la ambigüedad: este mismo evento nunca llega a handleClickFuera,
+	 * sin importar qué `target` reporte el WebView. */
+	function toggle(e: MouseEvent) {
+		e.stopPropagation();
 		if (disabled) return;
 		if (!open) {
 			busqueda = '';
