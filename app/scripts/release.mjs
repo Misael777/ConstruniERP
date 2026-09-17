@@ -39,13 +39,16 @@
  *     reusar las de contratos/proformas, mismo mecanismo OAuth2 que src/lib/server/config.ts)
  *
  * Opcional:
- *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP', ver tauri.conf.json)
+ *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP-releases', ver tauri.conf.json)
  *
  * También necesitás el GitHub CLI (`gh`) instalado y logueado (`gh auth login`) en tu máquina —
  * eso no es una variable de entorno, es una herramienta que se instala una sola vez.
  *
- * ⚠️ Este script todavía NO se corrió de punta a punta en un entorno real — falta generar la clave
- * de firma y la carpeta de Drive antes del primer release real.
+ * ⚠️ IMPORTANTE: las Releases se publican en un repo PÚBLICO dedicado
+ * (Misael777/ConstruniERP-releases), NO en el repo privado del código fuente — GitHub Releases
+ * requiere autenticación para descargar assets de un repo privado, y el updater de Tauri corriendo
+ * en la máquina del cliente no tiene ningún token para eso (fetch anónimo → 404 siempre). El repo de
+ * releases solo recibe instaladores/latest.json, nunca código — ver su propio README.
  */
 import { execSync, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
@@ -55,7 +58,7 @@ import https from 'node:https';
 import { createClient } from '@supabase/supabase-js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const GITHUB_REPO = process.env.GITHUB_REPO || 'Misael777/ConstruniERP';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'Misael777/ConstruniERP-releases';
 
 function log(msg) {
 	console.log(`[release] ${msg}`);
