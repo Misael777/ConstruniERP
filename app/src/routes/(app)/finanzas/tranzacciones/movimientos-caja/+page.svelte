@@ -117,6 +117,7 @@
 				numeroCuentaBanco: numeroCuentaBanco || undefined,
 				tipo: tipoFiltro || undefined,
 				soloAprobado: estadoFiltro === 'aprobado' ? true : estadoFiltro === 'pendiente' ? false : undefined,
+				documentoPendiente: documentoPendienteFiltro || undefined,
 				search: search || undefined
 			});
 			ingresosTotal = resultado.ingresosTotal;
@@ -175,12 +176,22 @@
 		{ key: 'saldoAcumulado', label: 'Saldo Acumulado', tipo: 'currency', showInTable: true },
 		{
 			key: 'estado',
-			label: 'Estado',
+			label: 'Estado de aprobación',
 			tipo: 'select',
 			showInTable: true,
 			options: [
 				{ value: 'aprobado', label: 'Aprobado' },
 				{ value: 'pendiente', label: 'Pendiente' }
+			]
+		},
+		{
+			key: 'documentoPendiente',
+			label: 'Documento pendiente',
+			tipo: 'select',
+			showInTable: true,
+			options: [
+				{ value: 'si', label: 'Sí' },
+				{ value: 'no', label: 'No' }
 			]
 		}
 	];
@@ -201,7 +212,16 @@
 							: `${fila.centroCostoOrigenLabel} → ${fila.centroCostoDestinoLabel}`;
 				if (!valor.toLowerCase().includes(filtro.contains.trim().toLowerCase())) return false;
 			} else if (filtro.kind === 'select') {
-				const valor = field.key === 'tipo' ? fila.tipo : field.key === 'medioPago' ? (fila.raw?.medio_pago ?? '') : fila.aprobado ? 'aprobado' : 'pendiente';
+				const valor =
+					field.key === 'tipo'
+						? fila.tipo
+						: field.key === 'medioPago'
+							? (fila.raw?.medio_pago ?? '')
+							: field.key === 'documentoPendiente'
+								? (fila.raw?.documento_pendiente ?? 'no')
+								: fila.aprobado
+									? 'aprobado'
+									: 'pendiente';
 				if (!filtro.values.includes(valor)) return false;
 			} else if (filtro.kind === 'range') {
 				const valor = field.key === 'monto' ? montoMovimiento(fila) : fila.saldoAcumulado;
@@ -230,8 +250,12 @@
 	let tipoFiltro = $state<TipoMovimiento | ''>('');
 	/** Filtra por `transaccion.aprobado` (ver soloAprobado en movimientosCaja.service.ts) — a pedido
 	 * explícito del usuario, para encontrar rápido los movimientos con "documento de pago pendiente"
-	 * (Estado='Pendiente' en la columna de la tabla). */
+	 * (Estado de aprobación='Pendiente' en la columna de la tabla). */
 	let estadoFiltro = $state<'' | 'aprobado' | 'pendiente'>('');
+	/** Filtra por `transaccion.documento_pendiente` (ver documentoPendiente en movimientosCaja.service.ts)
+	 * — reemplaza al filtro "Cuenta Bancaria" de la barra (redundante con el selector prominente del
+	 * encabezado, que ya controla numeroCuentaBanco), a pedido explícito del usuario. */
+	let documentoPendienteFiltro = $state<'' | 'si' | 'no'>('');
 	let desde = $state('');
 	let hasta = $state('');
 	let search = $state('');
@@ -294,6 +318,7 @@
 		void numeroCuentaBanco;
 		void tipoFiltro;
 		void estadoFiltro;
+		void documentoPendienteFiltro;
 		void desde;
 		void hasta;
 		void search;
@@ -311,6 +336,7 @@
 		numeroCuentaBanco = '';
 		tipoFiltro = '';
 		estadoFiltro = '';
+		documentoPendienteFiltro = '';
 		desde = '';
 		hasta = '';
 		searchInput = '';
@@ -346,7 +372,7 @@
 
 	function exportarCSV() {
 		if (movimientosFiltrados.length === 0) return;
-		const encabezados = ['Código', 'Fecha', 'Tipo', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Método de Pago', 'Monto', 'Moneda', 'Saldo Acumulado', 'Estado'];
+		const encabezados = ['Código', 'Fecha', 'Tipo', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Método de Pago', 'Monto', 'Moneda', 'Saldo Acumulado', 'Estado de aprobación', 'Documento pendiente'];
 		const filas = movimientosFiltrados.map((f) => [
 			f.codigo,
 			formatDate(f.fecha),
@@ -358,7 +384,8 @@
 			montoMovimiento(f),
 			f.moneda === 'dolares' ? 'Dólares' : 'Soles',
 			f.saldoAcumulado,
-			f.aprobado ? 'Aprobado' : 'Pendiente'
+			f.aprobado ? 'Aprobado' : 'Pendiente',
+			f.raw?.documento_pendiente === 'si' ? 'Sí' : 'No'
 		]);
 		const csv = [encabezados, ...filas].map((fila) => fila.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
 		const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -520,12 +547,13 @@
 	<div class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
 		<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 items-end">
 			<div>
-				<label for="mc-cuenta-banco" class="block text-xs font-medium text-slate-500 mb-1">Cuenta Bancaria</label>
-				<select id="mc-cuenta-banco" bind:value={numeroCuentaBanco} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todas</option>
-					{#each cuentaBancoOptions as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
+				<!-- Reemplaza al filtro "Cuenta Bancaria" (redundante con el selector prominente del
+				     encabezado, que ya controla numeroCuentaBanco) — a pedido explícito del usuario. -->
+				<label for="mc-documento-pendiente" class="block text-xs font-medium text-slate-500 mb-1">Documento pendiente</label>
+				<select id="mc-documento-pendiente" bind:value={documentoPendienteFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
+					<option value="">Todos</option>
+					<option value="si">Sí</option>
+					<option value="no">No</option>
 				</select>
 			</div>
 			<div>
@@ -555,7 +583,7 @@
 				</select>
 			</div>
 			<div>
-				<label for="mc-estado" class="block text-xs font-medium text-slate-500 mb-1">Estado</label>
+				<label for="mc-estado" class="block text-xs font-medium text-slate-500 mb-1">Estado de aprobación</label>
 				<select id="mc-estado" bind:value={estadoFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
 					<option value="">Todos</option>
 					<option value="aprobado">Aprobado</option>
@@ -598,7 +626,7 @@
 	<!-- Tabla / Tarjetas -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={10} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
+			<ResponsiveDataView items={filasPagina} keyField="id_transaccion" colspan={11} emptyMessage={loading ? 'Cargando...' : 'Sin movimientos que coincidan con los filtros.'}>
 				{#snippet header()}
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Código</th>
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Fecha</th>
@@ -621,7 +649,8 @@
 					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Método de Pago</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Monto</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Saldo Acumulado</th>
-					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Estado</th>
+					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Estado de aprobación</th>
+					<th class="text-left px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Documento pendiente</th>
 					<th class="text-right px-3 py-3.5 font-semibold text-slate-600 whitespace-nowrap">Ver</th>
 				{/snippet}
 				{#snippet row(fila)}
@@ -668,6 +697,11 @@
 							{fila.aprobado ? 'Aprobado' : 'Pendiente'}
 						</span>
 					</td>
+					<td class="px-3 py-3.5 whitespace-nowrap">
+						<span class={`inline-block px-2.5 py-1 rounded-full text-[11px] font-medium ${fila.raw?.documento_pendiente === 'si' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600'}`}>
+							{fila.raw?.documento_pendiente === 'si' ? 'Sí' : 'No'}
+						</span>
+					</td>
 					<td class="px-3 py-3.5 text-right whitespace-nowrap">
 						{#if fila.raw}
 							<button type="button" onclick={() => verTransaccion(fila)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
@@ -702,10 +736,16 @@
 						<span class="text-right text-slate-700">{medioPago ?? '—'}</span>
 						<span class="text-slate-400">Saldo Acumulado</span>
 						<span class={`text-right ${fila.saldoAcumulado >= 0 ? 'text-slate-700' : 'text-red-700'}`}>{formatMontoFila(fila.saldoAcumulado, fila)}</span>
-						<span class="text-slate-400">Estado</span>
+						<span class="text-slate-400">Estado de aprobación</span>
 						<span class="text-right">
 							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${fila.aprobado ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
 								{fila.aprobado ? 'Aprobado' : 'Pendiente'}
+							</span>
+						</span>
+						<span class="text-slate-400">Documento pendiente</span>
+						<span class="text-right">
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${fila.raw?.documento_pendiente === 'si' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600'}`}>
+								{fila.raw?.documento_pendiente === 'si' ? 'Sí' : 'No'}
 							</span>
 						</span>
 					</div>

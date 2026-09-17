@@ -141,6 +141,14 @@ if (!instaladorNombre || !sigNombre || !existsSync(join(BUNDLE_DIR, sigNombre)))
 const rutaInstalador = join(BUNDLE_DIR, instaladorNombre);
 const firma = readFileSync(join(BUNDLE_DIR, sigNombre), 'utf-8').trim();
 
+// GitHub reemplaza cada ESPACIO del nombre de archivo por un PUNTO al subir un asset de Release (ej.
+// "Construni ERP_0.2.4_x64-setup.exe" queda publicado como "Construni.ERP_0.2.4_x64-setup.exe") — bug
+// real visto en un deploy: latest.json apuntaba al nombre CON espacios, que nunca existió en GitHub,
+// así que el updater de Tauri siempre recibía 404 al intentar descargar. `instaladorNombre` (con
+// espacios) se sigue usando para el archivo LOCAL y para pasárselo a `gh release create` (ese sí
+// entiende el nombre real en disco) — pero cualquier URL pública debe usar el nombre YA transformado.
+const nombreAssetPublicado = instaladorNombre.replace(/ /g, '.');
+
 const latestJson = {
 	version: nuevaVersion,
 	notes: `Versión ${nuevaVersion}`,
@@ -148,7 +156,7 @@ const latestJson = {
 	platforms: {
 		'windows-x86_64': {
 			signature: firma,
-			url: `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${instaladorNombre}`
+			url: `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${nombreAssetPublicado}`
 		}
 	}
 };
@@ -166,7 +174,7 @@ run(
 	`gh release create v${nuevaVersion} "${rutaInstalador}" "${rutaLatestJson}" --repo ${GITHUB_REPO} --title "v${nuevaVersion}" --notes "Ver detalle de tickets incluidos en el módulo de Soporte del ERP."`
 );
 const urlManifestWin = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
-const urlInstaladorWin = `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${instaladorNombre}`;
+const urlInstaladorWin = `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${nombreAssetPublicado}`;
 
 // ── 6. Sube el APK a Drive (si se pasó --apk) ───────────────────────────────────────────────
 let urlApkDrive = null;
