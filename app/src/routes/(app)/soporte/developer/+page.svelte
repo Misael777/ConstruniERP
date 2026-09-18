@@ -62,6 +62,26 @@
 		const d = new Date(value);
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' });
 	}
+
+	// A pedido explícito del usuario: con el filtro en "Todos", la lista mezclaba pendientes/resueltos/
+	// aprobados/rechazados/cerrados en un solo bloque largo, sin distinguir qué necesita acción de qué
+	// no — "parece una megalista". Se agrupa en secciones con encabezado (mismo patrón que
+	// NotificacionesBell.svelte: "Pendientes de aprobar"/"Resueltas recientemente"), ordenadas por qué
+	// tan urgente es cada grupo: primero lo que el developer todavía tiene que trabajar, después lo que
+	// espera al admin, y al final lo ya cerrado. Con un filtro puntual elegido (no "Todos") no tiene
+	// sentido agrupar una lista que ya es de un solo estado — ahí se sigue mostrando plana, como antes.
+	const GRUPOS_ESTADO: { titulo: string; estados: EstadoTicket[] }[] = [
+		{ titulo: 'Pendientes', estados: ['abierto', 'en_progreso'] },
+		{ titulo: 'Resueltos — esperando aprobación', estados: ['resuelto'] },
+		{ titulo: 'Rechazados', estados: ['rechazado'] },
+		{ titulo: 'Aprobados — esperando release', estados: ['aprobado'] },
+		{ titulo: 'Cerrados', estados: ['cerrado'] }
+	];
+	const ticketsAgrupados = $derived(
+		filtroEstado
+			? null
+			: GRUPOS_ESTADO.map((g) => ({ ...g, tickets: tickets.filter((t) => g.estados.includes(t.estado)) })).filter((g) => g.tickets.length > 0)
+	);
 </script>
 
 <svelte:head>
@@ -91,34 +111,57 @@
 	</select>
 </div>
 
-<div class="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
-	{#if loading}
+{#snippet filaTicket(t: Ticket)}
+	<button
+		type="button"
+		onclick={() => (idTicketSeleccionado = t.id_ticket)}
+		class="w-full text-left flex items-center justify-between gap-3 p-4 hover:bg-slate-50 transition-colors"
+	>
+		<div class="min-w-0 flex-1">
+			<div class="flex items-center gap-1.5 flex-wrap">
+				<span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{ETIQUETA_TIPO[t.tipo] ?? t.tipo}</span>
+				{#if t.modulo}<span class="text-[11px] text-slate-300">· {t.modulo}</span>{/if}
+				<span class={`text-[11px] ${CLASE_PRIORIDAD[t.prioridad] ?? ''}`}>· {t.prioridad}</span>
+			</div>
+			<p class="font-semibold text-slate-800 truncate">{t.titulo}</p>
+			<p class="text-xs text-slate-400 mt-0.5">{t.creado_por ?? 'Usuario'} · {formatFecha(t.created_at)}</p>
+		</div>
+		<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium border shrink-0 ${CLASE_ESTADO[t.estado] ?? 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+			{ETIQUETA_ESTADO[t.estado] ?? t.estado}
+		</span>
+	</button>
+{/snippet}
+
+{#if loading}
+	<div class="bg-white rounded-2xl border border-slate-200">
 		<p class="px-4 py-10 text-center text-slate-400">Cargando...</p>
-	{:else if tickets.length === 0}
+	</div>
+{:else if tickets.length === 0}
+	<div class="bg-white rounded-2xl border border-slate-200">
 		<p class="px-4 py-10 text-center text-slate-400">No hay tickets con ese filtro.</p>
-	{:else}
-		{#each tickets as t (t.id_ticket)}
-			<button
-				type="button"
-				onclick={() => (idTicketSeleccionado = t.id_ticket)}
-				class="w-full text-left flex items-center justify-between gap-3 p-4 hover:bg-slate-50 transition-colors"
-			>
-				<div class="min-w-0 flex-1">
-					<div class="flex items-center gap-1.5 flex-wrap">
-						<span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{ETIQUETA_TIPO[t.tipo] ?? t.tipo}</span>
-						{#if t.modulo}<span class="text-[11px] text-slate-300">· {t.modulo}</span>{/if}
-						<span class={`text-[11px] ${CLASE_PRIORIDAD[t.prioridad] ?? ''}`}>· {t.prioridad}</span>
-					</div>
-					<p class="font-semibold text-slate-800 truncate">{t.titulo}</p>
-					<p class="text-xs text-slate-400 mt-0.5">{t.creado_por ?? 'Usuario'} · {formatFecha(t.created_at)}</p>
+	</div>
+{:else if ticketsAgrupados}
+	<!-- "Todos" — agrupado por sección (ver ticketsAgrupados), en vez de una sola lista larga. -->
+	<div class="flex flex-col gap-5">
+		{#each ticketsAgrupados as grupo (grupo.titulo)}
+			<div>
+				<p class="px-1 pb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{grupo.titulo} ({grupo.tickets.length})</p>
+				<div class="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
+					{#each grupo.tickets as t (t.id_ticket)}
+						{@render filaTicket(t)}
+					{/each}
 				</div>
-				<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium border shrink-0 ${CLASE_ESTADO[t.estado] ?? 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-					{ETIQUETA_ESTADO[t.estado] ?? t.estado}
-				</span>
-			</button>
+			</div>
 		{/each}
-	{/if}
-</div>
+	</div>
+{:else}
+	<!-- Filtro puntual elegido (no "Todos") — ya es un solo estado, no hace falta agrupar. -->
+	<div class="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
+		{#each tickets as t (t.id_ticket)}
+			{@render filaTicket(t)}
+		{/each}
+	</div>
+{/if}
 
 <TicketDetalleModal
 	open={idTicketSeleccionado !== null}
