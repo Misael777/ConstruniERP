@@ -22,6 +22,7 @@
 	import { getReleaseDeTicket, type AppRelease } from '../services/releases.service';
 	import BotonActualizar from '$lib/shared/components/BotonActualizar.svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, mismo tope que el resto de adjuntos del ERP
 
@@ -186,7 +187,7 @@
 					<p class="text-sm text-slate-700 whitespace-pre-wrap">{ticket.descripcion}</p>
 					{#if ticket.imagen_url}
 						<button type="button" onclick={() => (previewImagenUrl = ticket!.imagen_url)} class="block w-32 h-24 rounded-lg border border-slate-200 overflow-hidden hover:border-blue-300">
-							<img src={ticket.imagen_url} alt="Adjunto del ticket" class="w-full h-full object-cover" />
+							<img src={toDriveThumbnailUrl(ticket.imagen_url)} alt="Adjunto del ticket" class="w-full h-full object-cover" />
 						</button>
 					{/if}
 
@@ -257,7 +258,7 @@
 										<p class="text-xs text-slate-600 whitespace-pre-wrap">{c.mensaje}</p>
 										{#if c.imagen_url}
 											<button type="button" onclick={() => (previewImagenUrl = c.imagen_url)} class="block w-20 h-16 mt-1.5 rounded-lg border border-slate-200 overflow-hidden hover:border-blue-300">
-												<img src={c.imagen_url} alt="Adjunto del comentario" class="w-full h-full object-cover" />
+												<img src={toDriveThumbnailUrl(c.imagen_url)} alt="Adjunto del comentario" class="w-full h-full object-cover" />
 											</button>
 										{/if}
 									</div>
