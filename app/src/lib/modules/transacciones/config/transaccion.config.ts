@@ -161,7 +161,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		required: true,
 		options: [
 			// Catálogo vigente (a pedido explícito del usuario) — Ingreso: Adelanto/Valorización/Abonos;
-			// Egreso: Honorarios/Alquileres/Servicios/Subcontrata/Compras/Movilidad/Impuestos/Préstamo.
+			// Egreso: Honorarios/Alquileres/Servicios/Subcontrata/Compras/Movilidad/Préstamo. 'Impuestos'
+			// ya NO se ofrece (reemplazado por Clase="Tributo" en TransaccionModal.svelte, ver IGV/Renta/
+			// Multa más abajo en este catálogo) — se mantiene solo para traducir a label transacciones
+			// viejas que ya lo tengan guardado (ver optionsWhen, que sí lo quitó de la lista ofrecida).
 			{ value: 'Adelanto', label: 'Adelanto' },
 			{ value: 'Valorización', label: 'Valorización' },
 			{ value: 'Abonos', label: 'Abonos' },
@@ -254,6 +257,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Otros Materiales', label: 'Otros Materiales' },
 			{ value: 'Ensayos Laboratorio', label: 'Ensayos Laboratorio' },
 			{ value: 'Multas', label: 'Multas' },
+			// Distinto de 'Multas' de arriba (subcategoría de Obra) — este es el valor de Categoría para
+			// Clase="Tributo" (ver CATEGORIA_TRIBUTO_EGRESO en TransaccionModal.svelte), junto con 'IGV' y
+			// 'Renta', ambos ya presentes en este catálogo más abajo.
+			{ value: 'Multa', label: 'Multa' },
 			{ value: 'Sindicato', label: 'Sindicato' },
 			{ value: 'Portátil SSHH', label: 'Portátil SSHH' },
 			{ value: 'SCTR', label: 'SCTR' },
@@ -346,6 +353,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 				];
 			}
 			if (tipo === 'egreso') {
+				// "Impuestos" se quitó de acá (a pedido explícito del usuario, para todos los centros de
+				// costo) — reemplazada por Clase="Tributo" en TransaccionModal.svelte (IGV/Renta/Multa, ver
+				// CATEGORIA_TRIBUTO_EGRESO), que manda por encima de esta lista de todos modos. Se mantiene
+				// 'Impuestos' en el catálogo `options` de arriba solo para traducir a label cualquier
+				// transacción vieja que ya la tenga guardada.
 				return [
 					{ value: 'Honorarios', label: 'Honorarios' },
 					{ value: 'Alquileres', label: 'Alquileres' },
@@ -353,7 +365,6 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 					{ value: 'Subcontrata', label: 'Subcontrata' },
 					{ value: 'Compras', label: 'Compras' },
 					{ value: 'Movilidad', label: 'Movilidad' },
-					{ value: 'Impuestos', label: 'Impuestos' },
 					{ value: 'Préstamo', label: 'Préstamo' }
 				];
 			}
@@ -457,28 +468,28 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
-		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — oculto por completo si es
-		// No (ver TransaccionModal.svelte). La columna sigue siendo VARCHAR de texto libre (no una FK) —
-		// el valor guardado es el nombre del empleado elegido, mismo criterio que 'responsable' en
+		// Solo aplica (visible) si "Documento pendiente" es Sí — oculto por completo si es No (ver
+		// TransaccionModal.svelte). Opcional a pedido explícito del usuario (antes era obligatorio en
+		// ese caso) — la columna sigue siendo VARCHAR de texto libre (no una FK), el valor guardado es
+		// el nombre del empleado elegido, mismo criterio que 'responsable' en
 		// cuentaPagar.config.ts/cuentaCobrar.config.ts.
 		key: 'responsable_documento_pendiente',
 		label: 'Responsable',
 		tipo: 'select',
 		optionsSource: 'empleado',
 		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
-		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
-		// Solo aplica (visible y obligatorio) si "Documento pendiente" es Sí — mismo criterio que
-		// responsable_documento_pendiente de arriba.
+		// Solo aplica (visible) si "Documento pendiente" es Sí — mismo criterio que
+		// responsable_documento_pendiente de arriba. Opcional a pedido explícito del usuario (antes era
+		// obligatorio en ese caso).
 		key: 'fecha_vencimiento_documento',
 		label: 'Fecha de Vencimiento',
 		tipo: 'date',
 		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
-		requiredWhen: (values) => String(values.documento_pendiente ?? 'no') === 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false

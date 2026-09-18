@@ -66,6 +66,9 @@ export interface MovimientosCajaParams {
 	 * filtro de presentación (el estado de aprobación no cambia si el dinero es "de" esta cuenta/centro),
 	 * así que NO se aplica al saldo inicial, igual que tipo/categoria/search. */
 	soloAprobado?: boolean | null;
+	/** Filtra por `transaccion.documento_pendiente` — mismo criterio de "presentación" que soloAprobado
+	 * de arriba (no se aplica al saldo inicial). */
+	documentoPendiente?: 'si' | 'no' | null;
 	search?: string;
 }
 
@@ -154,6 +157,7 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	if (params.categoria) query = query.eq('categoria', params.categoria);
 	if (params.soloAprobado === true) query = query.eq('aprobado', true);
 	else if (params.soloAprobado === false) query = query.eq('aprobado', false);
+	if (params.documentoPendiente) query = query.eq('documento_pendiente', params.documentoPendiente);
 	const search = params.search?.trim();
 	if (search) {
 		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);

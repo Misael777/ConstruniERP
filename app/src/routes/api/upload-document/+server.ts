@@ -23,7 +23,7 @@ const handler: RequestHandler = async ({ request }) => {
 		return json({ success: false, error: 'Archivo no válido.' }, { status: 400 });
 	}
 
-	if (!type || (type !== 'contrato' && type !== 'proforma' && type !== 'documento' && type !== 'comprobante')) {
+	if (!type || (type !== 'contrato' && type !== 'proforma' && type !== 'documento' && type !== 'comprobante' && type !== 'ticket')) {
 		return json({ success: false, error: 'Tipo de documento inválido.' }, { status: 400 });
 	}
 
@@ -56,7 +56,7 @@ const handler: RequestHandler = async ({ request }) => {
 			? generateUniqueFileName(`documento_${documentType}_${documentName || 'doc'}_${projectName || 'Proyecto'}`, originalName)
 			: generateUniqueFileName(type, originalName);
 
-	const { url, fileId } = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma' | 'documento' | 'comprobante');
+	const { url, fileId } = await uploadToDrive(file, fileName, type as 'contrato' | 'proforma' | 'documento' | 'comprobante' | 'ticket');
 
 	// El contrato sigue siendo un archivo único por proyecto — se escribe directo en la columna.
 	// Las proformas ya NO se guardan aquí: ahora son filas en `documento_proyecto`

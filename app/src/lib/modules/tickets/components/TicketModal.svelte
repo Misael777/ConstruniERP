@@ -5,11 +5,14 @@
 	// reportar. El selector de "Módulo" reusa MODULE_REGISTRY (modules.ts) para no mantener un
 	// catálogo aparte — incluye "Otro / No aplica" para reclamos que no son de una pantalla puntual
 	// (ej. "la app se cierra sola").
-	import { X } from '@lucide/svelte';
+	import { X, ImagePlus, Trash2, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { MODULE_REGISTRY } from '$lib/config/modules';
+	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
 	import { crearTicket, type TipoTicket, type PrioridadTicket } from '../services/tickets.service';
+
+	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, mismo tope que el resto de adjuntos del ERP (ver AnuncioModal.svelte)
 
 	let { open = false, onClose = () => {}, onCreated = () => {} }: { open?: boolean; onClose?: () => void; onCreated?: () => void } = $props();
 
@@ -40,6 +43,9 @@
 	let prioridad = $state<PrioridadTicket>('media');
 	let guardando = $state(false);
 	let error = $state('');
+	let imagenFile = $state<File | null>(null);
+	let imagenPreviewUrl = $state<string | null>(null);
+	let subiendoImagen = $state(false);
 
 	function resetForm() {
 		tipo = 'incidencia';
@@ -48,6 +54,28 @@
 		descripcion = '';
 		prioridad = 'media';
 		error = '';
+		imagenFile = null;
+		if (imagenPreviewUrl) URL.revokeObjectURL(imagenPreviewUrl);
+		imagenPreviewUrl = null;
+	}
+
+	function onImagenChange(e: Event) {
+		const file = (e.target as HTMLInputElement).files?.[0];
+		(e.target as HTMLInputElement).value = '';
+		if (!file) return;
+		if (file.size > MAX_FILE_SIZE) {
+			toast.error('La imagen supera el máximo de 5MB.');
+			return;
+		}
+		imagenFile = file;
+		if (imagenPreviewUrl) URL.revokeObjectURL(imagenPreviewUrl);
+		imagenPreviewUrl = URL.createObjectURL(file);
+	}
+
+	function quitarImagen() {
+		imagenFile = null;
+		if (imagenPreviewUrl) URL.revokeObjectURL(imagenPreviewUrl);
+		imagenPreviewUrl = null;
 	}
 
 	async function handleSubmit(e: Event) {
@@ -59,12 +87,20 @@
 		guardando = true;
 		error = '';
 		try {
+			let imagenUrl: string | null = null;
+			if (imagenFile) {
+				subiendoImagen = true;
+				const { url } = await uploadProjectDocument(imagenFile, { type: 'ticket' });
+				imagenUrl = url;
+				subiendoImagen = false;
+			}
 			const result = await crearTicket(supabase, {
 				tipo,
 				modulo: modulo || null,
 				titulo: titulo.trim(),
 				descripcion: descripcion.trim(),
-				prioridad
+				prioridad,
+				imagenUrl
 			});
 			if (!result.success) {
 				error = result.message || 'No se pudo registrar el ticket.';
@@ -78,6 +114,7 @@
 			error = err?.message ?? 'Ocurrió un error inesperado.';
 		} finally {
 			guardando = false;
+			subiendoImagen = false;
 		}
 	}
 </script>
@@ -134,11 +171,38 @@
 						class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-200"
 					></textarea>
 				</div>
+				<div>
+					<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Imagen (opcional)</span>
+					{#if imagenPreviewUrl}
+						<div class="relative w-full h-32 rounded-lg border border-slate-200 overflow-hidden group">
+							<img src={imagenPreviewUrl} alt="Vista previa del adjunto" class="w-full h-full object-cover" />
+							<button
+								type="button"
+								onclick={quitarImagen}
+								class="absolute top-2 right-2 p-1.5 rounded-full bg-white/90 text-red-600 hover:bg-white shadow"
+								aria-label="Quitar imagen"
+								title="Quitar imagen"
+							>
+								<Trash2 size={14} />
+							</button>
+						</div>
+					{:else}
+						<label
+							for="ticket-imagen"
+							class="flex flex-col items-center justify-center gap-1.5 w-full h-20 rounded-lg border-2 border-dashed border-slate-300 text-slate-400 cursor-pointer hover:border-blue-300 hover:text-blue-500"
+						>
+							<ImagePlus size={18} />
+							<span class="text-xs">Adjuntar captura o foto</span>
+						</label>
+						<input id="ticket-imagen" type="file" accept="image/*" class="hidden" onchange={onImagenChange} />
+					{/if}
+				</div>
 				{#if error}<p class="text-xs text-red-600">{error}</p>{/if}
 				<div class="flex justify-end gap-2 pt-2">
 					<button type="button" onclick={onClose} class="px-4 py-2 text-sm border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50">Cancelar</button>
-					<button type="submit" disabled={guardando} class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-						{guardando ? 'Enviando...' : 'Enviar ticket'}
+					<button type="submit" disabled={guardando} class="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+						{#if guardando}<Loader2 size={16} class="animate-spin" />{/if}
+						{subiendoImagen ? 'Subiendo imagen...' : guardando ? 'Enviando...' : 'Enviar ticket'}
 					</button>
 				</div>
 			</form>

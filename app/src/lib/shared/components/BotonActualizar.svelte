@@ -20,7 +20,7 @@
 	 */
 	import { RefreshCw, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { isRunningInTauri, downloadFromDriveClient } from '$lib/driveUploadClient';
+	import { isRunningInTauri, downloadFromDriveClientStream } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import type { AppRelease } from '$lib/modules/tickets/services/releases.service';
 
@@ -51,12 +51,16 @@
 		}
 		const fileId = extractDriveFileId(release.url_apk_drive) ?? release.url_apk_drive;
 		estadoTexto = 'Descargando APK...';
-		const blob = await downloadFromDriveClient(fileId);
+		// Stream directo a disco (ver downloadFromDriveClientStream) — bug real reportado por el usuario
+		// (con video): cargar el APK completo en memoria como Blob→ArrayBuffer→Uint8Array antes de
+		// pasarlo al puente de Tauri tiraba `Invalid array length` en un teléfono de gama baja (~185MB,
+		// demasiada memoria de una sola vez para ese WebView). writeFile acepta un ReadableStream directo.
+		const stream = await downloadFromDriveClientStream(fileId);
 
 		const { writeFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
 		const { join, cacheDir } = await import('@tauri-apps/api/path');
 		const nombreArchivo = `construni-erp-v${release.version}.apk`;
-		await writeFile(nombreArchivo, new Uint8Array(await blob.arrayBuffer()), { baseDir: BaseDirectory.Cache });
+		await writeFile(nombreArchivo, stream, { baseDir: BaseDirectory.Cache });
 		const rutaCompleta = await join(await cacheDir(), nombreArchivo);
 
 		estadoTexto = 'Abriendo instalador...';

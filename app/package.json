@@ -1,7 +1,7 @@
 {
 	"name": "app",
 	"private": true,
-	"version": "0.0.1",
+	"version": "0.2.8",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
@@ -11,7 +11,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
-		"tauri": "tauri",
+		"tauri": "node --env-file=.env node_modules/@tauri-apps/cli/tauri.js",
 		"release": "node --env-file=.env scripts/release.mjs"
 	},
 	"devDependencies": {

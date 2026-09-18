@@ -1278,7 +1278,7 @@
 		const mantenerPrestamoOtorgado =
 			(key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') &&
 			formValues.tipo === 'egreso' &&
-			((claseEsOtroOPrestamo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado');
+			((claseEsOtroPrestamoOTributo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado');
 		if ((key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && !mantenerPrestamo && !mantenerPrestamoOtorgado) {
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
@@ -1422,14 +1422,17 @@
 	// categoriaEsPrestamoOtorgado, justo abajo, ya necesita leerlo — TypeScript exige que un `let`
 	// exista antes de su primera referencia en el archivo, aunque sea dentro de un $derived que recién
 	// se evalúa después.
-	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo' | 'tributo';
 	let claseDestino = $state<ClaseDestino>('');
-	// "Otro" y "Préstamo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
-	// optionsFor/catalogoDetalleActual más abajo) — la única diferencia entre ambos está en qué
-	// centros de costo ofrece "Centro de Costo Destino" (ver optionsFor: "Otro" muestra Obra/
-	// Consultoría/Corporativo/Otro, "Préstamo" muestra específicamente los de tipo 'prestamo', ej.
-	// "Persona Externa"). Se agrupan acá para no repetir la doble condición en cada sitio.
-	const claseEsOtroOPrestamo = $derived(claseDestino === 'otro' || claseDestino === 'prestamo');
+	// "Otro", "Préstamo" y "Tributo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
+	// optionsFor/catalogoDetalleActual más abajo): Categoría vuelve a ser un selector PLANO (sin la
+	// cascada Grupo→Subcategoría de Obra/Consultoría/Corporativo) — la diferencia entre las tres está en
+	// qué catálogo reducido ofrece (Inyecciones/Préstamo para Otro/Préstamo, IGV/Renta/Multa para
+	// Tributo, ver CATEGORIA_OTRO_EGRESO/CATEGORIA_TRIBUTO_EGRESO) y qué centros de costo ofrece "Centro
+	// de Costo Destino" (ver optionsFor: "Otro"/"Tributo" muestran Obra/Consultoría/Corporativo/Otro,
+	// "Préstamo" muestra específicamente los de tipo 'prestamo', ej. "Persona Externa"). Se agrupan acá
+	// para no repetir la triple condición en cada sitio.
+	const claseEsOtroPrestamoOTributo = $derived(claseDestino === 'otro' || claseDestino === 'prestamo' || claseDestino === 'tributo');
 
 	// A pedido explícito del usuario: en Ingreso, apenas Categoría="Préstamo" (en Nueva Y en Editar) —
 	// ver optionsFor, que deja de acotar "Proyecto" a solo Corporativo y muestra TODOS los centros de
@@ -1456,7 +1459,7 @@
 	// 1) Origen=Corporativo (esCorporativo), donde la Categoría "Préstamo Otorgado" es un valor DISTINTO
 	//    del "Préstamo" genérico de CATEGORIA_CORPORATIVO_EGRESO (que sigue siendo una categoría normal
 	//    de gasto, ej. pagar una cuota de un préstamo ya existente — no chocan).
-	// 2) Clase="Otro" o Clase="Préstamo" en Destino (ver CATEGORIA_OTRO_EGRESO/claseEsOtroOPrestamo/
+	// 2) Clase="Otro" o Clase="Préstamo" en Destino (ver CATEGORIA_OTRO_EGRESO/claseEsOtroPrestamoOTributo/
 	//    optionsFor), donde el catálogo reducido usa "Préstamo" directamente — sin ambigüedad ahí, esa
 	//    lista no tiene ningún otro significado de "Préstamo" con el que pueda confundirse.
 	// A pedido explícito del usuario, al CREAR (no al editar) una transacción Egreso con cualquiera de
@@ -1464,7 +1467,7 @@
 	// y el botón "Cuentas por Cobrar" más abajo en el template).
 	const categoriaEsPrestamoOtorgado = $derived(
 		formValues.tipo === 'egreso' &&
-			((claseEsOtroOPrestamo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
+			((claseEsOtroPrestamoOTributo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
 	);
 	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && categoriaEsPrestamoOtorgado);
 
@@ -1772,21 +1775,23 @@
 		const clasePrevia = claseDestino;
 		claseDestino = value as ClaseDestino;
 		formValues = { ...formValues, id_centro_costo_destino: '' };
-		// Si se sale de "Otro"/"Préstamo" y la Categoría elegida era una de las de Corporativo (esas solo
-		// se ofrecen con Clase=Otro/Préstamo o esCorporativo, ver optionsFor) — se limpia, igual que el
-		// resto de campos que dependen de Destino en handleInput, para no dejar guardado un valor que ya
-		// no aparece en la lista de opciones. Si esCorporativo sigue siendo true (Origen=Corporativo), esa
-		// lista sigue aplicando igual, no se limpia.
-		const clasePreviaEraOtroOPrestamo = clasePrevia === 'otro' || clasePrevia === 'prestamo';
-		const claseNuevaEsOtroOPrestamo = value === 'otro' || value === 'prestamo';
-		if (clasePreviaEraOtroOPrestamo && !claseNuevaEsOtroOPrestamo && !esCorporativo) {
+		// Si se sale de "Otro"/"Préstamo"/"Tributo" y la Categoría elegida era una de las de Corporativo
+		// (esas solo se ofrecen con Clase=Otro/Préstamo/Tributo o esCorporativo, ver optionsFor) — se
+		// limpia, igual que el resto de campos que dependen de Destino en handleInput, para no dejar
+		// guardado un valor que ya no aparece en la lista de opciones. Si esCorporativo sigue siendo true
+		// (Origen=Corporativo), esa lista sigue aplicando igual, no se limpia.
+		const clasePreviaEraPlana = clasePrevia === 'otro' || clasePrevia === 'prestamo' || clasePrevia === 'tributo';
+		const claseNuevaEsPlana = value === 'otro' || value === 'prestamo' || value === 'tributo';
+		if (clasePreviaEraPlana && !claseNuevaEsPlana && !esCorporativo) {
 			formValues.categoria = '';
 		}
-		// Espejo, al ENTRAR a "Otro"/"Préstamo": si la Categoría ya elegida no es una de las 2 del
-		// catálogo reducido (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO) — ej. venía de las 8 de
-		// Corporativo — se limpia, para no dejar seleccionado un valor que ya no aparece en la lista que
-		// se va a mostrar.
-		if (claseNuevaEsOtroOPrestamo && !['Inyecciones', 'Préstamo'].includes(formValues.categoria)) {
+		// Espejo, al ENTRAR a "Otro"/"Préstamo"/"Tributo": si la Categoría ya elegida no es una de las del
+		// catálogo reducido que corresponde (Inyecciones/Préstamo para Otro/Préstamo, ver
+		// CATEGORIA_OTRO_EGRESO; IGV/Renta/Multa para Tributo, ver CATEGORIA_TRIBUTO_EGRESO) — ej. venía
+		// de las 8 de Corporativo — se limpia, para no dejar seleccionado un valor que ya no aparece en la
+		// lista que se va a mostrar.
+		const categoriasValidas = value === 'tributo' ? ['IGV', 'Renta', 'Multa'] : ['Inyecciones', 'Préstamo'];
+		if (claseNuevaEsPlana && !categoriasValidas.includes(formValues.categoria)) {
 			formValues.categoria = '';
 		}
 	}
@@ -1808,7 +1813,10 @@
 		{ value: 'empleados', label: 'Empleados' },
 		{ value: 'cliente', label: 'Cliente' },
 		{ value: 'otro', label: 'Otro' },
-		{ value: 'prestamo', label: 'Préstamo' }
+		{ value: 'prestamo', label: 'Préstamo' },
+		// A pedido explícito del usuario: pago de tributos (IGV/Renta/Multa, ver CATEGORIA_TRIBUTO_EGRESO)
+		// — mismo criterio de Destino que "Otro" (no hay un tipo de Centro de Costo dedicado para esto).
+		{ value: 'tributo', label: 'Tributo' }
 	];
 	// Al editar una transacción de Egreso ya guardada, infiere la Clase a partir de a qué lista
 	// pertenece el Destino guardado — para no arrancar con el selector vacío y el campo Destino oculto.
@@ -1824,6 +1832,9 @@
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
 			else if (centroCostoTipoMap[destinoId] === 'prestamo') claseDestino = 'prestamo';
+			// "Tributo" no tiene un tipo de Centro de Costo dedicado (mismo Destino que "Otro", ver
+			// optionsFor) — se distingue por la Categoría ya guardada, único indicio disponible al editar.
+			else if (['IGV', 'Renta', 'Multa'].includes((transaccion as any).categoria ?? '')) claseDestino = 'tributo';
 			else claseDestino = 'otro';
 		}
 	});
@@ -1857,7 +1868,8 @@
 		{ value: 'Préstamo', label: 'Préstamo' },
 		{ value: 'Compras', label: 'Compras' },
 		{ value: 'Movilidad', label: 'Movilidad' },
-		{ value: 'Impuestos', label: 'Impuestos' },
+		// "Impuestos" se quitó de acá (a pedido explícito del usuario) — reemplazada por Clase="Tributo"
+		// (ver CATEGORIA_TRIBUTO_EGRESO/optionsFor), que manda por encima de esta lista de todos modos.
 		{ value: 'Inversión', label: 'Inversión' },
 		// A pedido explícito del usuario: valor DISTINTO del "Préstamo" de arriba (esa sigue siendo una
 		// categoría normal de gasto, ej. pagar una cuota) — dispara el flujo espejo de Ingreso+Préstamo,
@@ -1876,6 +1888,15 @@
 	const CATEGORIA_OTRO_EGRESO: FieldOption[] = [
 		{ value: 'Inyecciones', label: 'Inyecciones' },
 		{ value: 'Préstamo', label: 'Préstamo' }
+	];
+	// A pedido explícito del usuario: Egreso + Clase="Tributo" (ver claseDestino/optionsFor) ofrece este
+	// catálogo — reemplaza a la categoría genérica "Impuestos" (ya quitada de todos los catálogos, ver
+	// transaccion.config.ts) en TODOS los tipos de Centro de Costo (Obra/Consultoría/Corporativo), igual
+	// que "Otro"/"Préstamo" manda por encima de esProyectoDeObra/esCorporativo (ver optionsFor).
+	const CATEGORIA_TRIBUTO_EGRESO: FieldOption[] = [
+		{ value: 'IGV', label: 'IGV' },
+		{ value: 'Renta', label: 'Renta' },
+		{ value: 'Multa', label: 'Multa' }
 	];
 
 	// "Tipo de Gasto" — 7 dropdowns propios (uno por concepto, a pedido explícito del usuario, según
@@ -2036,7 +2057,7 @@
 	// Solo aplica a Egreso — en Ingreso, Obra usa Adelanto/Valorización/Adenda y Corporativo usa
 	// Inyecciones/Préstamo (ambas listas planas, sin desglose de subcategorías), así que "Otros campos"
 	// debe seguir mostrando el selector normal de Categoría en vez de la vista de solo lectura.
-	// A pedido explícito del usuario: con Clase="Otro" o Clase="Préstamo" (ver claseEsOtroOPrestamo/
+	// A pedido explícito del usuario: con Clase="Otro", Clase="Préstamo" o Clase="Tributo" (ver claseEsOtroPrestamoOTributo/
 	// CATEGORIA_OTRO_EGRESO en optionsFor), basta esa sola condición para que la Categoría vuelva a ser
 	// el selector plano de solo 2 opciones (Inyecciones/Préstamo) — NO ninguna de las 3 cascadas
 	// Grupo→Subcategoría (TIPOS_GASTO_OBRA/CONSULTORIA/CORPORATIVO), sin importar de qué tipo sea el
@@ -2046,7 +2067,7 @@
 	// Subcategoría elegida (ej. "Tarjeta de Crédito Pierina"), nunca el literal "Préstamo" que
 	// categoriaEsPrestamoOtorgado espera.
 	const catalogoDetalleActual = $derived(
-		formValues.tipo !== 'egreso' || claseEsOtroOPrestamo
+		formValues.tipo !== 'egreso' || claseEsOtroPrestamoOTributo
 			? []
 			: esProyectoDeObra
 				? TIPOS_GASTO_OBRA
@@ -2217,11 +2238,13 @@
 				if (claseDestino === 'subcontratista') return soloNombreCentro(centroCostoOptionsSubcontratistas);
 				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
 				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
-				// "Otro" (a pedido explícito del usuario) — cuentas externas de tipo 'otro', 'consultoria',
-				// 'obra' o 'bolsa general' (Corporativo): cubre el caso de un Egreso cuyo destino no es un
-				// proveedor/subcontratista/empleado/cliente registrado (ej. un préstamo que se le da a una
-				// persona sin vínculo formal en el sistema — ver categoria más abajo, esCorporativo).
-				if (claseDestino === 'otro') {
+				// "Otro"/"Tributo" (a pedido explícito del usuario) — cuentas externas de tipo 'otro',
+				// 'consultoria', 'obra' o 'bolsa general' (Corporativo): cubre el caso de un Egreso cuyo
+				// destino no es un proveedor/subcontratista/empleado/cliente registrado (ej. un préstamo
+				// que se le da a una persona sin vínculo formal en el sistema, o el pago de un tributo —
+				// ver categoria más abajo, esCorporativo). "Tributo" no tiene un tipo de Centro de Costo
+				// propio, reusa esta misma lista sin restringir más.
+				if (claseDestino === 'otro' || claseDestino === 'tributo') {
 					const TIPOS_CLASE_OTRO = new Set(['otro', 'consultoria', 'obra', 'bolsa general']);
 					const opcionesOtro = centroCostoOptionsTodos.filter((o) => TIPOS_CLASE_OTRO.has(centroCostoTipoMap[o.value]));
 					// Si el Destino ya guardado (ver el fallback a 'otro' en el $effect de arriba, al editar)
@@ -2281,13 +2304,16 @@
 			return todas;
 		}
 		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
-		// A pedido explícito del usuario: en Egreso, basta con que Clase="Otro" o Clase="Préstamo" para
-		// que "Categoría" ofrezca el catálogo reducido (Inyecciones/Préstamo, ver CATEGORIA_OTRO_EGRESO)
-		// — manda por ENCIMA de esProyectoDeObra/esCorporativo (ambos basados en el Centro de Costo
-		// Origen, un eje independiente de Clase/Destino): aunque el Origen sea de Obra o Corporativo, con
-		// Clase="Otro"/"Préstamo" igual se muestra esta lista, no CATEGORIA_OBRA_EGRESO/
-		// CATEGORIA_CORPORATIVO_EGRESO.
-		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseEsOtroOPrestamo) return CATEGORIA_OTRO_EGRESO;
+		// A pedido explícito del usuario: en Egreso, basta con que Clase="Otro"/"Préstamo"/"Tributo" para
+		// que "Categoría" ofrezca su catálogo reducido correspondiente (Inyecciones/Préstamo para
+		// Otro/Préstamo, ver CATEGORIA_OTRO_EGRESO; IGV/Renta/Multa para Tributo, ver
+		// CATEGORIA_TRIBUTO_EGRESO) — manda por ENCIMA de esProyectoDeObra/esCorporativo (ambos basados en
+		// el Centro de Costo Origen, un eje independiente de Clase/Destino): aunque el Origen sea de Obra
+		// o Corporativo, con Clase="Otro"/"Préstamo"/"Tributo" igual se muestra la lista reducida, no
+		// CATEGORIA_OBRA_EGRESO/CATEGORIA_CORPORATIVO_EGRESO. Tributo reemplaza a la categoría genérica
+		// "Impuestos" (ya quitada de esos catálogos) para TODOS los tipos de Centro de Costo.
+		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseDestino === 'tributo') return CATEGORIA_TRIBUTO_EGRESO;
+		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseEsOtroPrestamoOTributo) return CATEGORIA_OTRO_EGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
 		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'ingreso') return CATEGORIA_CORPORATIVO_INGRESO;

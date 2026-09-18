@@ -117,7 +117,15 @@
 		panelStyle = `position:fixed; top:${rect.bottom + 4}px; left:${left}px; width:${ancho}px; max-height:${alturaMax}px;`;
 	}
 
-	function toggle() {
+	/** Bug real reportado por el usuario: en algunos WebView de Android (confirmado en un teléfono con
+	 * chip económico, MediaTek Helio G36) el mismo toque que ABRE el panel podía, al seguir burbujeando
+	 * hasta `window`, disparar también handleClickFuera y cerrarlo casi al instante — dependía de que
+	 * `target` calzara exacto con buttonEl/panelEl, algo que la traducción touch→click de algunos
+	 * WebView no garantiza tan preciso como el click de mouse (con el que sí funcionaba bien). Cortar la
+	 * propagación acá saca por completo la ambigüedad: este mismo evento nunca llega a handleClickFuera,
+	 * sin importar qué `target` reporte el WebView. */
+	function toggle(e: MouseEvent) {
+		e.stopPropagation();
 		if (disabled) return;
 		if (!open) {
 			busqueda = '';
@@ -156,10 +164,19 @@
 	// que ocurre DENTRO del panel (la propia lista de opciones, con su barra lateral) NO debe cerrarlo —
 	// sin este chequeo, la barra lateral del panel "no funcionaba": el primer intento de desplazar la
 	// lista disparaba este mismo listener y cerraba el dropdown antes de que se viera nada.
+	//
+	// Bug real reportado por el usuario (con video, en el mismo teléfono del click-outside de arriba):
+	// al tocar el buscador, el teclado en pantalla de Android achica el viewport visual, y el WebView lo
+	// reporta como un evento `resize` de `window` — este listener lo tomaba como "la página se movió/
+	// cambió" y cerraba el panel de inmediato, antes de poder escribir nada. Se agrega el mismo chequeo
+	// de "¿el foco está DENTRO del panel?" (además del de scroll/resize por target) para no cerrar
+	// mientras el usuario sigue escribiendo en el buscador — cubre tanto el resize del teclado como un
+	// eventual scroll-into-view del navegador al enfocar el input.
 	$effect(() => {
 		if (!open) return;
 		const cerrar = (e: Event) => {
 			if (panelEl && e.target instanceof Node && panelEl.contains(e.target)) return;
+			if (panelEl && document.activeElement && panelEl.contains(document.activeElement)) return;
 			open = false;
 		};
 		window.addEventListener('scroll', cerrar, true);

@@ -5,7 +5,7 @@
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
-	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Info, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
 	import { armarMensajeEgreso, armarMensajeIngreso, armarMensajeIngresoEfectivo } from '$lib/shared/mensajeR2';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
@@ -879,7 +879,7 @@
 				     DocumentPreviewModal), Msje justo debajo (a pedido del usuario) y luego Editar/Bloqueado. -->
 				<div class="flex flex-row items-center justify-end gap-1 sm:flex-col sm:shrink-0 sm:ml-2">
 					<button type="button" onclick={(e) => { e.stopPropagation(); openView(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver transacción" aria-label="Ver transacción">
-						<Eye size={16} />
+						<Info size={16} />
 					</button>
 					<button type="button" onclick={(e) => { e.stopPropagation(); openComprobantePreview(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
 						<Eye size={16} />
@@ -901,8 +901,8 @@
 						</button>
 					{/if}
 					{#if item.aprobado}
-						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 inline-flex items-center gap-0.5" title="Ver (bloqueada: transacción aprobada, ya no se puede editar)" aria-label="Ver transacción aprobada">
-							<Lock size={12} class="shrink-0" /><Eye size={16} />
+						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="Ver (bloqueada: transacción aprobada, ya no se puede editar)" aria-label="Ver transacción aprobada">
+							<Lock size={16} />
 						</button>
 					{:else}
 						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">

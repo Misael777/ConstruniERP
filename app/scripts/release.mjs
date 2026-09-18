@@ -39,22 +39,26 @@
  *     reusar las de contratos/proformas, mismo mecanismo OAuth2 que src/lib/server/config.ts)
  *
  * Opcional:
- *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP', ver tauri.conf.json)
+ *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP-releases', ver tauri.conf.json)
  *
  * También necesitás el GitHub CLI (`gh`) instalado y logueado (`gh auth login`) en tu máquina —
  * eso no es una variable de entorno, es una herramienta que se instala una sola vez.
  *
- * ⚠️ Este script todavía NO se corrió de punta a punta en un entorno real — falta generar la clave
- * de firma y la carpeta de Drive antes del primer release real.
+ * ⚠️ IMPORTANTE: las Releases se publican en un repo PÚBLICO dedicado
+ * (Misael777/ConstruniERP-releases), NO en el repo privado del código fuente — GitHub Releases
+ * requiere autenticación para descargar assets de un repo privado, y el updater de Tauri corriendo
+ * en la máquina del cliente no tiene ningún token para eso (fetch anónimo → 404 siempre). El repo de
+ * releases solo recibe instaladores/latest.json, nunca código — ver su propio README.
  */
 import { execSync, execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import https from 'node:https';
 import { createClient } from '@supabase/supabase-js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const GITHUB_REPO = process.env.GITHUB_REPO || 'Misael777/ConstruniERP';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'Misael777/ConstruniERP-releases';
 
 function log(msg) {
 	console.log(`[release] ${msg}`);
@@ -122,14 +126,28 @@ const BUNDLE_DIR = join(ROOT, 'src-tauri', 'target', 'release', 'bundle', 'nsis'
 if (!existsSync(BUNDLE_DIR)) {
 	fail(`No se encontró el directorio de bundle esperado: ${BUNDLE_DIR}. Revisá dónde quedó el instalador de esta build.`);
 }
+// Filtra por la versión que ACABAMOS de escribir en tauri.conf.json (nuevaVersion), no solo por la
+// extensión — reintentos anteriores (builds fallidos en un paso posterior, ej. gh/Drive) dejan
+// instaladores viejos en esta misma carpeta (Tauri no la limpia entre builds) y un simple
+// `.find(f => f.endsWith('-setup.exe'))` puede agarrar CUALQUIERA de ellos, no el que se acaba de
+// compilar — bug real visto en un deploy: el tag v0.0.5 en GitHub terminó con el instalador de un
+// intento v0.0.2 viejo adjunto. Los `_` alrededor evitan que "0.0.2" matchee como substring de "0.0.20".
 const archivos = readdirSync(BUNDLE_DIR);
-const instaladorNombre = archivos.find((f) => f.endsWith('-setup.exe'));
-const sigNombre = archivos.find((f) => f.endsWith('.sig'));
-if (!instaladorNombre || !sigNombre) {
-	fail(`No se encontró el instalador (.exe) o la firma (.sig) en ${BUNDLE_DIR}. Archivos vistos: ${archivos.join(', ')}`);
+const instaladorNombre = archivos.find((f) => f.endsWith('-setup.exe') && f.includes(`_${nuevaVersion}_`));
+const sigNombre = instaladorNombre ? `${instaladorNombre}.sig` : undefined;
+if (!instaladorNombre || !sigNombre || !existsSync(join(BUNDLE_DIR, sigNombre))) {
+	fail(`No se encontró el instalador (.exe) o la firma (.sig) de la versión ${nuevaVersion} en ${BUNDLE_DIR}. Archivos vistos: ${archivos.join(', ')}`);
 }
 const rutaInstalador = join(BUNDLE_DIR, instaladorNombre);
 const firma = readFileSync(join(BUNDLE_DIR, sigNombre), 'utf-8').trim();
+
+// GitHub reemplaza cada ESPACIO del nombre de archivo por un PUNTO al subir un asset de Release (ej.
+// "Construni ERP_0.2.4_x64-setup.exe" queda publicado como "Construni.ERP_0.2.4_x64-setup.exe") — bug
+// real visto en un deploy: latest.json apuntaba al nombre CON espacios, que nunca existió en GitHub,
+// así que el updater de Tauri siempre recibía 404 al intentar descargar. `instaladorNombre` (con
+// espacios) se sigue usando para el archivo LOCAL y para pasárselo a `gh release create` (ese sí
+// entiende el nombre real en disco) — pero cualquier URL pública debe usar el nombre YA transformado.
+const nombreAssetPublicado = instaladorNombre.replace(/ /g, '.');
 
 const latestJson = {
 	version: nuevaVersion,
@@ -138,7 +156,7 @@ const latestJson = {
 	platforms: {
 		'windows-x86_64': {
 			signature: firma,
-			url: `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${instaladorNombre}`
+			url: `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${nombreAssetPublicado}`
 		}
 	}
 };
@@ -156,13 +174,17 @@ run(
 	`gh release create v${nuevaVersion} "${rutaInstalador}" "${rutaLatestJson}" --repo ${GITHUB_REPO} --title "v${nuevaVersion}" --notes "Ver detalle de tickets incluidos en el módulo de Soporte del ERP."`
 );
 const urlManifestWin = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
-const urlInstaladorWin = `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${instaladorNombre}`;
+const urlInstaladorWin = `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${nombreAssetPublicado}`;
 
 // ── 6. Sube el APK a Drive (si se pasó --apk) ───────────────────────────────────────────────
 let urlApkDrive = null;
 if (apkPath) {
 	log('Paso 6/7 — Subiendo APK a Drive...');
-	urlApkDrive = await subirApkADrive(apkPath, nuevaVersion);
+	try {
+		urlApkDrive = await subirApkADrive(apkPath, nuevaVersion);
+	} catch (err) {
+		fail(`No se pudo subir el APK a Drive: ${err?.message || err}`);
+	}
 } else {
 	log('Paso 6/7 — Sin --apk, se omite la subida a Drive (release solo para Windows).');
 }
@@ -187,39 +209,81 @@ async function obtenerAccessTokenDrive() {
 	return data.access_token;
 }
 
-async function subirApkADrive(ruta, version) {
-	const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID_RELEASES;
-	if (!folderId) fail('Falta GOOGLE_DRIVE_FOLDER_ID_RELEASES en el entorno — creá una carpeta de Drive dedicada a los APK de release.');
-	const accessToken = await obtenerAccessTokenDrive();
-	const contenido = readFileSync(ruta);
-	const nombreArchivo = `construni-erp-v${version}.apk`;
+/** Sube el APK a Drive vía el módulo `https` nativo de Node, NO fetch/undici — probado dos veces en un
+ * deploy real: tanto un Buffer armado a mano como un FormData/Blob nativo disparan `ENOBUFS` en Windows
+ * al mandar un archivo de decenas de MB como body de fetch (bug conocido de undici con bodies grandes
+ * en el socket de Windows, sin relación con CÓMO se arma el body — pasa igual con ambos). El módulo
+ * `https` clásico transmite el archivo por streaming real vía `.pipe()`, que respeta el backpressure del
+ * socket (Node lleva años usando este mecanismo sin este problema), en vez de que undici intente
+ * escribirlo de un tirón. El resto de subidas del ERP (comprobantes, documentos, tickets — ver
+ * src/lib/server/config.ts) se quedan con fetch: son archivos chicos, nunca dispararon este bug. */
+function subirApkADrive(ruta, version) {
+	return new Promise(async (resolve, reject) => {
+		try {
+			const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID_RELEASES;
+			if (!folderId) fail('Falta GOOGLE_DRIVE_FOLDER_ID_RELEASES en el entorno — creá una carpeta de Drive dedicada a los APK de release.');
+			const accessToken = await obtenerAccessTokenDrive();
+			const nombreArchivo = `construni-erp-v${version}.apk`;
 
-	const metadata = { name: nombreArchivo, parents: [folderId] };
-	const boundary = '-------release-boundary';
-	const body =
-		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
-		`--${boundary}\r\nContent-Type: application/vnd.android.package-archive\r\n\r\n`;
-	const cierre = `\r\n--${boundary}--`;
-	const bufferCompleto = Buffer.concat([Buffer.from(body, 'utf-8'), contenido, Buffer.from(cierre, 'utf-8')]);
+			const metadata = { name: nombreArchivo, parents: [folderId] };
+			const boundary = `release-boundary-${Date.now()}`;
+			const preambulo =
+				`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+				`--${boundary}\r\nContent-Type: application/vnd.android.package-archive\r\n\r\n`;
+			const cierre = `\r\n--${boundary}--`;
+			const largoTotal = Buffer.byteLength(preambulo) + statSync(ruta).size + Buffer.byteLength(cierre);
 
-	const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id&supportsAllDrives=true', {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
-		body: bufferCompleto
+			const req = https.request(
+				'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id&supportsAllDrives=true',
+				{
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${accessToken}`,
+						'Content-Type': `multipart/related; boundary=${boundary}`,
+						'Content-Length': largoTotal
+					}
+				},
+				(res) => {
+					let cuerpo = '';
+					res.on('data', (chunk) => (cuerpo += chunk));
+					res.on('end', () => {
+						let data;
+						try {
+							data = JSON.parse(cuerpo);
+						} catch (err) {
+							reject(new Error(`Respuesta de Drive no es JSON válido: ${cuerpo}`));
+							return;
+						}
+						if ((res.statusCode ?? 0) < 200 || (res.statusCode ?? 0) >= 300) {
+							reject(new Error(`No se pudo subir el APK a Drive (HTTP ${res.statusCode}): ${JSON.stringify(data)}`));
+							return;
+						}
+						resolve(data.id);
+					});
+				}
+			);
+			req.on('error', reject);
+			req.write(preambulo);
+			const lector = createReadStream(ruta);
+			lector.on('error', reject);
+			lector.on('end', () => req.end(cierre));
+			lector.pipe(req, { end: false });
+		} catch (err) {
+			reject(err);
+		}
+	}).then(async (fileId) => {
+		const accessToken = await obtenerAccessTokenDrive();
+		// Público de solo lectura vía link — mismo criterio que uploadToDrive en src/lib/server/config.ts,
+		// para que downloadFromDriveClient (BotonActualizar.svelte) pueda leerlo. Body chico, fetch normal
+		// acá no tiene el problema de arriba.
+		await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ role: 'reader', type: 'anyone' })
+		});
+		log(`APK subido a Drive con fileId=${fileId}`);
+		return fileId;
 	});
-	const data = await res.json();
-	if (!res.ok) fail(`No se pudo subir el APK a Drive: ${JSON.stringify(data)}`);
-
-	// Público de solo lectura vía link — mismo criterio que uploadToDrive en src/lib/server/config.ts,
-	// para que downloadFromDriveClient (BotonActualizar.svelte) pueda leerlo.
-	await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions?supportsAllDrives=true`, {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-		body: JSON.stringify({ role: 'reader', type: 'anyone' })
-	});
-
-	log(`APK subido a Drive con fileId=${data.id}`);
-	return data.id;
 }
 
 // ── 7. Agrupa tickets aprobados en el release nuevo ─────────────────────────────────────────

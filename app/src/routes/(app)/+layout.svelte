@@ -5,6 +5,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import NotificacionesBell from '$lib/components/layout/NotificacionesBell.svelte';
+	import ActualizacionBell from '$lib/components/layout/ActualizacionBell.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { getRequiredPermiso, getFirstAccessiblePath } from '$lib/config/modules';
@@ -178,6 +179,7 @@
 			<!-- Placeholder Topbar para Layout General -->
 			<header class="bg-white border-b border-slate-100 h-16 px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
 				<div class="flex items-center gap-4">
+					<ActualizacionBell />
 					<NotificacionesBell />
 					<div class="flex items-center gap-2 pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl">
 						<div class="w-8 h-8 rounded-full bg-[#1a233a] text-white flex items-center justify-center text-xs font-bold">
