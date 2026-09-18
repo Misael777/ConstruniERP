@@ -3313,8 +3313,10 @@
 
 								<!-- "Documento pendiente" (Sí/No) — a pedido explícito del usuario: solo aplica a
 								     Ingreso/Egreso, marca que todavía falta el documento de respaldo (factura/
-								     boleta) de esta transacción. "Responsable"/"Fecha de Vencimiento" SOLO
-								     aparecen si se elige Sí (ver transaccion_documento_pendiente_migration.sql). -->
+								     boleta) de esta transacción. "Responsable"/"Fecha de Vencimiento" ya NO se
+								     ocultan según el valor de "Documento pendiente" (antes solo aparecían con Sí)
+								     ni son obligatorios (sin asterisco) — a pedido explícito del usuario, siempre
+								     visibles y opcionales (ver transaccion_documento_pendiente_migration.sql). -->
 								{#if formValues.tipo === 'ingreso' || formValues.tipo === 'egreso'}
 									<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 										<div>
@@ -3333,47 +3335,41 @@
 												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
 											</div>
 										</div>
-										{#if formValues.documento_pendiente === 'si'}
-											<div>
-												<label for="tr-responsable-doc-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
-													Responsable<span class="text-red-500">*</span>
-												</label>
-												<div class="relative">
-													<select
-														id="tr-responsable-doc-pendiente"
-														value={formValues.responsable_documento_pendiente}
-														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('responsable_documento_pendiente', (e.target as HTMLSelectElement).value)}
-														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.responsable_documento_pendiente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-													>
-														<option value="" disabled>Selecciona una opción</option>
-														{#each dynamicOptions.responsable_documento_pendiente ?? [] as opt}
-															<option value={opt.value}>{opt.label}</option>
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-												</div>
-												{#if fieldErrors.responsable_documento_pendiente}
-													<p class="mt-1 text-xs text-red-600">{fieldErrors.responsable_documento_pendiente}</p>
-												{/if}
-											</div>
-											<div>
-												<label for="tr-fecha-vencimiento-doc" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
-													Fecha de Vencimiento<span class="text-red-500">*</span>
-												</label>
-												<input
-													id="tr-fecha-vencimiento-doc"
-													type="date"
-													value={formValues.fecha_vencimiento_documento}
+										<div>
+											<label for="tr-responsable-doc-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Responsable</label>
+											<div class="relative">
+												<select
+													id="tr-responsable-doc-pendiente"
+													value={formValues.responsable_documento_pendiente}
 													disabled={bloqueadaPorAprobacion}
-													oninput={(e) => handleInput('fecha_vencimiento_documento', (e.target as HTMLInputElement).value)}
-													class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.fecha_vencimiento_documento ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-												/>
-												{#if fieldErrors.fecha_vencimiento_documento}
-													<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
-												{/if}
+													onchange={(e) => handleInput('responsable_documento_pendiente', (e.target as HTMLSelectElement).value)}
+													class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.responsable_documento_pendiente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+												>
+													<option value="" disabled>Selecciona una opción</option>
+													{#each dynamicOptions.responsable_documento_pendiente ?? [] as opt}
+														<option value={opt.value}>{opt.label}</option>
+													{/each}
+												</select>
+												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
 											</div>
-										{/if}
+											{#if fieldErrors.responsable_documento_pendiente}
+												<p class="mt-1 text-xs text-red-600">{fieldErrors.responsable_documento_pendiente}</p>
+											{/if}
+										</div>
+										<div>
+											<label for="tr-fecha-vencimiento-doc" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Fecha de Vencimiento</label>
+											<input
+												id="tr-fecha-vencimiento-doc"
+												type="date"
+												value={formValues.fecha_vencimiento_documento}
+												disabled={bloqueadaPorAprobacion}
+												oninput={(e) => handleInput('fecha_vencimiento_documento', (e.target as HTMLInputElement).value)}
+												class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.fecha_vencimiento_documento ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+											/>
+											{#if fieldErrors.fecha_vencimiento_documento}
+												<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
+											{/if}
+										</div>
 									</div>
 								{/if}
 							</div>

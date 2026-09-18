@@ -468,28 +468,29 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
-		// Solo aplica (visible) si "Documento pendiente" es Sí — oculto por completo si es No (ver
-		// TransaccionModal.svelte). Opcional a pedido explícito del usuario (antes era obligatorio en
-		// ese caso) — la columna sigue siendo VARCHAR de texto libre (no una FK), el valor guardado es
-		// el nombre del empleado elegido, mismo criterio que 'responsable' en
-		// cuentaPagar.config.ts/cuentaCobrar.config.ts.
+		// Siempre visible y editable, sin importar "Documento pendiente" (antes se ocultaba/deshabilitaba
+		// por completo si era No — a pedido explícito del usuario, ya NO: "no quiero que desaparezcan
+		// estos campos"). Opcional (antes era obligatorio con Documento pendiente=Sí) — la columna sigue
+		// siendo VARCHAR de texto libre (no una FK), el valor guardado es el nombre del empleado elegido,
+		// mismo criterio que 'responsable' en cuentaPagar.config.ts/cuentaCobrar.config.ts. Sin
+		// disabledWhen a propósito: buildWritablePayload fuerza a null cualquier campo "bloqueado" por
+		// disabledWhen sin importar lo que el usuario haya escrito — con el campo siempre habilitado en
+		// el formulario (ver TransaccionModal.svelte), dejar disabledWhen acá borraría en silencio lo
+		// que se ingresó con Documento pendiente=No.
 		key: 'responsable_documento_pendiente',
 		label: 'Responsable',
 		tipo: 'select',
 		optionsSource: 'empleado',
-		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
 	},
 	{
-		// Solo aplica (visible) si "Documento pendiente" es Sí — mismo criterio que
-		// responsable_documento_pendiente de arriba. Opcional a pedido explícito del usuario (antes era
-		// obligatorio en ese caso).
+		// Siempre visible y editable, mismo criterio que responsable_documento_pendiente de arriba (ver
+		// esa nota para el porqué de no tener disabledWhen).
 		key: 'fecha_vencimiento_documento',
 		label: 'Fecha de Vencimiento',
 		tipo: 'date',
-		disabledWhen: (values) => String(values.documento_pendiente ?? 'no') !== 'si',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
