@@ -285,6 +285,16 @@ export function currencyMask(raw: string): string {
 	return decPart !== undefined ? `${intPart}.${decPart.slice(0, 2)}` : value;
 }
 
+/** Igual que currencyMask, pero permite un signo negativo opcional al inicio — a pedido explícito del
+ * usuario, para "Saldo Inicial" de Cuentas Bancarias (una cuenta puede arrancar en sobregiro/negativo,
+ * ver cuentaBanco.config.ts). NO usar en campos de monto de transacción ni similares, que siguen
+ * exigiendo un valor positivo con currencyMask normal. */
+export function currencyMaskConSigno(raw: string): string {
+	const negativo = raw.trim().startsWith('-');
+	const limpio = currencyMask(raw);
+	return negativo && limpio ? `-${limpio}` : limpio;
+}
+
 // =================================================================
 // FILTROS POR COLUMNA (estilo Excel — combinables, uno por columna)
 // =================================================================

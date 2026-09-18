@@ -7,12 +7,15 @@
  * Regla dura: una diferencia real (> tolerancia) en Conciliación siempre abre una Incidencia en vez
  * de corregir nada en silencio (ver incidencia.service.ts para el flujo de resolución).
  *
- * APERTURA FINANCIERA — mecanismo DISTINTO en cada lado, decisión explícita del usuario tras
- * comparar las alternativas:
- *   - Cuenta bancaria: escribe `cuenta_banco.saldo_inicial` DE VERDAD y llama a
- *     `recalcularSaldoCuentaBanco` (mismo RPC atómico que usa el resto del ERP) — la propia pantalla
- *     de Cuentas Bancarias queda actualizada, no solo Control Financiero. getSaldoTotalCuentasBancarias
- *     simplemente suma getSaldosCuentaBanco (la columna ya recalculada), sin lógica extra.
+ * APERTURA FINANCIERA — mismo criterio SIMÉTRICO en ambos lados desde
+ * cuenta_banco_saldo_fecha_corte_migration.sql (antes NO lo era — ver esa migración para el bug real
+ * de doble conteo que corrigió, encontrado investigando el ticket "SALDO NEGATIVO"):
+ *   - Cuenta bancaria: el monto declarado queda SOLO en `apertura_financiera` (ya NO pisa
+ *     `cuenta_banco.saldo_inicial`, que vuelve a ser el valor de una sola vez al crear la cuenta).
+ *     `fn_recalcular_saldo_cuenta_banco` (Postgres) ya sabe buscar sola la apertura MÁS RECIENTE de
+ *     esa cuenta y usarla como base + fecha de corte — si no hay ninguna, cae al saldo_inicial +
+ *     historial completo de siempre. La propia pantalla de Cuentas Bancarias queda actualizada
+ *     (saldo_actual recalculado), no solo Control Financiero.
  *   - Centro de costo (sin una columna propia donde guardar un saldo inicial, y a propósito SIN crear
  *     una transacción sintética que ensuciaría su historial real): el monto declarado queda SOLO en
  *     `apertura_financiera`, y `getSaldoTotalCentrosCosto` calcula el saldo "vigente" de cada centro
@@ -23,7 +26,9 @@
  *     CONSECUENCIA ACEPTADA por el usuario: la pantalla propia de "Centro de Costos y Cuentas
  *     Internas" (su columna "Monto Actual") NO refleja este número — esa pantalla no tiene noción de
  *     fecha de corte, siempre suma todo el historial. El saldo "vigente" es una cifra que solo vive
- *     dentro de Control Financiero (Dashboard/Conciliación/Consistencia).
+ *     dentro de Control Financiero (Dashboard/Conciliación/Consistencia). Cuenta Bancaria es la
+ *     EXCEPCIÓN: ahí sí se refleja en la propia pantalla de Cuentas Bancarias, porque saldo_actual es
+ *     una columna real que toda la app ya lee (no hay una "vista" separada como en Centro de Costo).
  *
  * IMPORTANTE: "Centro de Costo" acá SIEMPRE significa fondos propios (obra/consultoría/bolsa
  * general/otro/proyectos con venta cerrada) — la misma población que la pestaña "Centros de Costos"
@@ -322,11 +327,11 @@ export interface AperturaLotePayload {
  * centro, todas con la misma fecha_corte/fuente/observaciones (eso es lo que las agrupa como "el
  * mismo corte" en el historial — no hace falta una columna de lote aparte).
  *
- * Cuenta bancaria escribe `saldo_inicial` DE VERDAD y llama a `recalcularSaldoCuentaBanco` (mismo RPC
- * atómico de siempre) — decisión explícita del usuario para que la propia pantalla de Cuentas
- * Bancarias también quede actualizada. Centro de costo NO escribe nada aparte de este mismo registro
- * en `apertura_financiera` (a propósito, decisión explícita del usuario: no crear una transacción
- * sintética que ensuciaría el historial real de ese centro) — su saldo "vigente" lo calcula
+ * Cuenta bancaria y Centro de costo funcionan igual ahora (ver nota "APERTURA FINANCIERA" al inicio
+ * del archivo): ninguno de los dos pisa una columna real, ambos quedan SOLO en `apertura_financiera`.
+ * Para cuenta bancaria, después de insertar se llama a `recalcularSaldoCuentaBanco` (mismo RPC
+ * atómico de siempre, ya sabe leer la apertura sola) para que la propia pantalla de Cuentas Bancarias
+ * también quede actualizada. Centro de costo no necesita ese paso — su saldo "vigente" lo calcula
  * getSaldoTotalCentrosCosto arriba, a partir de esta misma fila. Best-effort por cuenta: si el
  * refresco de una cuenta puntual falla, no tumba el registro del corte completo (ya insertado); se
  * loguea y sigue con las demás.
@@ -358,6 +363,11 @@ export async function crearAperturaFinancieraLote(client: SupabaseClient, payloa
 	if (error) return { success: false, message: `No se pudo registrar el corte financiero: ${error.message}` };
 
 	if (payload.cuentas.length > 0) {
+		// Ya NO se pisa cuenta_banco.saldo_inicial acá (bug real corregido, ver
+		// cuenta_banco_saldo_fecha_corte_migration.sql) — la fila de apertura_financiera recién
+		// insertada arriba YA es la fuente de verdad que fn_recalcular_saldo_cuenta_banco usa como base
+		// + fecha de corte, mismo criterio que Centro de Costo (que tampoco pisa ninguna columna real).
+		// saldo_inicial vuelve a ser lo que dice su nombre: el valor de una sola vez al crear la cuenta.
 		const ids = payload.cuentas.map((c) => c.id_cuenta_banco);
 		const { data: cuentasBanco } = await client.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta').in('id_cuenta_banco', ids);
 		const numeroPorId = new Map((cuentasBanco ?? []).map((c: any) => [c.id_cuenta_banco, c.numero_cuenta as string]));
@@ -365,11 +375,10 @@ export async function crearAperturaFinancieraLote(client: SupabaseClient, payloa
 		await Promise.all(
 			payload.cuentas.map(async (c) => {
 				try {
-					await client.from('cuenta_banco').update({ saldo_inicial: c.monto }).eq('id_cuenta_banco', c.id_cuenta_banco);
 					const numeroCuenta = numeroPorId.get(c.id_cuenta_banco);
 					if (numeroCuenta) await recalcularSaldoCuentaBanco(client, numeroCuenta);
 				} catch (err) {
-					console.error('[conciliacion.service] No se pudo actualizar saldo_inicial de la cuenta', c.id_cuenta_banco, err);
+					console.error('[conciliacion.service] No se pudo recalcular el saldo de la cuenta', c.id_cuenta_banco, err);
 				}
 			})
 		);

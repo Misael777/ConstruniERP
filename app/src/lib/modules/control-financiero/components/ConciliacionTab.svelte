@@ -33,7 +33,7 @@
 	let conciliaciones = $state<ConciliacionFinanciera[]>([]);
 	let aperturas = $state<AperturaFinanciera[]>([]);
 	let cuentaOptions = $state<{ value: string; label: string }[]>([]);
-	let cuentasParaApertura = $state<{ id_cuenta_banco: number; numero_cuenta: string; titular_cuenta: string; saldo_inicial: number }[]>([]);
+	let cuentasParaApertura = $state<{ id_cuenta_banco: number; numero_cuenta: string; titular_cuenta: string; saldo_actual: number }[]>([]);
 	let centroCostoOptions = $state<{ value: string; label: string }[]>([]);
 	let saldosDetalleCentros = $state<SaldoDetalleEntidad[]>([]);
 
@@ -55,16 +55,21 @@
 	let montosCentros = $state<Record<string, string>>({});
 	let generandoApertura = $state(false);
 
-	/** Prefill de cuenta bancaria lee la columna real `saldo_inicial` (siempre correcta). Centro de
-	 * costo debe hacer lo mismo con su saldo VIGENTE actual (getSaldosDetalleCentrosCosto) — antes
-	 * caía a `montosCentros[c.value] ?? '0'`, un valor que solo vivía en memoria del componente y se
-	 * perdía al cambiar de pestaña (el {#if} del orquestador destruye y recrea ConciliacionTab). Eso
-	 * hacía que reabrir el wizard prellenara todos los centros en 0, y si el usuario solo editaba
-	 * uno para que la suma cuadrara, "Generar Apertura" creaba una fila MÁS RECIENTE con monto=0 para
-	 * el resto — que por diseño (última apertura gana) pisaba en silencio sus valores reales
-	 * anteriores. */
+	/** Prefill de cuenta bancaria lee `saldo_actual` (el saldo VIGENTE, ya sea que venga de una apertura
+	 * previa + transacciones posteriores, o de saldo_inicial + historial completo si nunca tuvo un
+	 * corte — ver fn_recalcular_saldo_cuenta_banco) — antes leía `saldo_inicial` directo, que era
+	 * correcto bajo el diseño viejo (un corte SÍ pisaba esa columna, ver
+	 * cuenta_banco_saldo_fecha_corte_migration.sql para el bug real que corrigió), pero dejó de serlo
+	 * al desacoplar el corte de esa columna: ahora saldo_inicial vuelve a ser el valor de una sola vez
+	 * al crear la cuenta, no lo último declarado. Centro de costo ya hacía lo mismo con su saldo
+	 * VIGENTE actual (getSaldosDetalleCentrosCosto) — antes caía a `montosCentros[c.value] ?? '0'`, un
+	 * valor que solo vivía en memoria del componente y se perdía al cambiar de pestaña (el {#if} del
+	 * orquestador destruye y recrea ConciliacionTab). Eso hacía que reabrir el wizard prellenara todos
+	 * los centros en 0, y si el usuario solo editaba uno para que la suma cuadrara, "Generar Apertura"
+	 * creaba una fila MÁS RECIENTE con monto=0 para el resto — que por diseño (última apertura gana)
+	 * pisaba en silencio sus valores reales anteriores. */
 	function prellenarMontosApertura() {
-		montosCuentas = Object.fromEntries(cuentasParaApertura.map((c) => [c.id_cuenta_banco, String(c.saldo_inicial ?? 0)]));
+		montosCuentas = Object.fromEntries(cuentasParaApertura.map((c) => [c.id_cuenta_banco, String(c.saldo_actual ?? 0)]));
 		const saldoVigentePorCentro = Object.fromEntries(saldosDetalleCentros.map((d) => [d.id, d.monto]));
 		montosCentros = Object.fromEntries(centroCostoOptions.map((c) => [c.value, String(saldoVigentePorCentro[c.value] ?? 0)]));
 	}
@@ -85,7 +90,7 @@
 				getConciliaciones(supabase),
 				getAperturasFinancieras(supabase),
 				getCuentaBancoOptions(supabase),
-				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta, saldo_inicial').eq('activo', true).then((r) => r.data ?? []),
+				supabase.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, titular_cuenta, saldo_actual').eq('activo', true).then((r) => r.data ?? []),
 				getCentroCostoOptionsSoloCentros(supabase),
 				getSaldosDetalleCentrosCosto(supabase)
 			]);
@@ -205,9 +210,9 @@
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm mb-8">
 		<h2 class="font-bold text-brand-marine text-sm mb-1">Cruce Interno — Centros de Costo vs Cuentas Bancarias</h2>
 		<p class="text-[11px] text-slate-400 mb-4">
-			Automático, sin datos manuales — compara dos totales que ya calcula el ERP. Saldo Cuentas Bancarias ya incluye lo declarado en Apertura Financiera (saldo inicial real). Saldo Centros de Costo
-			es el saldo "vigente" de cada centro: su última Apertura + solo las transacciones reales posteriores a esa fecha de corte (no se refleja en la pantalla propia de Centro de Costos, que
-			siempre suma todo el historial sin fecha de corte).
+			Automático, sin datos manuales — compara dos totales que ya calcula el ERP. Saldo Cuentas Bancarias es el saldo "vigente" de cada cuenta: su última Apertura + solo las transacciones reales
+			posteriores a esa fecha de corte (o saldo_inicial + historial completo si nunca tuvo un corte). Saldo Centros de Costo funciona igual: su última Apertura + solo las transacciones reales
+			posteriores a esa fecha de corte (no se refleja en la pantalla propia de Centro de Costos, que siempre suma todo el historial sin fecha de corte).
 			"Centro de Costo" acá es solo fondos propios (pestaña "Centros de Costos" del submódulo Centro de Costos y Cuentas Internas) — Cuentas Internas (cliente/proveedor/empleado) queda fuera, son
 			ledgers de contraparte, no dinero de la empresa.
 		</p>
@@ -311,10 +316,10 @@
 			<h2 class="font-bold text-brand-marine text-sm">Apertura Financiera / Saldo Inicial</h2>
 		</div>
 		<p class="text-[11px] text-slate-400 mb-4">
-			Al generar, esto actualiza de verdad el Saldo Inicial de cada cuenta bancaria (verás el cambio también en Cuentas Bancarias). Un centro de costo no tiene dónde guardar un saldo inicial
-			propio, así que su monto queda como referencia en este registro — Control Financiero calcula su saldo vigente sumando ese monto más las transacciones reales que registres después de esta
-			fecha (no se refleja en la pantalla propia de Centro de Costos). Revisa TODAS las cuentas bancarias y TODOS los centros de costo (solo fondos propios — Cuentas Internas queda fuera, ver nota
-			de Cruce Interno) para la misma fecha de corte; solo se puede generar cuando la suma de ambos lados cuadra.
+			Al generar, esto queda como referencia en Apertura Financiera para ambos lados — NINGUNO pisa una columna real (ni el Saldo Inicial de la cuenta bancaria ni nada en el centro de costo).
+			El Saldo Actual de cada cuenta bancaria (verás el cambio también en Cuentas Bancarias) y el saldo vigente de cada centro de costo se recalculan igual: ese monto declarado más las
+			transacciones reales que registres después de esta fecha (el del centro de costo no se refleja en la pantalla propia de Centro de Costos). Revisa TODAS las cuentas bancarias y TODOS los
+			centros de costo (solo fondos propios — Cuentas Internas queda fuera, ver nota de Cruce Interno) para la misma fecha de corte; solo se puede generar cuando la suma de ambos lados cuadra.
 		</p>
 
 		<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">

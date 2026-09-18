@@ -219,7 +219,10 @@ export async function marcarEnProgreso(client: SupabaseClient, idTicket: number)
  * para el próximo release (ver crearRelease en releases.service.ts). */
 export async function marcarResuelto(client: SupabaseClient, idTicket: number): Promise<ServiceResult<Ticket>> {
 	const usuario = permisosState.userName || null;
-	return cambiarEstado(client, idTicket, 'resuelto', usuario, { resuelto_por: usuario, resuelto_en: new Date().toISOString() });
+	// motivo_rechazo se limpia acá (a pedido explícito del usuario) — reenviar un ticket antes
+	// 'rechazado' para una nueva revisión no debe seguir mostrando el motivo del rechazo VIEJO, que
+	// ya no aplica al fix actual; si el admin lo vuelve a rechazar, ahí se guarda un motivo nuevo.
+	return cambiarEstado(client, idTicket, 'resuelto', usuario, { resuelto_por: usuario, resuelto_en: new Date().toISOString(), motivo_rechazo: null });
 }
 
 /** Admin-only (gate de UI, ver isAdmin() en TransaccionModal.svelte para el mismo criterio ya usado

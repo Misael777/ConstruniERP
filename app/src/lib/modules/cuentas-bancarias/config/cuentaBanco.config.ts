@@ -47,7 +47,7 @@
  */
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
-import { currencyMask } from '$lib/shared/fieldConfig';
+import { currencyMaskConSigno } from '$lib/shared/fieldConfig';
 
 export const TABLE_NAME = 'cuenta_banco';
 export const PK_COLUMN = 'id_cuenta_banco';
@@ -163,16 +163,23 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		// A pedido explícito del usuario: se pide al crear Y al editar. `saldo_actual` (ver más abajo)
-		// siempre se deriva de este valor + el neto de las transacciones reales que usan esta cuenta como
-		// origen/destino (ver recalcularSaldoCuentaBanco en cuentaBanco.service.ts) — nunca se escribe a
-		// mano, así que editar este campo después de creada la cuenta SÍ recalcula saldo_actual, no lo
-		// pisa directo.
+		// nunca se escribe a mano — lo deriva recalcularSaldoCuentaBanco (cuentaBanco.service.ts), que
+		// usa este valor SOLO si la cuenta nunca tuvo un Corte Financiero (ver apertura_financiera en
+		// Control Financiero → Conciliación); si ya tuvo uno, la base pasa a ser la última apertura y
+		// editar este campo deja de mover saldo_actual (ver cuenta_banco_saldo_fecha_corte_migration.sql
+		// — antes un corte pisaba este campo directo, doble-contando el historial; ya no). O sea:
+		// "Saldo Inicial" es el valor de UNA SOLA VEZ al crear la cuenta, no un checkpoint editable
+		// después — para corregir el saldo de una cuenta ya en uso, usar Corte Financiero, no este campo.
+		// Admite negativo (a pedido explícito del usuario/cliente, ticket "SALDO NEGATIVO" — mismo
+		// criterio ya permitido para saldo_actual vía transacciones, ver
+		// transaccion_permitir_saldo_negativo_cuenta_banco_migration.sql; acá no hace falta migración
+		// de esquema, solo quitar el `min:0`/regex/mask que bloqueaban escribir el signo) — una cuenta
+		// puede arrancar ya en sobregiro.
 		key: 'saldo_inicial',
 		label: 'Saldo Inicial',
 		tipo: 'currency',
-		min: 0,
-		mask: currencyMask,
-		regex: /^\d+(\.\d{1,2})?$/,
+		mask: currencyMaskConSigno,
+		regex: /^-?\d+(\.\d{1,2})?$/,
 		regexMessage: 'Solo números, con máximo 2 decimales',
 		placeholder: '0.00',
 		showInTable: true,

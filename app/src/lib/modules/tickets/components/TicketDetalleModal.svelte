@@ -208,9 +208,9 @@
 									<PlayCircle size={14} /> Marcar en progreso
 								</button>
 							{/if}
-							{#if ticket.estado === 'abierto' || ticket.estado === 'en_progreso'}
+							{#if ticket.estado === 'abierto' || ticket.estado === 'en_progreso' || ticket.estado === 'rechazado'}
 								<button type="button" disabled={procesando} onclick={() => ejecutar(() => marcarResuelto(supabase, ticket!.id_ticket))} class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-violet-300 text-violet-600 text-xs font-semibold hover:bg-violet-50 disabled:opacity-50">
-									<CheckCircle2 size={14} /> Marcar resuelto
+									<CheckCircle2 size={14} /> {ticket.estado === 'rechazado' ? 'Marcar resuelto de nuevo' : 'Marcar resuelto'}
 								</button>
 							{/if}
 							{#if ticket.estado === 'resuelto' && isAdmin()}
