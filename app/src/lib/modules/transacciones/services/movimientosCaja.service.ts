@@ -120,8 +120,14 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	if (params.idCentroCosto) {
 		queryAntes = queryAntes.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
 	}
-	if (params.idsCentroCosto && params.idsCentroCosto.length > 0) {
-		queryAntes = queryAntes.or(filtroOrigenODestino(params.idsCentroCosto));
+	if (params.idsCentroCosto) {
+		// Bug real reportado por el usuario (con captura): un tipo de Centro de Costo elegido (ej.
+		// "Consultoría") que hoy no tiene NINGÚN centro real de ese tipo (idsCentroCosto llega como []
+		// — no es que el filtro no esté activo) hacía que el `if` de abajo (`.length > 0`) se salteara
+		// por completo el filtro, mostrando TODOS los movimientos sin filtrar en vez de ninguno. Con
+		// lista vacía, se fuerza una condición imposible (id_centro_costo_origen = -1, un id que nunca
+		// existe) para que la consulta devuelva CERO filas, que es la respuesta correcta.
+		queryAntes = params.idsCentroCosto.length > 0 ? queryAntes.or(filtroOrigenODestino(params.idsCentroCosto)) : queryAntes.eq('id_centro_costo_origen', -1);
 	}
 	if (params.numeroCuentaBanco) {
 		queryAntes = queryAntes.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
@@ -147,8 +153,9 @@ export async function getMovimientosCaja(client: SupabaseClient, params: Movimie
 	if (params.idCentroCosto) {
 		query = query.or(`id_centro_costo_origen.eq.${params.idCentroCosto},id_centro_costo_destino.eq.${params.idCentroCosto}`);
 	}
-	if (params.idsCentroCosto && params.idsCentroCosto.length > 0) {
-		query = query.or(filtroOrigenODestino(params.idsCentroCosto));
+	if (params.idsCentroCosto) {
+		// Mismo fix que queryAntes de arriba — ver ese comentario para el bug real que corrige.
+		query = params.idsCentroCosto.length > 0 ? query.or(filtroOrigenODestino(params.idsCentroCosto)) : query.eq('id_centro_costo_origen', -1);
 	}
 	if (params.numeroCuentaBanco) {
 		query = query.or(`cuente_origen.eq.${params.numeroCuentaBanco},cuente_destino.eq.${params.numeroCuentaBanco}`);
