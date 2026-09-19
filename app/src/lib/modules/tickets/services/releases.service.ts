@@ -19,6 +19,26 @@ export interface AppRelease {
 
 const TABLE_NAME = 'app_release';
 
+/** Qué versión de la app tiene instalada una persona en una plataforma — la fila la escribe la propia
+ * app al abrir sesión (ver registrarVersionUsuario en shared/appVersion.ts y
+ * app_version_usuario_migration.sql). */
+export interface VersionUsuario {
+	id_registro: number;
+	user_id: string;
+	usuario: string | null;
+	plataforma: string;
+	version: string;
+	ultima_conexion: string;
+}
+
+/** Versiones instaladas por usuario/plataforma, la conexión más reciente primero — para la sección
+ * "Versiones instaladas" del Panel Developer. */
+export async function getVersionesInstaladas(client: SupabaseClient): Promise<VersionUsuario[]> {
+	const { data, error } = await client.from('app_version_usuario').select('*').order('ultima_conexion', { ascending: false });
+	if (error) throw error;
+	return (data ?? []) as VersionUsuario[];
+}
+
 /** Último release publicado — para comparar contra la versión instalada y decidir si mostrar
  * "Actualizar" en un lugar genérico (ej. un ícono en el header), no atado a un ticket puntual. */
 export async function getUltimoRelease(client: SupabaseClient): Promise<AppRelease | null> {

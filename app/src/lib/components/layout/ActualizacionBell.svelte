@@ -24,6 +24,7 @@
 	import { getUltimoRelease, type AppRelease } from '$lib/modules/tickets/services/releases.service';
 	import { sendNotificacionNativa } from '$lib/modules/aprobaciones/services/notificacionNativa';
 	import BotonActualizar from '$lib/shared/components/BotonActualizar.svelte';
+	import { esVersionMasNueva } from '$lib/shared/appVersion';
 
 	// Respaldo del Realtime — las versiones nuevas son poco frecuentes (a diferencia de
 	// solicitud_aprobacion/ticket), así que este intervalo puede ser largo sin que se sienta lento.
@@ -38,23 +39,10 @@
 	let channel: RealtimeChannel | null = null;
 	let pollIntervalId: ReturnType<typeof setInterval> | null = null;
 
-	/** Compara "1.2.10" > "1.2.9" por segmento numérico — un simple > de strings falla ahí (compara
-	 * caracter por caracter). */
-	function esMasNueva(remota: string, instalada: string): boolean {
-		const a = remota.split('.').map(Number);
-		const b = instalada.split('.').map(Number);
-		for (let i = 0; i < Math.max(a.length, b.length); i++) {
-			const x = a[i] ?? 0;
-			const y = b[i] ?? 0;
-			if (x !== y) return x > y;
-		}
-		return false;
-	}
-
 	async function verificarActualizacion() {
 		try {
 			const ultimo = await getUltimoRelease(supabase);
-			if (!ultimo || !esMasNueva(ultimo.version, versionInstalada)) {
+			if (!ultimo || !esVersionMasNueva(ultimo.version, versionInstalada)) {
 				release = null;
 				return;
 			}

@@ -15,8 +15,14 @@
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { mobileFabState } from '$lib/stores/mobileFab.svelte';
 	import MobileFab from '$lib/shared/components/MobileFab.svelte';
+	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
 
 	let { children } = $props();
+
+	// Versión instalada, visible en el encabezado — para que cualquiera (incluida quien reporta un
+	// problema) pueda decir exactamente con qué versión está.
+	let versionApp = $state('');
+	getInfoVersionApp().then((info) => (versionApp = info.version));
 
 	let isLoading = $state(true);
 	/** true = el usuario está autenticado pero no tiene permiso para NINGÚN módulo del ERP — no hay
@@ -78,6 +84,10 @@
 				permisosCount: permisosState.permisos.length,
 				permisos: permisosState.permisos
 			});
+
+			// Deja registrada la versión de la app que este usuario tiene instalada (Panel Developer →
+			// "Versiones instaladas"). Sin await a propósito: es best-effort y no debe demorar el arranque.
+			void registrarVersionUsuario(supabase, session.user.id, permisosState.userName || null);
 
 			// 2. Obtener rol del empleado desde base de datos
 			console.log('[Layout] Fetching employee role locally for layout checks...');
@@ -179,6 +189,9 @@
 			<!-- Placeholder Topbar para Layout General -->
 			<header class="bg-white border-b border-slate-100 h-16 px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
 				<div class="flex items-center gap-4">
+					{#if versionApp}
+						<span class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</span>
+					{/if}
 					<ActualizacionBell />
 					<NotificacionesBell />
 					<div class="flex items-center gap-2 pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl">

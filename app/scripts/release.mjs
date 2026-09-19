@@ -4,30 +4,36 @@
  * Documentacion/PlanModuloTicketsYReleases.md para el diseño del módulo de Tickets.
  *
  * Uso (SIEMPRE vía npm run, no `node scripts/release.mjs` directo — ver por qué en la nota de abajo):
- *   npm run release -- --patch [--apk "C:\ruta\al\app-debug.apk"]
- *   npm run release -- --minor
- *   npm run release -- --major
- *   npm run release -- --bump-only [--patch|--minor|--major]   (solo sube la versión y sale)
- *   npm run release -- --no-bump --apk "C:\ruta\al\app.apk"    (publica la versión que YA está puesta)
+ *   npm run release -- --patch            (el caso normal: compila Windows Y Android y publica todo)
+ *   npm run release -- --minor | --major
+ *   npm run release -- --no-apk           (release solo de Windows, sin Android)
+ *   npm run release -- --apk "C:\ruta\al\app.apk"   (usa un APK ya compilado en vez de compilar uno)
+ *   npm run release -- --no-bump          (re-publica la versión que YA está en los archivos, sin subirla
+ *                                          de nuevo — para reintentar tras un fallo posterior a publicar)
+ *   npm run release -- --bump-only        (solo sube la versión y sale)
  *
- * ⚠️ El APK debe compilarse DESPUÉS de subir la versión (ticket #8): la versión que reporta la app
- * instalada (getVersion(), lo que ActualizacionBell.svelte compara contra app_release) sale de
- * tauri.conf.json en el momento de COMPILAR. Un APK compilado antes del bump lleva la versión anterior
- * incrustada, y quien lo instale sigue viendo "actualización disponible" para siempre. Este script lo
- * verifica al pasarle --apk y aborta antes de publicar si la versión del APK no coincide. Flujo seguro:
- * (a) `--bump-only`, (b) compilar el APK, (c) `--no-bump --apk <ruta>`. Con `--apk` sin flags extra
- * también sirve, pero solo si el APK ya se compiló con la versión que va a salir.
+ * ⚠️ Por qué el script compila el APK él mismo (ticket #8): la versión que reporta la app instalada
+ * (getVersion(), lo que ActualizacionBell.svelte compara contra app_release) sale de tauri.conf.json en
+ * el momento de COMPILAR. Un APK compilado ANTES del bump lleva la versión anterior incrustada, y quien
+ * lo instale ve "actualización disponible" para siempre. Por eso el APK se compila acá, DESPUÉS del
+ * bump, y además se verifica su versión incrustada antes de publicar (también si viene de --apk). Si
+ * algo falla antes de publicar, la versión de package.json/tauri.conf.json se revierte sola — reintentar
+ * es siempre correr el mismo comando, sin quedar con la versión "salteada".
  *
- * Qué hace, en orden (aborta si cualquier paso falla — nunca deja el sistema a medio publicar):
+ * Qué hace, en orden (aborta si cualquier paso falla — nunca deja el sistema a medio publicar; los dos
+ * builds pesados van ANTES de publicar nada):
  *   1. Gate de calidad: npm run check + npx vitest run.
  *   2. Sube la versión en package.json y src-tauri/tauri.conf.json.
- *   3. npm run tauri build (Windows) — con TAURI_SIGNING_PRIVATE_KEY/_PASSWORD en el entorno, Tauri
+ *   3. Compila el APK de Android (npm run tauri android build -- --debug, configurable con
+ *      APK_BUILD_CMD) y verifica que lleve la versión nueva. Se omite con --no-apk; con --apk <ruta>
+ *      no compila, solo verifica ese archivo.
+ *   4. npm run tauri build (Windows) — con TAURI_SIGNING_PRIVATE_KEY/_PASSWORD en el entorno, Tauri
  *      firma el artefacto de update automáticamente (createUpdaterArtifacts:true en tauri.conf.json).
- *   4. Arma latest.json a partir del .sig generado.
- *   5. gh release create — sube el instalador + latest.json a GitHub Releases.
- *   6. Si se pasó --apk, sube ese archivo a la carpeta de Drive de releases (mismo flujo OAuth2 que
- *      ya usa el resto del ERP para documentos, ver src/lib/server/config.ts).
- *   7. Se conecta a Supabase (service role key) y agrupa TODOS los tickets 'aprobado' sin release
+ *   5. Arma latest.json a partir del .sig generado.
+ *   6. gh release create — sube el instalador + latest.json a GitHub Releases.
+ *   7. Sube el APK a la carpeta de Drive de releases (mismo flujo OAuth2 que ya usa el resto del ERP
+ *      para documentos, ver src/lib/server/config.ts).
+ *   8. Se conecta a Supabase (service role key) y agrupa TODOS los tickets 'aprobado' sin release
  *      asignado en la fila `app_release` nueva — los deja 'cerrado' directo (ver nota de terminología
  *      en el plan: Cliente=Admin, ya dio su visto bueno al aprobar).
  *
@@ -50,6 +56,10 @@
  *
  * Opcional:
  *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP-releases', ver tauri.conf.json)
+ *   APK_BUILD_CMD  (por defecto 'npm run tauri android build -- --debug' — el comando que compila el APK)
+ *
+ * El build de Android necesita en el entorno lo mismo que ya usás al compilarlo a mano
+ * (ANDROID_HOME, NDK_HOME, JAVA_HOME) — corré el release desde la misma terminal donde compilás el APK.
  *
  * También necesitás el GitHub CLI (`gh`) instalado y logueado (`gh auth login`) en tu máquina —
  * eso no es una variable de entorno, es una herramienta que se instala una sola vez.
@@ -105,18 +115,33 @@ function versionIncrustadaEnApk(ruta) {
 	return null;
 }
 
+const APK_BUILD_CMD = process.env.APK_BUILD_CMD || 'npm run tauri android build -- --debug';
+const APK_OUTPUT_DIR = join(ROOT, 'src-tauri', 'gen', 'android', 'app', 'build', 'outputs', 'apk');
+
+/** Todos los .apk bajo la carpeta de salida de Gradle, con su fecha de modificación. */
+function listarApks() {
+	if (!existsSync(APK_OUTPUT_DIR)) return [];
+	return readdirSync(APK_OUTPUT_DIR, { recursive: true })
+		.map((rel) => join(APK_OUTPUT_DIR, String(rel)))
+		.filter((f) => f.endsWith('.apk'))
+		.map((ruta) => ({ ruta, mtime: statSync(ruta).mtimeMs }));
+}
+
 // ── 0. Args ──────────────────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const bumpTipo = args.includes('--major') ? 'major' : args.includes('--minor') ? 'minor' : 'patch';
 const apkIdx = args.indexOf('--apk');
-const apkPath = apkIdx !== -1 ? args[apkIdx + 1] : null;
+let apkPath = apkIdx !== -1 ? args[apkIdx + 1] : null;
+const sinApk = args.includes('--no-apk');
 const soloBump = args.includes('--bump-only');
 const sinBump = args.includes('--no-bump');
 if (soloBump && sinBump) fail('--bump-only y --no-bump se excluyen entre sí.');
+if (sinApk && apkPath) fail('--apk y --no-apk se excluyen entre sí.');
+if (apkIdx !== -1 && (!apkPath || apkPath.startsWith('--'))) fail('--apk necesita la ruta al archivo .apk.');
 
 // ── 1. Gate de calidad ───────────────────────────────────────────────────────────────────────
 if (!soloBump) {
-	log('Paso 1/7 — Gate de calidad (npm run check + vitest)...');
+	log('Paso 1/8 — Gate de calidad (npm run check + vitest)...');
 	run('npm run check');
 	run('npx vitest run');
 }
@@ -130,9 +155,26 @@ function bumpVersion(actual, tipo) {
 }
 
 const pkgPath = join(ROOT, 'package.json');
-const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
 const tauriConfPath = join(ROOT, 'src-tauri', 'tauri.conf.json');
-const tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf-8'));
+const pkgRaw = readFileSync(pkgPath, 'utf-8');
+const tauriConfRaw = readFileSync(tauriConfPath, 'utf-8');
+const pkg = JSON.parse(pkgRaw);
+const tauriConf = JSON.parse(tauriConfRaw);
+
+// Si el script aborta ANTES de publicar nada (build fallido, APK con otra versión, falta una clave...),
+// la versión subida en el paso 2 se revierte sola: así reintentar es correr el mismo comando, sin quedar
+// con una versión "salteada" que nunca se publicó. Una vez que empieza a publicar (gh release create) ya
+// no se revierte — esa versión existe en GitHub.
+let versionSubida = false;
+let yaPublicado = false;
+process.on('SIGINT', () => process.exit(130));
+process.on('exit', (code) => {
+	if (code !== 0 && versionSubida && !yaPublicado) {
+		writeFileSync(pkgPath, pkgRaw);
+		writeFileSync(tauriConfPath, tauriConfRaw);
+		console.error(`[release] Se revirtió la versión a ${pkg.version} en package.json y tauri.conf.json (no se había publicado nada).`);
+	}
+});
 
 let nuevaVersion;
 if (sinBump) {
@@ -140,39 +182,19 @@ if (sinBump) {
 	if (tauriConf.version !== nuevaVersion) {
 		fail(`--no-bump: package.json (${pkg.version}) y src-tauri/tauri.conf.json (${tauriConf.version}) tienen versiones distintas — dejalos iguales antes de publicar.`);
 	}
-	log(`Paso 2/7 — --no-bump: se publica la versión que ya está en los archivos (${nuevaVersion}).`);
+	log(`Paso 2/8 — --no-bump: se publica la versión que ya está en los archivos (${nuevaVersion}).`);
 } else {
-	log(`Paso 2/7 — Subiendo versión (${bumpTipo})...`);
+	log(`Paso 2/8 — Subiendo versión (${bumpTipo})...`);
 	nuevaVersion = bumpVersion(pkg.version, bumpTipo);
-	pkg.version = nuevaVersion;
-	writeFileSync(pkgPath, JSON.stringify(pkg, null, '\t') + '\n');
-	tauriConf.version = nuevaVersion;
-	writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
+	writeFileSync(pkgPath, JSON.stringify({ ...pkg, version: nuevaVersion }, null, '\t') + '\n');
+	writeFileSync(tauriConfPath, JSON.stringify({ ...tauriConf, version: nuevaVersion }, null, 2) + '\n');
+	versionSubida = !soloBump;
 	log(`Versión nueva: ${nuevaVersion}`);
 }
 
 if (soloBump) {
-	log(`✅ Versión subida a ${nuevaVersion}. Ahora compilá el APK (recién ahora lleva la versión correcta) y publicá con: npm run release -- --no-bump --apk "<ruta al apk>"`);
+	log(`✅ Versión subida a ${nuevaVersion}. Para publicarla sin volver a subirla: npm run release -- --no-bump`);
 	process.exit(0);
-}
-
-// Verificación del APK ANTES de la parte lenta (build de Windows) y de publicar nada — ver la nota de
-// arriba (ticket #8): un APK compilado antes del bump reporta la versión vieja y deja a los usuarios en
-// un bucle de "actualización disponible".
-if (apkPath) {
-	log('Verificando que el APK lleve incrustada la versión que se va a publicar...');
-	if (!existsSync(apkPath)) fail(`No existe el APK indicado en --apk: ${apkPath}`);
-	const incrustada = versionIncrustadaEnApk(apkPath);
-	if (incrustada === null) {
-		log(`⚠️ No se pudo leer la versión incrustada en el APK (${apkPath}) — se continúa SIN verificar. Asegurate de haberlo compilado con la versión ${nuevaVersion}.`);
-	} else if (incrustada !== nuevaVersion) {
-		fail(
-			`El APK lleva incrustada la versión ${incrustada}, pero se va a publicar la ${nuevaVersion}. Quien lo instale se va a reportar como ${incrustada} y seguirá viendo "actualización disponible" en bucle. ` +
-				`Los archivos ya quedaron en ${nuevaVersion}: compilá el APK AHORA (recién ahora lleva esa versión) y volvé a correr: npm run release -- --no-bump --apk "<ruta al apk>"`
-		);
-	} else {
-		log(`APK verificado: lleva la versión ${incrustada}.`);
-	}
 }
 
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
@@ -183,12 +205,52 @@ if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
 	);
 }
 
-// ── 3. Build de Windows (firma el artefacto de update automáticamente) ──────────────────────
-log('Paso 3/7 — Compilando Windows (npm run tauri build)...');
+// ── 3. Build de Android + verificación de la versión incrustada ─────────────────────────────
+// Se compila DESPUÉS del bump a propósito (ticket #8, ver nota de arriba): así el APK lleva por
+// construcción la versión que se va a publicar, y aun así se verifica antes de publicar nada.
+if (sinApk) {
+	log('Paso 3/8 — --no-apk: se omite Android (release solo para Windows).');
+} else {
+	let apkCompiladoAca = false;
+	if (apkPath) {
+		log(`Paso 3/8 — Usando el APK ya compilado: ${apkPath}`);
+		if (!existsSync(apkPath)) fail(`No existe el APK indicado en --apk: ${apkPath}`);
+	} else {
+		log('Paso 3/8 — Compilando Android...');
+		const inicioBuild = Date.now();
+		run(APK_BUILD_CMD);
+		const nuevos = listarApks().filter((a) => a.mtime >= inicioBuild - 2000);
+		if (nuevos.length === 0) {
+			fail(`El build de Android terminó pero no generó ningún APK nuevo en ${APK_OUTPUT_DIR}. Revisá la salida de arriba (o el comando en APK_BUILD_CMD).`);
+		}
+		nuevos.sort((a, b) => Number(/universal[\\/]debug/.test(b.ruta)) - Number(/universal[\\/]debug/.test(a.ruta)) || b.mtime - a.mtime);
+		apkPath = nuevos[0].ruta;
+		apkCompiladoAca = true;
+		log(`APK compilado: ${apkPath}`);
+	}
+
+	log('Verificando que el APK lleve incrustada la versión que se va a publicar...');
+	const incrustada = versionIncrustadaEnApk(apkPath);
+	if (incrustada === null) {
+		log(`⚠️ No se pudo leer la versión incrustada en el APK — se continúa SIN verificar${apkCompiladoAca ? ' (se compiló recién, después del bump)' : `. Asegurate de haberlo compilado con la versión ${nuevaVersion}`}.`);
+	} else if (incrustada !== nuevaVersion) {
+		fail(
+			`El APK lleva incrustada la versión ${incrustada}, pero se va a publicar la ${nuevaVersion}. Quien lo instale se va a reportar como ${incrustada} y seguirá viendo "actualización disponible" en bucle. ` +
+				(apkCompiladoAca
+					? 'El build no tomó la versión de tauri.conf.json — limpiá la caché de Rust del APK (src-tauri/target/*/*/build/tauri-*) o el build de Gradle y reintentá.'
+					: 'Volvé a correr sin --apk para que el script lo compile con la versión correcta.')
+		);
+	} else {
+		log(`APK verificado: lleva la versión ${incrustada}.`);
+	}
+}
+
+// ── 4. Build de Windows (firma el artefacto de update automáticamente) ──────────────────────
+log('Paso 4/8 — Compilando Windows (npm run tauri build)...');
 run('npm run tauri build');
 
-// ── 4. Arma latest.json a partir del .sig generado ──────────────────────────────────────────
-log('Paso 4/7 — Armando latest.json...');
+// ── 5. Arma latest.json a partir del .sig generado ──────────────────────────────────────────
+log('Paso 5/8 — Armando latest.json...');
 // ⚠️ Ruta/nombre EXACTO del bundle todavía no verificado contra un build real — Tauri v2 genera el
 // instalador NSIS + su .sig bajo src-tauri/target/release/bundle/nsis/. Si tu build usa otro target
 // (msi, etc.) ajustá BUNDLE_DIR.
@@ -233,30 +295,33 @@ const latestJson = {
 const rutaLatestJson = join(BUNDLE_DIR, 'latest.json');
 writeFileSync(rutaLatestJson, JSON.stringify(latestJson, null, 2));
 
-// ── 5. Publica en GitHub Releases ────────────────────────────────────────────────────────────
-log('Paso 5/7 — Publicando en GitHub Releases...');
+// ── 6. Publica en GitHub Releases ────────────────────────────────────────────────────────────
+log('Paso 6/8 — Publicando en GitHub Releases...');
 try {
 	execFileSync('gh', ['--version'], { stdio: 'ignore' });
 } catch {
 	fail('No se encontró el GitHub CLI (`gh`) en el PATH — instalalo desde https://cli.github.com/ y corré `gh auth login` una vez.');
 }
+// Desde acá la versión ya existe en GitHub: si algo falla más adelante NO se revierte el bump (ver el
+// handler de 'exit' arriba) — para terminar de publicar, correr de nuevo con --no-bump.
+yaPublicado = true;
 run(
 	`gh release create v${nuevaVersion} "${rutaInstalador}" "${rutaLatestJson}" --repo ${GITHUB_REPO} --title "v${nuevaVersion}" --notes "Ver detalle de tickets incluidos en el módulo de Soporte del ERP."`
 );
 const urlManifestWin = `https://github.com/${GITHUB_REPO}/releases/latest/download/latest.json`;
 const urlInstaladorWin = `https://github.com/${GITHUB_REPO}/releases/download/v${nuevaVersion}/${nombreAssetPublicado}`;
 
-// ── 6. Sube el APK a Drive (si se pasó --apk) ───────────────────────────────────────────────
+// ── 7. Sube el APK a Drive (salvo --no-apk) ─────────────────────────────────────────────────
 let urlApkDrive = null;
 if (apkPath) {
-	log('Paso 6/7 — Subiendo APK a Drive...');
+	log('Paso 7/8 — Subiendo APK a Drive...');
 	try {
 		urlApkDrive = await subirApkADrive(apkPath, nuevaVersion);
 	} catch (err) {
 		fail(`No se pudo subir el APK a Drive: ${err?.message || err}`);
 	}
 } else {
-	log('Paso 6/7 — Sin --apk, se omite la subida a Drive (release solo para Windows).');
+	log('Paso 7/8 — --no-apk: se omite la subida a Drive (release solo para Windows).');
 }
 
 async function obtenerAccessTokenDrive() {
@@ -356,8 +421,8 @@ function subirApkADrive(ruta, version) {
 	});
 }
 
-// ── 7. Agrupa tickets aprobados en el release nuevo ─────────────────────────────────────────
-log('Paso 7/7 — Agrupando tickets aprobados en Supabase...');
+// ── 8. Agrupa tickets aprobados en el release nuevo ─────────────────────────────────────────
+log('Paso 8/8 — Agrupando tickets aprobados en Supabase...');
 const { PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 if (!PUBLIC_SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 	fail('Faltan PUBLIC_SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY en el entorno — el release en GitHub/Drive ya se publicó, pero el ticket no va a quedar vinculado. Configurá las variables y corré de nuevo (el script es re-ejecutable: gh/Drive fallarán por versión duplicada, pero podés correr solo este paso a mano si hace falta).');

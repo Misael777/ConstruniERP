@@ -43,25 +43,29 @@ Por eso este proyecto separa las dos cosas con claridad:
 6. Cuando decido que es momento de publicar una versión (puede juntar varios tickets aprobados a la
    vez), corro UN SOLO comando:
 
-     node scripts/release.mjs --patch      (o --minor / --major)
+     npm run release -- --patch      (o --minor / --major)
 
-   Este script:
+   Este script (todo en uno — ya NO hay que compilar el APK a mano antes):
      a. Vuelve a correr check+test como último gate (por si algo cambió desde el push).
      b. Sube la versión en package.json/tauri.conf.json.
-     c. Compila el instalador de Windows (npm run tauri build) y lo FIRMA con la clave privada del
+     c. Compila el APK de Android (npm run tauri android build -- --debug) DESPUÉS del bump y verifica
+        que lleve la versión nueva incrustada. ⚠️ Por qué importa (ticket #8): la versión que la app
+        instalada reporta (y que compara contra `app_release` para mostrar "actualización
+        disponible") queda incrustada al COMPILAR. Un APK compilado antes del bump lleva la versión
+        anterior, y quien lo instale ve el aviso de actualización para siempre. Si la versión no
+        coincide, el script aborta antes de publicar nada. (--no-apk = release solo Windows;
+        --apk <ruta> = usar un APK ya compilado, se verifica igual.)
+     d. Compila el instalador de Windows (npm run tauri build) y lo FIRMA con la clave privada del
         updater (tauri signer sign) — esa clave NUNCA está en el repo, vive solo en la máquina del
         developer (o como GitHub Secret si más adelante se mueve el build a un runner de GitHub).
-     d. Genera/actualiza latest.json (el manifest que el updater de Tauri va a leer) y publica todo
+     e. Genera/actualiza latest.json (el manifest que el updater de Tauri va a leer) y publica todo
         (instalador + manifest) en GitHub Releases con `gh release create`.
-     e. Toma el APK debug ya compilado (--apk) y lo sube a la carpeta de Drive que ya usa el ERP para
-        documentos — mismo mecanismo de autenticación que ya existe, no hay nada nuevo que inventar ahí.
-        ⚠️ El APK debe compilarse DESPUÉS de subir la versión: la versión que la app instalada reporta
-        (y que compara contra `app_release` para mostrar "actualización disponible") queda incrustada al
-        COMPILAR. Un APK compilado antes del bump lleva la versión anterior, y quien lo instale ve el
-        aviso de actualización para siempre (ticket #8). El script lo verifica y aborta antes de
-        publicar. Flujo seguro: `npm run release -- --bump-only` → compilar el APK →
-        `npm run release -- --no-bump --apk "<ruta>"`.
-     f. Se conecta a Supabase, busca todos los tickets en estado 'aprobado' sin release asignado,
+     f. Sube el APK a la carpeta de Drive que ya usa el ERP para documentos — mismo mecanismo de
+        autenticación que ya existe, no hay nada nuevo que inventar ahí.
+     Si algo falla ANTES de publicar (los dos builds van antes), la versión de package.json/
+     tauri.conf.json se revierte sola: reintentar es correr el mismo comando. Si falla DESPUÉS de
+     publicar, se termina con `npm run release -- --no-bump`.
+     g. Se conecta a Supabase, busca todos los tickets en estado 'aprobado' sin release asignado,
         arma el changelog con sus títulos, crea la fila en la tabla `release`, y marca esos tickets
         con el id de ese release y `estado='cerrado'` directamente — sin pedirle al Admin que confirme
         otra vez (ya lo hizo al aprobar en el paso 5).

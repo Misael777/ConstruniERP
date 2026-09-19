@@ -11,6 +11,33 @@
 	import { toast } from '$lib/stores/toast';
 	import { getTicketsDeveloper, type Ticket, type EstadoTicket } from '$lib/modules/tickets/services/tickets.service';
 	import TicketDetalleModal from '$lib/modules/tickets/components/TicketDetalleModal.svelte';
+	import { getUltimoRelease, getVersionesInstaladas, type VersionUsuario } from '$lib/modules/tickets/services/releases.service';
+	import { esVersionMasNueva } from '$lib/shared/appVersion';
+
+	// "Versiones instaladas" — qué versión de la app tiene cada persona (la registra la propia app al
+	// abrir sesión, ver app_version_usuario_migration.sql), comparada contra la última release publicada,
+	// para asegurarse de que las correcciones realmente les llegaron.
+	let versiones = $state<VersionUsuario[]>([]);
+	let ultimaVersion = $state<string | null>(null);
+	let versionesError = $state('');
+	let versionesAbierto = $state(true);
+	const desactualizadas = $derived(ultimaVersion ? versiones.filter((v) => esVersionMasNueva(ultimaVersion!, v.version)).length : 0);
+
+	async function fetchVersiones() {
+		versionesError = '';
+		try {
+			const [lista, ultimo] = await Promise.all([getVersionesInstaladas(supabase), getUltimoRelease(supabase)]);
+			versiones = lista;
+			ultimaVersion = ultimo?.version ?? null;
+		} catch (err: any) {
+			versionesError = err?.message ?? 'No se pudieron cargar las versiones instaladas.';
+		}
+	}
+
+	function formatFechaHora(value: string) {
+		const d = new Date(value);
+		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('es-PE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+	}
 
 	let tickets = $state<Ticket[]>([]);
 	let loading = $state(true);
@@ -28,7 +55,10 @@
 		}
 	}
 
-	onMount(fetchList);
+	onMount(() => {
+		fetchList();
+		fetchVersiones();
+	});
 
 	const ETIQUETA_ESTADO: Record<string, string> = {
 		abierto: 'Abierto',
@@ -93,6 +123,75 @@
 		<Code2 size={24} class="text-blue-600" /> Panel Developer
 	</h1>
 	<p class="text-sm text-slate-500 mt-1">Todos los tickets reportados — progreso, aprobación/rechazo y releases.</p>
+</div>
+
+<div class="mb-5 bg-white rounded-2xl border border-slate-200">
+	<button
+		type="button"
+		onclick={() => (versionesAbierto = !versionesAbierto)}
+		class="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+		aria-expanded={versionesAbierto}
+	>
+		<span class="text-sm font-bold text-slate-700">
+			Versiones instaladas
+			{#if ultimaVersion}
+				<span class="font-normal text-slate-400">· última publicada v{ultimaVersion}</span>
+			{/if}
+		</span>
+		<span class="text-xs text-slate-500 shrink-0">
+			{#if versionesError}
+				sin datos
+			{:else if versiones.length === 0}
+				nadie registrado todavía
+			{:else if desactualizadas > 0}
+				<span class="font-semibold text-amber-600">{desactualizadas} de {versiones.length} desactualizada{desactualizadas === 1 ? '' : 's'}</span>
+			{:else}
+				<span class="font-semibold text-emerald-600">todas al día</span>
+			{/if}
+			· {versionesAbierto ? 'ocultar' : 'ver'}
+		</span>
+	</button>
+	{#if versionesAbierto}
+		<div class="border-t border-slate-100">
+			{#if versionesError}
+				<p class="px-4 py-4 text-sm text-slate-500">
+					No se pudo leer la tabla de versiones ({versionesError}). Si es la primera vez, falta correr <code class="text-xs">app_version_usuario_migration.sql</code> en Supabase.
+				</p>
+			{:else if versiones.length === 0}
+				<p class="px-4 py-4 text-sm text-slate-500">Todavía nadie registró su versión — cada persona aparece acá la próxima vez que abra sesión en una app con esta función.</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm min-w-[520px]">
+						<thead>
+							<tr class="text-[11px] uppercase tracking-wide text-slate-400">
+								<th class="text-left px-4 py-2 font-semibold">Usuario</th>
+								<th class="text-left px-4 py-2 font-semibold">Plataforma</th>
+								<th class="text-left px-4 py-2 font-semibold">Versión</th>
+								<th class="text-left px-4 py-2 font-semibold">Última conexión</th>
+								<th class="text-left px-4 py-2 font-semibold">Estado</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each versiones as v (v.id_registro)}
+								{@const vieja = !!ultimaVersion && esVersionMasNueva(ultimaVersion, v.version)}
+								<tr class="border-t border-slate-100">
+									<td class="px-4 py-2 text-slate-800">{v.usuario ?? 'Usuario'}</td>
+									<td class="px-4 py-2 text-slate-600 capitalize">{v.plataforma}</td>
+									<td class="px-4 py-2 font-mono text-slate-800">v{v.version}</td>
+									<td class="px-4 py-2 text-slate-500">{formatFechaHora(v.ultima_conexion)}</td>
+									<td class="px-4 py-2">
+										<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium border ${vieja ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+											{vieja ? 'Desactualizada' : 'Al día'}
+										</span>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</div>
+	{/if}
 </div>
 
 <div class="mb-4 flex items-center gap-2">

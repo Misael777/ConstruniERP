@@ -4,8 +4,12 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { MODULE_REGISTRY } from '$lib/config/modules';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { getInfoVersionApp } from '$lib/shared/appVersion';
 
 	let { collapsed = $bindable(false), mobileOpen = $bindable(false) } = $props();
+
+	let versionApp = $state('');
+	getInfoVersionApp().then((info) => (versionApp = info.version));
 
 	// El drawer móvil siempre se ve expandido (280px, labels visibles) sin importar `collapsed` —
 	// ese estado es solo para la franja fija de desktop, en un overlay temporal no tiene sentido
@@ -197,6 +201,9 @@
 				<div class="min-w-0 flex-1">
 					<p class="text-sm font-semibold text-white truncate leading-tight">{permisosState.userName}</p>
 					<p class="text-[10px] text-orange-400 capitalize font-semibold leading-tight mt-0.5">{permisosState.rolNombre}</p>
+					{#if versionApp}
+						<p class="text-[10px] text-white/40 leading-tight mt-0.5">Versión {versionApp}</p>
+					{/if}
 				</div>
 			{/if}
 		</div>

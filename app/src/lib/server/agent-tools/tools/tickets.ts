@@ -120,6 +120,47 @@ const ultimaVersionApp: AgentTool = {
 	}
 };
 
+/** Misma comparación por segmento numérico que esVersionMasNueva (shared/appVersion.ts), reimplementada
+ * acá porque ese archivo importa código de SvelteKit ($lib/…) que Node puro no puede cargar (ver la
+ * nota de arriba). */
+function versionMasNueva(remota: string, instalada: string): boolean {
+	const a = remota.split('.').map(Number);
+	const b = instalada.split('.').map(Number);
+	for (let i = 0; i < Math.max(a.length, b.length); i++) {
+		const x = a[i] ?? 0;
+		const y = b[i] ?? 0;
+		if (x !== y) return x > y;
+	}
+	return false;
+}
+
+const versionesInstaladas: AgentTool = {
+	name: 'versiones_instaladas',
+	description:
+		'Qué versión de la app tiene instalada cada persona (por plataforma: android/windows/web), la conexión más reciente de cada una, y la última versión publicada — indica quién quedó desactualizado. Los datos los registra la propia app al abrir sesión (tabla app_version_usuario); solo aparecen quienes ya abrieron sesión en una versión con esa función.',
+	inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+	permiso: 'ver_soporte_developer',
+	async handler(_input, ctx) {
+		const [instalaciones, ultimo] = await Promise.all([
+			ctx.client.from('app_version_usuario').select('usuario, plataforma, version, ultima_conexion').order('ultima_conexion', { ascending: false }),
+			ctx.client.from('app_release').select('version').order('created_at', { ascending: false }).limit(1).maybeSingle()
+		]);
+		if (instalaciones.error) throw new Error(instalaciones.error.message);
+		if (ultimo.error) throw new Error(ultimo.error.message);
+		const ultimaVersion = (ultimo.data?.version as string | undefined) ?? null;
+		return {
+			ultima_version_publicada: ultimaVersion,
+			instalaciones: (instalaciones.data ?? []).map((r: Record<string, unknown>) => ({
+				usuario: r.usuario,
+				plataforma: r.plataforma,
+				version: r.version,
+				ultima_conexion: r.ultima_conexion,
+				desactualizada: !!ultimaVersion && versionMasNueva(ultimaVersion, String(r.version))
+			}))
+		};
+	}
+};
+
 /** Extrae el fileId de Drive de una URL de descarga (`uc?export=download&id=X`) o de visor
  * (`/file/d/X/...`) — misma lógica que extractDriveFileId en uploadProjectDocument.ts, reimplementada
  * acá standalone por la misma razón del comentario de arriba (ese archivo termina importando código
@@ -186,4 +227,4 @@ const verImagenAdjunta: AgentTool = {
 	}
 };
 
-export const ticketsTools: AgentTool[] = [listarTickets, verTicket, ultimaVersionApp, verImagenAdjunta];
+export const ticketsTools: AgentTool[] = [listarTickets, verTicket, ultimaVersionApp, versionesInstaladas, verImagenAdjunta];
