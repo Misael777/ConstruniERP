@@ -53,8 +53,14 @@ Por eso este proyecto separa las dos cosas con claridad:
         developer (o como GitHub Secret si más adelante se mueve el build a un runner de GitHub).
      d. Genera/actualiza latest.json (el manifest que el updater de Tauri va a leer) y publica todo
         (instalador + manifest) en GitHub Releases con `gh release create`.
-     e. Toma el APK debug ya compilado y lo sube a la carpeta de Drive que ya usa el ERP para
+     e. Toma el APK debug ya compilado (--apk) y lo sube a la carpeta de Drive que ya usa el ERP para
         documentos — mismo mecanismo de autenticación que ya existe, no hay nada nuevo que inventar ahí.
+        ⚠️ El APK debe compilarse DESPUÉS de subir la versión: la versión que la app instalada reporta
+        (y que compara contra `app_release` para mostrar "actualización disponible") queda incrustada al
+        COMPILAR. Un APK compilado antes del bump lleva la versión anterior, y quien lo instale ve el
+        aviso de actualización para siempre (ticket #8). El script lo verifica y aborta antes de
+        publicar. Flujo seguro: `npm run release -- --bump-only` → compilar el APK →
+        `npm run release -- --no-bump --apk "<ruta>"`.
      f. Se conecta a Supabase, busca todos los tickets en estado 'aprobado' sin release asignado,
         arma el changelog con sus títulos, crea la fila en la tabla `release`, y marca esos tickets
         con el id de ese release y `estado='cerrado'` directamente — sin pedirle al Admin que confirme
@@ -84,12 +90,15 @@ Por eso este proyecto separa las dos cosas con claridad:
 ```
 1. Entra al ERP en su teléfono como siempre.
 2. Ve en un ticket (o en un aviso general) el botón "Actualizar disponible".
-3. Toca el botón → la app descarga el APK nuevo desde Drive (usando la misma conexión autenticada que
-   ya usa para ver/subir documentos — no hace falta que el usuario sepa qué es Drive tampoco).
-4. Android abre el instalador nativo del APK descargado — acá SÍ hace falta un paso manual del
-   usuario (tocar "Instalar", y la primera vez, permitir "orígenes desconocidos"): Android no permite
-   que ninguna app se auto-instale sola por seguridad, fuera de Play Store. No hay forma de evitar este
-   paso sin publicar en Play Store.
+3. Toca el botón → la app abre en el navegador del teléfono el enlace público de descarga directa del
+   APK (Drive, `drive.usercontent.google.com/download?...&confirm=t`) y el navegador lo baja. (Antes
+   la app lo bajaba a caché y lo abría con `openPath`, pero eso nunca pudo funcionar en Android: falta
+   el permiso `opener:allow-open-path`, `openPath` no usa FileProvider y el manifest no declara
+   `REQUEST_INSTALL_PACKAGES` — ticket #8.)
+4. El usuario toca el archivo descargado y Android abre el instalador nativo — acá SÍ hace falta un
+   paso manual del usuario (tocar "Instalar", y la primera vez, permitir "orígenes desconocidos" para el
+   navegador): Android no permite que ninguna app se auto-instale sola por seguridad, fuera de Play
+   Store. No hay forma de evitar este paso sin publicar en Play Store.
 5. Termina la instalación, la app se actualiza.
 ```
 

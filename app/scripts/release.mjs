@@ -7,6 +7,16 @@
  *   npm run release -- --patch [--apk "C:\ruta\al\app-debug.apk"]
  *   npm run release -- --minor
  *   npm run release -- --major
+ *   npm run release -- --bump-only [--patch|--minor|--major]   (solo sube la versión y sale)
+ *   npm run release -- --no-bump --apk "C:\ruta\al\app.apk"    (publica la versión que YA está puesta)
+ *
+ * ⚠️ El APK debe compilarse DESPUÉS de subir la versión (ticket #8): la versión que reporta la app
+ * instalada (getVersion(), lo que ActualizacionBell.svelte compara contra app_release) sale de
+ * tauri.conf.json en el momento de COMPILAR. Un APK compilado antes del bump lleva la versión anterior
+ * incrustada, y quien lo instale sigue viendo "actualización disponible" para siempre. Este script lo
+ * verifica al pasarle --apk y aborta antes de publicar si la versión del APK no coincide. Flujo seguro:
+ * (a) `--bump-only`, (b) compilar el APK, (c) `--no-bump --apk <ruta>`. Con `--apk` sin flags extra
+ * también sirve, pero solo si el APK ya se compiló con la versión que va a salir.
  *
  * Qué hace, en orden (aborta si cualquier paso falla — nunca deja el sistema a medio publicar):
  *   1. Gate de calidad: npm run check + npx vitest run.
@@ -72,19 +82,46 @@ function run(cmd, opts = {}) {
 	execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...opts });
 }
 
+/** Versión que un APK lleva incrustada (la que devuelve getVersion() en la app instalada): Tauri la
+ * compila dentro de la lib nativa como PackageInfo, y en el binario queda el nombre del producto pegado
+ * a la versión ("Construni ERP0.2.19com.construnierp.app"). Se lee sin dependencias con el `tar` de
+ * Windows (bsdtar, lee zips) extrayendo solo la lib nativa a stdout. Devuelve null si no se pudo leer. */
+function versionIncrustadaEnApk(ruta) {
+	const tarBin = process.platform === 'win32' ? join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+	const marcador = Buffer.from('Construni ERP');
+	for (const abi of ['arm64-v8a', 'x86_64', 'armeabi-v7a', 'x86']) {
+		let lib;
+		try {
+			lib = execFileSync(tarBin, ['-xOf', ruta, `lib/${abi}/libapp_lib.so`], { maxBuffer: 1024 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+		} catch {
+			continue;
+		}
+		let idx = -1;
+		while ((idx = lib.indexOf(marcador, idx + 1)) !== -1) {
+			const m = lib.subarray(idx, idx + 40).toString('latin1').match(/^Construni ERP(\d+\.\d+\.\d+)/);
+			if (m) return m[1];
+		}
+	}
+	return null;
+}
+
 // ── 0. Args ──────────────────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const bumpTipo = args.includes('--major') ? 'major' : args.includes('--minor') ? 'minor' : 'patch';
 const apkIdx = args.indexOf('--apk');
 const apkPath = apkIdx !== -1 ? args[apkIdx + 1] : null;
+const soloBump = args.includes('--bump-only');
+const sinBump = args.includes('--no-bump');
+if (soloBump && sinBump) fail('--bump-only y --no-bump se excluyen entre sí.');
 
 // ── 1. Gate de calidad ───────────────────────────────────────────────────────────────────────
-log('Paso 1/7 — Gate de calidad (npm run check + vitest)...');
-run('npm run check');
-run('npx vitest run');
+if (!soloBump) {
+	log('Paso 1/7 — Gate de calidad (npm run check + vitest)...');
+	run('npm run check');
+	run('npx vitest run');
+}
 
 // ── 2. Bump de versión ───────────────────────────────────────────────────────────────────────
-log(`Paso 2/7 — Subiendo versión (${bumpTipo})...`);
 function bumpVersion(actual, tipo) {
 	const [maj, min, pat] = actual.split('.').map(Number);
 	if (tipo === 'major') return `${maj + 1}.0.0`;
@@ -94,16 +131,49 @@ function bumpVersion(actual, tipo) {
 
 const pkgPath = join(ROOT, 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-const nuevaVersion = bumpVersion(pkg.version, bumpTipo);
-pkg.version = nuevaVersion;
-writeFileSync(pkgPath, JSON.stringify(pkg, null, '\t') + '\n');
-
 const tauriConfPath = join(ROOT, 'src-tauri', 'tauri.conf.json');
 const tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf-8'));
-tauriConf.version = nuevaVersion;
-writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
 
-log(`Versión nueva: ${nuevaVersion}`);
+let nuevaVersion;
+if (sinBump) {
+	nuevaVersion = pkg.version;
+	if (tauriConf.version !== nuevaVersion) {
+		fail(`--no-bump: package.json (${pkg.version}) y src-tauri/tauri.conf.json (${tauriConf.version}) tienen versiones distintas — dejalos iguales antes de publicar.`);
+	}
+	log(`Paso 2/7 — --no-bump: se publica la versión que ya está en los archivos (${nuevaVersion}).`);
+} else {
+	log(`Paso 2/7 — Subiendo versión (${bumpTipo})...`);
+	nuevaVersion = bumpVersion(pkg.version, bumpTipo);
+	pkg.version = nuevaVersion;
+	writeFileSync(pkgPath, JSON.stringify(pkg, null, '\t') + '\n');
+	tauriConf.version = nuevaVersion;
+	writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
+	log(`Versión nueva: ${nuevaVersion}`);
+}
+
+if (soloBump) {
+	log(`✅ Versión subida a ${nuevaVersion}. Ahora compilá el APK (recién ahora lleva la versión correcta) y publicá con: npm run release -- --no-bump --apk "<ruta al apk>"`);
+	process.exit(0);
+}
+
+// Verificación del APK ANTES de la parte lenta (build de Windows) y de publicar nada — ver la nota de
+// arriba (ticket #8): un APK compilado antes del bump reporta la versión vieja y deja a los usuarios en
+// un bucle de "actualización disponible".
+if (apkPath) {
+	log('Verificando que el APK lleve incrustada la versión que se va a publicar...');
+	if (!existsSync(apkPath)) fail(`No existe el APK indicado en --apk: ${apkPath}`);
+	const incrustada = versionIncrustadaEnApk(apkPath);
+	if (incrustada === null) {
+		log(`⚠️ No se pudo leer la versión incrustada en el APK (${apkPath}) — se continúa SIN verificar. Asegurate de haberlo compilado con la versión ${nuevaVersion}.`);
+	} else if (incrustada !== nuevaVersion) {
+		fail(
+			`El APK lleva incrustada la versión ${incrustada}, pero se va a publicar la ${nuevaVersion}. Quien lo instale se va a reportar como ${incrustada} y seguirá viendo "actualización disponible" en bucle. ` +
+				`Los archivos ya quedaron en ${nuevaVersion}: compilá el APK AHORA (recién ahora lleva esa versión) y volvé a correr: npm run release -- --no-bump --apk "<ruta al apk>"`
+		);
+	} else {
+		log(`APK verificado: lleva la versión ${incrustada}.`);
+	}
+}
 
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
 	fail(

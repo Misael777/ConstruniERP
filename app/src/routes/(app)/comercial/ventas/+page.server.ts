@@ -53,7 +53,9 @@ export const load: PageServerLoad = async () => {
 		const comisionesPorMes = Array(12).fill(0);
 		const ventas = proyectos.map((project: any) => {
 			const valor = Number(project.precio_venta) || 0;
-			const comisionPct = Number(project.comision_asesor) || 10;
+			// 0% es una comisión válida (ticket #17) — el 10% por defecto solo aplica si no hay valor guardado.
+			const comisionRaw = Number(project.comision_asesor);
+			const comisionPct = project.comision_asesor == null || !Number.isFinite(comisionRaw) ? 10 : comisionRaw;
 			const tipoRaw = String(project.tip_proyecto || project.tipo_edifica || 'Otros');
 			const tipo = mapProjectType(tipoRaw);
 			const fechaRaw = project.fecha_inicio_plan || project.created_at;

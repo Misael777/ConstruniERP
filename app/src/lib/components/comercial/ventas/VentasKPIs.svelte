@@ -16,6 +16,10 @@
 	function formatMoney(amount: number) {
 		return new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(amount);
 	}
+
+	// Ticket #17: la leyenda decía "10% del valor total" fijo, aunque cada venta tiene su propio % de
+	// comisión (a veces 0%) — ahora es el porcentaje real que representa la comisión total.
+	const comisionEfectivaPct = $derived(valorTotal > 0 ? (comisionTotal / valorTotal) * 100 : 0);
 </script>
 
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
@@ -51,7 +55,7 @@
 		<div class="min-w-0">
 			<h3 class="text-xs font-semibold text-slate-500 mb-0.5">Comisión total</h3>
 			<p class="text-lg font-bold text-slate-800 leading-tight truncate">{formatMoney(comisionTotal)}</p>
-			<p class="text-[10px] text-slate-400 mt-1 font-medium">10% del valor total</p>
+			<p class="text-[10px] text-slate-400 mt-1 font-medium">{comisionEfectivaPct.toLocaleString('es-PE', { maximumFractionDigits: 2 })}% del valor total</p>
 		</div>
 	</div>
 

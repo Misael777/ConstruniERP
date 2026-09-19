@@ -304,6 +304,15 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let resumenDesde = $state(primerDiaDelAnio());
 	let resumenHasta = $state(hoyISO());
 	let resumenLoading = $state(false);
+	/** % de comisión de una venta. Ticket #17: antes era `Number(x) || 10`, que trata 0 como "vacío" y lo
+	 * pisaba con 10% — una venta guardada con 0% de comisión se mostraba (y sumaba) como 10%. 0 es un
+	 * valor válido; el 10% por defecto solo aplica cuando no hay ningún valor guardado (NULL). */
+	function comisionPctDe(valor: unknown): number {
+		if (valor === null || valor === undefined || valor === '') return 10;
+		const n = Number(valor);
+		return Number.isFinite(n) ? n : 10;
+	}
+
 	let resumenKpis = $state({ valorTotal: 0, comisionTotal: 0, ventasCount: 0, asesorCount: 0 });
 
 	/** Solo ventas CERRADAS (estado_proyecto='venta_cerrada') cuya fecha caiga en [resumenDesde,
@@ -335,7 +344,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			let comisionTotal = 0;
 			for (const row of filas as any[]) {
 				const valor = Number(row.precio_venta) || 0;
-				const comisionPct = Number(row.comision_asesor) || 10;
+				const comisionPct = comisionPctDe(row.comision_asesor);
 				valorTotal += valor;
 				comisionTotal += valor * (comisionPct / 100);
 				asesores.add(String(row.asesor_comercial_id || row.responsable || 'Sin asignar'));
@@ -397,7 +406,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 			ventas = proyectos.map((project: any) => {
 				const valor = Number(project.precio_venta) || 0;
-				const comisionPct = Number(project.comision_asesor) || 10;
+				const comisionPct = comisionPctDe(project.comision_asesor);
 				const tipoRaw = String(project.tip_proyecto || project.tipo_edifica || 'Otros');
 				const tipo = mapProjectType(tipoRaw);
 				const fechaRaw = project.fecha_inicio_plan || project.created_at;
