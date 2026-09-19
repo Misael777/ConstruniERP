@@ -160,30 +160,6 @@ export async function downloadFromDriveClient(fileId: string): Promise<Blob> {
 	return res.blob();
 }
 
-/** Mismo endpoint autenticado que downloadFromDriveClient, pero devuelve el stream crudo de la
- * respuesta en vez de materializar todo el archivo en memoria como un Blob — bug real reportado por el
- * usuario (con video): el botón "Actualizar" en Android tiraba `Invalid array length` al descargar el
- * APK (~185MB, ver BotonActualizar.svelte) porque el flujo anterior cargaba el archivo completo como
- * Blob → ArrayBuffer → Uint8Array antes de pasarlo al puente de Tauri, demasiada memoria de una sola
- * vez para el WebView de un teléfono de gama baja. `writeFile` de @tauri-apps/plugin-fs acepta un
- * `ReadableStream<Uint8Array>` directo (ver su firma), así que este stream se puede escribir a disco
- * en chunks sin nunca tener el archivo entero en RAM. Solo para archivos grandes (el APK de
- * actualización); el resto de las descargas (documentos/comprobantes) siguen usando
- * downloadFromDriveClient normal, son chicas y no lo necesitan. */
-export async function downloadFromDriveClientStream(fileId: string): Promise<ReadableStream<Uint8Array>> {
-	const accessToken = await getAccessToken();
-	const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
-		headers: { Authorization: `Bearer ${accessToken}` }
-	});
-	if (!res.ok) {
-		throw new Error(`Google Drive download failed: ${await res.text()}`);
-	}
-	if (!res.body) {
-		throw new Error('La respuesta de Drive no trae un stream de body legible.');
-	}
-	return res.body;
-}
-
 /** Deletes a Drive file by id — used to remove a comprobante's previous file when it's replaced,
  * so re-uploads don't pile up as duplicates (see TransaccionModal.svelte). */
 export async function deleteDriveFileClient(fileId: string): Promise<void> {

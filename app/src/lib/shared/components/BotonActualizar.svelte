@@ -11,36 +11,68 @@
 	 *   (`npx tauri signer generate`) y pegada en tauri.conf.json, este flujo NO puede funcionar
 	 *   todavía, ver la nota en ese archivo.
 	 * - Android: no existe auto-update fuera de Play Store (Android bloquea la auto-instalación) —
-	 *   descarga el APK del release desde Drive (mismo cliente autenticado que ya usa el resto del ERP
-	 *   para documentos) y usa @tauri-apps/plugin-opener para invocarle al usuario el instalador
-	 *   nativo del APK ya descargado. ⚠️ Sin verificar en un dispositivo real todavía — Android exige
-	 *   que el usuario ya haya habilitado "Instalar apps desconocidas" para esta app la primera vez.
+	 *   abre el enlace público de descarga directa del APK (Drive) en el navegador del teléfono con
+	 *   openUrl, y es el navegador + el instalador de Android quienes terminan la instalación. Ticket
+	 *   #8: el flujo anterior (bajar el APK a caché con plugin-fs y abrirlo con `openPath` de
+	 *   plugin-opener) NUNCA podía funcionar: `opener:default` no incluye `allow-open-path`, y aunque se
+	 *   agregara, en Android `openPath` lanza un ACTION_VIEW con la ruta cruda (sin FileProvider ni MIME
+	 *   de APK) y el manifest no declara REQUEST_INSTALL_PACKAGES. Android exige que el usuario haya
+	 *   habilitado "Instalar apps desconocidas" para el navegador la primera vez.
 	 * - Fuera de Tauri (navegador/`npm run dev`): no hay nada que auto-actualizar — se muestra
 	 *   deshabilitado con una nota, no lanza ningún error.
 	 */
 	import { RefreshCw, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
-	import { isRunningInTauri, downloadFromDriveClientStream } from '$lib/driveUploadClient';
+	import { isRunningInTauri } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
+	import { describeError } from '$lib/shared/describeError';
 	import type { AppRelease } from '$lib/modules/tickets/services/releases.service';
 
 	let { release }: { release: AppRelease } = $props();
 
 	let procesando = $state(false);
 	let estadoTexto = $state('');
+	/** Último paso alcanzado — se vuelca en el diagnóstico si algo falla, para saber EXACTAMENTE cuál
+	 * llamada rompió (los errores de los plugins de Tauri llegan como string, sin stack). */
+	let paso = 'sin iniciar';
+	let urlIntentada = '';
+
+	function diagnostico(err: any, plataforma: string, urlDescarga: string): string {
+		const lineas = [
+			`paso que falló: ${paso}`,
+			`plataforma: ${plataforma}`,
+			`versión destino: v${release.version}`,
+			`versión destino url_apk_drive: ${release.url_apk_drive ?? '(vacío)'}`,
+			`url intentada: ${urlDescarga || '(aún no armada)'}`,
+			`tipo de error: ${typeof err}${err?.name ? ` / ${err.name}` : ''}`,
+			`mensaje: ${describeError(err)}`,
+			`userAgent: ${typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a'}`,
+			''
+		];
+		if (err?.stack) {
+			lineas.push('stack del error:', String(err.stack));
+		} else {
+			lineas.push('El error no trae stack (llegó como texto desde el plugin nativo).', 'stack del punto donde se capturó:', new Error().stack ?? '(sin stack)');
+		}
+		return lineas.join('\n');
+	}
 
 	async function actualizarWindows() {
+		paso = 'importar plugin-updater/plugin-process';
 		const { check } = await import('@tauri-apps/plugin-updater');
 		const { relaunch } = await import('@tauri-apps/plugin-process');
 		estadoTexto = 'Buscando actualización...';
+		paso = 'check() — consultar latest.json en GitHub';
 		const update = await check();
 		if (!update) {
 			toast.info('Ya tienes la última versión instalada.');
 			return;
 		}
 		estadoTexto = `Descargando v${update.version}...`;
+		paso = `downloadAndInstall() v${update.version}`;
 		await update.downloadAndInstall();
 		toast.success('Actualización instalada — la app se va a reiniciar.');
+		paso = 'relaunch()';
 		await relaunch();
 	}
 
@@ -49,24 +81,19 @@
 			toast.error('Esta versión todavía no tiene el APK adjunto — avísale al developer.');
 			return;
 		}
+		paso = 'armar URL de descarga';
 		const fileId = extractDriveFileId(release.url_apk_drive) ?? release.url_apk_drive;
-		estadoTexto = 'Descargando APK...';
-		// Stream directo a disco (ver downloadFromDriveClientStream) — bug real reportado por el usuario
-		// (con video): cargar el APK completo en memoria como Blob→ArrayBuffer→Uint8Array antes de
-		// pasarlo al puente de Tauri tiraba `Invalid array length` en un teléfono de gama baja (~185MB,
-		// demasiada memoria de una sola vez para ese WebView). writeFile acepta un ReadableStream directo.
-		const stream = await downloadFromDriveClientStream(fileId);
-
-		const { writeFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-		const { join, cacheDir } = await import('@tauri-apps/api/path');
-		const nombreArchivo = `construni-erp-v${release.version}.apk`;
-		await writeFile(nombreArchivo, stream, { baseDir: BaseDirectory.Cache });
-		const rutaCompleta = await join(await cacheDir(), nombreArchivo);
-
-		estadoTexto = 'Abriendo instalador...';
-		const { openPath } = await import('@tauri-apps/plugin-opener');
-		await openPath(rutaCompleta);
-		toast.info('Sigue los pasos del instalador de Android para terminar de actualizar.');
+		estadoTexto = 'Abriendo descarga...';
+		// El archivo de Drive es público (lo sube release.mjs con permiso "anyone reader") y es grande:
+		// `confirm=t` en drive.usercontent.google.com salta el aviso "no se puede analizar en busca de
+		// virus" que Drive muestra en archivos pesados, así el navegador baja el APK directo.
+		const urlDescarga = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+		urlIntentada = urlDescarga;
+		paso = 'importar plugin-opener';
+		const { openUrl } = await import('@tauri-apps/plugin-opener');
+		paso = 'openUrl() — abrir la descarga en el navegador';
+		await openUrl(urlDescarga);
+		toast.info('Se abrió la descarga en tu navegador. Al terminar, toca el archivo descargado para instalar la nueva versión.');
 	}
 
 	async function handleClick() {
@@ -75,9 +102,12 @@
 			return;
 		}
 		procesando = true;
+		paso = 'detectar plataforma (plugin-os)';
+		urlIntentada = '';
+		let plataforma = 'desconocida';
 		try {
 			const { platform } = await import('@tauri-apps/plugin-os');
-			const plataforma = platform();
+			plataforma = platform();
 			if (plataforma === 'android') {
 				await actualizarAndroid();
 			} else {
@@ -85,7 +115,10 @@
 			}
 		} catch (err: any) {
 			console.error('[BotonActualizar] Error al actualizar:', err);
-			toast.error(err?.message ?? 'No se pudo completar la actualización.');
+			// Los errores de los plugins de Tauri llegan como string (no como Error) — con `err?.message` el
+			// motivo real se perdía y siempre salía el texto genérico (ticket #8). El detalle completo (paso
+			// que falló + stack) va en un bloque copiable dentro del toast rojo.
+			toast.error(`No se pudo completar la actualización: ${describeError(err)}`, diagnostico(err, plataforma, urlIntentada));
 		} finally {
 			procesando = false;
 			estadoTexto = '';

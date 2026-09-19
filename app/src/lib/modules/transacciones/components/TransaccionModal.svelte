@@ -209,6 +209,21 @@
 	let uploadingComprobante = $state(false);
 	let localPreviewUrl = $state<string | null>(null);
 	let showComprobantePreview = $state(false);
+	// Ticket #10: al adjuntar un boucher NUEVO (todavía no subido a Drive) no había cómo verlo en grande —
+	// "Ver comprobante actual" solo existe para el ya guardado. Vista previa del archivo local elegido
+	// (imagen o PDF completo, no solo la miniatura de localPreviewUrl) vía una URL blob propia.
+	let showComprobanteNuevoPreview = $state(false);
+	let comprobanteNuevoBlobUrl = $state<string | null>(null);
+	$effect(() => {
+		if (!comprobanteFile) {
+			comprobanteNuevoBlobUrl = null;
+			showComprobanteNuevoPreview = false;
+			return;
+		}
+		const url = URL.createObjectURL(comprobanteFile);
+		comprobanteNuevoBlobUrl = url;
+		return () => URL.revokeObjectURL(url);
+	});
 
 	/** Comprobante autogenerado por el ERP (Boucher Interna/Recibo por Pago/Recibo a Proveedor) YA
 	 * guardado en Drive — a pedido explícito del usuario, vive en su propio campo/espacio, separado de
@@ -3074,7 +3089,11 @@
 									{/if}
 								</label>
 								<div class="flex flex-col gap-1 mt-1.5">
-									{#if comprobanteUrl && !comprobanteFile}
+									{#if comprobanteFile}
+										<button type="button" onclick={() => (showComprobanteNuevoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
+											Ver comprobante
+										</button>
+									{:else if comprobanteUrl}
 										<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
 											Ver comprobante actual
 										</button>
@@ -4160,6 +4179,14 @@
 	title="Comprobante"
 	documents={comprobanteUrl ? [{ url: comprobanteUrl, label: 'Comprobante', filename: nombreDescargaBoucher() }] : []}
 	onClose={() => (showComprobantePreview = false)}
+/>
+
+<DocumentPreviewModal
+	open={showComprobanteNuevoPreview && !!comprobanteNuevoBlobUrl}
+	url={comprobanteNuevoBlobUrl}
+	title={comprobanteFile?.name ?? 'Comprobante'}
+	documents={comprobanteNuevoBlobUrl ? [{ url: comprobanteNuevoBlobUrl, label: 'Comprobante', filename: comprobanteFile?.name }] : []}
+	onClose={() => (showComprobanteNuevoPreview = false)}
 />
 
 <DocumentPreviewModal

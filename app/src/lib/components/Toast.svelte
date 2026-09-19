@@ -7,6 +7,15 @@
 		error: 'bg-red-50 border-red-200 text-red-800',
 		info: 'bg-blue-50 border-blue-200 text-blue-800'
 	};
+
+	async function copiarDetalle(texto: string, detalle: string) {
+		try {
+			await navigator.clipboard.writeText(`${texto}\n\n${detalle}`);
+			toast.info('Detalle copiado al portapapeles.');
+		} catch {
+			toast.info('No se pudo copiar automáticamente — mantén presionado el texto para seleccionarlo.');
+		}
+	}
 </script>
 
 <!-- z-[200]: por encima de cualquier modal de la app (el más alto hoy es DocumentPreviewModal en
@@ -28,7 +37,19 @@
 					<Info size={18} />
 				{/if}
 			</div>
-			<p class="flex-1 leading-snug">{t.text}</p>
+			<div class="flex-1 min-w-0">
+				<p class="leading-snug">{t.text}</p>
+				{#if t.detail}
+					<pre class="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white/70 border border-red-200 p-2 text-[11px] leading-tight select-text">{t.detail}</pre>
+					<button
+						type="button"
+						onclick={() => copiarDetalle(t.text, t.detail!)}
+						class="mt-2 text-xs font-semibold underline underline-offset-2"
+					>
+						Copiar detalle
+					</button>
+				{/if}
+			</div>
 			<button
 				type="button"
 				onclick={() => toast.dismiss(t.id)}
