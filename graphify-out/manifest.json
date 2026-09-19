@@ -1,0 +1,2432 @@
+{
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\.claude\\settings.local.json": {
+    "mtime": 1783193466.910209,
+    "seen": 1789764666.1992648,
+    "ast_hash": "46754019fa443e95e82f479786a522f6",
+    "semantic_hash": "46754019fa443e95e82f479786a522f6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\.vscode\\settings.json": {
+    "mtime": 1779765029.665517,
+    "seen": 1789764666.1992648,
+    "ast_hash": "2d06b60b7caf61c40b4ebbd7f8a1afa2",
+    "semantic_hash": "2d06b60b7caf61c40b4ebbd7f8a1afa2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\APIS.sql": {
+    "mtime": 1780601876.914634,
+    "seen": 1789764666.1992648,
+    "ast_hash": "626ac431e100c6d89340b4d4fa778bda",
+    "semantic_hash": "626ac431e100c6d89340b4d4fa778bda"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\DB_reset_withoutacces.sql": {
+    "mtime": 1783015335.1564493,
+    "seen": 1789764666.1992648,
+    "ast_hash": "40e4f7b38effe1cfee8c500a46b9bd87",
+    "semantic_hash": "40e4f7b38effe1cfee8c500a46b9bd87"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\DER2.sql": {
+    "mtime": 1783015335.1599774,
+    "seen": 1789764666.1992648,
+    "ast_hash": "867fd44f58d1b369f87f9ae419250184",
+    "semantic_hash": "867fd44f58d1b369f87f9ae419250184"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\anuncios_migration.sql": {
+    "mtime": 1788529066.8371663,
+    "seen": 1789764666.1992648,
+    "ast_hash": "bb21cd651c32c12cbdf4edbcf6c69a02",
+    "semantic_hash": "bb21cd651c32c12cbdf4edbcf6c69a02"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\.vscode\\extensions.json": {
+    "mtime": 1779451425.8774755,
+    "seen": 1789764666.1992648,
+    "ast_hash": "81d7618406bbb376699d26b044b380f2",
+    "semantic_hash": "81d7618406bbb376699d26b044b380f2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\mcp-server\\index.ts": {
+    "mtime": 1789762997.0231638,
+    "seen": 1789764666.1992648,
+    "ast_hash": "88699e8afff0ec1a30c61a77df994bae",
+    "semantic_hash": "88699e8afff0ec1a30c61a77df994bae"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\package.json": {
+    "mtime": 1789763724.7960043,
+    "seen": 1789764666.1992648,
+    "ast_hash": "93dce9dc51741f75dc7d8971d90f0288",
+    "semantic_hash": "93dce9dc51741f75dc7d8971d90f0288"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\scratch_logo_check.mjs": {
+    "mtime": 1788272248.1279452,
+    "seen": 1789764666.1992648,
+    "ast_hash": "eb83f2cbd1c4fc45cbe770beea5fabb3",
+    "semantic_hash": "eb83f2cbd1c4fc45cbe770beea5fabb3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\scripts\\release.mjs": {
+    "mtime": 1789671109.683245,
+    "seen": 1789764666.1992648,
+    "ast_hash": "a5357bd4aa686766d3eeac75cb55fe93",
+    "semantic_hash": "a5357bd4aa686766d3eeac75cb55fe93"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\Cargo.toml": {
+    "mtime": 1789238155.1614637,
+    "seen": 1789764666.1992648,
+    "ast_hash": "be1a7b630af3150f58d4931160f5dbba",
+    "semantic_hash": "be1a7b630af3150f58d4931160f5dbba"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\build.rs": {
+    "mtime": 1779451425.8841114,
+    "seen": 1789764666.1992648,
+    "ast_hash": "8e6c89bd412b755ef41bd9bb191f2e31",
+    "semantic_hash": "8e6c89bd412b755ef41bd9bb191f2e31"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\capabilities\\default.json": {
+    "mtime": 1789238165.0935376,
+    "seen": 1789764666.1992648,
+    "ast_hash": "ad13d70920456223858ff8bfacf7e875",
+    "semantic_hash": "ad13d70920456223858ff8bfacf7e875"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\capabilities\\desktop-updater.json": {
+    "mtime": 1789238085.8359282,
+    "seen": 1789764666.1992648,
+    "ast_hash": "9f7baa9b8559975d9f149ff93903d4fb",
+    "semantic_hash": "9f7baa9b8559975d9f149ff93903d4fb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\build.gradle.kts": {
+    "mtime": 1779555783.020167,
+    "seen": 1789764666.1992648,
+    "ast_hash": "eb7e1e6277e3127ccde9f52f849a4096",
+    "semantic_hash": "eb7e1e6277e3127ccde9f52f849a4096"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\java\\com\\construnierp\\app\\MainActivity.kt": {
+    "mtime": 1779555783.024042,
+    "seen": 1789764666.1992648,
+    "ast_hash": "2f596d029bd02c2cebde3680b65b871d",
+    "semantic_hash": "2f596d029bd02c2cebde3680b65b871d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\build.gradle.kts": {
+    "mtime": 1779555783.0156472,
+    "seen": 1789764666.1992648,
+    "ast_hash": "b488fdc882c6879f5acbb88466f90798",
+    "semantic_hash": "b488fdc882c6879f5acbb88466f90798"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\buildSrc\\build.gradle.kts": {
+    "mtime": 1779762507.9719505,
+    "seen": 1789764666.1992648,
+    "ast_hash": "94f9d5281d8036fc20f71c0fe24004ea",
+    "semantic_hash": "94f9d5281d8036fc20f71c0fe24004ea"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\buildSrc\\src\\main\\java\\com\\construnierp\\app\\kotlin\\BuildTask.kt": {
+    "mtime": 1779762874.6029828,
+    "seen": 1789764666.1992648,
+    "ast_hash": "0a3c88ada6deefeb1a5a3d67c3e43829",
+    "semantic_hash": "0a3c88ada6deefeb1a5a3d67c3e43829"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\buildSrc\\src\\main\\java\\com\\construnierp\\app\\kotlin\\RustPlugin.kt": {
+    "mtime": 1779762507.983958,
+    "seen": 1789764666.1992648,
+    "ast_hash": "2d9a9586b818a725cbf09dcc81f442ad",
+    "semantic_hash": "2d9a9586b818a725cbf09dcc81f442ad"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\gradlew": {
+    "mtime": 1779555783.0166483,
+    "seen": 1789764666.1992648,
+    "ast_hash": "c6ea21dea2d500b277296894708cf792",
+    "semantic_hash": "c6ea21dea2d500b277296894708cf792"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\settings.gradle": {
+    "mtime": 1779555783.0176516,
+    "seen": 1789764666.1992648,
+    "ast_hash": "a0504aba9a4ae9ef19a4e617fb97ff25",
+    "semantic_hash": "a0504aba9a4ae9ef19a4e617fb97ff25"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\Cargo.toml": {
+    "mtime": 1786721737.6878972,
+    "seen": 1789764666.1992648,
+    "ast_hash": "148b5f88e6d9ceaa055db314e564d25d",
+    "semantic_hash": "148b5f88e6d9ceaa055db314e564d25d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\build.gradle.kts": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "68900af07f5c317d787436216820fa47",
+    "semantic_hash": "68900af07f5c317d787436216820fa47"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\androidTest\\java\\app\\tauri\\ExampleInstrumentedTest.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "2f853621cd24b6d1f15372d91b1012ff",
+    "semantic_hash": "2f853621cd24b6d1f15372d91b1012ff"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\AppPlugin.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "9aa5fc61c23958ffa6d1d5eff4f3869d",
+    "semantic_hash": "9aa5fc61c23958ffa6d1d5eff4f3869d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\FsUtils.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "5ed4630add62705b18d833454e22ca8e",
+    "semantic_hash": "5ed4630add62705b18d833454e22ca8e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\JniMethod.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "27681725923c55d0e1ff640332664723",
+    "semantic_hash": "27681725923c55d0e1ff640332664723"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\Logger.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "4a93f67857c6c1b174291bcc47942e1a",
+    "semantic_hash": "4a93f67857c6c1b174291bcc47942e1a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\PathPlugin.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "def1c7eac1a447b581c7fc40cbf47d5f",
+    "semantic_hash": "def1c7eac1a447b581c7fc40cbf47d5f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\PermissionHelper.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "3a55f8c76fba88220bb4727261674031",
+    "semantic_hash": "3a55f8c76fba88220bb4727261674031"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\PermissionState.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "c1bae658a48e0531f08dc166df8b6c72",
+    "semantic_hash": "c1bae658a48e0531f08dc166df8b6c72"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\ActivityCallback.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "71dcfee2c3780c5dd3edc0cfe6772875",
+    "semantic_hash": "71dcfee2c3780c5dd3edc0cfe6772875"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\InvokeArg.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "e613af328d6bb00cc2830d62418efa00",
+    "semantic_hash": "e613af328d6bb00cc2830d62418efa00"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\Permission.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "90b59311f98c4619093abda32cd671ee",
+    "semantic_hash": "90b59311f98c4619093abda32cd671ee"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\PermissionCallback.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "9ca0364ca399a70583be92fd45de9985",
+    "semantic_hash": "9ca0364ca399a70583be92fd45de9985"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\PluginMethod.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "106ee9a3ffd0f0e2b19a7100652e17e5",
+    "semantic_hash": "106ee9a3ffd0f0e2b19a7100652e17e5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\annotation\\TauriPlugin.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "9bc051596b319ae0d6ae201e59b9f788",
+    "semantic_hash": "9bc051596b319ae0d6ae201e59b9f788"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\Channel.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "29dbe9854e49e9ddd9be9f40bf409444",
+    "semantic_hash": "29dbe9854e49e9ddd9be9f40bf409444"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\InvalidPluginMethodException.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "2e7d1da4bcfdc9c287b6789b5c5daac1",
+    "semantic_hash": "2e7d1da4bcfdc9c287b6789b5c5daac1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\Invoke.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "b5faed15b22709f66bf1109a37e278cc",
+    "semantic_hash": "b5faed15b22709f66bf1109a37e278cc"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\JSArray.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "3a6cfcabfa0d257681abc0a324d3de8c",
+    "semantic_hash": "3a6cfcabfa0d257681abc0a324d3de8c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\JSObject.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "0cae3aa8e75e2c76d8a4d2400a42815f",
+    "semantic_hash": "0cae3aa8e75e2c76d8a4d2400a42815f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\Plugin.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "bfd8fdfa0271d3c24ac6605f6e3422a1",
+    "semantic_hash": "bfd8fdfa0271d3c24ac6605f6e3422a1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\PluginHandle.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "fa361ef6ddba4f345f7c11d405ea942d",
+    "semantic_hash": "fa361ef6ddba4f345f7c11d405ea942d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\PluginManager.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "eb9f4cf4607bd857e520c17dbbbbbafa",
+    "semantic_hash": "eb9f4cf4607bd857e520c17dbbbbbafa"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\PluginMethodData.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "15d350202bd06580f260f35cd3d7d09b",
+    "semantic_hash": "15d350202bd06580f260f35cd3d7d09b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\main\\java\\app\\tauri\\plugin\\PluginResult.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "6a1e6b3f54a8ef6d2b3d47bc40c433a9",
+    "semantic_hash": "6a1e6b3f54a8ef6d2b3d47bc40c433a9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\.tauri\\tauri-api\\src\\test\\java\\app\\tauri\\ExampleUnitTest.kt": {
+    "mtime": 1153704088.0,
+    "seen": 1789764666.1992648,
+    "ast_hash": "d238e28954fa65612410096e84572971",
+    "semantic_hash": "d238e28954fa65612410096e84572971"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\build.gradle.kts": {
+    "mtime": 1786721272.326669,
+    "seen": 1789764666.1992648,
+    "ast_hash": "4e697996baf46d9dd93511428df6ea10",
+    "semantic_hash": "4e697996baf46d9dd93511428df6ea10"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\android\\src\\main\\java\\com\\construnierp\\app\\sharetarget\\SharePlugin.kt": {
+    "mtime": 1786721394.0836482,
+    "seen": 1789764666.1992648,
+    "ast_hash": "99458dab9e01666e7317cead09276019",
+    "semantic_hash": "99458dab9e01666e7317cead09276019"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\build.rs": {
+    "mtime": 1786721046.6345384,
+    "seen": 1789764666.1992648,
+    "ast_hash": "3f9d708051c2c182131d9652e6175a7d",
+    "semantic_hash": "3f9d708051c2c182131d9652e6175a7d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\permissions\\schemas\\schema.json": {
+    "mtime": 1786721744.3355992,
+    "seen": 1789764666.1992648,
+    "ast_hash": "65185636f1e597dadbdcefb4478f9e04",
+    "semantic_hash": "65185636f1e597dadbdcefb4478f9e04"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\src\\commands.rs": {
+    "mtime": 1786721115.9501035,
+    "seen": 1789764666.1992648,
+    "ast_hash": "15eee5e851cfb7f517b06a7c96c3e26c",
+    "semantic_hash": "15eee5e851cfb7f517b06a7c96c3e26c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\src\\desktop.rs": {
+    "mtime": 1786721122.8540685,
+    "seen": 1789764666.1992648,
+    "ast_hash": "c981a90d0ea6e17cbe2680a18d40d275",
+    "semantic_hash": "c981a90d0ea6e17cbe2680a18d40d275"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\src\\lib.rs": {
+    "mtime": 1786721402.4734216,
+    "seen": 1789764666.1992648,
+    "ast_hash": "7fff9b9cd20d1c400a81666d2e2563bc",
+    "semantic_hash": "7fff9b9cd20d1c400a81666d2e2563bc"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\src\\mobile.rs": {
+    "mtime": 1786721962.3117964,
+    "seen": 1789764666.1992648,
+    "ast_hash": "90241d70153994d518858f8abac3090d",
+    "semantic_hash": "90241d70153994d518858f8abac3090d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\src\\lib.rs": {
+    "mtime": 1789238161.0090437,
+    "seen": 1789764666.1992648,
+    "ast_hash": "69705aa29f85f00bc2c35ffae8d9234c",
+    "semantic_hash": "69705aa29f85f00bc2c35ffae8d9234c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\src\\main.rs": {
+    "mtime": 1779451425.9095433,
+    "seen": 1789764666.1992648,
+    "ast_hash": "a8e64e9b6bd150703cbc12bc0d188f24",
+    "semantic_hash": "a8e64e9b6bd150703cbc12bc0d188f24"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\tauri.conf.json": {
+    "mtime": 1789763724.797012,
+    "seen": 1789764666.1992648,
+    "ast_hash": "b9ac9d62d7ac0242ee8c00a137a3f30e",
+    "semantic_hash": "b9ac9d62d7ac0242ee8c00a137a3f30e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\app.d.ts": {
+    "mtime": 1779451425.9125583,
+    "seen": 1789764666.1992648,
+    "ast_hash": "8e49b3db4448994b9eaa84b10925f439",
+    "semantic_hash": "8e49b3db4448994b9eaa84b10925f439"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\apiClient.ts": {
+    "mtime": 1783141848.5391655,
+    "seen": 1789764666.1992648,
+    "ast_hash": "fbed4ad2da4080fb55852a2d42180dd2",
+    "semantic_hash": "fbed4ad2da4080fb55852a2d42180dd2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\Toast.svelte": {
+    "mtime": 1786164358.2613614,
+    "seen": 1789764666.1992648,
+    "ast_hash": "fbe13c2b370c2207f310f87b533bf0d6",
+    "semantic_hash": "fbe13c2b370c2207f310f87b533bf0d6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\clientes\\ClienteModal.svelte": {
+    "mtime": 1786129161.618289,
+    "seen": 1789764666.1992648,
+    "ast_hash": "3cee863916286885a3698ce7c31a6888",
+    "semantic_hash": "3cee863916286885a3698ce7c31a6888"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\clientes\\ClientesTable.svelte": {
+    "mtime": 1786637142.4676642,
+    "seen": 1789764666.1992648,
+    "ast_hash": "005bfb64f97604850bab0b20e5ce8718",
+    "semantic_hash": "005bfb64f97604850bab0b20e5ce8718"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\ventas\\NuevaVentaModal.svelte": {
+    "mtime": 1789659286.4333887,
+    "seen": 1789764666.1992648,
+    "ast_hash": "90f5d2fb228ff3865890ea669ac3aa04",
+    "semantic_hash": "90f5d2fb228ff3865890ea669ac3aa04"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\ventas\\VentasCharts.svelte": {
+    "mtime": 1781989517.4628232,
+    "seen": 1789764666.1992648,
+    "ast_hash": "38e1fef8f449ecd013b742a14b1c31bb",
+    "semantic_hash": "38e1fef8f449ecd013b742a14b1c31bb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\ventas\\VentasKPIs.svelte": {
+    "mtime": 1785808407.4250271,
+    "seen": 1789764666.1992648,
+    "ast_hash": "f63cd468123119c61ffee8940adebaa7",
+    "semantic_hash": "f63cd468123119c61ffee8940adebaa7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\ventas\\VentasSummarySidebar.svelte": {
+    "mtime": 1785420581.3733592,
+    "seen": 1789764666.1992648,
+    "ast_hash": "26db5ea2715319ddeaf7ac5f8b95adf1",
+    "semantic_hash": "26db5ea2715319ddeaf7ac5f8b95adf1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\comercial\\ventas\\VentasTable.svelte": {
+    "mtime": 1788442703.339476,
+    "seen": 1789764666.1992648,
+    "ast_hash": "c93d8dfc499d86ee95abcd461e0d0c5a",
+    "semantic_hash": "c93d8dfc499d86ee95abcd461e0d0c5a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\dashboard\\NodeGraph.svelte": {
+    "mtime": 1788453230.3795097,
+    "seen": 1789764666.1992648,
+    "ast_hash": "ca1c1f59ef2a4d1948865a23780b6e26",
+    "semantic_hash": "ca1c1f59ef2a4d1948865a23780b6e26"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\finanzas\\proveedores\\ProveedorModal.svelte": {
+    "mtime": 1789760637.348083,
+    "seen": 1789764666.1992648,
+    "ast_hash": "46ab01eb456388aec519e934a070629f",
+    "semantic_hash": "46ab01eb456388aec519e934a070629f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\finanzas\\proveedores\\ProveedoresTable.svelte": {
+    "mtime": 1786637327.6115491,
+    "seen": 1789764666.200264,
+    "ast_hash": "acfdb6d8a41c575e486a77215f5e2cf1",
+    "semantic_hash": "acfdb6d8a41c575e486a77215f5e2cf1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\layout\\ActualizacionBell.svelte": {
+    "mtime": 1789748310.0650234,
+    "seen": 1789764666.200264,
+    "ast_hash": "50b84906b7fd06aa7721505e3f46e88c",
+    "semantic_hash": "50b84906b7fd06aa7721505e3f46e88c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\layout\\NotificacionesBell.svelte": {
+    "mtime": 1789238401.701214,
+    "seen": 1789764666.200264,
+    "ast_hash": "bbf0dcf308bc26434231fa2d98cb86a4",
+    "semantic_hash": "bbf0dcf308bc26434231fa2d98cb86a4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\layout\\Sidebar.svelte": {
+    "mtime": 1786074381.000607,
+    "seen": 1789764666.200264,
+    "ast_hash": "2f8fd53fd61b0fe44b217d41e9ff9e61",
+    "semantic_hash": "2f8fd53fd61b0fe44b217d41e9ff9e61"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\layout\\Topbar.svelte": {
+    "mtime": 1779451425.9226859,
+    "seen": 1789764666.200264,
+    "ast_hash": "1efd8fbb1e22844874a288c64e998b6f",
+    "semantic_hash": "1efd8fbb1e22844874a288c64e998b6f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\InstanciarPlantillaModal.svelte": {
+    "mtime": 1787351953.9599023,
+    "seen": 1789764666.200264,
+    "ast_hash": "6dc55380a34459fdc4f4f9e81402665b",
+    "semantic_hash": "6dc55380a34459fdc4f4f9e81402665b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\PartidaDetail.svelte": {
+    "mtime": 1782832898.0379531,
+    "seen": 1789764666.200264,
+    "ast_hash": "1531e5542e12305d808056ba6f853ae9",
+    "semantic_hash": "1531e5542e12305d808056ba6f853ae9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\PartidaModal.svelte": {
+    "mtime": 1786411425.3794272,
+    "seen": 1789764666.200264,
+    "ast_hash": "fc215820e32d865a00e4da13fac5220d",
+    "semantic_hash": "fc215820e32d865a00e4da13fac5220d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\PlantillaDetail.svelte": {
+    "mtime": 1787351953.9623501,
+    "seen": 1789764666.200264,
+    "ast_hash": "3c7d82594bbb1edac1978a8f38143fce",
+    "semantic_hash": "3c7d82594bbb1edac1978a8f38143fce"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\PlantillaList.svelte": {
+    "mtime": 1787351953.9658747,
+    "seen": 1789764666.200264,
+    "ast_hash": "9fc24c016071b7242381eb98778de7e9",
+    "semantic_hash": "9fc24c016071b7242381eb98778de7e9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\PlantillaModal.svelte": {
+    "mtime": 1787351953.9688773,
+    "seen": 1789764666.200264,
+    "ast_hash": "638f504f200ff5281c49605478d2d64a",
+    "semantic_hash": "638f504f200ff5281c49605478d2d64a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\partidas\\TreeView.svelte": {
+    "mtime": 1783019343.5212784,
+    "seen": 1789764666.200264,
+    "ast_hash": "b68c02472822c2c527947d09241e2423",
+    "semantic_hash": "b68c02472822c2c527947d09241e2423"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\DocumentosTab.svelte": {
+    "mtime": 1785901891.176964,
+    "seen": 1789764666.200264,
+    "ast_hash": "1ac27f8fd2d38bb8338aedbdb5356f74",
+    "semantic_hash": "1ac27f8fd2d38bb8338aedbdb5356f74"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\GanttTab.svelte": {
+    "mtime": 1785901891.1834905,
+    "seen": 1789764666.200264,
+    "ast_hash": "18a2b92393a746949ac9298a0fc99608",
+    "semantic_hash": "18a2b92393a746949ac9298a0fc99608"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\GanttTimeline.svelte": {
+    "mtime": 1784729225.9131186,
+    "seen": 1789764666.200264,
+    "ast_hash": "9a04977740bc99381b886c119acb3f9d",
+    "semantic_hash": "9a04977740bc99381b886c119acb3f9d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\NuevoPresupuestoModal.svelte": {
+    "mtime": 1787351953.9703872,
+    "seen": 1789764666.200264,
+    "ast_hash": "9818ca782c08aea38d9ef777f77f2846",
+    "semantic_hash": "9818ca782c08aea38d9ef777f77f2846"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\PresupuestoModule.svelte": {
+    "mtime": 1787351953.9724028,
+    "seen": 1789764666.200264,
+    "ast_hash": "02b7c51a8db1cc0b144fd263929336a9",
+    "semantic_hash": "02b7c51a8db1cc0b144fd263929336a9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\proyecto\\PresupuestoTab.svelte": {
+    "mtime": 1787351953.9754064,
+    "seen": 1789764666.200264,
+    "ast_hash": "9d21f5014c8ae6428592ef77f106dc6d",
+    "semantic_hash": "9d21f5014c8ae6428592ef77f106dc6d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\ui\\Card.svelte": {
+    "mtime": 1779451425.9242103,
+    "seen": 1789764666.200264,
+    "ast_hash": "5eacb13074b591a64b71ee8d6d2ac366",
+    "semantic_hash": "5eacb13074b591a64b71ee8d6d2ac366"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\components\\ui\\KPICard.svelte": {
+    "mtime": 1779451425.92472,
+    "seen": 1789764666.200264,
+    "ast_hash": "8544154dce92053d18d36b792df70256",
+    "semantic_hash": "8544154dce92053d18d36b792df70256"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\config\\modules.ts": {
+    "mtime": 1789237795.588279,
+    "seen": 1789764666.200264,
+    "ast_hash": "88983ac8dc68766cbf547224f2367174",
+    "semantic_hash": "88983ac8dc68766cbf547224f2367174"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\data\\peruUbigeo.ts": {
+    "mtime": 1785420581.3763509,
+    "seen": 1789764666.200264,
+    "ast_hash": "40780cf0d0b1df1ff5279f7f2846846b",
+    "semantic_hash": "40780cf0d0b1df1ff5279f7f2846846b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\driveUploadClient.ts": {
+    "mtime": 1789676196.436381,
+    "seen": 1789764666.200264,
+    "ast_hash": "edef3c40721e7dd664ea97fdfc7ca06b",
+    "semantic_hash": "edef3c40721e7dd664ea97fdfc7ca06b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\edgeFunctionClient.ts": {
+    "mtime": 1787885607.06826,
+    "seen": 1789764666.200264,
+    "ast_hash": "e9b9aa3abed112d18c4608e5dbcac274",
+    "semantic_hash": "e9b9aa3abed112d18c4608e5dbcac274"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\index.ts": {
+    "mtime": 1779451425.9277291,
+    "seen": 1789764666.200264,
+    "ast_hash": "96b4b418bf522ade417aa89604ea0a8f",
+    "semantic_hash": "96b4b418bf522ade417aa89604ea0a8f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\loggerHook.ts": {
+    "mtime": 1780438786.169661,
+    "seen": 1789764666.200264,
+    "ast_hash": "e6f6045717733b46de80753f60850c29",
+    "semantic_hash": "e6f6045717733b46de80753f60850c29"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\anuncios\\components\\AnuncioModal.svelte": {
+    "mtime": 1788529131.447359,
+    "seen": 1789764666.200264,
+    "ast_hash": "4ec9624daff013352bb07824605256a9",
+    "semantic_hash": "4ec9624daff013352bb07824605256a9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\anuncios\\services\\anuncios.service.ts": {
+    "mtime": 1788529084.9676738,
+    "seen": 1789764666.200264,
+    "ast_hash": "e705bbbada9138b45262f967143c2572",
+    "semantic_hash": "e705bbbada9138b45262f967143c2572"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\aprobaciones\\services\\aprobaciones.service.ts": {
+    "mtime": 1789659286.4343894,
+    "seen": 1789764666.200264,
+    "ast_hash": "60c2738cfb3df01ded9f00d2c41b9ec9",
+    "semantic_hash": "60c2738cfb3df01ded9f00d2c41b9ec9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\aprobaciones\\services\\notificacionNativa.ts": {
+    "mtime": 1785936067.284215,
+    "seen": 1789764666.200264,
+    "ast_hash": "5442d7110e09a5d67be49e020dfed5b5",
+    "semantic_hash": "5442d7110e09a5d67be49e020dfed5b5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\centro-costos\\components\\CentroCostoDetalleModal.svelte": {
+    "mtime": 1786627027.4637165,
+    "seen": 1789764666.200264,
+    "ast_hash": "7402437b03551b6c3aca14f4afc5d40e",
+    "semantic_hash": "7402437b03551b6c3aca14f4afc5d40e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\centro-costos\\components\\CentroCostoModal.svelte": {
+    "mtime": 1785460674.0143425,
+    "seen": 1789764666.200264,
+    "ast_hash": "f638bf34ab6ad2843d584cae315c73aa",
+    "semantic_hash": "f638bf34ab6ad2843d584cae315c73aa"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\centro-costos\\config\\centroCostos.config.ts": {
+    "mtime": 1789484663.0327163,
+    "seen": 1789764666.200264,
+    "ast_hash": "6341e0548a927864edef205e41c3bca1",
+    "semantic_hash": "6341e0548a927864edef205e41c3bca1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\centro-costos\\services\\centroCostos.service.ts": {
+    "mtime": 1789484663.0338476,
+    "seen": 1789764666.200264,
+    "ast_hash": "14388eafc3b3620a1dfef8cccaa2aa7f",
+    "semantic_hash": "14388eafc3b3620a1dfef8cccaa2aa7f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\clientes\\services\\clientes.service.ts": {
+    "mtime": 1789188838.4478302,
+    "seen": 1789764666.200264,
+    "ast_hash": "831a09aa66d2535e065267928866f6d0",
+    "semantic_hash": "831a09aa66d2535e065267928866f6d0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\clientes\\services\\clientesExport.service.ts": {
+    "mtime": 1786130092.8878148,
+    "seen": 1789764666.200264,
+    "ast_hash": "5dde965fe6f6fddd5803759dbf326f60",
+    "semantic_hash": "5dde965fe6f6fddd5803759dbf326f60"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\components\\ConciliacionTab.svelte": {
+    "mtime": 1789742018.3562057,
+    "seen": 1789764666.200264,
+    "ast_hash": "539069f86e4a4853edf20bed812335be",
+    "semantic_hash": "539069f86e4a4853edf20bed812335be"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\components\\ConsistenciaTab.svelte": {
+    "mtime": 1788620485.187321,
+    "seen": 1789764666.200264,
+    "ast_hash": "771ab4ac8fe0b29532f0ba34d16d6572",
+    "semantic_hash": "771ab4ac8fe0b29532f0ba34d16d6572"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\components\\DashboardTab.svelte": {
+    "mtime": 1788891516.0757196,
+    "seen": 1789764666.200264,
+    "ast_hash": "b042f08d11c90c9fdf9979c1bfe0e623",
+    "semantic_hash": "b042f08d11c90c9fdf9979c1bfe0e623"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\components\\IncidenciasTab.svelte": {
+    "mtime": 1788566495.0273738,
+    "seen": 1789764666.200264,
+    "ast_hash": "e985f5a179733f89376b9520cbd3c7b8",
+    "semantic_hash": "e985f5a179733f89376b9520cbd3c7b8"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\services\\conciliacion.service.ts": {
+    "mtime": 1789741958.8803663,
+    "seen": 1789764666.200264,
+    "ast_hash": "2227994432072fc8baea7c21caa97dc6",
+    "semantic_hash": "2227994432072fc8baea7c21caa97dc6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\services\\controlFinanciero.service.ts": {
+    "mtime": 1788649016.653659,
+    "seen": 1789764666.200264,
+    "ast_hash": "6e69ac39bfa1e584577a85238f9ee74c",
+    "semantic_hash": "6e69ac39bfa1e584577a85238f9ee74c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\services\\incidencia.service.ts": {
+    "mtime": 1788566128.0105324,
+    "seen": 1789764666.200264,
+    "ast_hash": "c22a7fe7c6ae268ba847de491029a396",
+    "semantic_hash": "c22a7fe7c6ae268ba847de491029a396"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\control-financiero\\services\\trayectoria.service.ts": {
+    "mtime": 1788645028.3346276,
+    "seen": 1789764666.200264,
+    "ast_hash": "a268024560cbb4feb197941fe439e8ce",
+    "semantic_hash": "a268024560cbb4feb197941fe439e8ce"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-bancarias\\components\\CuentaBancoModal.svelte": {
+    "mtime": 1789484663.034855,
+    "seen": 1789764666.200264,
+    "ast_hash": "133364c64709383b435a9d565a76bfe0",
+    "semantic_hash": "133364c64709383b435a9d565a76bfe0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-bancarias\\config\\cuentaBanco.config.ts": {
+    "mtime": 1789742033.7745085,
+    "seen": 1789764666.200264,
+    "ast_hash": "e577c410ad2963ab3e2239b4efe34bf2",
+    "semantic_hash": "e577c410ad2963ab3e2239b4efe34bf2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-bancarias\\services\\cuentaBanco.service.ts": {
+    "mtime": 1789484663.0358815,
+    "seen": 1789764666.200264,
+    "ast_hash": "bf141454fd3079526f4ed5b5d029e9ed",
+    "semantic_hash": "bf141454fd3079526f4ed5b5d029e9ed"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-cobrar\\components\\CobroModal.svelte": {
+    "mtime": 1787078516.2586503,
+    "seen": 1789764666.200264,
+    "ast_hash": "1bcc35e607736f8dfec1a8b3fb8e5aac",
+    "semantic_hash": "1bcc35e607736f8dfec1a8b3fb8e5aac"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-cobrar\\components\\CuentaCobrarModal.svelte": {
+    "mtime": 1789659286.4353929,
+    "seen": 1789764666.200264,
+    "ast_hash": "15085cbf0bb3de9096230e0053f9dcc5",
+    "semantic_hash": "15085cbf0bb3de9096230e0053f9dcc5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-cobrar\\config\\cobro.config.ts": {
+    "mtime": 1787078516.2705271,
+    "seen": 1789764666.200264,
+    "ast_hash": "b7d6b58c286a78688275c384cdf4be58",
+    "semantic_hash": "b7d6b58c286a78688275c384cdf4be58"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-cobrar\\config\\cuentaCobrar.config.ts": {
+    "mtime": 1787050149.435401,
+    "seen": 1789764666.200264,
+    "ast_hash": "eeeba16db16a566949acbb492d4b0187",
+    "semantic_hash": "eeeba16db16a566949acbb492d4b0187"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-cobrar\\services\\cuentasCobrar.service.ts": {
+    "mtime": 1789659286.4363928,
+    "seen": 1789764666.200264,
+    "ast_hash": "8b59fed081851f37594ac63e621f789e",
+    "semantic_hash": "8b59fed081851f37594ac63e621f789e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-pagar\\components\\CuentaPagarModal.svelte": {
+    "mtime": 1789659286.4379017,
+    "seen": 1789764666.200264,
+    "ast_hash": "a467630790bb0fdb410899cc6faa5978",
+    "semantic_hash": "a467630790bb0fdb410899cc6faa5978"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-pagar\\components\\PagoModal.svelte": {
+    "mtime": 1785250187.1097908,
+    "seen": 1789764666.200264,
+    "ast_hash": "bf859a590b8f10131d5a29aac6bc3773",
+    "semantic_hash": "bf859a590b8f10131d5a29aac6bc3773"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-pagar\\config\\cuentaPagar.config.ts": {
+    "mtime": 1789188838.4538307,
+    "seen": 1789764666.200264,
+    "ast_hash": "00f095786e3bfdca12d10b5f0e5b39ff",
+    "semantic_hash": "00f095786e3bfdca12d10b5f0e5b39ff"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-pagar\\config\\pago.config.ts": {
+    "mtime": 1783472984.7129278,
+    "seen": 1789764666.200264,
+    "ast_hash": "7a81c7f13337566ccce9b093371f0585",
+    "semantic_hash": "7a81c7f13337566ccce9b093371f0585"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\cuentas-pagar\\services\\cuentasPagar.service.ts": {
+    "mtime": 1789659286.4389107,
+    "seen": 1789764666.200264,
+    "ast_hash": "3c4a4073b90f99a0c930d4dbd68cf39b",
+    "semantic_hash": "3c4a4073b90f99a0c930d4dbd68cf39b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\dashboard-finanzas\\services\\dashboardFinanzas.service.ts": {
+    "mtime": 1788453102.4661162,
+    "seen": 1789764666.200264,
+    "ast_hash": "e80ded47e743fa596c4f7838516f8475",
+    "semantic_hash": "e80ded47e743fa596c4f7838516f8475"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\gantt-planning\\services\\ganttPlanning.service.test.ts": {
+    "mtime": 1784241820.4881392,
+    "seen": 1789764666.200264,
+    "ast_hash": "a161b2a1fa238b4f96517a1609708d6a",
+    "semantic_hash": "a161b2a1fa238b4f96517a1609708d6a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\gantt-planning\\services\\ganttPlanning.service.ts": {
+    "mtime": 1784241794.6707666,
+    "seen": 1789764666.200264,
+    "ast_hash": "44a3ebce3c063f30c415a80779819867",
+    "semantic_hash": "44a3ebce3c063f30c415a80779819867"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\panoramas\\components\\PanoramaCalendarView.svelte": {
+    "mtime": 1787050149.4499278,
+    "seen": 1789764666.200264,
+    "ast_hash": "f24424815b101d12fbbd4aa29c5825ad",
+    "semantic_hash": "f24424815b101d12fbbd4aa29c5825ad"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\panoramas\\services\\panoramas.service.ts": {
+    "mtime": 1788455060.5984087,
+    "seen": 1789764666.200264,
+    "ast_hash": "d1face691c505ddafaec26ad8d9ce58c",
+    "semantic_hash": "d1face691c505ddafaec26ad8d9ce58c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\proveedores\\services\\proveedores.service.ts": {
+    "mtime": 1789188838.45683,
+    "seen": 1789764666.200264,
+    "ast_hash": "6a1a08c633a0cebe3bcb5bd56cc604c5",
+    "semantic_hash": "6a1a08c633a0cebe3bcb5bd56cc604c5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\tickets\\components\\TicketDetalleModal.svelte": {
+    "mtime": 1789751086.9253802,
+    "seen": 1789764666.200264,
+    "ast_hash": "3606f382b0b8677bfd1e23139821eba2",
+    "semantic_hash": "3606f382b0b8677bfd1e23139821eba2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\tickets\\components\\TicketModal.svelte": {
+    "mtime": 1789660173.241996,
+    "seen": 1789764666.200264,
+    "ast_hash": "d126b10d4f3930c07f4a91be7e1f2ad8",
+    "semantic_hash": "d126b10d4f3930c07f4a91be7e1f2ad8"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\tickets\\services\\releases.service.ts": {
+    "mtime": 1789237842.8278103,
+    "seen": 1789764666.200264,
+    "ast_hash": "8779b3a691e1a82a5c787546deb02d1c",
+    "semantic_hash": "8779b3a691e1a82a5c787546deb02d1c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\tickets\\services\\tickets.service.ts": {
+    "mtime": 1789746042.7079291,
+    "seen": 1789764666.200264,
+    "ast_hash": "789d066d514f213a8da5a73a1d939ee5",
+    "semantic_hash": "789d066d514f213a8da5a73a1d939ee5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\components\\ReciboPagoModal.svelte": {
+    "mtime": 1788478354.6815133,
+    "seen": 1789764666.200264,
+    "ast_hash": "39780b7dced3f5ef5d3bd0cdad03d42e",
+    "semantic_hash": "39780b7dced3f5ef5d3bd0cdad03d42e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\components\\ReciboPagoProveedorModal.svelte": {
+    "mtime": 1788478381.8781657,
+    "seen": 1789764666.200264,
+    "ast_hash": "9605c0b36faa618fb631bd77c4001018",
+    "semantic_hash": "9605c0b36faa618fb631bd77c4001018"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\components\\TransDetalleModal.svelte": {
+    "mtime": 1785250187.1228042,
+    "seen": 1789764666.200264,
+    "ast_hash": "e8c0ed9522d160a320cf3bbeb8d3072f",
+    "semantic_hash": "e8c0ed9522d160a320cf3bbeb8d3072f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\components\\TransaccionCalendarView.svelte": {
+    "mtime": 1788442703.3539922,
+    "seen": 1789764666.200264,
+    "ast_hash": "dd16c4c80492507b5bdedd6b78f3d9f9",
+    "semantic_hash": "dd16c4c80492507b5bdedd6b78f3d9f9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\components\\TransaccionModal.svelte": {
+    "mtime": 1789758048.1671014,
+    "seen": 1789764666.200264,
+    "ast_hash": "101c2c96a28bc65189c2002e9f26e74d",
+    "semantic_hash": "101c2c96a28bc65189c2002e9f26e74d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\config\\transDetalle.config.ts": {
+    "mtime": 1783472984.7229247,
+    "seen": 1789764666.200264,
+    "ast_hash": "22f55ece130f4898519e6dc8a6cda025",
+    "semantic_hash": "22f55ece130f4898519e6dc8a6cda025"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\config\\transaccion.config.ts": {
+    "mtime": 1789758062.6206079,
+    "seen": 1789764666.200264,
+    "ast_hash": "0a79e927b2d0b6c80987aafc900e0cab",
+    "semantic_hash": "0a79e927b2d0b6c80987aafc900e0cab"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\services\\movimientosCaja.service.ts": {
+    "mtime": 1789756065.8950129,
+    "seen": 1789764666.200264,
+    "ast_hash": "0890cdcd2ba21b06b0ab37e725f539f5",
+    "semantic_hash": "0890cdcd2ba21b06b0ab37e725f539f5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\transacciones\\services\\transacciones.service.ts": {
+    "mtime": 1789484663.04273,
+    "seen": 1789764666.200264,
+    "ast_hash": "d5467881dc2b680abae024f911ad8d4a",
+    "semantic_hash": "d5467881dc2b680abae024f911ad8d4a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\modules\\ventas\\services\\ventasExport.service.ts": {
+    "mtime": 1786411425.418975,
+    "seen": 1789764666.200264,
+    "ast_hash": "d2b5efa098e15dfc62bb5a181e9012e3",
+    "semantic_hash": "d2b5efa098e15dfc62bb5a181e9012e3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\server\\agent-tools\\registry.ts": {
+    "mtime": 1789762935.0862637,
+    "seen": 1789764666.200264,
+    "ast_hash": "ecba2756bb37295488afc599c33009f3",
+    "semantic_hash": "ecba2756bb37295488afc599c33009f3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\server\\agent-tools\\tools\\tickets.ts": {
+    "mtime": 1789762973.5213242,
+    "seen": 1789764666.200264,
+    "ast_hash": "fa41bcb4ee314ca67f279eeebbd788b4",
+    "semantic_hash": "fa41bcb4ee314ca67f279eeebbd788b4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\server\\config.ts": {
+    "mtime": 1789659864.7970488,
+    "seen": 1789764666.200264,
+    "ast_hash": "05651c837f06550b928abb55990d33e7",
+    "semantic_hash": "05651c837f06550b928abb55990d33e7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\server\\safeEndpoint.ts": {
+    "mtime": 1787351953.9979498,
+    "seen": 1789764666.200264,
+    "ast_hash": "60b57a6e1b5094f191d2a74f9f10fe45",
+    "semantic_hash": "60b57a6e1b5094f191d2a74f9f10fe45"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\server\\supabase.ts": {
+    "mtime": 1782788428.2721164,
+    "seen": 1789764666.200264,
+    "ast_hash": "8eb332639903f59b911e7595de1027bd",
+    "semantic_hash": "8eb332639903f59b911e7595de1027bd"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shareTarget.ts": {
+    "mtime": 1786722151.0982351,
+    "seen": 1789764666.200264,
+    "ast_hash": "119ce470f80a96336c3d6c266afc34c1",
+    "semantic_hash": "119ce470f80a96336c3d6c266afc34c1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\adminAuth.ts": {
+    "mtime": 1785511287.0498428,
+    "seen": 1789764666.200264,
+    "ast_hash": "fccb7e35a20509713d06adbb958477f8",
+    "semantic_hash": "fccb7e35a20509713d06adbb958477f8"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\base64.ts": {
+    "mtime": 1786130287.6101592,
+    "seen": 1789764666.200264,
+    "ast_hash": "49a4d04e2eac96cb129db65d1174de24",
+    "semantic_hash": "49a4d04e2eac96cb129db65d1174de24"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\codigoProyecto.ts": {
+    "mtime": 1787351954.0009463,
+    "seen": 1789764666.200264,
+    "ast_hash": "87c2866c3949a14e21505f44b02ae2c5",
+    "semantic_hash": "87c2866c3949a14e21505f44b02ae2c5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\AdminConfirmModal.svelte": {
+    "mtime": 1785511287.05184,
+    "seen": 1789764666.200264,
+    "ast_hash": "07d343c3a47e7adbaf8423d236b4a173",
+    "semantic_hash": "07d343c3a47e7adbaf8423d236b4a173"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\BotonActualizar.svelte": {
+    "mtime": 1789676212.1570683,
+    "seen": 1789764666.200264,
+    "ast_hash": "83fd6a209b36396e7746b8ef963f3432",
+    "semantic_hash": "83fd6a209b36396e7746b8ef963f3432"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\ColumnFilterBar.svelte": {
+    "mtime": 1784611987.8995092,
+    "seen": 1789764666.200264,
+    "ast_hash": "f1809a073c0cf8b5e6b99a71833f6677",
+    "semantic_hash": "f1809a073c0cf8b5e6b99a71833f6677"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\ConfirmModal.svelte": {
+    "mtime": 1786634557.5673256,
+    "seen": 1789764666.200264,
+    "ast_hash": "2dedf3c6398e8875244ecaa11eb55953",
+    "semantic_hash": "2dedf3c6398e8875244ecaa11eb55953"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\DocumentPreviewModal.svelte": {
+    "mtime": 1789659286.4429097,
+    "seen": 1789764666.200264,
+    "ast_hash": "9893fbd00b9370075f23b37e3568d6a7",
+    "semantic_hash": "9893fbd00b9370075f23b37e3568d6a7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\FraccionamientoModal.svelte": {
+    "mtime": 1787078516.28955,
+    "seen": 1789764666.200264,
+    "ast_hash": "e854ef32d77ec52e3c8d30533c182cb4",
+    "semantic_hash": "e854ef32d77ec52e3c8d30533c182cb4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\MobileFab.svelte": {
+    "mtime": 1788304455.284402,
+    "seen": 1789764666.200264,
+    "ast_hash": "da1dee238a2a2e46bca57ffd80bd2747",
+    "semantic_hash": "da1dee238a2a2e46bca57ffd80bd2747"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\ResponsiveDataView.svelte": {
+    "mtime": 1788442703.360013,
+    "seen": 1789764666.200264,
+    "ast_hash": "d23480ff6bc01ad8b6b56236941be4e0",
+    "semantic_hash": "d23480ff6bc01ad8b6b56236941be4e0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\SelectConSaldo.svelte": {
+    "mtime": 1789674904.1122127,
+    "seen": 1789764666.200264,
+    "ast_hash": "41a70240e04e87b881baf9469dd8647f",
+    "semantic_hash": "41a70240e04e87b881baf9469dd8647f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\components\\SignaturePad.svelte": {
+    "mtime": 1787885607.0788126,
+    "seen": 1789764666.200264,
+    "ast_hash": "f4567f0badc4e67f3d94acbd700993e0",
+    "semantic_hash": "f4567f0badc4e67f3d94acbd700993e0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\comprobanteTransferenciaInterna.ts": {
+    "mtime": 1789046071.9346707,
+    "seen": 1789764666.200264,
+    "ast_hash": "ce4031815512b92b3f785c557ba0196b",
+    "semantic_hash": "ce4031815512b92b3f785c557ba0196b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\dateUtils.ts": {
+    "mtime": 1785816278.3793278,
+    "seen": 1789764666.200264,
+    "ast_hash": "720de3d966d85912fe76506d7dbf736e",
+    "semantic_hash": "720de3d966d85912fe76506d7dbf736e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\describeError.ts": {
+    "mtime": 1788442703.363014,
+    "seen": 1789764666.200264,
+    "ast_hash": "509d8e96fc88658d9ff2899012dfde84",
+    "semantic_hash": "509d8e96fc88658d9ff2899012dfde84"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\drivePreview.ts": {
+    "mtime": 1787885607.080812,
+    "seen": 1789764666.200264,
+    "ast_hash": "13c58abf93141e9b140880c07ce93ad4",
+    "semantic_hash": "13c58abf93141e9b140880c07ce93ad4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\empresaConstantes.ts": {
+    "mtime": 1787885607.082043,
+    "seen": 1789764666.200264,
+    "ast_hash": "c84c36eca7bd19ad519ea8192a39650f",
+    "semantic_hash": "c84c36eca7bd19ad519ea8192a39650f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\fieldConfig.ts": {
+    "mtime": 1789737514.2089307,
+    "seen": 1789764666.200264,
+    "ast_hash": "68a30878b0f957a493ac7a7421f83cc9",
+    "semantic_hash": "68a30878b0f957a493ac7a7421f83cc9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\fileNaming.ts": {
+    "mtime": 1789659286.4439108,
+    "seen": 1789764666.200264,
+    "ast_hash": "211c176339d96a497b589065e8e9fa2b",
+    "semantic_hash": "211c176339d96a497b589065e8e9fa2b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\mensajeR2.ts": {
+    "mtime": 1789188838.4720182,
+    "seen": 1789764666.200264,
+    "ast_hash": "2065d6d23361ea8a0410b85c9d11ce17",
+    "semantic_hash": "2065d6d23361ea8a0410b85c9d11ce17"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\numeroALetras.ts": {
+    "mtime": 1787885607.082043,
+    "seen": 1789764666.200264,
+    "ast_hash": "f85dcffa6e063bee58a53fe1fd670212",
+    "semantic_hash": "f85dcffa6e063bee58a53fe1fd670212"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\ocrComprobante.ts": {
+    "mtime": 1789682347.9898527,
+    "seen": 1789764666.200264,
+    "ast_hash": "48114491a9c6e8b4d8ed0bacf9d6d13f",
+    "semantic_hash": "48114491a9c6e8b4d8ed0bacf9d6d13f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\pdfFormatoUtil.ts": {
+    "mtime": 1787885607.0850427,
+    "seen": 1789764666.200264,
+    "ast_hash": "91fae875ce7cba3e414aa9088f582c57",
+    "semantic_hash": "91fae875ce7cba3e414aa9088f582c57"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\pdfHtmlRender.ts": {
+    "mtime": 1788902668.538848,
+    "seen": 1789764666.200264,
+    "ast_hash": "bc36f2c27a13d4cf31302833228dc5d9",
+    "semantic_hash": "bc36f2c27a13d4cf31302833228dc5d9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\pdfPreview.ts": {
+    "mtime": 1787087395.8029487,
+    "seen": 1789764666.200264,
+    "ast_hash": "e2de90c95a0d8cafdc8a003d4dcc8da6",
+    "semantic_hash": "e2de90c95a0d8cafdc8a003d4dcc8da6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\pdfTextoUtil.ts": {
+    "mtime": 1787885607.0862505,
+    "seen": 1789764666.200264,
+    "ast_hash": "77558176ee929ffc8be852fe01e0b86a",
+    "semantic_hash": "77558176ee929ffc8be852fe01e0b86a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\pdfVoucherEstilos.ts": {
+    "mtime": 1788902668.5404484,
+    "seen": 1789764666.200264,
+    "ast_hash": "70b67c68f9b645b7b199562b609ff44d",
+    "semantic_hash": "70b67c68f9b645b7b199562b609ff44d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\reciboPagoEfectivo.ts": {
+    "mtime": 1789188838.476019,
+    "seen": 1789764666.200264,
+    "ast_hash": "87dc01a2c91206fb83492cd71c6c337a",
+    "semantic_hash": "87dc01a2c91206fb83492cd71c6c337a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\reciboPagoProveedor.ts": {
+    "mtime": 1789188838.4780204,
+    "seen": 1789764666.200264,
+    "ast_hash": "55a7dc171b0ed25d7b3a9dcc8cbf757c",
+    "semantic_hash": "55a7dc171b0ed25d7b3a9dcc8cbf757c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\saveFile.ts": {
+    "mtime": 1786130047.0467577,
+    "seen": 1789764666.200264,
+    "ast_hash": "5bdf642494063b1a57f3b220de3ca097",
+    "semantic_hash": "5bdf642494063b1a57f3b220de3ca097"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\shared\\uploadProjectDocument.ts": {
+    "mtime": 1789659892.6613786,
+    "seen": 1789764666.200264,
+    "ast_hash": "4ee8ea90bcb53f5a161436cc1f27539c",
+    "semantic_hash": "4ee8ea90bcb53f5a161436cc1f27539c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\stores\\mobileFab.svelte.ts": {
+    "mtime": 1788449014.4627411,
+    "seen": 1789764666.200264,
+    "ast_hash": "ae53067b4e5bdf3e122e89c87397c4eb",
+    "semantic_hash": "ae53067b4e5bdf3e122e89c87397c4eb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\stores\\partidas.ts": {
+    "mtime": 1787351954.005949,
+    "seen": 1789764666.200264,
+    "ast_hash": "643ba6043dc7efe8acf63f74f99348e6",
+    "semantic_hash": "643ba6043dc7efe8acf63f74f99348e6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\stores\\pendingShare.svelte.ts": {
+    "mtime": 1786721446.6146016,
+    "seen": 1789764666.200264,
+    "ast_hash": "9575c872e262703632542695448ed9ae",
+    "semantic_hash": "9575c872e262703632542695448ed9ae"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\stores\\permisos.svelte.ts": {
+    "mtime": 1787885607.1817782,
+    "seen": 1789764666.200264,
+    "ast_hash": "5677d3f985f45a85fd1311b1deaca56d",
+    "semantic_hash": "5677d3f985f45a85fd1311b1deaca56d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\stores\\toast.ts": {
+    "mtime": 1783015335.2295017,
+    "seen": 1789764666.200264,
+    "ast_hash": "eb7bb68a878afd83fd1701cd07fe16c2",
+    "semantic_hash": "eb7bb68a878afd83fd1701cd07fe16c2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\supabaseClient.ts": {
+    "mtime": 1782786902.4036477,
+    "seen": 1789764666.200264,
+    "ast_hash": "18f2e73161c12ed23f9db4d172a155b1",
+    "semantic_hash": "18f2e73161c12ed23f9db4d172a155b1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\utils\\tree.test.ts": {
+    "mtime": 1783728055.6217735,
+    "seen": 1789764666.200264,
+    "ast_hash": "aaef5f01bf173fc7ebc5a51a0118e527",
+    "semantic_hash": "aaef5f01bf173fc7ebc5a51a0118e527"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\utils\\tree.ts": {
+    "mtime": 1783728038.4312534,
+    "seen": 1789764666.200264,
+    "ast_hash": "dd53f9661c91e5f9eb711800c75793d0",
+    "semantic_hash": "dd53f9661c91e5f9eb711800c75793d0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\+layout.svelte": {
+    "mtime": 1789660610.7304196,
+    "seen": 1789764666.200264,
+    "ast_hash": "76fbf2ae94709cce9c0766c7f9fa5475",
+    "semantic_hash": "76fbf2ae94709cce9c0766c7f9fa5475"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\comercial\\clientes\\+page.svelte": {
+    "mtime": 1788451932.418185,
+    "seen": 1789764666.200264,
+    "ast_hash": "aa7a4db625da2290f6e5b9dc18bdb7ae",
+    "semantic_hash": "aa7a4db625da2290f6e5b9dc18bdb7ae"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\comercial\\ventas\\+page.server.ts": {
+    "mtime": 1782881874.558465,
+    "seen": 1789764666.200264,
+    "ast_hash": "aac241a3cb121d322a3716da69b1ada6",
+    "semantic_hash": "aac241a3cb121d322a3716da69b1ada6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\comercial\\ventas\\+page.svelte": {
+    "mtime": 1789484663.0477355,
+    "seen": 1789764666.200264,
+    "ast_hash": "6b8d5dcf196f7bfb2421d0b9ef50b58b",
+    "semantic_hash": "6b8d5dcf196f7bfb2421d0b9ef50b58b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\dashboard\\+page.svelte": {
+    "mtime": 1788567160.2397287,
+    "seen": 1789764666.200264,
+    "ast_hash": "3607dae0280c99144c74f4650c92ea0c",
+    "semantic_hash": "3607dae0280c99144c74f4650c92ea0c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\centros-de-costos\\+page.svelte": {
+    "mtime": 1789484663.048737,
+    "seen": 1789764666.200264,
+    "ast_hash": "90771aaaee0394cc48210b3110f9facf",
+    "semantic_hash": "90771aaaee0394cc48210b3110f9facf"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\control-financiero\\+page.svelte": {
+    "mtime": 1788891516.0777192,
+    "seen": 1789764666.200264,
+    "ast_hash": "dc92df606eb4c9b2cded8db40dde1595",
+    "semantic_hash": "dc92df606eb4c9b2cded8db40dde1595"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\cuentas-bancarias\\+page.svelte": {
+    "mtime": 1789484663.0497355,
+    "seen": 1789764666.200264,
+    "ast_hash": "7fce9556f95ae2018885e72514bf4dba",
+    "semantic_hash": "7fce9556f95ae2018885e72514bf4dba"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\cuentas-cobrar\\+page.svelte": {
+    "mtime": 1789758765.4700782,
+    "seen": 1789764666.200264,
+    "ast_hash": "7aecd70f6bd04f8db9b1ddbe9b4c4a71",
+    "semantic_hash": "7aecd70f6bd04f8db9b1ddbe9b4c4a71"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\cuentas-cobrar\\panoramas\\+page.svelte": {
+    "mtime": 1787050149.4725585,
+    "seen": 1789764666.200264,
+    "ast_hash": "cceef318294979f6c9c53e3f8052c11f",
+    "semantic_hash": "cceef318294979f6c9c53e3f8052c11f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\cuentas-pagar\\+page.svelte": {
+    "mtime": 1789758745.3511777,
+    "seen": 1789764666.200264,
+    "ast_hash": "f7a6b0b6a9f026a477fa057c3fa0def5",
+    "semantic_hash": "f7a6b0b6a9f026a477fa057c3fa0def5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\cuentas-pagar\\panoramas\\+page.svelte": {
+    "mtime": 1789758800.6295383,
+    "seen": 1789764666.200264,
+    "ast_hash": "2df80c920f904a2a3efe80eee3f8b994",
+    "semantic_hash": "2df80c920f904a2a3efe80eee3f8b994"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\proveedores\\+page.svelte": {
+    "mtime": 1788452135.466221,
+    "seen": 1789764666.200264,
+    "ast_hash": "2528588bece40934ef5d8e4b69b1623d",
+    "semantic_hash": "2528588bece40934ef5d8e4b69b1623d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\tranzacciones\\+page.svelte": {
+    "mtime": 1789677621.030696,
+    "seen": 1789764666.200264,
+    "ast_hash": "187dd28f19dddf7fc5d73b12da8a59ef",
+    "semantic_hash": "187dd28f19dddf7fc5d73b12da8a59ef"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\finanzas\\tranzacciones\\movimientos-caja\\+page.svelte": {
+    "mtime": 1789758711.7179823,
+    "seen": 1789764666.200264,
+    "ast_hash": "b97ca4d4bcb13927c69eff5944313e2a",
+    "semantic_hash": "b97ca4d4bcb13927c69eff5944313e2a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\iam\\empleados\\+page.svelte": {
+    "mtime": 1788301041.2222426,
+    "seen": 1789764666.200264,
+    "ast_hash": "512048dd4008db5ba8b153e670153030",
+    "semantic_hash": "512048dd4008db5ba8b153e670153030"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\iam\\roles-permisos\\+page.svelte": {
+    "mtime": 1789238737.747931,
+    "seen": 1789764666.200264,
+    "ast_hash": "96885211ecf55a19141d37385b2e4a2c",
+    "semantic_hash": "96885211ecf55a19141d37385b2e4a2c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\proyectos\\gestion\\+page.svelte": {
+    "mtime": 1787351954.0225158,
+    "seen": 1789764666.200264,
+    "ast_hash": "275c472fe68cd4b1dd070f0add2f61cb",
+    "semantic_hash": "275c472fe68cd4b1dd070f0add2f61cb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\proyectos\\gestion\\[id]\\+page.svelte": {
+    "mtime": 1787351954.0265307,
+    "seen": 1789764666.200264,
+    "ast_hash": "a21e9b0d94b7725d6b07d0a055ff271d",
+    "semantic_hash": "a21e9b0d94b7725d6b07d0a055ff271d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\proyectos\\gestion\\[id]\\+page.ts": {
+    "mtime": 1782833668.3919334,
+    "seen": 1789764666.200264,
+    "ast_hash": "e7b0e83eacc1321b3a006a975acafa45",
+    "semantic_hash": "e7b0e83eacc1321b3a006a975acafa45"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\proyectos\\partidas\\+page.svelte": {
+    "mtime": 1787351954.0285306,
+    "seen": 1789764666.200264,
+    "ast_hash": "b5a25a5441ab319414d78eb23081a5c3",
+    "semantic_hash": "b5a25a5441ab319414d78eb23081a5c3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\soporte\\developer\\+page.svelte": {
+    "mtime": 1789746899.1214526,
+    "seen": 1789764666.200264,
+    "ast_hash": "9a93ce2c154815bf936a3a1bc79c3ebc",
+    "semantic_hash": "9a93ce2c154815bf936a3a1bc79c3ebc"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(app)\\soporte\\tickets\\+page.svelte": {
+    "mtime": 1789238222.205289,
+    "seen": 1789764666.200264,
+    "ast_hash": "6cfffdd109370848037c6994a57ac440",
+    "semantic_hash": "6cfffdd109370848037c6994a57ac440"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\(auth)\\login\\+page.svelte": {
+    "mtime": 1787351954.0315304,
+    "seen": 1789764666.200264,
+    "ast_hash": "4294865a7dc10664d893101850432bd2",
+    "semantic_hash": "4294865a7dc10664d893101850432bd2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\+layout.svelte": {
+    "mtime": 1783189627.032214,
+    "seen": 1789764666.200264,
+    "ast_hash": "7149c50fe8cc5637d6edfabca9ed4ce0",
+    "semantic_hash": "7149c50fe8cc5637d6edfabca9ed4ce0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\+layout.ts": {
+    "mtime": 1779767856.2221868,
+    "seen": 1789764666.200264,
+    "ast_hash": "e1724b7407e474d68584adabfd74a473",
+    "semantic_hash": "e1724b7407e474d68584adabfd74a473"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\+page.svelte": {
+    "mtime": 1783119511.7881837,
+    "seen": 1789764666.200264,
+    "ast_hash": "36edac317ec0670f9cee4a739fb03e11",
+    "semantic_hash": "36edac317ec0670f9cee4a739fb03e11"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\create-employee-user\\+server.ts": {
+    "mtime": 1787885607.2163851,
+    "seen": 1789764666.200264,
+    "ast_hash": "02ccd97595c8666a982bb1481389d978",
+    "semantic_hash": "02ccd97595c8666a982bb1481389d978"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\delete-employee-user\\+server.ts": {
+    "mtime": 1780599113.4051914,
+    "seen": 1789764666.200264,
+    "ast_hash": "cd7ce11cccccbf92a820d99554a3b085",
+    "semantic_hash": "cd7ce11cccccbf92a820d99554a3b085"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\first-admin\\+server.ts": {
+    "mtime": 1780599113.4001918,
+    "seen": 1789764666.200264,
+    "ast_hash": "6a02004d50bbcedca59522bcd45f8bf2",
+    "semantic_hash": "6a02004d50bbcedca59522bcd45f8bf2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\setup-password\\+server.ts": {
+    "mtime": 1780599113.406196,
+    "seen": 1789764666.200264,
+    "ast_hash": "5966620bf2e0d0e3ea7751e9be16e511",
+    "semantic_hash": "5966620bf2e0d0e3ea7751e9be16e511"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\update-employee-user\\+server.ts": {
+    "mtime": 1787885607.2194672,
+    "seen": 1789764666.200264,
+    "ast_hash": "0b94b54bc9f525af341f2cc50516621a",
+    "semantic_hash": "0b94b54bc9f525af341f2cc50516621a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\routes\\api\\upload-document\\+server.ts": {
+    "mtime": 1789660114.8091564,
+    "seen": 1789764666.200264,
+    "ast_hash": "74dd5ec27ebefb9bb57f35db3af3ee73",
+    "semantic_hash": "74dd5ec27ebefb9bb57f35db3af3ee73"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\supabase\\.temp\\linked-project.json": {
+    "mtime": 1787351954.0366032,
+    "seen": 1789764666.200264,
+    "ast_hash": "7c3668a5320b08d9fe281f9f27801134",
+    "semantic_hash": "7c3668a5320b08d9fe281f9f27801134"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\svelte.config.js": {
+    "mtime": 1779451425.949144,
+    "seen": 1789764666.200264,
+    "ast_hash": "e597dc88645bf082aa4c96e21d6e6ca5",
+    "semantic_hash": "e597dc88645bf082aa4c96e21d6e6ca5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\tsconfig.json": {
+    "mtime": 1779451425.9501562,
+    "seen": 1789764666.200264,
+    "ast_hash": "8c140b518df24278a8aa09a661d3378a",
+    "semantic_hash": "8c140b518df24278a8aa09a661d3378a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\vite.config.ts": {
+    "mtime": 1782825949.6515944,
+    "seen": 1789764666.200264,
+    "ast_hash": "1dbf0b9576e76693fffbd731f40236e8",
+    "semantic_hash": "1dbf0b9576e76693fffbd731f40236e8"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\vitest.config.ts": {
+    "mtime": 1783717202.9330974,
+    "seen": 1789764666.200264,
+    "ast_hash": "3610e22bfe5b257408b3cbfc44510a06",
+    "semantic_hash": "3610e22bfe5b257408b3cbfc44510a06"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app_release_realtime_migration.sql": {
+    "mtime": 1789748285.042236,
+    "seen": 1789764666.200264,
+    "ast_hash": "794d0514821444aa64d6157b749e39a9",
+    "semantic_hash": "794d0514821444aa64d6157b749e39a9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\backfill_permisos_administrador_migration.sql": {
+    "mtime": 1785456681.6233234,
+    "seen": 1789764666.200264,
+    "ast_hash": "7768f653690f762467c72f1fc558fdab",
+    "semantic_hash": "7768f653690f762467c72f1fc558fdab"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_descripcion_migration.sql": {
+    "mtime": 1785460600.295866,
+    "seen": 1789764666.200264,
+    "ast_hash": "34de2453f6d4d5a4d5046170f078df95",
+    "semantic_hash": "34de2453f6d4d5a4d5046170f078df95"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_empleado_migration.sql": {
+    "mtime": 1784524713.6247609,
+    "seen": 1789764666.200264,
+    "ast_hash": "33731d792a12bc30a72b17c6aaddeb5f",
+    "semantic_hash": "33731d792a12bc30a72b17c6aaddeb5f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_estado_migration.sql": {
+    "mtime": 1786627027.497974,
+    "seen": 1789764666.200264,
+    "ast_hash": "caa1946df2d20316db380230ab634c80",
+    "semantic_hash": "caa1946df2d20316db380230ab634c80"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_socio_banca_migration.sql": {
+    "mtime": 1787665821.176836,
+    "seen": 1789764666.200264,
+    "ast_hash": "24af9de9ab8f408a8aa68be442fc5aa9",
+    "semantic_hash": "24af9de9ab8f408a8aa68be442fc5aa9"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_tipo_bolsa_general_migration.sql": {
+    "mtime": 1785128106.155113,
+    "seen": 1789764666.200264,
+    "ast_hash": "66f192fc7bab754707c0c11678e5d025",
+    "semantic_hash": "66f192fc7bab754707c0c11678e5d025"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_tipo_prestamo_migration.sql": {
+    "mtime": 1789484663.0547352,
+    "seen": 1789764666.200264,
+    "ast_hash": "117a829f377b30b221e6632906b45fbd",
+    "semantic_hash": "117a829f377b30b221e6632906b45fbd"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_tipo_subcontratista_migration.sql": {
+    "mtime": 1787665821.179349,
+    "seen": 1789764666.200264,
+    "ast_hash": "4f63596a68ab55cb98d168fffcfe3ab3",
+    "semantic_hash": "4f63596a68ab55cb98d168fffcfe3ab3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\centro_costo_vinculacion_migration.sql": {
+    "mtime": 1785128557.9074402,
+    "seen": 1789764666.200264,
+    "ast_hash": "7e0838737abb45689d446fa1d28be570",
+    "semantic_hash": "7e0838737abb45689d446fa1d28be570"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cliente_estado_migration.sql": {
+    "mtime": 1786629013.6829233,
+    "seen": 1789764666.200264,
+    "ast_hash": "2a64fe4ae812e79c37e3f8e80938e329",
+    "semantic_hash": "2a64fe4ae812e79c37e3f8e80938e329"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cobros_pagos_transaccion_migration.sql": {
+    "mtime": 1783619986.2347736,
+    "seen": 1789764666.200264,
+    "ast_hash": "36411bae9d682979209c50c542aac706",
+    "semantic_hash": "36411bae9d682979209c50c542aac706"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\concurrency_test_manual.sql": {
+    "mtime": 1788539000.9797673,
+    "seen": 1789764666.200264,
+    "ast_hash": "244c43891626bd810c44800e6e3da635",
+    "semantic_hash": "244c43891626bd810c44800e6e3da635"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\control_financiero_migration.sql": {
+    "mtime": 1788617392.907759,
+    "seen": 1789764666.200264,
+    "ast_hash": "255667fe9dc74786fd82061e0566e632",
+    "semantic_hash": "255667fe9dc74786fd82061e0566e632"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cronograma_actividad_cycle_migration.sql": {
+    "mtime": 1783716480.5610938,
+    "seen": 1789764666.200264,
+    "ast_hash": "41cfce6a43fd14a101d9752469dffa03",
+    "semantic_hash": "41cfce6a43fd14a101d9752469dffa03"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cronograma_gantt_migration.sql": {
+    "mtime": 1783010751.3187127,
+    "seen": 1789764666.200264,
+    "ast_hash": "9f9f92307a31add5800aad2669f1c8e4",
+    "semantic_hash": "9f9f92307a31add5800aad2669f1c8e4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuenta_banco_saldo_fecha_corte_migration.sql": {
+    "mtime": 1789742210.1957178,
+    "seen": 1789764666.200264,
+    "ast_hash": "d49be991a6da6836c2cdf640e46e2d58",
+    "semantic_hash": "d49be991a6da6836c2cdf640e46e2d58"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuenta_banco_saldo_migration.sql": {
+    "mtime": 1788442703.378018,
+    "seen": 1789764666.200264,
+    "ast_hash": "2376d8af42bb83499c86a7f111add30c",
+    "semantic_hash": "2376d8af42bb83499c86a7f111add30c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuenta_banco_tipo_cuenta_efectivo_migration.sql": {
+    "mtime": 1788521623.850942,
+    "seen": 1789764666.200264,
+    "ast_hash": "aa4ca842a64eb7bb04951324d160466b",
+    "semantic_hash": "aa4ca842a64eb7bb04951324d160466b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_cobrar_dolares_migration.sql": {
+    "mtime": 1783943759.9353192,
+    "seen": 1789764666.200264,
+    "ast_hash": "630f6f0dadc9b6eeb61235119f960231",
+    "semantic_hash": "630f6f0dadc9b6eeb61235119f960231"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_cobrar_prioridad_migration.sql": {
+    "mtime": 1783997452.1922777,
+    "seen": 1789764666.200264,
+    "ast_hash": "17a8ccbbb3d4cdb5fadb882e2076b631",
+    "semantic_hash": "17a8ccbbb3d4cdb5fadb882e2076b631"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_cobrar_id_transaccion_migration.sql": {
+    "mtime": 1789659286.44792,
+    "seen": 1789764666.200264,
+    "ast_hash": "b5168cbeac1ffb556ea1416101059e77",
+    "semantic_hash": "b5168cbeac1ffb556ea1416101059e77"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_fin_periodo_pago_migration.sql": {
+    "mtime": 1786705675.0282135,
+    "seen": 1789764666.200264,
+    "ast_hash": "c8e1249e083988a1e1df2b2db5e32f47",
+    "semantic_hash": "c8e1249e083988a1e1df2b2db5e32f47"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_frecuencia_pago_migration.sql": {
+    "mtime": 1786705675.0302162,
+    "seen": 1789764666.200264,
+    "ast_hash": "fabb5b5a02b531945cdc424d3a56a0ad",
+    "semantic_hash": "fabb5b5a02b531945cdc424d3a56a0ad"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_generacion_inmediata_migration.sql": {
+    "mtime": 1786749145.5646696,
+    "seen": 1789764666.200264,
+    "ast_hash": "6cd399428a6203b293d8fe891acaee23",
+    "semantic_hash": "6cd399428a6203b293d8fe891acaee23"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_prioridad_migration.sql": {
+    "mtime": 1783997452.1937966,
+    "seen": 1789764666.200264,
+    "ast_hash": "179ebde4de7de30ebe750cef8f0d202c",
+    "semantic_hash": "179ebde4de7de30ebe750cef8f0d202c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_recurrencia_mensual_migration.sql": {
+    "mtime": 1786705675.0322134,
+    "seen": 1789764666.200264,
+    "ast_hash": "77ffdda6dba59f08cdaa34d869a58fd7",
+    "semantic_hash": "77ffdda6dba59f08cdaa34d869a58fd7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\cuentas_pagar_recurrencia_todas_frecuencias_migration.sql": {
+    "mtime": 1786749145.5682116,
+    "seen": 1789764666.200264,
+    "ast_hash": "f577747b05075c3e5cf117f531a79c7f",
+    "semantic_hash": "f577747b05075c3e5cf117f531a79c7f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\documento_proyecto_migration.sql": {
+    "mtime": 1782880757.0978525,
+    "seen": 1789764666.200264,
+    "ast_hash": "5c8c1d7674e9d586fe83e3f7da6b1793",
+    "semantic_hash": "5c8c1d7674e9d586fe83e3f7da6b1793"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\documento_proyecto_proforma_final_migration.sql": {
+    "mtime": 1785263937.356774,
+    "seen": 1789764666.200264,
+    "ast_hash": "0ad5fa4439b69bd05adbd1e910322a15",
+    "semantic_hash": "0ad5fa4439b69bd05adbd1e910322a15"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\empleado_password_configurado_migration.sql": {
+    "mtime": 1784838194.8762896,
+    "seen": 1789764666.200264,
+    "ast_hash": "9026fa037fae8dd182b1f3ccf77847e4",
+    "semantic_hash": "9026fa037fae8dd182b1f3ccf77847e4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\empleados_dni_migration.sql": {
+    "mtime": 1787885607.2268653,
+    "seen": 1789764666.200264,
+    "ast_hash": "5bb00e85e7ffabbe10405a4ee8d3ab53",
+    "semantic_hash": "5bb00e85e7ffabbe10405a4ee8d3ab53"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\empleados_estado_migration.sql": {
+    "mtime": 1786627027.5009751,
+    "seen": 1789764666.200264,
+    "ast_hash": "b955d5f1a05bdc3ade4dc7c3502f3da3",
+    "semantic_hash": "b955d5f1a05bdc3ade4dc7c3502f3da3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\entidades_activo_migration.sql": {
+    "mtime": 1786636910.0102656,
+    "seen": 1789764666.200264,
+    "ast_hash": "99982f36fb1a4bcda13f500b8df278ed",
+    "semantic_hash": "99982f36fb1a4bcda13f500b8df278ed"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\financial_integrity_rpc_migration.sql": {
+    "mtime": 1788538472.2134564,
+    "seen": 1789764666.200264,
+    "ast_hash": "60578f5ed88e80c81838b8b0e5ded9cf",
+    "semantic_hash": "60578f5ed88e80c81838b8b0e5ded9cf"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\finanzas_dashboard_permiso_migration.sql": {
+    "mtime": 1788528865.0764346,
+    "seen": 1789764666.200264,
+    "ast_hash": "dade674603e6784a82c5035485b5ecd0",
+    "semantic_hash": "dade674603e6784a82c5035485b5ecd0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\fix_audit_trigger.sql": {
+    "mtime": 1783022813.0420744,
+    "seen": 1789764666.200264,
+    "ast_hash": "912bea7451eb5cbebe56850fa8e74df3",
+    "semantic_hash": "912bea7451eb5cbebe56850fa8e74df3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\fix_audit_trigger_proyecto_delete.sql": {
+    "mtime": 1785129584.896983,
+    "seen": 1789764666.200264,
+    "ast_hash": "3e33877817bc99066ab9bd00500b0e37",
+    "semantic_hash": "3e33877817bc99066ab9bd00500b0e37"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\fn_crear_transaccion_categoria_fix_migration.sql": {
+    "mtime": 1789188838.4955459,
+    "seen": 1789764666.200264,
+    "ast_hash": "798c098199d63aef550cfafd0facfa54",
+    "semantic_hash": "798c098199d63aef550cfafd0facfa54"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\fn_crear_transaccion_saldo_inicial_migration.sql": {
+    "mtime": 1788922155.08892,
+    "seen": 1789764666.200264,
+    "ast_hash": "9f5c34b7d0673b612f5bb6117af09ce4",
+    "semantic_hash": "9f5c34b7d0673b612f5bb6117af09ce4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\limpiar_apertura_financiera.sql": {
+    "mtime": 1788652385.7266617,
+    "seen": 1789764666.200264,
+    "ast_hash": "b50061c3f96a826c1fbba8c7a961d3ff",
+    "semantic_hash": "b50061c3f96a826c1fbba8c7a961d3ff"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\panorama_persistencia_migration.sql": {
+    "mtime": 1784612747.9872885,
+    "seen": 1789764666.200264,
+    "ast_hash": "3401d0861c2babf87f393d282e66661f",
+    "semantic_hash": "3401d0861c2babf87f393d282e66661f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\path\\to\\app\\src\\routes\\(app)\\iam\\+page.server.ts": {
+    "mtime": 1779499821.7249525,
+    "seen": 1789764666.200264,
+    "ast_hash": "ee2c467de7535f433a1ca9ad2a370480",
+    "semantic_hash": "ee2c467de7535f433a1ca9ad2a370480"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\presupuesto_gastos_generales_migration.sql": {
+    "mtime": 1784076431.8804657,
+    "seen": 1789764666.200264,
+    "ast_hash": "c640c9e41e6d6647b9aa039a364d02b4",
+    "semantic_hash": "c640c9e41e6d6647b9aa039a364d02b4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proveedor_banco_cci_migration.sql": {
+    "mtime": 1789749280.0005536,
+    "seen": 1789764666.200264,
+    "ast_hash": "1185d1aaf9eed2095dd49533a2f44e54",
+    "semantic_hash": "1185d1aaf9eed2095dd49533a2f44e54"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proveedor_cuenta_banco_migration.sql": {
+    "mtime": 1786627027.5024946,
+    "seen": 1789764666.200264,
+    "ast_hash": "100f5b3ce7e6505e96ec5383aff790a2",
+    "semantic_hash": "100f5b3ce7e6505e96ec5383aff790a2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proveedor_estado_migration.sql": {
+    "mtime": 1786719263.6579812,
+    "seen": 1789764666.200264,
+    "ast_hash": "2d38afd889c741ff519416ca82dd01ee",
+    "semantic_hash": "2d38afd889c741ff519416ca82dd01ee"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proyecto_caracteristicas_obra_migration.sql": {
+    "mtime": 1785901891.253734,
+    "seen": 1789764666.200264,
+    "ast_hash": "f7b583f34a51bdce2f251e0e7d236bff",
+    "semantic_hash": "f7b583f34a51bdce2f251e0e7d236bff"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proyecto_codigo_obra_migration.sql": {
+    "mtime": 1786161256.46881,
+    "seen": 1789764666.200264,
+    "ast_hash": "7927a171ac78046e0d4b75089869346c",
+    "semantic_hash": "7927a171ac78046e0d4b75089869346c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proyecto_tipo_estado_multiseleccion_migration.sql": {
+    "mtime": 1786124344.3320951,
+    "seen": 1789764666.200264,
+    "ast_hash": "15863dba169d692b273d6f27d20c22cd",
+    "semantic_hash": "15863dba169d692b273d6f27d20c22cd"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\proyecto_tipo_venta_migration.sql": {
+    "mtime": 1785459130.687338,
+    "seen": 1789764666.200264,
+    "ast_hash": "e7f7de42827009e881d4e68386106b2c",
+    "semantic_hash": "e7f7de42827009e881d4e68386106b2c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\responsable_varchar_migration.sql": {
+    "mtime": 1789484663.0557349,
+    "seen": 1789764666.200264,
+    "ast_hash": "555f60f24f64c25e03f60f3cd265823e",
+    "semantic_hash": "555f60f24f64c25e03f60f3cd265823e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\restriccion_origen_migration.sql": {
+    "mtime": 1784228345.8737688,
+    "seen": 1789764666.200264,
+    "ast_hash": "67c0ebaf4d8be430d67c2d39ba72c433",
+    "semantic_hash": "67c0ebaf4d8be430d67c2d39ba72c433"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\rls_coherencia_roles_migration.sql": {
+    "mtime": 1789659286.4489157,
+    "seen": 1789764666.200264,
+    "ast_hash": "19cdf634b0fafe8ea7aa2774fa054466",
+    "semantic_hash": "19cdf634b0fafe8ea7aa2774fa054466"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_exportar_aviso_migration.sql": {
+    "mtime": 1785624386.9061406,
+    "seen": 1789764666.200264,
+    "ast_hash": "6f2c9b844b6e3fc22c49f7eb742607af",
+    "semantic_hash": "6f2c9b844b6e3fc22c49f7eb742607af"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_migration.sql": {
+    "mtime": 1785551456.679319,
+    "seen": 1789764666.200264,
+    "ast_hash": "2855bbbdac6177e20b28d8660cc2e0b5",
+    "semantic_hash": "2855bbbdac6177e20b28d8660cc2e0b5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_notificado_migration.sql": {
+    "mtime": 1785937544.1254177,
+    "seen": 1789764666.200264,
+    "ast_hash": "d4b7b9c07997f03c92382138ec60c34d",
+    "semantic_hash": "d4b7b9c07997f03c92382138ec60c34d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_payload_anterior_migration.sql": {
+    "mtime": 1786129122.3285234,
+    "seen": 1789764666.200264,
+    "ast_hash": "cfc5c82bc45190b0d53c11e6b94e7280",
+    "semantic_hash": "cfc5c82bc45190b0d53c11e6b94e7280"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_realtime_migration.sql": {
+    "mtime": 1785938511.8467686,
+    "seen": 1789764666.200264,
+    "ast_hash": "cb5f7c1a68db2236f0ca483de3fc7e7b",
+    "semantic_hash": "cb5f7c1a68db2236f0ca483de3fc7e7b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_transaccion_migration.sql": {
+    "mtime": 1788908436.2554862,
+    "seen": 1789764666.200264,
+    "ast_hash": "6cb1b6a87b37baf4025ab737cef8af18",
+    "semantic_hash": "6cb1b6a87b37baf4025ab737cef8af18"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\solicitud_aprobacion_visto_migration.sql": {
+    "mtime": 1785615292.7583537,
+    "seen": 1789764666.200264,
+    "ast_hash": "6841a6df28640f7dd3329263fb8328c1",
+    "semantic_hash": "6841a6df28640f7dd3329263fb8328c1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\supabase\\.temp\\linked-project.json": {
+    "mtime": 1787351954.0406022,
+    "seen": 1789764666.200264,
+    "ast_hash": "7c3668a5320b08d9fe281f9f27801134",
+    "semantic_hash": "7c3668a5320b08d9fe281f9f27801134"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\supabase\\functions\\package.json": {
+    "mtime": 1780601876.914634,
+    "seen": 1789764666.200264,
+    "ast_hash": "2bf8c546d1c62c3b88c6eb626c02e96f",
+    "semantic_hash": "2bf8c546d1c62c3b88c6eb626c02e96f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\supabase\\functions\\user-admin\\index.ts": {
+    "mtime": 1787885607.8580618,
+    "seen": 1789764666.200264,
+    "ast_hash": "599d508eb8934f92aec4aaaf9ff40c67",
+    "semantic_hash": "599d508eb8934f92aec4aaaf9ff40c67"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\temp.json": {
+    "mtime": 1780425366.7986202,
+    "seen": 1789764666.200264,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\ticket_imagenes_migration.sql": {
+    "mtime": 1789659850.786498,
+    "seen": 1789764666.200264,
+    "ast_hash": "aad0eea3b2e61bea366068828ae97fab",
+    "semantic_hash": "aad0eea3b2e61bea366068828ae97fab"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\ticket_module_migration.sql": {
+    "mtime": 1789237787.6485913,
+    "seen": 1789764666.200264,
+    "ast_hash": "44ac0df6a97093c0260fd1af286be654",
+    "semantic_hash": "44ac0df6a97093c0260fd1af286be654"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_aprobacion_migration.sql": {
+    "mtime": 1783625291.3217463,
+    "seen": 1789764666.200264,
+    "ast_hash": "dee533584eed92c80f4574e843fa0e3c",
+    "semantic_hash": "dee533584eed92c80f4574e843fa0e3c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_comprobante_autogenerado_migration.sql": {
+    "mtime": 1788463906.4867747,
+    "seen": 1789764666.200264,
+    "ast_hash": "c6e8cd94e135fc7987303687b8022d48",
+    "semantic_hash": "c6e8cd94e135fc7987303687b8022d48"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_comprobante_migration.sql": {
+    "mtime": 1783623290.1859775,
+    "seen": 1789764666.200264,
+    "ast_hash": "b2ed0db90acab247560235f9a43a581a",
+    "semantic_hash": "b2ed0db90acab247560235f9a43a581a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_comprobante_pago_migration.sql": {
+    "mtime": 1787665821.1813607,
+    "seen": 1789764666.200264,
+    "ast_hash": "4070737cc735cd5464695727c85365a7",
+    "semantic_hash": "4070737cc735cd5464695727c85365a7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_cuente_origen_destino_ampliar_migration.sql": {
+    "mtime": 1788477481.4272468,
+    "seen": 1789764666.200264,
+    "ast_hash": "028a4e46d2ac749019fc75bb5e757197",
+    "semantic_hash": "028a4e46d2ac749019fc75bb5e757197"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_detalle_categoria_migration.sql": {
+    "mtime": 1787351954.0426016,
+    "seen": 1789764666.200264,
+    "ast_hash": "00fbe479a87e17cb4803bdf767094511",
+    "semantic_hash": "00fbe479a87e17cb4803bdf767094511"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_documento_pendiente_migration.sql": {
+    "mtime": 1789484663.0557349,
+    "seen": 1789764666.200264,
+    "ast_hash": "4aa4a84446042e49ab8eb844776541a8",
+    "semantic_hash": "4aa4a84446042e49ab8eb844776541a8"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_factura_migration.sql": {
+    "mtime": 1786627027.5115073,
+    "seen": 1789764666.200264,
+    "ast_hash": "b6a6cbd6dd2d0ad22a090e5e744a3be1",
+    "semantic_hash": "b6a6cbd6dd2d0ad22a090e5e744a3be1"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_financiamiento_categoria_migration.sql": {
+    "mtime": 1783943759.9369907,
+    "seen": 1789764666.200264,
+    "ast_hash": "601ec0f19f5777d7b644cdd0db91d744",
+    "semantic_hash": "601ec0f19f5777d7b644cdd0db91d744"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_interna_estado_activo_migration.sql": {
+    "mtime": 1789050448.7552986,
+    "seen": 1789764666.200264,
+    "ast_hash": "01e97d96cc10b4703e89023cbc4cbda5",
+    "semantic_hash": "01e97d96cc10b4703e89023cbc4cbda5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_moneda_migration.sql": {
+    "mtime": 1789484663.0567372,
+    "seen": 1789764666.200264,
+    "ast_hash": "c4c6b3043c5292e702db53ca15b30c9d",
+    "semantic_hash": "c4c6b3043c5292e702db53ca15b30c9d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_monto_convertido_4decimales_migration.sql": {
+    "mtime": 1789484663.0567372,
+    "seen": 1789764666.200264,
+    "ast_hash": "eb0d5cb8b16735733cf892ed5f505280",
+    "semantic_hash": "eb0d5cb8b16735733cf892ed5f505280"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_num_comprobante_interno_migration.sql": {
+    "mtime": 1787885607.8592558,
+    "seen": 1789764666.200264,
+    "ast_hash": "80ac9deb49b170978301a7bbc51d32dd",
+    "semantic_hash": "80ac9deb49b170978301a7bbc51d32dd"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_num_operacion_migration.sql": {
+    "mtime": 1787351954.0445988,
+    "seen": 1789764666.200264,
+    "ast_hash": "e3938fb721b2a0f15d456c634cf3edf4",
+    "semantic_hash": "e3938fb721b2a0f15d456c634cf3edf4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_num_recibo_pago_migration.sql": {
+    "mtime": 1787885607.8627722,
+    "seen": 1789764666.200264,
+    "ast_hash": "8b61296e798f65b167aae12c9c5b1e02",
+    "semantic_hash": "8b61296e798f65b167aae12c9c5b1e02"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_num_recibo_pago_no_efectivo_migration.sql": {
+    "mtime": 1788272248.1707356,
+    "seen": 1789764666.200264,
+    "ast_hash": "7b317b8320aadcd4f91030fb7bea99b0",
+    "semantic_hash": "7b317b8320aadcd4f91030fb7bea99b0"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_num_recibo_pago_proveedor_migration.sql": {
+    "mtime": 1788272248.1717374,
+    "seen": 1789764666.200264,
+    "ast_hash": "cecab0c87978d97efeb61d7b5678e32b",
+    "semantic_hash": "cecab0c87978d97efeb61d7b5678e32b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_permitir_saldo_negativo_cuenta_banco_migration.sql": {
+    "mtime": 1789484663.057735,
+    "seen": 1789764666.200264,
+    "ast_hash": "f1b0b8fe3dea8447436c5fcbe8642236",
+    "semantic_hash": "f1b0b8fe3dea8447436c5fcbe8642236"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_tipo_gasto_migration.sql": {
+    "mtime": 1787351954.0456028,
+    "seen": 1789764666.200264,
+    "ast_hash": "cfb1a75fd4aa3662c19efc6083926d3a",
+    "semantic_hash": "cfb1a75fd4aa3662c19efc6083926d3a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\transaccion_tipos_gasto_columnas_migration.sql": {
+    "mtime": 1787351954.0476022,
+    "seen": 1789764666.200264,
+    "ast_hash": "035c4f663f4aa85b8c6b7c97ec51a515",
+    "semantic_hash": "035c4f663f4aa85b8c6b7c97ec51a515"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\ventas_clientes_realtime_migration.sql": {
+    "mtime": 1786078987.2827606,
+    "seen": 1789764666.200264,
+    "ast_hash": "f25f46912fa30986e6677e33157aa7d2",
+    "semantic_hash": "f25f46912fa30986e6677e33157aa7d2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\.claude\\skills\\dar-de-baja-pattern\\SKILL.md": {
+    "mtime": 1786719279.8868608,
+    "seen": 1789764666.200264,
+    "ast_hash": "60d80ddf65bb11c09affe1b2ab0b00f7",
+    "semantic_hash": "60d80ddf65bb11c09affe1b2ab0b00f7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\.github\\workflows\\ci.yml": {
+    "mtime": 1789238567.8868895,
+    "seen": 1789764666.200264,
+    "ast_hash": "9d0a65438410045f7f615bca39414a0d",
+    "semantic_hash": "9d0a65438410045f7f615bca39414a0d"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\DEVELOPER_MANUAL.md": {
+    "mtime": 1779467525.1855125,
+    "seen": 1789764666.200264,
+    "ast_hash": "6ddf6f00b300a3ab2f36885f1f569f11",
+    "semantic_hash": "6ddf6f00b300a3ab2f36885f1f569f11"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\AgentTools.md": {
+    "mtime": 1789763072.4125235,
+    "seen": 1789764666.200264,
+    "ast_hash": "0c1dce1831c4bfc9f769d1f2aa105884",
+    "semantic_hash": "0c1dce1831c4bfc9f769d1f2aa105884"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\MecanismoCICD.md": {
+    "mtime": 1789241524.6083379,
+    "seen": 1789764666.200264,
+    "ast_hash": "2b5c9bb97a38aec9ca2501c2e49e5e7a",
+    "semantic_hash": "2b5c9bb97a38aec9ca2501c2e49e5e7a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\PlanModuloTicketsYReleases.md": {
+    "mtime": 1789237315.1516662,
+    "seen": 1789764666.200264,
+    "ast_hash": "ee1e39314c8ba551311bccc9299b55a2",
+    "semantic_hash": "ee1e39314c8ba551311bccc9299b55a2"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\SCOPE_Y_GANTT.md": {
+    "mtime": 1783003923.919873,
+    "seen": 1789764666.200264,
+    "ast_hash": "68d01ffb4fc20ab3a9e026d86e5cc4fd",
+    "semantic_hash": "68d01ffb4fc20ab3a9e026d86e5cc4fd"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\TeoriaTransferencias.md": {
+    "mtime": 1789048731.464131,
+    "seen": 1789764666.200264,
+    "ast_hash": "f4a6cf450bcbf3f2e171664a26615a9b",
+    "semantic_hash": "f4a6cf450bcbf3f2e171664a26615a9b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\README.md": {
+    "mtime": 1779498886.1225305,
+    "seen": 1789764666.200264,
+    "ast_hash": "5424556c0350653402eda58280284003",
+    "semantic_hash": "5424556c0350653402eda58280284003"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\README.md": {
+    "mtime": 1779451425.878022,
+    "seen": 1789764666.200264,
+    "ast_hash": "a5563f3b2cc0f54024b5580d2a2abd0f",
+    "semantic_hash": "a5563f3b2cc0f54024b5580d2a2abd0f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\scripts\\html_ideas\\dashboard_transacctions.html": {
+    "mtime": 1788451125.2608583,
+    "seen": 1789764666.200264,
+    "ast_hash": "767684b733f4ad8c7ef3eb5a8622911b",
+    "semantic_hash": "767684b733f4ad8c7ef3eb5a8622911b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\plugins\\tauri-plugin-share-target\\permissions\\autogenerated\\reference.md": {
+    "mtime": 1786721744.337598,
+    "seen": 1789764666.200264,
+    "ast_hash": "62512c49ab8625cddfb7f9c528ce2a03",
+    "semantic_hash": "62512c49ab8625cddfb7f9c528ce2a03"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\app.html": {
+    "mtime": 1786073414.9590814,
+    "seen": 1789764666.200264,
+    "ast_hash": "994da847078c0da6d01cc56b86ca7b8c",
+    "semantic_hash": "994da847078c0da6d01cc56b86ca7b8c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\static\\robots.txt": {
+    "mtime": 1779451425.9486353,
+    "seen": 1789764666.200264,
+    "ast_hash": "17fb6d5f32c1874fae9a6bad26f1fcff",
+    "semantic_hash": "17fb6d5f32c1874fae9a6bad26f1fcff"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\demo.html": {
+    "mtime": 1779451425.952818,
+    "seen": 1789764666.200264,
+    "ast_hash": "95ee94e9b5067ddbc8a36a38e280557b",
+    "semantic_hash": "95ee94e9b5067ddbc8a36a38e280557b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\supabase\\functions\\README.md": {
+    "mtime": 1780601876.914634,
+    "seen": 1789764666.200264,
+    "ast_hash": "d8ae106ec5513e5ab837ec7de99fab2f",
+    "semantic_hash": "d8ae106ec5513e5ab837ec7de99fab2f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Aprobaciones de Documentos - Modulo de Proyectos.jpeg": {
+    "mtime": 1780775670.0377672,
+    "seen": 1789764666.200264,
+    "ast_hash": "b008a9b4425d4a63237ea78a114e648b",
+    "semantic_hash": "b008a9b4425d4a63237ea78a114e648b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Bandeja de pagos pendientes.jpeg": {
+    "mtime": 1783189626.9791498,
+    "seen": 1789764666.200264,
+    "ast_hash": "2ecbf39f87fb7091ace46e9773701454",
+    "semantic_hash": "2ecbf39f87fb7091ace46e9773701454"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Curva S - Modulo de Proyectos.jpeg": {
+    "mtime": 1780775317.1421409,
+    "seen": 1789764666.200264,
+    "ast_hash": "5a56b5f880b4fd18de161de97e491824",
+    "semantic_hash": "5a56b5f880b4fd18de161de97e491824"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Dashboard Proyectos de Consultoria.jpeg": {
+    "mtime": 1780775423.1527894,
+    "seen": 1789764666.200264,
+    "ast_hash": "a363ebfb2d2658ffbe0b420700a54ea7",
+    "semantic_hash": "a363ebfb2d2658ffbe0b420700a54ea7"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Dashboard Proyectos de Obras.jpeg": {
+    "mtime": 1780775838.650928,
+    "seen": 1789764666.200264,
+    "ast_hash": "df762b8b2ebb81b2583a700c5ccc5812",
+    "semantic_hash": "df762b8b2ebb81b2583a700c5ccc5812"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Gantt con Dependencias - Modulo Proyectos.jpeg": {
+    "mtime": 1780775198.440012,
+    "seen": 1789764666.200264,
+    "ast_hash": "8aa45e7847ab5051d6b46ca4cdf7a2c5",
+    "semantic_hash": "8aa45e7847ab5051d6b46ca4cdf7a2c5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Gestion de Documentos - Modulo de Proyectos.jpeg": {
+    "mtime": 1780775607.6868048,
+    "seen": 1789764666.200264,
+    "ast_hash": "df14c5c25e75f3e83bb19e8150e326df",
+    "semantic_hash": "df14c5c25e75f3e83bb19e8150e326df"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Gestion de partidas con progresos - Modulo Proyectos.jpeg": {
+    "mtime": 1780775363.4446533,
+    "seen": 1789764666.200264,
+    "ast_hash": "48a9ece4cb866952ec2a8379f45a7c90",
+    "semantic_hash": "48a9ece4cb866952ec2a8379f45a7c90"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Historico de cumplimiento - Modulo Proyecto Obras.jpeg": {
+    "mtime": 1780775028.362118,
+    "seen": 1789764666.200264,
+    "ast_hash": "982fa33db9223d6efaf5763e3d1f2925",
+    "semantic_hash": "982fa33db9223d6efaf5763e3d1f2925"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Main Dashboard - Modulo de Proyectos.jpeg": {
+    "mtime": 1780775250.342785,
+    "seen": 1789764666.200264,
+    "ast_hash": "9a0e8c661f7a40dd1a4ed2332a25ef79",
+    "semantic_hash": "9a0e8c661f7a40dd1a4ed2332a25ef79"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Metodologia last Planner.jpeg": {
+    "mtime": 1780767112.9640226,
+    "seen": 1789764666.200264,
+    "ast_hash": "6381c706329fe7ebe3a701e05c1fd88f",
+    "semantic_hash": "6381c706329fe7ebe3a701e05c1fd88f"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\PPC causas de incumplimiento -Modulo Proyectos.jpeg": {
+    "mtime": 1780775129.3100667,
+    "seen": 1789764666.200264,
+    "ast_hash": "d47cb291ed067a8b4f94cc7cd352e0db",
+    "semantic_hash": "d47cb291ed067a8b4f94cc7cd352e0db"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\PPC- Modulo Proyecto Obras.jpeg": {
+    "mtime": 1780769003.4897318,
+    "seen": 1789764666.200264,
+    "ast_hash": "fccad0c141c731c9dff7bc7c6e908ff4",
+    "semantic_hash": "fccad0c141c731c9dff7bc7c6e908ff4"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Plantillas para flujos - Proyectos de Consultoria.jpeg": {
+    "mtime": 1780775524.903162,
+    "seen": 1789764666.200264,
+    "ast_hash": "f344580801bc5bfc1b845f2112566a52",
+    "semantic_hash": "f344580801bc5bfc1b845f2112566a52"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\RNC Razones de No Cumplimiento - Modulo de Proyectos.jpeg": {
+    "mtime": 1780775725.099223,
+    "seen": 1789764666.200264,
+    "ast_hash": "b3c335b411f04514acac3545480aeacc",
+    "semantic_hash": "b3c335b411f04514acac3545480aeacc"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Revision proyectos Feedback - Modulo Proyectos Obras.jpeg": {
+    "mtime": 1780768787.6555576,
+    "seen": 1789764666.200264,
+    "ast_hash": "e71ef30a4e573b316d9759d9186b5c5e",
+    "semantic_hash": "e71ef30a4e573b316d9759d9186b5c5e"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\Documentacion\\Cliente\\Vista de Flujo - Proyectos de Consultoria.jpeg": {
+    "mtime": 1780775475.67892,
+    "seen": 1789764666.200264,
+    "ast_hash": "c0da2eac6f250cd9cace2696c521b6a5",
+    "semantic_hash": "c0da2eac6f250cd9cace2696c521b6a5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-hdpi\\ic_launcher.png": {
+    "mtime": 1786073388.9036775,
+    "seen": 1789764666.200264,
+    "ast_hash": "30803e8208bc9f671b176b32f7e19369",
+    "semantic_hash": "30803e8208bc9f671b176b32f7e19369"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-hdpi\\ic_launcher_foreground.png": {
+    "mtime": 1786073388.8919597,
+    "seen": 1789764666.200264,
+    "ast_hash": "c907d2379d4bc638e7483b7ba13bf197",
+    "semantic_hash": "c907d2379d4bc638e7483b7ba13bf197"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-hdpi\\ic_launcher_round.png": {
+    "mtime": 1786073388.8981545,
+    "seen": 1789764666.200264,
+    "ast_hash": "30803e8208bc9f671b176b32f7e19369",
+    "semantic_hash": "30803e8208bc9f671b176b32f7e19369"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-mdpi\\ic_launcher.png": {
+    "mtime": 1786073388.9270127,
+    "seen": 1789764666.200264,
+    "ast_hash": "016dd5308be3464654e17918168e0ff3",
+    "semantic_hash": "016dd5308be3464654e17918168e0ff3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-mdpi\\ic_launcher_foreground.png": {
+    "mtime": 1786073388.9152942,
+    "seen": 1789764666.200264,
+    "ast_hash": "5aaeea9c26ab155f25f1df3583da2cab",
+    "semantic_hash": "5aaeea9c26ab155f25f1df3583da2cab"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-mdpi\\ic_launcher_round.png": {
+    "mtime": 1786073388.9218552,
+    "seen": 1789764666.200264,
+    "ast_hash": "016dd5308be3464654e17918168e0ff3",
+    "semantic_hash": "016dd5308be3464654e17918168e0ff3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xhdpi\\ic_launcher.png": {
+    "mtime": 1786073388.9666798,
+    "seen": 1789764666.200264,
+    "ast_hash": "c4953e565d7dcca7ee1b3ea55c6960b3",
+    "semantic_hash": "c4953e565d7dcca7ee1b3ea55c6960b3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xhdpi\\ic_launcher_foreground.png": {
+    "mtime": 1786073388.9528303,
+    "seen": 1789764666.200264,
+    "ast_hash": "64381e170681d3df7902ee3c908edc18",
+    "semantic_hash": "64381e170681d3df7902ee3c908edc18"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xhdpi\\ic_launcher_round.png": {
+    "mtime": 1786073388.9601364,
+    "seen": 1789764666.200264,
+    "ast_hash": "c4953e565d7dcca7ee1b3ea55c6960b3",
+    "semantic_hash": "c4953e565d7dcca7ee1b3ea55c6960b3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxhdpi\\ic_launcher.png": {
+    "mtime": 1786073389.0556457,
+    "seen": 1789764666.200264,
+    "ast_hash": "15a1285ad75220fa966630bd8b8bea90",
+    "semantic_hash": "15a1285ad75220fa966630bd8b8bea90"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxhdpi\\ic_launcher_foreground.png": {
+    "mtime": 1786073389.0291429,
+    "seen": 1789764666.200264,
+    "ast_hash": "4cfbacd6b479db8ba1b8a51dd7fef499",
+    "semantic_hash": "4cfbacd6b479db8ba1b8a51dd7fef499"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxhdpi\\ic_launcher_round.png": {
+    "mtime": 1786073389.0428555,
+    "seen": 1789764666.200264,
+    "ast_hash": "15a1285ad75220fa966630bd8b8bea90",
+    "semantic_hash": "15a1285ad75220fa966630bd8b8bea90"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxxhdpi\\ic_launcher.png": {
+    "mtime": 1786073389.2614982,
+    "seen": 1789764666.200264,
+    "ast_hash": "beb7113e539eaadf6d4c08084290f803",
+    "semantic_hash": "beb7113e539eaadf6d4c08084290f803"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxxhdpi\\ic_launcher_foreground.png": {
+    "mtime": 1786073389.208296,
+    "seen": 1789764666.200264,
+    "ast_hash": "8382f874f7be48a3c01147af810dbd10",
+    "semantic_hash": "8382f874f7be48a3c01147af810dbd10"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\gen\\android\\app\\src\\main\\res\\mipmap-xxxhdpi\\ic_launcher_round.png": {
+    "mtime": 1786073389.235965,
+    "seen": 1789764666.200264,
+    "ast_hash": "beb7113e539eaadf6d4c08084290f803",
+    "semantic_hash": "beb7113e539eaadf6d4c08084290f803"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\128x128.png": {
+    "mtime": 1786073388.6417983,
+    "seen": 1789764666.200264,
+    "ast_hash": "007a876383d698d5f0e6f0ea15d57432",
+    "semantic_hash": "007a876383d698d5f0e6f0ea15d57432"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\128x128@2x.png": {
+    "mtime": 1786073388.6875226,
+    "seen": 1789764666.200264,
+    "ast_hash": "00e973cb5b6c0446e90d5d165b369323",
+    "semantic_hash": "00e973cb5b6c0446e90d5d165b369323"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\32x32.png": {
+    "mtime": 1786073388.6281433,
+    "seen": 1789764666.200264,
+    "ast_hash": "3d5c14849a79a992c746c6ecde12b848",
+    "semantic_hash": "3d5c14849a79a992c746c6ecde12b848"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square107x107Logo.png": {
+    "mtime": 1786073387.392678,
+    "seen": 1789764666.200264,
+    "ast_hash": "ed5dbb25e725a5dc25be42caf3512d26",
+    "semantic_hash": "ed5dbb25e725a5dc25be42caf3512d26"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square142x142Logo.png": {
+    "mtime": 1786073387.4036875,
+    "seen": 1789764666.200264,
+    "ast_hash": "d9210163519984bae82623d38392f48c",
+    "semantic_hash": "d9210163519984bae82623d38392f48c"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square150x150Logo.png": {
+    "mtime": 1786073387.4162147,
+    "seen": 1789764666.200264,
+    "ast_hash": "72f1172f9bf9dc56322f549604b2f585",
+    "semantic_hash": "72f1172f9bf9dc56322f549604b2f585"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square284x284Logo.png": {
+    "mtime": 1786073387.4647906,
+    "seen": 1789764666.200264,
+    "ast_hash": "b3a1dfefc1f5be2eb48e9edd0922f503",
+    "semantic_hash": "b3a1dfefc1f5be2eb48e9edd0922f503"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square30x30Logo.png": {
+    "mtime": 1786073387.3661554,
+    "seen": 1789764666.200264,
+    "ast_hash": "f6eda9e3c5bfbdd9e6fb71eeb9517a23",
+    "semantic_hash": "f6eda9e3c5bfbdd9e6fb71eeb9517a23"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square310x310Logo.png": {
+    "mtime": 1786073387.5218327,
+    "seen": 1789764666.200264,
+    "ast_hash": "bfbb81c79946da7d141b316ca2b11645",
+    "semantic_hash": "bfbb81c79946da7d141b316ca2b11645"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square44x44Logo.png": {
+    "mtime": 1786073387.370152,
+    "seen": 1789764666.200264,
+    "ast_hash": "ebcf8191720bfa8742ccecd64804dd24",
+    "semantic_hash": "ebcf8191720bfa8742ccecd64804dd24"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square71x71Logo.png": {
+    "mtime": 1786073387.3761525,
+    "seen": 1789764666.200264,
+    "ast_hash": "1f422ef566354b31a0709dbf5925e2c5",
+    "semantic_hash": "1f422ef566354b31a0709dbf5925e2c5"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\Square89x89Logo.png": {
+    "mtime": 1786073387.3836744,
+    "seen": 1789764666.200264,
+    "ast_hash": "431d57639068a4bd17fa9825a8c41aa3",
+    "semantic_hash": "431d57639068a4bd17fa9825a8c41aa3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\StoreLogo.png": {
+    "mtime": 1786073387.3611422,
+    "seen": 1789764666.200264,
+    "ast_hash": "656bb7b1435025c0cc61c118d469eee6",
+    "semantic_hash": "656bb7b1435025c0cc61c118d469eee6"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\icon.png": {
+    "mtime": 1786073388.8715825,
+    "seen": 1789764666.200264,
+    "ast_hash": "e86743942ae44ca38e3455be42bbe2c3",
+    "semantic_hash": "e86743942ae44ca38e3455be42bbe2c3"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-20x20@1x.png": {
+    "mtime": 1786073389.271591,
+    "seen": 1789764666.200264,
+    "ast_hash": "c51af0680b8150c6695d6998785b4c0a",
+    "semantic_hash": "c51af0680b8150c6695d6998785b4c0a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-20x20@2x-1.png": {
+    "mtime": 1786073389.2675903,
+    "seen": 1789764666.200264,
+    "ast_hash": "1c7672a1fa5a07235d37cf444a62e47b",
+    "semantic_hash": "1c7672a1fa5a07235d37cf444a62e47b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-20x20@2x.png": {
+    "mtime": 1786073389.277121,
+    "seen": 1789764666.200264,
+    "ast_hash": "1c7672a1fa5a07235d37cf444a62e47b",
+    "semantic_hash": "1c7672a1fa5a07235d37cf444a62e47b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-20x20@3x.png": {
+    "mtime": 1786073389.2831244,
+    "seen": 1789764666.200264,
+    "ast_hash": "d6f3e54ebcc8fca0f0e5826a94572421",
+    "semantic_hash": "d6f3e54ebcc8fca0f0e5826a94572421"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-29x29@1x.png": {
+    "mtime": 1786073389.2941227,
+    "seen": 1789764666.200264,
+    "ast_hash": "7558bd6143d41d315ae2340fb5861426",
+    "semantic_hash": "7558bd6143d41d315ae2340fb5861426"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-29x29@2x-1.png": {
+    "mtime": 1786073389.2891276,
+    "seen": 1789764666.200264,
+    "ast_hash": "88b76c6550c56e45aa334c4bad00d564",
+    "semantic_hash": "88b76c6550c56e45aa334c4bad00d564"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-29x29@2x.png": {
+    "mtime": 1786073389.299138,
+    "seen": 1789764666.200264,
+    "ast_hash": "88b76c6550c56e45aa334c4bad00d564",
+    "semantic_hash": "88b76c6550c56e45aa334c4bad00d564"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-29x29@3x.png": {
+    "mtime": 1786073389.306136,
+    "seen": 1789764666.200264,
+    "ast_hash": "70041c95e4bf61acaa9f0c73d1898429",
+    "semantic_hash": "70041c95e4bf61acaa9f0c73d1898429"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-40x40@1x.png": {
+    "mtime": 1786073389.318667,
+    "seen": 1789764666.200264,
+    "ast_hash": "1c7672a1fa5a07235d37cf444a62e47b",
+    "semantic_hash": "1c7672a1fa5a07235d37cf444a62e47b"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-40x40@2x-1.png": {
+    "mtime": 1786073389.3136663,
+    "seen": 1789764666.200264,
+    "ast_hash": "52863afd1e1d80fb9fc0519fe7c6fabb",
+    "semantic_hash": "52863afd1e1d80fb9fc0519fe7c6fabb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-40x40@2x.png": {
+    "mtime": 1786073389.327311,
+    "seen": 1789764666.200264,
+    "ast_hash": "52863afd1e1d80fb9fc0519fe7c6fabb",
+    "semantic_hash": "52863afd1e1d80fb9fc0519fe7c6fabb"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-40x40@3x.png": {
+    "mtime": 1786073389.3362987,
+    "seen": 1789764666.200264,
+    "ast_hash": "87696dbe1916ac9ca273b369aaae9464",
+    "semantic_hash": "87696dbe1916ac9ca273b369aaae9464"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-512@2x.png": {
+    "mtime": 1786073389.986757,
+    "seen": 1789764666.200264,
+    "ast_hash": "ad24cd8dd48adf8b5f059c81586fad4a",
+    "semantic_hash": "ad24cd8dd48adf8b5f059c81586fad4a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-60x60@2x.png": {
+    "mtime": 1786073389.3461866,
+    "seen": 1789764666.200264,
+    "ast_hash": "87696dbe1916ac9ca273b369aaae9464",
+    "semantic_hash": "87696dbe1916ac9ca273b369aaae9464"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-60x60@3x.png": {
+    "mtime": 1786073389.365496,
+    "seen": 1789764666.200264,
+    "ast_hash": "b3ffcbbd63c571d8a4369613e5379669",
+    "semantic_hash": "b3ffcbbd63c571d8a4369613e5379669"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-76x76@1x.png": {
+    "mtime": 1786073389.3720286,
+    "seen": 1789764666.200264,
+    "ast_hash": "59893181bea3b699564abaca42a92e63",
+    "semantic_hash": "59893181bea3b699564abaca42a92e63"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-76x76@2x.png": {
+    "mtime": 1786073389.3874958,
+    "seen": 1789764666.200264,
+    "ast_hash": "ff8e31b1929a7132d93b34c5323f722a",
+    "semantic_hash": "ff8e31b1929a7132d93b34c5323f722a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src-tauri\\icons\\ios\\AppIcon-83.5x83.5@2x.png": {
+    "mtime": 1786073389.4079626,
+    "seen": 1789764666.200264,
+    "ast_hash": "672a2503885bf2a186077eee7ae15e53",
+    "semantic_hash": "672a2503885bf2a186077eee7ae15e53"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\src\\lib\\assets\\favicon.svg": {
+    "mtime": 1779451425.9170866,
+    "seen": 1789764666.200264,
+    "ast_hash": "a0d1b540c1b9a2a920d5f6cae983118a",
+    "semantic_hash": "a0d1b540c1b9a2a920d5f6cae983118a"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\static\\favicon.png": {
+    "mtime": 1786073409.5993023,
+    "seen": 1789764666.200264,
+    "ast_hash": "00e973cb5b6c0446e90d5d165b369323",
+    "semantic_hash": "00e973cb5b6c0446e90d5d165b369323"
+  },
+  "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\static\\logo.png": {
+    "mtime": 1786074342.3369806,
+    "seen": 1789764666.200264,
+    "ast_hash": "00e973cb5b6c0446e90d5d165b369323",
+    "semantic_hash": "00e973cb5b6c0446e90d5d165b369323"
+  }
+}

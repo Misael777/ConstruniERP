@@ -121,9 +121,16 @@
 </script>
 
 {#if isOpen}
-	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto" transition:fade={{duration: 200}}>
-		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-8 relative" transition:scale={{duration: 300, start: 0.95}}>
-			
+	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" transition:fade={{duration: 200}}>
+		<!-- Bug real reportado por el usuario (con captura, ticket "Error de diagramación en etiqueta"):
+		     antes había DOS contenedores con scroll independiente a la vez (este wrapper exterior +
+		     el "Body" de abajo), con el header `sticky top-0` anclado al EXTERIOR — cuando los dos
+		     scrolls se desalineaban, la etiqueta de "Razón Social" quedaba atrapada detrás del header,
+		     sin forma de hacerle scroll hasta la vista. Un solo contenedor con scroll (este, con
+		     max-h-[90vh]) es el mismo patrón ya usado en el resto de modales del ERP (ver
+		     TicketModal.svelte). -->
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl relative max-h-[90vh] overflow-y-auto" transition:scale={{duration: 300, start: 0.95}}>
+
 			<!-- Header -->
 			<div class="flex items-center justify-between p-6 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
 				<h2 class="text-xl font-bold text-slate-800">
@@ -135,7 +142,7 @@
 			</div>
 
 			<!-- Body -->
-			<div class="p-6 overflow-y-auto">
+			<div class="p-6">
 				{#if errorMsg}
 					<div class="mb-4 p-3 bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm flex items-start gap-2">
 						<i class="fas fa-exclamation-circle mt-0.5"></i>

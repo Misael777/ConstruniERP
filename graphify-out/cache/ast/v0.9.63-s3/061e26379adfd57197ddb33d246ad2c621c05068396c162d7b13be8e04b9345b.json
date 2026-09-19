@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_app_src_tauri_plugins_tauri_plugin_share_target_android_tauri_tauri_api_build_gradle_kts", "label": "build.gradle.kts", "file_type": "code", "source_file": "app/src-tauri/plugins/tauri-plugin-share-target/android/.tauri/tauri-api/build.gradle.kts", "source_location": "L1"}], "edges": [], "raw_calls": []}

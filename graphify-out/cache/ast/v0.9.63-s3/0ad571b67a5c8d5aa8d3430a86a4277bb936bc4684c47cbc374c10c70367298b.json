@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_empleados_dni_migration_sql", "label": "empleados_dni_migration.sql", "file_type": "code", "source_file": "empleados_dni_migration.sql", "source_location": null}, {"id": "empleados", "label": "empleados", "file_type": "code", "source_file": "", "source_location": "", "origin_file": "$graphify-root$/empleados_dni_migration.sql"}], "edges": []}

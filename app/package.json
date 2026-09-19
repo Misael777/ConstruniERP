@@ -1,7 +1,7 @@
 {
 	"name": "app",
 	"private": true,
-	"version": "0.2.16",
+	"version": "0.2.18",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
@@ -12,7 +12,8 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
 		"tauri": "node --env-file=.env node_modules/@tauri-apps/cli/tauri.js",
-		"release": "node --env-file=.env scripts/release.mjs"
+		"release": "node --env-file=.env scripts/release.mjs",
+		"mcp": "node --env-file=.env --experimental-strip-types mcp-server/index.ts"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",
@@ -29,6 +30,7 @@
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.22.0",
+		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@supabase/supabase-js": "^2.106.0",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@tailwindcss/vite": "^4.3.0",

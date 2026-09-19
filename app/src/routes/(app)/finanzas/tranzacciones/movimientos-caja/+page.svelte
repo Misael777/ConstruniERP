@@ -65,15 +65,18 @@
 	// Botones "Consultoria"/"Obra"/"Corporativo"/"Otros" — mismo diseño/lógica que ya usan Cuentas por
 	// Pagar/Cobrar (ver idsParaTipoFiltro ahí), filtran por el TIPO real del centro de costo de cada
 	// movimiento (origen O destino, ver idsCentroCosto en movimientosCaja.service.ts). "Otros" es el
-	// catch-all (cualquier tipo que no sea uno de los 3 conocidos).
-	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otros';
+	// tipo LITERAL 'otro' (ver el tab "Centros de Costos", que muestra esa etiqueta exacta para
+	// OTRO-002/006/007/008, etc.) — bug real reportado con captura: antes era un catch-all "cualquier
+	// tipo que no sea uno de los 3 conocidos", que de paso arrastraba Préstamo y Cuentas Internas
+	// (cliente/proveedor/empleado/subcontratista), que NUNCA deberían aparecer bajo ninguno de estos 4
+	// botones — son una categoría aparte (ver la nota de "IMPORTANTE" en conciliacion.service.ts).
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otro';
 	let centroCostoTipoMap = $state<Record<string, string>>({});
 	let tipoFilterCC = $state<TipoFiltroCC | null>(null);
-	const TIPOS_CONOCIDOS_CC = ['proyecto', 'consultoria', 'bolsa general'];
 	function idsParaTipoFiltroCC(tipo: TipoFiltroCC): number[] {
-		const entries = Object.entries(centroCostoTipoMap);
-		const filtradas = tipo === 'otros' ? entries.filter(([, t]) => !TIPOS_CONOCIDOS_CC.includes(t)) : entries.filter(([, t]) => t === tipo);
-		return filtradas.map(([id]) => Number(id));
+		return Object.entries(centroCostoTipoMap)
+			.filter(([, t]) => t === tipo)
+			.map(([id]) => Number(id));
 	}
 	function toggleTipoFilterCC(tipo: TipoFiltroCC) {
 		tipoFilterCC = tipoFilterCC === tipo ? null : tipo;
@@ -479,8 +482,8 @@
 		</button>
 		<button
 			type="button"
-			onclick={() => toggleTipoFilterCC('otros')}
-			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'otros' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			onclick={() => toggleTipoFilterCC('otro')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilterCC === 'otro' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
 		>
 			<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
 				<Ellipsis size={14} />

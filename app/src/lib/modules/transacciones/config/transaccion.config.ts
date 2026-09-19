@@ -468,15 +468,14 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
-		// Siempre visible y editable, sin importar "Documento pendiente" (antes se ocultaba/deshabilitaba
-		// por completo si era No — a pedido explícito del usuario, ya NO: "no quiero que desaparezcan
-		// estos campos"). Opcional (antes era obligatorio con Documento pendiente=Sí) — la columna sigue
-		// siendo VARCHAR de texto libre (no una FK), el valor guardado es el nombre del empleado elegido,
-		// mismo criterio que 'responsable' en cuentaPagar.config.ts/cuentaCobrar.config.ts. Sin
-		// disabledWhen a propósito: buildWritablePayload fuerza a null cualquier campo "bloqueado" por
-		// disabledWhen sin importar lo que el usuario haya escrito — con el campo siempre habilitado en
-		// el formulario (ver TransaccionModal.svelte), dejar disabledWhen acá borraría en silencio lo
-		// que se ingresó con Documento pendiente=No.
+		// Solo aplica (visible) si "Documento pendiente" es Sí — oculto por completo si es No (ver
+		// TransaccionModal.svelte; hubo un cambio intermedio que lo dejaba siempre visible, revertido a
+		// pedido explícito del usuario). Opcional (antes era obligatorio con Documento pendiente=Sí,
+		// también revertido) — la columna sigue siendo VARCHAR de texto libre (no una FK), el valor
+		// guardado es el nombre del empleado elegido, mismo criterio que 'responsable' en
+		// cuentaPagar.config.ts/cuentaCobrar.config.ts. Sin disabledWhen: al estar fuera del DOM con
+		// Documento pendiente=No (ver el {#if} en TransaccionModal.svelte), el campo no puede recibir
+		// texto que luego haga falta limpiar al guardar — disabledWhen sería redundante acá.
 		key: 'responsable_documento_pendiente',
 		label: 'Responsable',
 		tipo: 'select',
@@ -486,8 +485,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
-		// Siempre visible y editable, mismo criterio que responsable_documento_pendiente de arriba (ver
-		// esa nota para el porqué de no tener disabledWhen).
+		// Solo aplica (visible) si "Documento pendiente" es Sí — mismo criterio que
+		// responsable_documento_pendiente de arriba.
 		key: 'fecha_vencimiento_documento',
 		label: 'Fecha de Vencimiento',
 		tipo: 'date',
