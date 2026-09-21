@@ -33,8 +33,33 @@
 	let release = $state<AppRelease | null>(null);
 	let isOpen = $state(false);
 	let versionInstalada = '';
-	/** Última versión por la que YA se mandó la notificación nativa — evita re-notificar en cada poll/
-	 * evento Realtime mientras siga siendo la misma release ya avisada. */
+	/** Ticket #26 (sonido de notificación repetido sin motivo aparente): esto vivía solo en memoria
+	 * (una variable de módulo), a diferencia del mecanismo equivalente de NotificacionesBell.svelte, que
+	 * persiste "ya notificado" en la base de datos — sobrevive un remount, esto no. En un WebView de
+	 * Android, el sistema recrea la Activity/WebView bastante seguido (rotar la pantalla, la app pasa a
+	 * segundo plano y Android le libera memoria, etc.), lo que remonta este componente: `onMount` vuelve
+	 * a correr con `versionYaNotificada = null`, y como YA existe una versión más nueva sin instalar (el
+	 * caso normal mientras el usuario no actualiza), `verificarActualizacion()` la trata como "nunca
+	 * avisada" y dispara sendNotificacionNativa() de nuevo — de ahí el sonido "constante" sin que pase
+	 * nada nuevo en la base de datos. Persistir en localStorage (sobrevive un remount, no un reinstall)
+	 * cierra ese hueco. Se guarda por versión INSTALADA (no solo la remota) para que, apenas se
+	 * actualice de verdad, el próximo release SÍ vuelva a avisar. */
+	const LS_KEY_ULTIMA_NOTIFICADA = 'construnierp_version_ya_notificada';
+	function leerVersionYaNotificada(): string | null {
+		try {
+			return localStorage.getItem(LS_KEY_ULTIMA_NOTIFICADA);
+		} catch {
+			return null;
+		}
+	}
+	function guardarVersionYaNotificada(version: string) {
+		try {
+			localStorage.setItem(LS_KEY_ULTIMA_NOTIFICADA, version);
+		} catch {
+			// Best-effort — si localStorage no está disponible (privado/bloqueado), se degrada al
+			// comportamiento anterior (solo en memoria) sin romper nada.
+		}
+	}
 	let versionYaNotificada: string | null = null;
 	let channel: RealtimeChannel | null = null;
 	let pollIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -49,6 +74,7 @@
 			release = ultimo;
 			if (versionYaNotificada !== ultimo.version) {
 				versionYaNotificada = ultimo.version;
+				guardarVersionYaNotificada(ultimo.version);
 				await sendNotificacionNativa('Construni ERP', `Nueva versión disponible: v${ultimo.version}. Toca el ícono de descarga para actualizar.`);
 			}
 		} catch (err) {
@@ -58,6 +84,7 @@
 
 	onMount(async () => {
 		if (!isRunningInTauri()) return;
+		versionYaNotificada = leerVersionYaNotificada();
 		try {
 			const { getVersion } = await import('@tauri-apps/api/app');
 			versionInstalada = await getVersion();

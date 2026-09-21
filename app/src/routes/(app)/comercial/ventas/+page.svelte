@@ -462,10 +462,27 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			}).sort(compararVentasParaTabla);
 
 			// Los KPIs de arriba ("Ventas cerradas", "Valor total", etc.) reflejan solo las ventas ya
-			// CERRADAS (estado_proyecto='venta_cerrada' — ver ProformasVentaModal.svelte). La tabla y
-			// los gráficos de más abajo siguen mostrando TODAS las ventas del asesor (abiertas y
-			// cerradas), pedido explícito del usuario para no ocultar las que siguen en negociación.
-			const cerradas = ventas.filter((row) => row.estado_proyecto === 'venta_cerrada');
+			// CERRADAS (estado_proyecto='venta_cerrada' — ver ProformasVentaModal.svelte) Y DEL AÑO EN
+			// CURSO — la tarjeta dice "Este año" (ver VentasKPIs.svelte), pero antes (ticket #27) contaba
+			// TODAS las cerradas de los últimos 100 proyectos sin filtrar por año, así que una venta de
+			// 2024 se sumaba al resumen "de este año". Se filtra por la misma fecha que ya usa el resto
+			// de esta pantalla para ubicar una venta en el tiempo (fecha_inicio_plan, con created_at como
+			// respaldo — ver fechaRaw más arriba, misma resolución que ventasPorMes). La tabla y los
+			// gráficos de más abajo siguen mostrando TODAS las ventas del asesor sin filtrar por año
+			// (abiertas y cerradas, de cualquier fecha), pedido explícito del usuario para no ocultar las
+			// que siguen en negociación.
+			const anioActual = new Date().getFullYear();
+			const proyectosCerradosEsteAnio = new Set(
+				proyectos
+					.filter((project: any) => {
+						if (project.estado_proyecto !== 'venta_cerrada') return false;
+						const fechaRaw = project.fecha_inicio_plan || project.created_at;
+						const fecha = fechaRaw ? new Date(fechaRaw) : null;
+						return !!fecha && !Number.isNaN(fecha.getTime()) && fecha.getFullYear() === anioActual;
+					})
+					.map((project: any) => project.id_proyecto)
+			);
+			const cerradas = ventas.filter((row) => proyectosCerradosEsteAnio.has(row.id));
 			const ventasCerradas = cerradas.length;
 			const valorTotal = cerradas.reduce((sum, row) => sum + row.valor, 0);
 			const comisionTotal = cerradas.reduce((sum, row) => sum + row.comision, 0);

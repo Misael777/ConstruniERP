@@ -96,7 +96,7 @@ export interface FiltrosFinanzas {
 export const TIPO_CENTRO_COSTO_OPTIONS: FieldOption[] = [
 	{ value: 'obra', label: 'Obra' },
 	{ value: 'consultoria', label: 'Consultoría' },
-	{ value: 'bolsa general', label: 'Bolsa General' },
+	{ value: 'bolsa general', label: 'Corporativo' }, // Ticket #24: renombrado a pedido del cliente — el valor de BD ('bolsa general') no cambia, solo la etiqueta.
 	{ value: 'area', label: 'Área' },
 	{ value: 'otro', label: 'Otro' },
 	{ value: 'proyecto', label: 'Proyecto' },

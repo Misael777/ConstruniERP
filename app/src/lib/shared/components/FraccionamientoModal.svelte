@@ -14,6 +14,7 @@
 	 * para que el formulario padre (CuentaCobrarModal/CuentaPagarModal) lo mande junto con el resto del
 	 * payload al guardar la cuenta — ver sincronizarCuotasProgramadas en cada servicio.
 	 */
+	import { untrack } from 'svelte';
 	import { X, Trash2, Plus, Minus, Loader2 } from '@lucide/svelte';
 	import { currencyMask, formatCurrency } from '$lib/shared/fieldConfig';
 
@@ -73,20 +74,50 @@
 		return d.toISOString().slice(0, 10);
 	}
 
-	function repartirEnPartesIguales(n: number): Fraccion[] {
+	/** Tickets #20/#22: antes las fechas de las cuotas SIEMPRE avanzaban de a un mes exacto
+	 * (addMonths), sin importar qué tan seguido se cobra/paga de verdad. Cuando la ventana entre
+	 * emisión y vencimiento es corta (ej. una semana) pero se piden muchas cuotas, cada cuota
+	 * "mensual" se pasaba de largo del vencimiento y el clamp de abajo las dejaba todas pegadas en
+	 * la misma fecha tope — de ahí el reclamo "me salen las fechas del mismo día". 'quincenal'/
+	 * 'semanal' suman días exactos en vez de meses. */
+	function avanzarPeriodo(fecha: Date, periodos: number): Date {
+		if (periodicidad === 'mensual') return addMonths(fecha, periodos);
+		const dias = periodicidad === 'quincenal' ? 15 : 7;
+		const d = new Date(fecha);
+		d.setDate(d.getDate() + dias * periodos);
+		return d;
+	}
+
+	/** Solo las fechas (sin montos) que le tocarían a `n` cuotas con la periodicidad elegida — usada
+	 * tanto por repartirEnPartesIguales como para RE-fechar las filas existentes cuando el usuario
+	 * cambia la periodicidad (ver el $effect de más abajo). El tope contra fechaVencimiento solo tiene
+	 * sentido en 'mensual' (el diseño original: la última cuota cae justo en el vencimiento) — en
+	 * quincenal/semanal el usuario explícitamente quiere que el calendario se extienda MÁS ALLÁ de esa
+	 * fecha (ver ticket #20: "fracciono en 20 cuotas... cada cuota... la fecha semana a semana"),
+	 * así que ahí no se recorta contra el vencimiento. */
+	function fechasParaPeriodicidad(n: number): string[] {
 		const inicio = new Date(fechaEmision);
-		const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
+		const limite = periodicidad === 'mensual' && fechaVencimiento ? new Date(fechaVencimiento) : null;
+		const fechas: string[] = [];
+		for (let i = 1; i <= n; i++) {
+			let fecha = Number.isNaN(inicio.getTime()) ? new Date() : avanzarPeriodo(inicio, i);
+			if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) fecha = limite;
+			fechas.push(toISODate(fecha));
+		}
+		return fechas;
+	}
+
+	function repartirEnPartesIguales(n: number): Fraccion[] {
+		const fechas = fechasParaPeriodicidad(n);
 		const base = Number.isFinite(montoTotal) ? montoTotal : 0;
 		const montoBase = Math.floor((base / n) * 100) / 100;
 		const filas: Fraccion[] = [];
 		let acumulado = 0;
-		for (let i = 1; i <= n; i++) {
-			let fecha = Number.isNaN(inicio.getTime()) ? new Date() : addMonths(inicio, i);
-			if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) fecha = limite;
-			const esUltima = i === n;
+		for (let i = 0; i < n; i++) {
+			const esUltima = i === n - 1;
 			const monto = esUltima ? Number((base - acumulado).toFixed(2)) : montoBase;
 			acumulado += monto;
-			filas.push({ fecha: toISODate(fecha), monto });
+			filas.push({ fecha: fechas[i], monto });
 		}
 		return filas;
 	}
@@ -94,6 +125,11 @@
 	let activo = $state(fraccionesIniciales.length > 0);
 	let filas = $state<Fraccion[]>([]);
 	let metodo = $state<'montos_iguales' | 'montos_desiguales' | 'por_porcentaje'>('montos_iguales');
+	/** Independiente de "Método de fraccionamiento" (que decide cómo se reparte el MONTO) — esto decide
+	 * cada cuánto avanza la FECHA de una cuota a la siguiente. Arranca en 'mensual' siempre (mismo
+	 * comportamiento que ya existía) — no se infiere de datos ya guardados, que se crearon todos bajo la
+	 * lógica mensual anterior. */
+	let periodicidad = $state<'mensual' | 'quincenal' | 'semanal'>('mensual');
 
 	/** ¿Los montos de `filas` calzan con lo que daría un reparto en partes iguales? (con tolerancia de
 	 * un centavo por redondeo). Se usa solo para decidir con qué método abrir una cuenta YA fraccionada
@@ -111,6 +147,7 @@
 	$effect(() => {
 		if (!open) return;
 		activo = true;
+		periodicidad = 'mensual';
 		// OJO: se usa una variable local (`nuevasFilas`) para decidir el método, NO se vuelve a leer
 		// `filas` (el $state) — leerla acá la dejaría "suscrita" a los cambios que hace el otro efecto
 		// (el que recalcula montos iguales más abajo), disparando este efecto de nuevo, que resetea
@@ -136,14 +173,26 @@
 		if (cambio) filas = filas.map((f, i) => ({ ...f, monto: esperado[i].monto }));
 	});
 
+	// Cuando el usuario cambia "Periodicidad", re-fecha las cuotas YA generadas (sin tocar sus montos)
+	// para que respeten el nuevo espaciado — a propósito NO depende reactivamente de `filas` (se lee con
+	// `untrack`, ver comentario del efecto de "abrir" más arriba): si dependiera de `filas`, cualquier
+	// edición manual de una fecha (actualizarFecha) volvería a pisarla con la fecha "canónica".
+	$effect(() => {
+		periodicidad;
+		const filasActuales = untrack(() => filas);
+		if (filasActuales.length === 0) return;
+		const fechas = fechasParaPeriodicidad(filasActuales.length);
+		filas = filasActuales.map((f, i) => ({ ...f, fecha: fechas[i] }));
+	});
+
 	const sumaFilas = $derived(filas.reduce((sum, f) => sum + (Number.isFinite(f.monto) ? f.monto : 0), 0));
 	const sumaOk = $derived(Math.abs(Number(sumaFilas.toFixed(2)) - Number((montoTotal || 0).toFixed(2))) < 0.01);
 
 	function agregarFraccion() {
 		const ultima = filas[filas.length - 1];
 		const baseFecha = ultima ? new Date(ultima.fecha) : new Date(fechaEmision);
-		let fecha = Number.isNaN(baseFecha.getTime()) ? new Date() : addMonths(baseFecha, 1);
-		const limite = fechaVencimiento ? new Date(fechaVencimiento) : null;
+		let fecha = Number.isNaN(baseFecha.getTime()) ? new Date() : avanzarPeriodo(baseFecha, 1);
+		const limite = periodicidad === 'mensual' && fechaVencimiento ? new Date(fechaVencimiento) : null;
 		if (limite && !Number.isNaN(limite.getTime()) && fecha.getTime() > limite.getTime()) fecha = limite;
 		const restante = Number(((montoTotal || 0) - sumaFilas).toFixed(2));
 		filas = [...filas, { fecha: toISODate(fecha), monto: restante > 0 ? restante : 0 }];
@@ -298,6 +347,26 @@
 								<Plus size={14} />
 							</button>
 						</div>
+					</div>
+
+					<div>
+						<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Periodicidad</span>
+						<select
+							value={periodicidad}
+							onchange={(e) => (periodicidad = (e.target as HTMLSelectElement).value as 'mensual' | 'quincenal' | 'semanal')}
+							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+						>
+							<option value="mensual">Mensual</option>
+							<option value="quincenal">Quincenal</option>
+							<option value="semanal">Semanal</option>
+						</select>
+						<p class="mt-1 text-xs text-slate-400">
+							{#if periodicidad === 'mensual'}
+								Cada cuota cae un mes después de la anterior, sin pasarse de la Fecha de Vencimiento.
+							{:else}
+								Cada cuota cae {periodicidad === 'quincenal' ? '15 días' : '7 días'} después de la anterior — el calendario puede extenderse más allá de la Fecha de Vencimiento si el número de cuotas lo pide.
+							{/if}
+						</p>
 					</div>
 
 					<div>
