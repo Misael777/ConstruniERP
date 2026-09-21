@@ -1,67 +1,81 @@
 /**
- * Servicio de acceso a datos para "factura" + su detalle "factura_detalle".
- * Recibe el SupabaseClient como parámetro; se invoca client-side con el cliente anon
- * ($lib/supabaseClient) para funcionar igual en web y en Tauri (Windows/Android) sin
- * servidor embebido — mismo criterio que el resto de Finanzas. La BD no tiene RLS real todavía.
+ * Servicio de acceso a datos para "factura" + su detalle "factura_detalle" + sus archivos emitidos
+ * "factura_archivo". Recibe el SupabaseClient como parámetro; se invoca client-side con el cliente anon
+ * ($lib/supabaseClient) para funcionar igual en web y en Tauri (Windows/Android) sin servidor embebido.
  *
- * Documento INTERNO de facturación/valorización (no un comprobante electrónico SUNAT — sin serie/
- * correlativo oficial ni OSE). Al "emitir" una factura se crea/vincula una Cuenta por Cobrar real
- * (ver emitirFactura) — el seguimiento de cobro/estado (Pagado/Pendiente/Vencido) NUNCA se duplica
- * acá, siempre se lee de esa cuenta vinculada (mismo criterio que evitó el bug de "Pagado
- * incorrecto" ya corregido varias veces para Cuentas por Cobrar esta sesión).
+ * Factura en el formato real de Construni, armada a partir de las transacciones de ingreso YA cobradas
+ * de un cliente (documento INTERNO, sin firma digital ni OSE). Una transacción sin `id_factura` está
+ * "sin facturar" (azul lino en la UI); al emitir la factura (fn_emitir_factura, atómica) queda
+ * "facturada". NO se crea Cuenta por Cobrar: ese dinero ya se cobró.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ColumnFilters, FieldOption } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, applyColumnFilters } from '$lib/shared/fieldConfig';
 import { TABLE_NAME, PK_COLUMN, SEARCHABLE_COLUMNS, DEFAULT_PAGE_SIZE, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, FIELDS_CONFIG } from '../config/factura.config';
-import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
-import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
-import { createCuentaCobrar, darDeBajaCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+import { getCentroCostoOptions, getComprobantesPago } from '$lib/modules/transacciones/services/transacciones.service';
+import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
+import { base64ToUint8Array } from '$lib/shared/base64';
 
 export interface FacturaDetalle {
 	id_factura_detalle: number;
 	id_factura: number;
-	id_partida: number | null;
-	codigo: string | null;
+	id_transaccion: number | null;
 	descripcion: string;
 	unidad: string | null;
 	cantidad: number;
 	precio_unitario: number;
 	subtotal: number;
+	monto_total_linea: number | null;
 	orden: number;
 }
 
 export interface Factura {
 	id_factura: number;
 	folio: string;
-	id_proyecto: number;
 	id_cliente: number;
-	tipo_comprobante: 'factura' | 'boleta';
-	tipo_factura: string;
-	numero_valorizacion: number | null;
+	cliente_nombre: string | null;
+	cliente_tipo_doc: string | null;
+	cliente_documento: string | null;
+	cliente_direccion: string | null;
 	fecha_emision: string;
-	fecha_vencimiento: string | null;
+	forma_pago: string;
+	observacion: string | null;
 	moneda: string;
 	tipo_cambio: number | null;
-	subtotal: number;
-	porcentaje_amortizacion: number;
-	monto_amortizacion: number;
-	porcentaje_retencion_garantia: number;
-	monto_retencion_garantia: number;
+	sub_total_ventas: number;
+	anticipos: number;
+	descuentos: number;
+	valor_venta: number;
+	isc: number;
 	monto_igv: number;
+	otros_cargos: number;
+	otros_tributos: number;
+	redondeo: number;
 	monto_total: number;
+	sujeta_detraccion: boolean;
+	porcentaje_detraccion: number | null;
+	monto_detraccion: number | null;
+	detraccion_bien_servicio: string | null;
+	detraccion_medio_pago: string | null;
+	detraccion_cuenta_bn: string | null;
+	imagen_url: string | null;
+	autorizado_por: string | null;
+	fecha_autorizacion: string | null;
 	estado: 'borrador' | 'emitida' | 'anulada';
-	comentarios: string | null;
-	id_cuenta_cobrar: number | null;
 	activo: boolean;
 	usuario_registro: string | null;
 	created_at: string;
-	proyecto?: { nombre_proyecto: string } | null;
-	cliente?: { nombre: string; tipo_doc: string | null; num_documento: string | null } | null;
-	/** Solo viene poblado cuando la factura ya está 'emitida' (ver getFacturas) — la fuente única de
-	 * verdad del estado de pago real (Pagado/Pendiente/Vencido), nunca recalculada acá. */
-	cuenta_cobrar_vinculada?: { estado: string; monto_cobrado: number; saldo_pendiente: number } | null;
+	cliente?: { nombre: string } | null;
+}
+
+export interface FacturaArchivo {
+	id_archivo: number;
+	id_factura: number;
+	tipo: 'png' | 'pdf';
+	url: string;
+	nombre_archivo: string | null;
+	created_at: string;
 }
 
 export interface ServiceResult<T = undefined> {
@@ -90,7 +104,7 @@ export interface ListResult<T> {
 }
 
 const SORTABLE_KEYS = new Set(FIELDS_CONFIG.filter((f) => f.sortable).map((f) => f.key));
-const FACTURA_SELECT = '*, proyecto:id_proyecto(nombre_proyecto), cliente:id_cliente(nombre, tipo_doc, num_documento), cuenta_cobrar_vinculada:id_cuenta_cobrar(estado, monto_cobrado, saldo_pendiente)';
+const FACTURA_SELECT = '*, cliente:id_cliente(nombre)';
 
 export async function getFacturas(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<Factura>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
@@ -125,19 +139,348 @@ export async function getFacturas(client: SupabaseClient, params: ListParams = {
 	};
 }
 
-/** "Estado" a mostrar en la lista/badges: el de la Cuenta por Cobrar vinculada (Pendiente/Pagado/
- * Vencido) una vez emitida — nunca se recalcula acá, siempre se lee tal cual esa fuente única de
- * verdad. Borrador/Anulada son propios de la factura (nunca tienen cuenta vinculada real). */
-export function estadoVisibleFactura(factura: Factura): string {
-	if (factura.estado === 'borrador' || factura.estado === 'anulada') return factura.estado;
-	return factura.cuenta_cobrar_vinculada?.estado ?? 'pendiente';
+export async function getFacturaConDetalle(
+	client: SupabaseClient,
+	idFactura: number
+): Promise<{ factura: Factura; detalle: FacturaDetalle[]; archivos: FacturaArchivo[] } | null> {
+	const [{ data: factura }, { data: detalle }, { data: archivos }] = await Promise.all([
+		client.from(TABLE_NAME).select(FACTURA_SELECT).eq(PK_COLUMN, idFactura).maybeSingle(),
+		client.from('factura_detalle').select('*').eq('id_factura', idFactura).order('orden'),
+		client.from('factura_archivo').select('*').eq('id_factura', idFactura).order('created_at')
+	]);
+	if (!factura) return null;
+	return { factura: factura as unknown as Factura, detalle: (detalle ?? []) as FacturaDetalle[], archivos: (archivos ?? []) as FacturaArchivo[] };
 }
+
+// ─────────────────────────────────────────────────────────────
+// Clientes y sus transacciones (soportes) facturables
+// ─────────────────────────────────────────────────────────────
+
+export interface ClienteParaFacturar {
+	id_cliente: number;
+	nombre: string;
+	tipo_doc: string | null;
+	num_documento: string | null;
+	direccion: string | null;
+}
+
+export async function getClientesParaFacturar(client: SupabaseClient): Promise<ClienteParaFacturar[]> {
+	const { data, error } = await client.from('cliente').select('id_cliente, nombre, tipo_doc, num_documento, direccion').order('nombre');
+	if (error) throw error;
+	return (data ?? []) as ClienteParaFacturar[];
+}
+
+export async function getClienteOptions(client: SupabaseClient): Promise<FieldOption[]> {
+	const clientes = await getClientesParaFacturar(client);
+	return clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre }));
+}
+
+export interface TransaccionFacturable {
+	id_transaccion: number;
+	fecha: string;
+	categoria: string | null;
+	descripcion: string | null;
+	num_documento: string | null;
+	monto_total: number;
+	tipo_moneda: string; // 'soles' | 'dolares'
+	tipo_cambio: number | null;
+	destinoLabel: string;
+	comprobante_url: string | null;
+	comprobante_autogenerado_url: string | null;
+	factura_url: string | null;
+	/** null = SIN FACTURA (azul lino, seleccionable); no-null = ya facturada por esa factura. */
+	id_factura: number | null;
+	facturaFolio: string | null;
+	/** Imagen guardada en Drive de la factura EMITIDA que ya facturó esta transacción (null si no hay). */
+	facturaImagenUrl: string | null;
+}
+
+/** Transacciones de ingreso (externas, activas) cuyo ORIGEN es el centro de costo del cliente — es decir,
+ * lo que ese cliente ya pagó. El vínculo cliente↔transacción es `id_centro_costo_origen` → `centro_costo.
+ * id_cliente` (no hay FK real en `transaccion`, por eso se resuelve en dos pasos). */
+export async function getTransaccionesDelCliente(client: SupabaseClient, idCliente: number): Promise<TransaccionFacturable[]> {
+	const { data: centro } = await client.from('centro_costo').select('id_centro_costo').eq('id_cliente', idCliente).maybeSingle();
+	if (!centro?.id_centro_costo) return [];
+
+	const { data, error } = await client
+		.from('transaccion')
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura')
+		.eq('tipo', 'ingreso')
+		.eq('estado', 'activo')
+		.eq('tipo_alcance', 'externa')
+		.eq('id_centro_costo_origen', centro.id_centro_costo)
+		.order('fecha', { ascending: false });
+	if (error) throw error;
+	const filas = (data ?? []) as any[];
+	if (filas.length === 0) return [];
+
+	const idsFactura = [...new Set(filas.map((t) => t.id_factura).filter((v) => v != null))];
+	const [centros, facturas] = await Promise.all([
+		getCentroCostoOptions(client),
+		idsFactura.length > 0 ? client.from(TABLE_NAME).select('id_factura, folio, imagen_url, estado').in('id_factura', idsFactura) : Promise.resolve({ data: [] as any[] })
+	]);
+	const labelPorCentro = new Map(centros.map((o) => [o.value, o.label]));
+	const facturasPorId = new Map<number, any>(((facturas as any).data ?? []).map((f: any) => [f.id_factura, f]));
+
+	return filas.map((t) => ({
+		id_transaccion: t.id_transaccion,
+		fecha: t.fecha,
+		categoria: t.categoria,
+		descripcion: t.descripcion,
+		num_documento: t.num_documento,
+		monto_total: Number(t.monto_total ?? 0),
+		tipo_moneda: t.tipo_moneda ?? 'soles',
+		tipo_cambio: t.tipo_cambio != null ? Number(t.tipo_cambio) : null,
+		destinoLabel: labelPorCentro.get(String(t.id_centro_costo_destino)) ?? '—',
+		comprobante_url: t.comprobante_url,
+		comprobante_autogenerado_url: t.comprobante_autogenerado_url,
+		factura_url: t.factura_url,
+		id_factura: t.id_factura ?? null,
+		facturaFolio: t.id_factura != null ? (facturasPorId.get(t.id_factura)?.folio ?? null) : null,
+		facturaImagenUrl: t.id_factura != null && facturasPorId.get(t.id_factura)?.estado === 'emitida' ? (facturasPorId.get(t.id_factura)?.imagen_url ?? null) : null
+	}));
+}
+
+/** Soportes (documentos) de una transacción para el visor — mismo armado que openComprobantePreview en
+ * finanzas/tranzacciones/+page.svelte: boucher + recibo autogenerado + factura adjunta + los
+ * comprobantes de pago múltiples (transaccion_comprobante_pago). */
+export async function getDocumentosTransaccion(client: SupabaseClient, t: TransaccionFacturable): Promise<{ url: string; label: string }[]> {
+	const docs: { url: string; label: string }[] = [];
+	if (t.comprobante_url) docs.push({ url: t.comprobante_url, label: 'Boucher' });
+	if (t.comprobante_autogenerado_url) docs.push({ url: t.comprobante_autogenerado_url, label: 'Comprobante ERP' });
+	if (t.factura_url) docs.push({ url: t.factura_url, label: 'Factura adjunta' });
+	if (t.facturaImagenUrl) docs.push({ url: t.facturaImagenUrl, label: `Factura ${t.facturaFolio ?? ''}`.trim() });
+	try {
+		const extra = await getComprobantesPago(client, t.id_transaccion);
+		extra.forEach((c, i) => docs.push({ url: c.url, label: c.num_documento ? `Comprobante ${c.num_documento}` : `Comprobante ${i + 1}` }));
+	} catch (err) {
+		console.error('[facturacion.service] No se pudieron leer los comprobantes de pago:', err);
+	}
+	return docs;
+}
+
+/** Documento (imagen guardada en Drive) de la factura EMITIDA que facturó una transacción — para que
+ * aparezca junto al resto de sus soportes en el ojito de Transacciones. null si no hay factura emitida. */
+export async function getFacturaEmitidaDocumento(client: SupabaseClient, idFactura: number): Promise<{ url: string; label: string } | null> {
+	const { data } = await client.from(TABLE_NAME).select('folio, imagen_url, estado').eq(PK_COLUMN, idFactura).maybeSingle();
+	if (!data?.imagen_url || data.estado !== 'emitida') return null;
+	return { url: data.imagen_url, label: `Factura ${data.folio}` };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Totales del formato
+// ─────────────────────────────────────────────────────────────
+
+const IGV_PERU = 0.18;
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** Valor unitario SIN IGV de una línea, a partir del monto de la transacción (que ya incluye IGV). */
+export function valorSinIgv(montoConIgv: number): number {
+	return round2(Number(montoConIgv || 0) / (1 + IGV_PERU));
+}
+
+export interface TotalesFactura {
+	subTotalVentas: number;
+	anticipos: number;
+	descuentos: number;
+	valorVenta: number;
+	isc: number;
+	igv: number;
+	otrosCargos: number;
+	otrosTributos: number;
+	redondeo: number;
+	importeTotal: number;
+	montoDetraccion: number;
+}
+
+/** Única fórmula de totales de una factura — usada TANTO en la vista previa en vivo como al guardar, para
+ * que nunca puedan desincronizarse. Los montos de las transacciones YA incluyen IGV: el Importe Total es
+ * exactamente la suma de lo cobrado; Valor Venta = Σ valores sin IGV de cada línea; IGV = 18% de eso; y
+ * "Monto de redondeo" absorbe la diferencia de centavos para que Importe Total nunca se desvíe de lo
+ * realmente cobrado. Detracción (si aplica) = Importe Total × % redondeado al sol (criterio SUNAT). */
+export function calcularTotalesFactura(montosConIgv: number[], sujetaDetraccion: boolean, porcentajeDetraccion: number): TotalesFactura {
+	const importeTotal = round2(montosConIgv.reduce((s, m) => s + Number(m || 0), 0));
+	const subTotalVentas = round2(montosConIgv.reduce((s, m) => s + valorSinIgv(m), 0));
+	const valorVenta = subTotalVentas;
+	const igv = round2(valorVenta * IGV_PERU);
+	const redondeo = round2(importeTotal - valorVenta - igv);
+	const montoDetraccion = sujetaDetraccion ? Math.round(importeTotal * (Number(porcentajeDetraccion || 0) / 100)) : 0;
+	return { subTotalVentas, anticipos: 0, descuentos: 0, valorVenta, isc: 0, igv, otrosCargos: 0, otrosTributos: 0, redondeo, importeTotal, montoDetraccion };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Guardar borrador / autorizar y emitir
+// ─────────────────────────────────────────────────────────────
+
+export interface LineaFactura {
+	id_transaccion: number;
+	descripcion: string;
+	unidad: string;
+	cantidad: number;
+	/** Valor unitario SIN IGV (ver valorSinIgv) */
+	precio_unitario: number;
+	/** Monto de la transacción de origen (con IGV) */
+	monto_total_linea: number;
+}
+
+export interface DatosClienteFactura {
+	id_cliente: number;
+	nombre: string;
+	tipo_doc: string | null;
+	num_documento: string | null;
+	direccion: string | null;
+}
+
+async function reemplazarDetalle(client: SupabaseClient, idFactura: number, lineas: LineaFactura[]): Promise<void> {
+	const { error: delError } = await client.from('factura_detalle').delete().eq('id_factura', idFactura);
+	if (delError) throw delError;
+	const filas = lineas.map((l, i) => ({
+		id_factura: idFactura,
+		id_transaccion: l.id_transaccion,
+		descripcion: l.descripcion,
+		unidad: l.unidad,
+		cantidad: l.cantidad,
+		precio_unitario: l.precio_unitario,
+		monto_total_linea: l.monto_total_linea,
+		orden: i
+	}));
+	const { error } = await client.from('factura_detalle').insert(filas);
+	if (error) throw error;
+}
+
+/** Crea o actualiza una factura en 'borrador'. `moneda`/`tipo_cambio` se derivan de las transacciones
+ * elegidas (no se editan a mano). Una factura ya emitida no se puede modificar. */
+export async function guardarBorradorFactura(
+	client: SupabaseClient,
+	payload: Record<string, unknown>,
+	cliente: DatosClienteFactura,
+	moneda: 'PEN' | 'USD',
+	tipoCambio: number | null,
+	lineas: LineaFactura[],
+	usuarioRegistro: string | null,
+	idFactura?: number
+): Promise<ServiceResult<Factura>> {
+	const errors = validatePayload(FIELDS_CONFIG, payload);
+	if (Object.keys(errors).length > 0) return { success: false, message: 'Revisa los campos marcados', errors };
+	if (lineas.length === 0) return { success: false, message: 'Selecciona al menos una transacción para facturar.' };
+
+	if (idFactura) {
+		const { data: actual } = await client.from(TABLE_NAME).select('estado').eq(PK_COLUMN, idFactura).maybeSingle();
+		if (actual && actual.estado !== 'borrador') return { success: false, message: 'Solo se puede modificar una factura en borrador.' };
+	}
+
+	const sujeta = String(payload.sujeta_detraccion ?? 'no') === 'si';
+	const t = calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0));
+	const datos: Record<string, unknown> = {
+		...buildWritablePayload(FIELDS_CONFIG, payload),
+		sujeta_detraccion: sujeta,
+		id_cliente: cliente.id_cliente,
+		cliente_nombre: cliente.nombre,
+		cliente_tipo_doc: cliente.tipo_doc,
+		cliente_documento: cliente.num_documento,
+		cliente_direccion: cliente.direccion,
+		moneda,
+		tipo_cambio: tipoCambio,
+		sub_total_ventas: t.subTotalVentas,
+		anticipos: t.anticipos,
+		descuentos: t.descuentos,
+		valor_venta: t.valorVenta,
+		isc: t.isc,
+		monto_igv: t.igv,
+		otros_cargos: t.otrosCargos,
+		otros_tributos: t.otrosTributos,
+		redondeo: t.redondeo,
+		monto_total: t.importeTotal,
+		monto_detraccion: sujeta ? t.montoDetraccion : null
+	};
+
+	try {
+		if (idFactura) {
+			const { data, error } = await client.from(TABLE_NAME).update({ ...datos, updated_at: new Date().toISOString() }).eq(PK_COLUMN, idFactura).select(FACTURA_SELECT).single();
+			if (error) return { success: false, message: `No se pudo actualizar la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+			await reemplazarDetalle(client, idFactura, lineas);
+			return { success: true, message: 'Borrador actualizado', data: data as unknown as Factura };
+		}
+
+		const { data, error } = await client.from(TABLE_NAME).insert({ ...datos, usuario_registro: usuarioRegistro }).select(FACTURA_SELECT).single();
+		if (error) return { success: false, message: `No se pudo crear la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+		try {
+			await reemplazarDetalle(client, data.id_factura, lineas);
+		} catch (err: any) {
+			await client.from(TABLE_NAME).delete().eq(PK_COLUMN, data.id_factura);
+			return { success: false, message: `No se pudo guardar el detalle de la factura: ${err?.message ?? 'error inesperado'}` };
+		}
+		return { success: true, message: 'Borrador guardado', data: data as unknown as Factura };
+	} catch (err: any) {
+		return { success: false, message: `No se pudo guardar la factura: ${err?.message ?? 'error inesperado'}` };
+	}
+}
+
+const MENSAJES_EMISION: Record<string, string> = {
+	TRANSACCION_YA_FACTURADA: 'Alguna de las transacciones seleccionadas ya fue facturada por otra persona. Actualiza la lista y vuelve a elegir.',
+	FACTURA_SIN_TRANSACCIONES: 'La factura no tiene transacciones seleccionadas.',
+	FACTURA_NO_EMITIBLE: 'Solo se puede emitir una factura en borrador.',
+	FACTURA_NO_ENCONTRADA: 'No se encontró la factura.'
+};
+
+function dataUrlABytes(dataUrl: string) {
+	return base64ToUint8Array(dataUrl.slice(dataUrl.indexOf(',') + 1));
+}
+
+/** Autorización final: sube la imagen (PNG) y el PDF a Google Drive, y RECIÉN entonces emite la factura
+ * de forma atómica (fn_emitir_factura). Si la subida falla, la factura queda en borrador y las
+ * transacciones sin tocar; si el RPC falla (ej. una transacción ya facturada), se borran los archivos
+ * recién subidos (mejor esfuerzo). `pngDataUrl`/`pdfBase64` deben venir ya con el folio REAL impreso. */
+export async function autorizarYEmitirFactura(
+	client: SupabaseClient,
+	factura: Pick<Factura, 'id_factura' | 'folio'>,
+	pngDataUrl: string,
+	pdfBase64: string,
+	usuario: string | null
+): Promise<ServiceResult<Factura>> {
+	let pngUrl: string;
+	let pdfUrl: string;
+	try {
+		const png = new File([dataUrlABytes(pngDataUrl)], `Factura_${factura.folio}.png`, { type: 'image/png' });
+		const pdf = new File([base64ToUint8Array(pdfBase64)], `Factura_${factura.folio}.pdf`, { type: 'application/pdf' });
+		// type 'comprobante': reutiliza la carpeta de Drive de comprobantes (no exige una carpeta/env nueva).
+		const [subidoPng, subidoPdf] = await Promise.all([
+			uploadProjectDocument(png, { type: 'comprobante', documentName: png.name }),
+			uploadProjectDocument(pdf, { type: 'comprobante', documentName: pdf.name })
+		]);
+		pngUrl = subidoPng.url;
+		pdfUrl = subidoPdf.url;
+	} catch (err: any) {
+		console.error('[facturacion.service] No se pudo subir la factura a Drive:', err);
+		return { success: false, message: `No se pudo guardar la imagen de la factura: ${err?.message ?? 'error inesperado'}. La factura sigue en borrador.` };
+	}
+
+	const { data, error } = await client.rpc('fn_emitir_factura', { p_id_factura: factura.id_factura, p_imagen_url: pngUrl, p_usuario: usuario });
+	if (error) {
+		await Promise.allSettled([deleteProjectDocumentFile(pngUrl), deleteProjectDocumentFile(pdfUrl)]);
+		const hint = (error as any).hint as string | undefined;
+		return { success: false, message: (hint && MENSAJES_EMISION[hint]) || `No se pudo emitir la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+	}
+
+	const { error: archivoError } = await client.from('factura_archivo').insert([
+		{ id_factura: factura.id_factura, tipo: 'png', url: pngUrl, nombre_archivo: `Factura_${factura.folio}.png`, usuario_registro: usuario },
+		{ id_factura: factura.id_factura, tipo: 'pdf', url: pdfUrl, nombre_archivo: `Factura_${factura.folio}.pdf`, usuario_registro: usuario }
+	]);
+	if (archivoError) console.error('[facturacion.service] La factura se emitió pero no se registró en factura_archivo:', archivoError);
+
+	return { success: true, message: 'Factura emitida y guardada correctamente', data: data as unknown as Factura };
+}
+
+// ─────────────────────────────────────────────────────────────
+// KPIs
+// ─────────────────────────────────────────────────────────────
 
 export interface KpisFacturacion {
 	totalFacturadoMes: number;
-	porCobrarObra: number;
-	retencionesAcumuladas: number;
-	facturasVencidas: number;
+	porFacturar: number;
+	porFacturarCount: number;
+	detraccionesAcumuladas: number;
+	facturasEmitidas: number;
 }
 
 export async function getKpisFacturacion(client: SupabaseClient): Promise<KpisFacturacion> {
@@ -146,297 +489,72 @@ export async function getKpisFacturacion(client: SupabaseClient): Promise<KpisFa
 	inicioMes.setHours(0, 0, 0, 0);
 	const inicioMesStr = inicioMes.toISOString().slice(0, 10);
 
-	const [{ data: delMes }, { data: emitidas }] = await Promise.all([
-		client.from(TABLE_NAME).select('monto_total').eq('activo', true).eq('estado', 'emitida').gte('fecha_emision', inicioMesStr),
-		client
-			.from(TABLE_NAME)
-			.select('monto_retencion_garantia, id_cuenta_cobrar, proyecto:id_proyecto(tipo_venta), cuenta_cobrar_vinculada:id_cuenta_cobrar(estado, saldo_pendiente)')
-			.eq('activo', true)
-			.eq('estado', 'emitida')
+	const [{ data: emitidas }, { data: centrosCliente }] = await Promise.all([
+		client.from(TABLE_NAME).select('monto_total, monto_detraccion, fecha_emision').eq('activo', true).eq('estado', 'emitida'),
+		client.from('centro_costo').select('id_centro_costo').not('id_cliente', 'is', null)
 	]);
 
-	const totalFacturadoMes = (delMes ?? []).reduce((sum: number, r: any) => sum + Number(r.monto_total ?? 0), 0);
-	const retencionesAcumuladas = (emitidas ?? []).reduce((sum: number, r: any) => sum + Number(r.monto_retencion_garantia ?? 0), 0);
-	const porCobrarObra = (emitidas ?? [])
-		.filter((r: any) => r.proyecto?.tipo_venta === 'obra')
-		.reduce((sum: number, r: any) => sum + Number(r.cuenta_cobrar_vinculada?.saldo_pendiente ?? 0), 0);
-	const facturasVencidas = (emitidas ?? []).filter((r: any) => r.cuenta_cobrar_vinculada?.estado === 'vencido').length;
+	const totalFacturadoMes = (emitidas ?? []).filter((f: any) => f.fecha_emision >= inicioMesStr).reduce((s: number, f: any) => s + Number(f.monto_total ?? 0), 0);
+	const detraccionesAcumuladas = (emitidas ?? []).reduce((s: number, f: any) => s + Number(f.monto_detraccion ?? 0), 0);
 
-	return { totalFacturadoMes, porCobrarObra, retencionesAcumuladas, facturasVencidas };
-}
-
-export interface ProyectoParaFacturar {
-	id_proyecto: number;
-	id_cliente: number;
-	codigo: string;
-	nombre_proyecto: string;
-	tipo_venta: string;
-	cliente: { nombre: string; tipo_doc: string | null; num_documento: string | null } | null;
-}
-
-/** Solo proyectos con venta ya cerrada — mismo criterio que getProyectoOptions en
- * cuentasCobrar.service.ts (una factura corresponde a una venta confirmada, no a una en negociación). */
-export async function getProyectosParaFacturar(client: SupabaseClient): Promise<ProyectoParaFacturar[]> {
-	const { data, error } = await client
-		.from('proyecto')
-		.select(
-			'id_proyecto, id_cliente, nombre_proyecto, tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre, tipo_doc, num_documento)'
-		)
-		.eq('estado_proyecto', 'venta_cerrada')
-		.order('fecha_inicio_plan', { ascending: false });
-	if (error) throw error;
-	return (data ?? []).map((p: any) => ({
-		id_proyecto: p.id_proyecto,
-		id_cliente: p.id_cliente,
-		codigo: generarCodigoProyecto(p),
-		nombre_proyecto: p.nombre_proyecto,
-		tipo_venta: p.tipo_venta,
-		cliente: p.cliente ?? null
-	}));
-}
-
-export interface PartidaFacturable {
-	id_partida: number;
-	codigo: string;
-	descripcion: string;
-	unidad: string | null;
-	precio_unitario_sugerido: number;
-}
-
-/** Partidas "hoja" (sin hijos) del presupuesto vigente del proyecto — las únicas con cantidad/precio
- * real facturable, mismo criterio de árbol que PresupuestoTab.svelte. Un proyecto sin presupuesto
- * cargado (ej. Consultoría, que normalmente no usa esta tabla) devuelve [] — la línea de la factura
- * se puede escribir a mano en ese caso (ver FacturaModal.svelte). */
-export async function getPartidasFacturables(client: SupabaseClient, idProyecto: number): Promise<PartidaFacturable[]> {
-	const { data: pres } = await client
-		.from('presupuesto')
-		.select('id_presupuesto')
-		.eq('id_proyecto', idProyecto)
-		.order('created_at', { ascending: false })
-		.limit(1)
-		.maybeSingle();
-	if (!pres?.id_presupuesto) return [];
-
-	const { data: rows, error } = await client
-		.from('presupuesto_detalle')
-		.select('id_partida, precio_unitario, partida:id_partida(codigo, descripcion, unidad, id_partida_padre)')
-		.eq('id_presupuesto', pres.id_presupuesto);
-	if (error) throw error;
-
-	const filas = (rows ?? []).filter((r: any) => r.partida) as any[];
-	// Una fila es "hoja" si ningún OTRO detalle del mismo presupuesto la tiene como padre — es decir,
-	// su id_partida nunca aparece en el id_partida_padre de otra fila de este mismo presupuesto.
-	const idsQueSonPadres = new Set(filas.map((r) => r.partida.id_partida_padre).filter((v: unknown) => v != null));
-
-	return filas
-		.filter((r) => !idsQueSonPadres.has(r.id_partida))
-		.map((r) => ({
-			id_partida: r.id_partida,
-			codigo: r.partida.codigo,
-			descripcion: r.partida.descripcion,
-			unidad: r.partida.unidad,
-			precio_unitario_sugerido: Number(r.precio_unitario ?? 0)
-		}));
-}
-
-export interface TotalesFactura {
-	subtotal: number;
-	montoAmortizacion: number;
-	montoRetencionGarantia: number;
-	montoIgv: number;
-	montoTotal: number;
-}
-
-const IGV_PERU = 0.18;
-
-/** Única fórmula de totales de una factura — usada TANTO en la vista previa en vivo del modal como al
- * guardar en el service, para que nunca puedan desincronizarse. Orden (igual al mockup de referencia):
- * Subtotal -> (-) Amortización -> (-) Retención -> base para IGV -> (+) IGV -> Total a Pagar. */
-export function calcularTotalesFactura(
-	detalle: { cantidad: number; precio_unitario: number }[],
-	porcentajeAmortizacion: number,
-	porcentajeRetencionGarantia: number
-): TotalesFactura {
-	const subtotal = detalle.reduce((sum, d) => sum + Number(d.cantidad || 0) * Number(d.precio_unitario || 0), 0);
-	const montoAmortizacion = subtotal * (Number(porcentajeAmortizacion || 0) / 100);
-	const montoRetencionGarantia = subtotal * (Number(porcentajeRetencionGarantia || 0) / 100);
-	const baseIgv = Math.max(subtotal - montoAmortizacion - montoRetencionGarantia, 0);
-	const montoIgv = baseIgv * IGV_PERU;
-	const montoTotal = baseIgv + montoIgv;
-	return { subtotal, montoAmortizacion, montoRetencionGarantia, montoIgv, montoTotal };
-}
-
-type DetalleInput = { id_partida: number | null; codigo: string | null; descripcion: string; unidad: string | null; cantidad: number; precio_unitario: number };
-
-async function reemplazarDetalle(client: SupabaseClient, idFactura: number, detalle: DetalleInput[]): Promise<void> {
-	await client.from('factura_detalle').delete().eq('id_factura', idFactura);
-	if (detalle.length === 0) return;
-	const filas = detalle.map((d, i) => ({ id_factura: idFactura, orden: i, ...d }));
-	const { error } = await client.from('factura_detalle').insert(filas);
-	if (error) throw error;
-}
-
-/** Crea o actualiza una factura en estado 'borrador' (o mantiene su estado si ya era 'emitida' — no
- * debería llamarse para una emitida desde la UI, pero no lo fuerza acá). Reemplaza factura_detalle
- * completo (delete+insert) en vez de diffear fila por fila — mucho más simple y las líneas de una
- * factura no tienen historial propio que preservar. */
-export async function guardarBorradorFactura(
-	client: SupabaseClient,
-	payload: Record<string, unknown>,
-	detalle: DetalleInput[],
-	usuarioRegistro: string | null,
-	idFactura?: number
-): Promise<ServiceResult<Factura>> {
-	const errors = validatePayload(FIELDS_CONFIG, payload);
-	if (Object.keys(errors).length > 0) {
-		return { success: false, message: 'Revisa los campos marcados', errors };
-	}
-	if (detalle.length === 0) {
-		return { success: false, message: 'Agrega al menos una partida antes de guardar.' };
+	let porFacturar = 0;
+	let porFacturarCount = 0;
+	const idsCentros = (centrosCliente ?? []).map((c: any) => c.id_centro_costo);
+	if (idsCentros.length > 0) {
+		const { data: pendientes } = await client
+			.from('transaccion')
+			.select('monto_total')
+			.eq('tipo', 'ingreso')
+			.eq('estado', 'activo')
+			.eq('tipo_alcance', 'externa')
+			.is('id_factura', null)
+			.in('id_centro_costo_origen', idsCentros);
+		porFacturar = (pendientes ?? []).reduce((s: number, t: any) => s + Number(t.monto_total ?? 0), 0);
+		porFacturarCount = (pendientes ?? []).length;
 	}
 
-	const totales = calcularTotalesFactura(detalle, Number(payload.porcentaje_amortizacion || 0), Number(payload.porcentaje_retencion_garantia || 0));
-	const datos: Record<string, unknown> = {
-		...buildWritablePayload(FIELDS_CONFIG, payload),
-		id_proyecto: Number(payload.id_proyecto),
-		id_cliente: Number(payload.id_cliente),
-		subtotal: totales.subtotal,
-		monto_amortizacion: totales.montoAmortizacion,
-		monto_retencion_garantia: totales.montoRetencionGarantia,
-		monto_igv: totales.montoIgv,
-		monto_total: totales.montoTotal
-	};
-
-	if (idFactura) {
-		const { data, error } = await client.from(TABLE_NAME).update(datos).eq(PK_COLUMN, idFactura).select(FACTURA_SELECT).single();
-		if (error) return { success: false, message: `No se pudo actualizar la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-		await reemplazarDetalle(client, idFactura, detalle);
-		return { success: true, message: 'Borrador actualizado', data: data as unknown as Factura };
-	}
-
-	const { data, error } = await client
-		.from(TABLE_NAME)
-		.insert({ ...datos, usuario_registro: usuarioRegistro })
-		.select(FACTURA_SELECT)
-		.single();
-	if (error) return { success: false, message: `No se pudo crear la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-	await reemplazarDetalle(client, data.id_factura, detalle);
-	return { success: true, message: 'Borrador guardado', data: data as unknown as Factura };
+	return { totalFacturadoMes, porFacturar, porFacturarCount, detraccionesAcumuladas, facturasEmitidas: (emitidas ?? []).length };
 }
 
-/** Segundo paso: pasa la factura a 'emitida' y, si todavía no tiene una Cuenta por Cobrar vinculada,
- * la crea — reutiliza createCuentaCobrar (cuentasCobrar.service.ts) TAL CUAL, así el seguimiento de
- * cobro/estado nunca se duplica. Necesita el Centro de Costo del proyecto — reutiliza
- * getOrCrearCentroCostoParaEntidad, mismo helper que ya usa cerrarVentaAprobada. */
-export async function emitirFactura(client: SupabaseClient, idFactura: number, usuarioRegistro: string | null, usuarioNombre: string | null): Promise<ServiceResult<Factura>> {
-	const { data: factura, error: fetchError } = await client.from(TABLE_NAME).select(FACTURA_SELECT).eq(PK_COLUMN, idFactura).single();
-	if (fetchError || !factura) return { success: false, message: fetchError?.message || 'Factura no encontrada.' };
-	const f = factura as unknown as Factura;
-	if (f.estado === 'anulada') return { success: false, message: 'Esta factura está anulada.' };
-	if (f.estado === 'emitida') return { success: true, message: 'La factura ya estaba emitida', data: f };
+// ─────────────────────────────────────────────────────────────
+// Dar de baja / restaurar / eliminar
+// ─────────────────────────────────────────────────────────────
 
-	let idCuentaCobrar = f.id_cuenta_cobrar;
-	if (!idCuentaCobrar) {
-		const idCentroCosto = await getOrCrearCentroCostoParaEntidad(client, 'proyecto', f.id_proyecto, f.proyecto?.nombre_proyecto ?? `Proyecto #${f.id_proyecto}`);
-		if (!idCentroCosto) return { success: false, message: 'No se pudo obtener el centro de costo del proyecto.' };
-
-		const resultCuenta = await createCuentaCobrar(
-			client,
-			{
-				id_cliente: String(f.id_cliente),
-				id_centro_costo: String(idCentroCosto),
-				id_proyecto: String(f.id_proyecto),
-				tipo_documento: f.tipo_comprobante === 'factura' ? '1' : '2',
-				num_documento: f.folio,
-				// factura.monto_total ya está denominado en factura.moneda (los precios unitarios de las
-				// líneas se cargan directamente en esa moneda) — a diferencia de cuentas_cobrar.monto, que
-				// SIEMPRE es el equivalente en Soles (ver disabledValue de 'monto' en cuentaCobrar.config.ts,
-				// que lo recalcula solo como monto_dolares × tipo_cambio cuando moneda='USD'). Por eso acá
-				// 'monto' se manda tal cual solo importa cuando moneda=PEN (con USD queda bloqueado y el
-				// motor lo recalcula solo); monto_dolares es el propio monto_total, sin dividir de nuevo.
-				monto: String(f.monto_total),
-				moneda: f.moneda === 'USD' ? 'USD' : 'PEN',
-				monto_dolares: f.moneda === 'USD' ? String(f.monto_total) : '',
-				tipo_cambio: f.tipo_cambio != null ? String(f.tipo_cambio) : '',
-				fecha_emision: f.fecha_emision,
-				fecha_vencimiento: f.fecha_vencimiento ?? '',
-				responsable: usuarioNombre ?? '',
-				observaciones: `Factura ${f.folio} - ${f.tipo_factura}`
-			},
-			usuarioRegistro
-		);
-		if (!resultCuenta.success || !resultCuenta.data) {
-			return { success: false, message: `No se pudo generar la Cuenta por Cobrar: ${resultCuenta.message}` };
-		}
-		idCuentaCobrar = resultCuenta.data.id_cuenta_cobrar;
-	}
-
-	const { data, error } = await client
-		.from(TABLE_NAME)
-		.update({ estado: 'emitida', id_cuenta_cobrar: idCuentaCobrar })
-		.eq(PK_COLUMN, idFactura)
-		.select(FACTURA_SELECT)
-		.single();
-	if (error) return { success: false, message: `No se pudo emitir la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-	return { success: true, message: 'Factura emitida correctamente', data: data as unknown as Factura };
-}
-
-export async function getFacturaConDetalle(client: SupabaseClient, idFactura: number): Promise<{ factura: Factura; detalle: FacturaDetalle[] } | null> {
-	const [{ data: factura }, { data: detalle }] = await Promise.all([
-		client.from(TABLE_NAME).select(FACTURA_SELECT).eq(PK_COLUMN, idFactura).maybeSingle(),
-		client.from('factura_detalle').select('*').eq('id_factura', idFactura).order('orden')
-	]);
-	if (!factura) return null;
-	return { factura: factura as unknown as Factura, detalle: (detalle ?? []) as FacturaDetalle[] };
-}
-
-/** Da de baja una factura (oculta de la lista, reversible, sin contraseña) — mismo patrón que
- * darDeBajaCuentaCobrar. Si estaba emitida y su Cuenta por Cobrar todavía no tiene cobros reales, se
- * da de baja también esa cuenta (mismo criterio de "todo o nada" de otros flujos vinculados de esta
- * sesión); si ya tiene cobros reales, la factura igual se da de baja pero la cuenta se deja intacta
- * (hay plata real de por medio, no se toca). */
+/** Da de baja una factura (oculta de la lista, sin contraseña). Un borrador simplemente se oculta. Una
+ * EMITIDA pasa a 'anulada' y libera sus transacciones (id_factura=null → vuelven a azul lino y se pueden
+ * facturar de nuevo) — no se puede restaurar (ver restaurarFactura): se emite una nueva. */
 export async function darDeBajaFactura(client: SupabaseClient, id: number): Promise<ServiceResult> {
-	const { data: factura } = await client.from(TABLE_NAME).select('id_cuenta_cobrar').eq(PK_COLUMN, id).maybeSingle();
-	const { error } = await client.from(TABLE_NAME).update({ activo: false }).eq(PK_COLUMN, id);
-	if (error) return { success: false, message: `No se pudo dar de baja la factura: ${error.message}` };
+	const { data: factura } = await client.from(TABLE_NAME).select('estado').eq(PK_COLUMN, id).maybeSingle();
+	if (!factura) return { success: false, message: 'Factura no encontrada.' };
 
-	if (factura?.id_cuenta_cobrar) {
-		const { data: cuenta } = await client.from('cuentas_cobrar').select('monto_cobrado').eq('id_cuenta_cobrar', factura.id_cuenta_cobrar).maybeSingle();
-		if (!cuenta || Number(cuenta.monto_cobrado ?? 0) === 0) {
-			await darDeBajaCuentaCobrar(client, factura.id_cuenta_cobrar);
-		}
+	if (factura.estado === 'emitida') {
+		const { error: libError } = await client.from('transaccion').update({ id_factura: null }).eq('id_factura', id);
+		if (libError) return { success: false, message: `No se pudieron liberar las transacciones de la factura: ${libError.message}` };
 	}
+	const cambios = factura.estado === 'emitida' ? { activo: false, estado: 'anulada' } : { activo: false };
+	const { error } = await client.from(TABLE_NAME).update(cambios).eq(PK_COLUMN, id);
+	if (error) return { success: false, message: `No se pudo dar de baja la factura: ${error.message}` };
 	return { success: true, message: 'Factura dada de baja correctamente' };
 }
 
 export async function restaurarFactura(client: SupabaseClient, id: number): Promise<ServiceResult> {
+	const { data: factura } = await client.from(TABLE_NAME).select('estado').eq(PK_COLUMN, id).maybeSingle();
+	if (factura?.estado === 'anulada') {
+		return { success: false, message: 'Una factura anulada no se puede restaurar (sus transacciones ya fueron liberadas). Emite una factura nueva.' };
+	}
 	const { error } = await client.from(TABLE_NAME).update({ activo: true }).eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo restaurar la factura: ${error.message}` };
 	return { success: true, message: 'Factura restaurada correctamente' };
 }
 
-/** Elimina PERMANENTEMENTE una factura y su detalle (factura_detalle cae por ON DELETE CASCADE) —
- * bloqueada si su Cuenta por Cobrar vinculada ya tiene cobros reales registrados, mismo criterio de
- * guarda ya usado para las cuentas de Préstamo esta sesión (no se puede deshacer algo con plata real
- * detrás). Se llama solo desde AdminConfirmModal (contraseña de administrador), ver +page.svelte. */
+/** Elimina PERMANENTEMENTE una factura, su detalle y sus archivos (ON DELETE CASCADE) — las
+ * transacciones que había facturado quedan libres (transaccion.id_factura ON DELETE SET NULL). Se llama
+ * solo desde AdminConfirmModal (contraseña de administrador), ver +page.svelte. Las imágenes en Drive se
+ * borran en mejor esfuerzo. */
 export async function eliminarFacturaPermanente(client: SupabaseClient, id: number): Promise<ServiceResult> {
-	const { data: factura } = await client.from(TABLE_NAME).select('id_cuenta_cobrar').eq(PK_COLUMN, id).maybeSingle();
-	if (factura?.id_cuenta_cobrar) {
-		const { data: cuenta } = await client.from('cuentas_cobrar').select('monto_cobrado').eq('id_cuenta_cobrar', factura.id_cuenta_cobrar).maybeSingle();
-		if (cuenta && Number(cuenta.monto_cobrado ?? 0) > 0) {
-			return { success: false, message: 'No se puede eliminar: la Cuenta por Cobrar vinculada ya tiene cobros reales registrados. Usa "Dar de baja" en su lugar.' };
-		}
-	}
+	const { data: archivos } = await client.from('factura_archivo').select('url').eq('id_factura', id);
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar la factura: ${error.message}` };
-	if (factura?.id_cuenta_cobrar) {
-		await client.from('cuentas_cobrar').delete().eq('id_cuenta_cobrar', factura.id_cuenta_cobrar);
-	}
+	await Promise.allSettled((archivos ?? []).map((a: any) => deleteProjectDocumentFile(a.url)));
 	return { success: true, message: 'Factura eliminada permanentemente' };
-}
-
-export async function getClienteOptions(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data, error } = await client.from('cliente').select('id_cliente, nombre').order('nombre');
-	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: String(c.id_cliente), label: c.nombre }));
 }

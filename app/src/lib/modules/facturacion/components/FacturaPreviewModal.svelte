@@ -18,11 +18,18 @@
 	let {
 		open = false,
 		datos = null,
-		onClose
+		onClose,
+		onAutorizar = null,
+		autorizando = false
 	}: {
 		open?: boolean;
 		datos: DatosFacturaPdf | null;
 		onClose: () => void;
+		/** Cuando viene, se muestra "Autorizar y emitir" (paso obligatorio antes de guardar la imagen y
+		 * emitir la factura — a pedido explícito del usuario: previsualización → autorización). El padre
+		 * hace el trabajo real (guardar, regenerar con el folio real, subir a Drive, emitir). */
+		onAutorizar?: (() => Promise<void>) | null;
+		autorizando?: boolean;
 	} = $props();
 
 	let loading = $state(false);
@@ -53,7 +60,7 @@
 	async function handleDescargar() {
 		if (!pdfBase64 || !datos) return;
 		try {
-			await guardarArchivoBinario(pdfBase64, `${datos.folio}.pdf`, 'application/pdf');
+			await guardarArchivoBinario(pdfBase64, `Factura_${datos.folio ?? 'borrador'}.pdf`, 'application/pdf');
 			toast.success('PDF descargado');
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo descargar el PDF');
@@ -82,6 +89,15 @@
 			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
 				<h2 class="text-lg font-semibold text-slate-800">Vista previa — {datos?.folio ?? 'Factura'}</h2>
 				<div class="flex items-center gap-2">
+					{#if onAutorizar}
+						<button
+							onclick={() => onAutorizar?.()}
+							disabled={loading || !pdfBase64 || autorizando}
+							class="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+						>
+							{#if autorizando}<Loader2 size={14} class="animate-spin" />{/if} Autorizar y emitir
+						</button>
+						{/if}
 					<button
 						onclick={handleDescargar}
 						disabled={loading || !pdfBase64}

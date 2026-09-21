@@ -124,6 +124,9 @@ export interface Transaccion {
 	 * (documentos de terceros): antes reusaba comprobante_url y eso pisaba/borraba el boucher que el
 	 * usuario había subido. Ver transaccion_comprobante_autogenerado_migration.sql. */
 	comprobante_autogenerado_url: string | null;
+	/** Factura (submódulo Facturación) que ya facturó esta transacción — null = sin factura (azul lino en
+	 * Nueva Factura). Ver factura_migration.sql / fn_emitir_factura. */
+	id_factura?: number | null;
 	/** true = un administrador confirmó que el comprobante es correcto. A partir de ahí, esta transacción
 	 * queda bloqueada para TODOS, sin excepción de administrador (a pedido explícito del usuario) — ver
 	 * updateTransaccion/deleteTransaccion y BLOQUEADO_POR_APROBACION. Para editarla hay que quitar la
@@ -633,6 +636,14 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+	// Una transacción ya facturada respalda una factura emitida (submódulo Facturación) — no se puede
+	// borrar; primero hay que dar de baja esa factura (eso libera la transacción). Consulta APARTE a
+	// propósito: si factura_migration.sql todavía no se corrió, la columna no existe y esta consulta
+	// falla en silencio (data=null) sin tumbar la guarda de aprobación de arriba.
+	const { data: facturada } = await client.from(TABLE_NAME).select('id_factura').eq(PK_COLUMN, id).maybeSingle();
+	if (facturada?.id_factura != null) {
+		return { success: false, message: 'No se puede eliminar: esta transacción ya fue facturada. Da de baja la factura primero.' };
 	}
 
 	// Guardia agregada en la auditoría de integridad financiera (confirmada con el usuario): el borrado

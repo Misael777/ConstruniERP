@@ -1,12 +1,12 @@
 <script lang="ts">
-	// Facturación (Finanzas) — documento interno de facturación/valorización, mismo patrón de módulo
-	// que el resto de Finanzas (KPIs arriba, ColumnFilterBar + búsqueda, tabla, modal). Al "Emitir" una
-	// factura se genera una Cuenta por Cobrar vinculada — el "Estado" que se ve acá (Pendiente/Pagado/
-	// Vencido) se LEE de esa cuenta, nunca se recalcula en este módulo (ver estadoVisibleFactura).
+	// Facturación (Finanzas) — factura en el formato real de Construni, armada a partir de las
+	// transacciones de ingreso ya cobradas de un cliente (documento INTERNO, sin firma digital ni OSE).
+	// Mismo patrón de módulo que el resto de Finanzas (KPIs arriba, ColumnFilterBar + búsqueda, tabla,
+	// modal). Una factura EMITIDA guarda su imagen/PDF en Drive; el ojito abre esa imagen guardada.
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Wallet, ShieldCheck, AlertTriangle } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, type ColumnFilters, type FieldOption } from '$lib/shared/fieldConfig';
@@ -15,12 +15,10 @@
 		getFacturas,
 		getKpisFacturacion,
 		getFacturaConDetalle,
-		getProyectosParaFacturar,
 		getClienteOptions,
 		darDeBajaFactura,
 		restaurarFactura,
 		eliminarFacturaPermanente,
-		estadoVisibleFactura,
 		type Factura,
 		type FacturaDetalle,
 		type KpisFacturacion
@@ -30,15 +28,15 @@
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import type { DatosFacturaPdf } from '$lib/shared/facturaPdf';
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
+	const formaPagoField = FIELDS_CONFIG.find((f) => f.key === 'forma_pago')!;
 	const estadoBadgeClass: Record<string, string> = {
 		borrador: 'bg-slate-100 text-slate-600',
-		pendiente: 'bg-amber-100 text-amber-700',
-		pagado: 'bg-emerald-100 text-emerald-700',
-		vencido: 'bg-red-100 text-red-700',
+		emitida: 'bg-emerald-100 text-emerald-700',
 		anulada: 'bg-slate-100 text-slate-400'
 	};
 
@@ -58,7 +56,7 @@
 	let verEliminados = $state(false);
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({});
 
-	let kpis = $state<KpisFacturacion>({ totalFacturadoMes: 0, porCobrarObra: 0, retencionesAcumuladas: 0, facturasVencidas: 0 });
+	let kpis = $state<KpisFacturacion>({ totalFacturadoMes: 0, porFacturar: 0, porFacturarCount: 0, detraccionesAcumuladas: 0, facturasEmitidas: 0 });
 
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
@@ -67,6 +65,9 @@
 
 	let previewOpen = $state(false);
 	let previewDatos = $state<DatosFacturaPdf | null>(null);
+	let imagenOpen = $state(false);
+	let imagenTitle = $state('');
+	let imagenDocs = $state<{ url: string; label: string }[]>([]);
 
 	let facturaParaDarDeBaja = $state<Factura | null>(null);
 	let confirmDarDeBajaOpen = $state(false);
@@ -83,7 +84,10 @@
 			total = result.total;
 			totalPages = result.totalPages;
 		} catch (err: any) {
-			loadError = err?.message ?? 'No se pudieron cargar las facturas.';
+			const mensaje: string = err?.message ?? '';
+			loadError = /schema cache|does not exist|Could not find/i.test(mensaje)
+				? 'Falta crear las tablas de Facturación en la base de datos: ejecuta el archivo factura_migration.sql en el SQL Editor de Supabase y recarga esta página.'
+				: mensaje || 'No se pudieron cargar las facturas.';
 		} finally {
 			loading = false;
 		}
@@ -99,11 +103,7 @@
 
 	async function fetchDynamicOptions() {
 		try {
-			const [proyectos, clientes] = await Promise.all([getProyectosParaFacturar(supabase), getClienteOptions(supabase)]);
-			dynamicOptions = {
-				id_proyecto: proyectos.map((p) => ({ value: String(p.id_proyecto), label: p.codigo })),
-				id_cliente: clientes
-			};
+			dynamicOptions = { id_cliente: await getClienteOptions(supabase) };
 		} catch (err) {
 			console.error('[Facturación] No se pudieron cargar las opciones de filtro:', err);
 		}
@@ -169,36 +169,54 @@
 	}
 
 	async function handleSaved() {
-		closeModal();
 		await Promise.all([fetchList(), fetchKpis()]);
 	}
 
+	/** Emitida con imagen guardada → se abre ESA imagen (lo que realmente se autorizó). Borrador/anulada (sin
+	 * imagen) → se regenera la vista previa desde los datos guardados, con sello de agua. */
 	async function openPreview(item: Factura) {
 		const full = await getFacturaConDetalle(supabase, item.id_factura);
 		if (!full) return;
-		const { factura, detalle } = full;
+		const { factura, detalle, archivos } = full;
+
+		if (factura.estado === 'emitida' && factura.imagen_url) {
+			imagenTitle = `Factura ${factura.folio}`;
+			imagenDocs = [
+				{ url: factura.imagen_url, label: 'Imagen' },
+				...archivos.filter((a) => a.tipo === 'pdf').map((a) => ({ url: a.url, label: 'PDF' }))
+			];
+			imagenOpen = true;
+			return;
+		}
+
 		previewDatos = {
 			folio: factura.folio,
-			tipoComprobante: factura.tipo_comprobante,
-			tipoFactura: factura.tipo_factura,
 			fechaEmision: factura.fecha_emision,
-			fechaVencimiento: factura.fecha_vencimiento,
-			proyectoNombre: factura.proyecto?.nombre_proyecto ?? 'Sin proyecto',
-			proyectoCodigo: '',
-			clienteNombre: factura.cliente?.nombre ?? 'Sin cliente',
-			clienteDocumentoLabel: factura.cliente?.tipo_doc ?? '—',
-			clienteDocumento: factura.cliente?.num_documento ?? '',
-			moneda: factura.moneda,
-			detalle: detalle.map((d) => ({ codigo: d.codigo, descripcion: d.descripcion, unidad: d.unidad, cantidad: Number(d.cantidad), precio_unitario: Number(d.precio_unitario), subtotal: Number(d.subtotal) })),
-			subtotal: Number(factura.subtotal),
-			porcentajeAmortizacion: Number(factura.porcentaje_amortizacion),
-			montoAmortizacion: Number(factura.monto_amortizacion),
-			porcentajeRetencionGarantia: Number(factura.porcentaje_retencion_garantia),
-			montoRetencionGarantia: Number(factura.monto_retencion_garantia),
-			montoIgv: Number(factura.monto_igv),
-			montoTotal: Number(factura.monto_total),
-			comentarios: factura.comentarios,
-			estado: factura.estado
+			formaPago: factura.forma_pago === 'credito' ? 'credito' : 'contado',
+			clienteNombre: factura.cliente_nombre ?? factura.cliente?.nombre ?? '',
+			clienteDocumentoLabel: factura.cliente_tipo_doc ?? 'RUC',
+			clienteDocumento: factura.cliente_documento ?? '',
+			clienteDireccion: factura.cliente_direccion ?? '',
+			moneda: factura.moneda === 'USD' ? 'USD' : 'PEN',
+			observacion: factura.observacion ?? '',
+			lineas: detalle.map((d) => ({ cantidad: Number(d.cantidad), unidad: d.unidad ?? 'Servicio', descripcion: d.descripcion, valorUnitario: Number(d.precio_unitario) })),
+			subTotalVentas: Number(factura.sub_total_ventas),
+			anticipos: Number(factura.anticipos),
+			descuentos: Number(factura.descuentos),
+			valorVenta: Number(factura.valor_venta),
+			isc: Number(factura.isc),
+			igv: Number(factura.monto_igv),
+			otrosCargos: Number(factura.otros_cargos),
+			otrosTributos: Number(factura.otros_tributos),
+			redondeo: Number(factura.redondeo),
+			importeTotal: Number(factura.monto_total),
+			sujetaDetraccion: factura.sujeta_detraccion,
+			porcentajeDetraccion: Number(factura.porcentaje_detraccion ?? 0),
+			montoDetraccion: Number(factura.monto_detraccion ?? 0),
+			detraccionBienServicio: factura.detraccion_bien_servicio ?? '',
+			detraccionMedioPago: factura.detraccion_medio_pago ?? '',
+			detraccionCuentaBn: factura.detraccion_cuenta_bn ?? '',
+			marcaAgua: factura.estado === 'anulada' ? 'ANULADA' : 'BORRADOR'
 		};
 		previewOpen = true;
 	}
@@ -291,7 +309,7 @@
 			<div>
 				<h1 class="text-xl font-bold text-[#0f3b5e]">{verEliminados ? 'Facturas eliminadas' : 'Gestión de Facturas'}</h1>
 				<p class="text-sm text-slate-500">
-					{verEliminados ? 'Facturas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.' : 'Emite facturas de tus proyectos y previsualízalas antes de imprimir'}
+					{verEliminados ? 'Facturas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.' : 'Factura a tus clientes a partir de sus pagos ya registrados, previsualiza y autoriza antes de emitir'}
 				</p>
 			</div>
 		</div>
@@ -323,26 +341,27 @@
 			</div>
 			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.totalFacturadoMes)}</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
+		<div class="bg-white rounded-xl border border-slate-200 p-4" style="background:#eef4fb;border-color:#b7cce6">
 			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center shrink-0"><Wallet size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Por Cobrar (Obra)</span>
+				<div class="w-8 h-8 rounded-lg bg-white text-blue-700 flex items-center justify-center shrink-0"><Inbox size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Por Facturar</span>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.porCobrarObra)}</p>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.porFacturar)}</p>
+			<p class="text-[11px] text-slate-400 mt-1">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin factura</p>
 		</div>
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center shrink-0"><ShieldCheck size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Retenciones Acumuladas</span>
+				<div class="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center shrink-0"><Percent size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Detracciones Acumuladas</span>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.retencionesAcumuladas)}</p>
+			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.detraccionesAcumuladas)}</p>
 		</div>
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0"><AlertTriangle size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Facturas Vencidas</span>
+				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><CheckCircle2 size={16} /></div>
+				<span class="text-xs font-medium text-slate-500">Facturas Emitidas</span>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{kpis.facturasVencidas}</p>
+			<p class="text-xl font-bold text-slate-800">{kpis.facturasEmitidas}</p>
 		</div>
 	</div>
 
@@ -355,7 +374,7 @@
 				type="text"
 				value={searchInput}
 				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
-				placeholder="Buscar por Folio..."
+				placeholder="Buscar por Folio o Cliente..."
 				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
 			/>
 			{#if searchInput}
@@ -376,30 +395,27 @@
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<div class="min-w-[900px]">
-				<div class="grid grid-cols-[1fr_1fr_1.6fr_1.4fr_1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+			<div class="min-w-[860px]">
+				<div class="grid grid-cols-[1.2fr_1fr_2fr_1fr_1.1fr_0.9fr_104px] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
 					<span>Folio</span>
 					<span>Fecha</span>
-					<span>Proyecto</span>
 					<span>Cliente</span>
-					<span>Tipo</span>
-					<span class="text-right">Monto Total</span>
+					<span>Forma de pago</span>
+					<span class="text-right pr-4">Importe Total</span>
 					<span>Estado</span>
 					<span class="text-right">Acciones</span>
 				</div>
 
 				{#each items as item (item.id_factura)}
-					{@const estadoVisible = estadoVisibleFactura(item)}
-					<div class="grid grid-cols-[1fr_1fr_1.6fr_1.4fr_1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+					<div class="grid grid-cols-[1.2fr_1fr_2fr_1fr_1.1fr_0.9fr_104px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
 						<span class="font-semibold text-slate-700 text-sm">{item.folio}</span>
 						<span class="text-sm text-slate-600">{formatDate(item.fecha_emision)}</span>
-						<span class="text-sm text-slate-600 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</span>
-						<span class="text-sm text-slate-600 truncate">{item.cliente?.nombre ?? 'Sin cliente'}</span>
-						<span class="text-sm text-slate-600">{item.tipo_factura}</span>
-						<span class="text-sm font-semibold text-slate-800 text-right">{formatCurrency(item.monto_total)}</span>
+						<span class="text-sm text-slate-600 truncate">{item.cliente_nombre ?? item.cliente?.nombre ?? 'Sin cliente'}</span>
+						<span class="text-sm text-slate-600">{getOptionLabel(formaPagoField, item.forma_pago)}</span>
+						<span class="text-sm font-semibold text-slate-800 text-right pr-4">{item.moneda === 'USD' ? 'US$ ' + Number(item.monto_total).toLocaleString('es-PE', { minimumFractionDigits: 2 }) : formatCurrency(item.monto_total)}</span>
 						<span>
-							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[estadoVisible] ?? 'bg-slate-100 text-slate-600'}`}>
-								{getOptionLabel(estadoField, estadoVisible)}
+							<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						</span>
 						<div class="flex items-center gap-1 justify-end">
@@ -413,7 +429,7 @@
 									</button>
 								{/if}
 							{:else}
-								<button type="button" onclick={() => openPreview(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver / Previsualizar" aria-label="Ver / Previsualizar">
+								<button type="button" onclick={() => openPreview(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver factura" aria-label="Ver factura">
 									<Eye size={16} />
 								</button>
 								{#if item.estado === 'borrador'}
@@ -449,11 +465,12 @@
 <FacturaModal open={modalOpen} mode={modalMode} factura={editingFactura} detalleInicial={editingDetalle} onClose={closeModal} onSaved={handleSaved} />
 
 <FacturaPreviewModal open={previewOpen} datos={previewDatos} onClose={closePreview} />
+<DocumentPreviewModal open={imagenOpen} documents={imagenDocs} title={imagenTitle} onClose={() => (imagenOpen = false)} />
 
 <ConfirmModal
 	open={confirmDarDeBajaOpen}
 	title="Dar de baja factura"
-	message={facturaParaDarDeBaja ? `¿Dar de baja la factura ${facturaParaDarDeBaja.folio}? Quedará marcada como inactiva.` : ''}
+	message={facturaParaDarDeBaja ? (facturaParaDarDeBaja.estado === 'emitida' ? `¿Dar de baja la factura ${facturaParaDarDeBaja.folio}? Quedará ANULADA y sus transacciones volverán a estar sin factura (azul). No se puede restaurar.` : `¿Dar de baja la borrador ${facturaParaDarDeBaja.folio}? Quedará marcada como inactiva.`) : ''}
 	confirmLabel="Dar de baja"
 	onConfirm={confirmarDarDeBaja}
 	onClose={closeConfirmDarDeBaja}
@@ -462,7 +479,7 @@
 <AdminConfirmModal
 	open={confirmEliminarPermanenteOpen}
 	title="Eliminar factura permanentemente"
-	message={facturaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE la factura ${facturaParaEliminarPermanente.folio}. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	message={facturaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE la factura ${facturaParaEliminarPermanente.folio}, su detalle y sus imágenes guardadas. Sus transacciones (si las tenía facturadas) quedarán libres. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
 	confirmLabel="Eliminar permanentemente"
 	onConfirm={confirmarEliminarPermanente}
 	onClose={closeConfirmEliminarPermanente}
