@@ -24,7 +24,7 @@
  * builds pesados van ANTES de publicar nada):
  *   1. Gate de calidad: npm run check + npx vitest run.
  *   2. Sube la versión en package.json y src-tauri/tauri.conf.json.
- *   3. Compila el APK de Android (npm run tauri android build -- --debug, configurable con
+ *   3. Compila el APK de Android (npm run tauri android build -- --debug --target aarch64, configurable con
  *      APK_BUILD_CMD) y verifica que lleve la versión nueva. Se omite con --no-apk; con --apk <ruta>
  *      no compila, solo verifica ese archivo.
  *   4. npm run tauri build (Windows) — con TAURI_SIGNING_PRIVATE_KEY/_PASSWORD en el entorno, Tauri
@@ -56,7 +56,7 @@
  *
  * Opcional:
  *   GITHUB_REPO  (por defecto 'Misael777/ConstruniERP-releases', ver tauri.conf.json)
- *   APK_BUILD_CMD  (por defecto 'npm run tauri android build -- --debug' — el comando que compila el APK)
+ *   APK_BUILD_CMD  (por defecto 'npm run tauri android build -- --debug --target aarch64' — el comando que compila el APK)
  *
  * El build de Android necesita en el entorno lo mismo que ya usás al compilarlo a mano
  * (ANDROID_HOME, NDK_HOME, JAVA_HOME) — corré el release desde la misma terminal donde compilás el APK.
@@ -115,7 +115,11 @@ function versionIncrustadaEnApk(ruta) {
 	return null;
 }
 
-const APK_BUILD_CMD = process.env.APK_BUILD_CMD || 'npm run tauri android build -- --debug';
+// APK debug y SOLO arm64 (`--target aarch64`): cubre prácticamente cualquier Android real de los últimos
+// ~8 años (incluido el del cliente). El "universal" (las 4 arquitecturas juntas) pesó ~794MB en una
+// prueba real — mucho más lento de compilar/subir/descargar, y probablemente la causa real de un ENOBUFS
+// visto al subirlo a Drive. Windows, en cambio, va en release (el bundle firmado del updater lo exige).
+const APK_BUILD_CMD = process.env.APK_BUILD_CMD || 'npm run tauri android build -- --debug --target aarch64';
 const APK_OUTPUT_DIR = join(ROOT, 'src-tauri', 'gen', 'android', 'app', 'build', 'outputs', 'apk');
 
 /** Todos los .apk bajo la carpeta de salida de Gradle, con su fecha de modificación. */
