@@ -7,6 +7,7 @@
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Info, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
 	import { armarMensajeEgreso, armarMensajeIngreso, armarMensajeIngresoEfectivo } from '$lib/shared/mensajeR2';
+	import { getFacturaEmitidaDocumento } from '$lib/modules/facturacion/services/facturacion.service';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -176,9 +177,13 @@
 		previewOpen = true;
 
 		try {
+			// Factura EMITIDA que facturó esta transacción (submódulo Facturación): su imagen guardada se
+			// ve junto al resto de soportes.
+			const facturaDoc = item.id_factura != null ? await getFacturaEmitidaDocumento(supabase, item.id_factura) : null;
 			const comprobantes = await getComprobantesPago(supabase, item.id_transaccion);
 			previewDocuments = [
 				...previewDocuments,
+				...(facturaDoc ? [{ url: facturaDoc.url, label: facturaDoc.label, filename: facturaDoc.label }] : []),
 				...comprobantes.map((c, i) => ({
 					url: c.url,
 					label:
