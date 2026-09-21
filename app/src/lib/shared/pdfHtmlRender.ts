@@ -118,3 +118,31 @@ export async function ensamblarPdfDosCopiasA4(original: HtmlRenderResult, copia:
 
 	return arrayBufferToBase64(doc.output('arraybuffer'));
 }
+
+/**
+ * Arma un PDF A4 de UNA sola imagen (ej. una factura), repartida en varias páginas si es más alta de
+ * lo que entra en una sola A4 — a diferencia de ensamblarPdfDosCopiasA4 (que ESCALA el contenido para
+ * que quepa siempre en una hoja), acá una factura con muchas partidas debe seguir siendo legible, así
+ * que se pagina en vez de encogerse. Técnica estándar de jsPDF: cada página recorta su contenido al
+ * tamaño de la hoja (su MediaBox), así que dibujar la MISMA imagen completa en cada página con un
+ * offset Y negativo (que sube la imagen una página completa por cada `addPage()`) hace que cada
+ * página solo muestre la porción que le toca — sin tener que cortar el PNG a mano en varios canvases.
+ */
+export function ensamblarPdfUnaCopiaMultipagina(pagina: HtmlRenderResult): string {
+	const doc = new jsPDF();
+	const altoPaginaMm = doc.internal.pageSize.getHeight();
+	const altoDisponibleMm = altoPaginaMm - MARGEN_PAGINA_MM * 2;
+
+	const anchoMm = ANCHO_PAGINA_MM;
+	const altoTotalMm = (pagina.heightPx / pagina.widthPx) * anchoMm;
+	const xMm = MARGEN_PAGINA_MM;
+
+	const totalPaginas = Math.max(1, Math.ceil(altoTotalMm / altoDisponibleMm));
+	for (let i = 0; i < totalPaginas; i++) {
+		if (i > 0) doc.addPage();
+		const yMm = MARGEN_PAGINA_MM - i * altoDisponibleMm;
+		doc.addImage(pagina.dataUrl, 'PNG', xMm, yMm, anchoMm, altoTotalMm);
+	}
+
+	return arrayBufferToBase64(doc.output('arraybuffer'));
+}
