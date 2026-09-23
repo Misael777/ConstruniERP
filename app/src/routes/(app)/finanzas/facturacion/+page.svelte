@@ -1,27 +1,38 @@
 <script lang="ts">
-	// Facturación (Finanzas) — factura en el formato real de Construni, armada a partir de las
-	// transacciones de ingreso ya cobradas de un cliente (documento INTERNO, sin firma digital ni OSE).
-	// Mismo patrón de módulo que el resto de Finanzas (KPIs arriba, ColumnFilterBar + búsqueda, tabla,
-	// modal). Una factura EMITIDA guarda su imagen/PDF en Drive; el ojito abre esa imagen guardada.
+	// Gestión de Comprobantes (Finanzas) — 4 pestañas (Factura / Boleta / Nota de Crédito / Nota de
+	// Débito), TODAS con el mismo mecanismo (a pedido explícito del usuario: "cada pestaña debe mostrar
+	// la relación de transacciones tipo ingreso según el tipo de documento"): se clasifican las
+	// transacciones de ingreso por transaccion.tipo_documento (ver TIPO_DOCUMENTO_POR_COMPROBANTE en
+	// facturacion.service.ts) — sin comprobante = azul lino y seleccionable; marcar el check abre
+	// "Nueva Factura/Boleta/Nota de Crédito/Nota de Débito" con esa transacción y su cliente ya
+	// precargados. Documento INTERNO (sin firma digital ni OSE). Una vez emitido, guarda su imagen/PDF en
+	// Drive; el ojito de "Documentos emitidos" abre esa imagen guardada.
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2, Receipt, FileMinus, FilePlus, Check } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, type ColumnFilters, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/facturacion/config/factura.config';
 	import {
 		getFacturas,
-		getKpisFacturacion,
+		getKpisComprobante,
 		getFacturaConDetalle,
 		getClienteOptions,
+		getTransaccionesFacturables,
+		getDocumentosTransaccion,
 		darDeBajaFactura,
 		restaurarFactura,
 		eliminarFacturaPermanente,
+		TIPO_DOCUMENTO_POR_COMPROBANTE,
+		COMPROBANTE_POR_TIPO_DOCUMENTO,
 		type Factura,
 		type FacturaDetalle,
-		type KpisFacturacion
+		type KpisFacturacion,
+		type TransaccionFacturable,
+		type TipoComprobante
 	} from '$lib/modules/facturacion/services/facturacion.service';
 	import FacturaModal from '$lib/modules/facturacion/components/FacturaModal.svelte';
 	import FacturaPreviewModal from '$lib/modules/facturacion/components/FacturaPreviewModal.svelte';
@@ -39,7 +50,31 @@
 		emitida: 'bg-emerald-100 text-emerald-700',
 		anulada: 'bg-slate-100 text-slate-400'
 	};
+	// Mismos colores usados dentro de FacturaModal — consistencia visual entre el picker de esta página y
+	// la tabla de transacciones dentro del modal.
+	const COLOR_SIN_FACTURA = { bg: '#bcd3f2', border: '#5b8fd4' };
+	const COLOR_FACTURADA = { bg: '#a8dfb9', border: '#3c9b5c' };
 
+	// 'sin_tipo' = transacciones de ingreso sin tipo de documento (a pedido explícito del usuario, última
+	// pestaña): no tiene comprobantes emitidos propios; al marcar una se elige "Emitir como" qué comprobante.
+	type TabValue = TipoComprobante | 'sin_tipo';
+	const TABS: { value: TabValue; label: string; plural: string; icon: typeof FileText }[] = [
+		{ value: 'factura', label: 'Factura', plural: 'Facturas', icon: FileText },
+		{ value: 'boleta', label: 'Boleta', plural: 'Boletas', icon: Receipt },
+		{ value: 'nota_credito', label: 'Nota de Crédito', plural: 'Notas de Crédito', icon: FileMinus },
+		{ value: 'nota_debito', label: 'Nota de Débito', plural: 'Notas de Débito', icon: FilePlus },
+		{ value: 'sin_tipo', label: 'Sin tipo de documento', plural: 'Sin tipo de documento', icon: Inbox }
+	];
+
+	let activeTab = $state<TabValue>('factura');
+	const esSinTipo = $derived(activeTab === 'sin_tipo');
+	let emitirComo = $state<TipoComprobante>('factura');
+	const comprobanteModal = $derived<TipoComprobante>(activeTab === 'sin_tipo' ? emitirComo : activeTab);
+	const tabActual = $derived(TABS.find((t) => t.value === activeTab)!);
+	const nombreTab = $derived(tabActual.label);
+	const pluralTab = $derived(tabActual.plural);
+
+	// ── Documentos emitidos (sección inferior, todas las pestañas) ──────────────────────────────
 	let items = $state<Factura[]>([]);
 	let total = $state(0);
 	let pageNum = $state(1);
@@ -56,12 +91,28 @@
 	let verEliminados = $state(false);
 	let dynamicOptions = $state<Record<string, FieldOption[]>>({});
 
+	// ── KPIs (mismas 4 tarjetas para las 4 pestañas) ────────────────────────────────────────────
 	let kpis = $state<KpisFacturacion>({ totalFacturadoMes: 0, porFacturar: 0, porFacturarCount: 0, detraccionesAcumuladas: 0, facturasEmitidas: 0 });
 
+	// ── Sección superior: transacciones de ingreso clasificadas por el tipo_documento de la pestaña ──
+	// (paginada server-side, mismo patrón que "Documentos emitidos" abajo — a pedido explícito del
+	// usuario: con muchas transacciones esta lista no debe traerlas todas de una vez).
+	let transaccionesPendientes = $state<TransaccionFacturable[]>([]);
+	let transaccionesTotal = $state(0);
+	let transaccionesPageNum = $state(1);
+	let transaccionesTotalPages = $state(1);
+	let cargandoSuperior = $state(false);
+
+	let docsOpen = $state(false);
+	let docsTitle = $state('');
+	let docsLista = $state<{ url: string; label: string }[]>([]);
+
+	// ── Modal Nueva/Editar (mismo para las 4 pestañas, ver prop tipoComprobante) ────────────────
 	let modalOpen = $state(false);
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingFactura = $state<Factura | null>(null);
 	let editingDetalle = $state<FacturaDetalle[]>([]);
+	let preseleccion = $state<{ idCliente: number; idTransaccion: number } | null>(null);
 
 	let previewOpen = $state(false);
 	let previewDatos = $state<DatosFacturaPdf | null>(null);
@@ -76,28 +127,50 @@
 	let eliminandoPermanente = $state(false);
 
 	async function fetchList() {
+		if (activeTab === 'sin_tipo') {
+			items = [];
+			total = 0;
+			totalPages = 1;
+			loading = false;
+			return;
+		}
 		loading = true;
 		loadError = '';
 		try {
-			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados });
+			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados, tipoComprobante: activeTab });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
 		} catch (err: any) {
 			const mensaje: string = err?.message ?? '';
 			loadError = /schema cache|does not exist|Could not find/i.test(mensaje)
-				? 'Falta crear las tablas de Facturación en la base de datos: ejecuta el archivo factura_migration.sql en el SQL Editor de Supabase y recarga esta página.'
-				: mensaje || 'No se pudieron cargar las facturas.';
+				? 'Falta actualizar las tablas de Facturación en la base de datos: vuelve a ejecutar factura_migration.sql en el SQL Editor de Supabase y recarga esta página.'
+				: mensaje || 'No se pudieron cargar los documentos.';
 		} finally {
 			loading = false;
 		}
 	}
 
 	async function fetchKpis() {
+		if (activeTab === 'sin_tipo') return;
 		try {
-			kpis = await getKpisFacturacion(supabase);
+			kpis = await getKpisComprobante(supabase, activeTab);
 		} catch (err) {
-			console.error('[Facturación] No se pudieron cargar los KPIs:', err);
+			console.error('[Gestión de Comprobantes] No se pudieron cargar los KPIs:', err);
+		}
+	}
+
+	async function fetchSuperior() {
+		cargandoSuperior = true;
+		try {
+			const result = await getTransaccionesFacturables(supabase, activeTab === 'sin_tipo' ? null : TIPO_DOCUMENTO_POR_COMPROBANTE[activeTab], { page: transaccionesPageNum, pageSize: DEFAULT_PAGE_SIZE });
+			transaccionesPendientes = result.items;
+			transaccionesTotal = result.total;
+			transaccionesTotalPages = result.totalPages;
+		} catch (err) {
+			console.error('[Gestión de Comprobantes] No se pudieron cargar las transacciones:', err);
+		} finally {
+			cargandoSuperior = false;
 		}
 	}
 
@@ -105,15 +178,63 @@
 		try {
 			dynamicOptions = { id_cliente: await getClienteOptions(supabase) };
 		} catch (err) {
-			console.error('[Facturación] No se pudieron cargar las opciones de filtro:', err);
+			console.error('[Gestión de Comprobantes] No se pudieron cargar las opciones de filtro:', err);
 		}
 	}
 
-	onMount(() => {
-		fetchList();
-		fetchKpis();
+	async function fetchTab() {
+		await Promise.all([fetchList(), fetchKpis(), fetchSuperior()]);
+	}
+
+	/** Viene de "Generar comprobante ERP = Sí" en Nueva/Editar Transacción (ver
+	 * redirigirANuevoComprobanteErp en TransaccionModal.svelte) — cambia a la pestaña que corresponda al
+	 * tipo_documento de esa transacción y abre "Nuevo Comprobante" directo, ya con el cliente y esa
+	 * transacción precargados (mismo mecanismo que marcar el check de una fila azul a mano). */
+	async function abrirDesdeTransaccionPrefill(): Promise<boolean> {
+		if (page.url.searchParams.get('nuevoComprobanteDesdeTransaccion') !== '1') return false;
+		const crudo = sessionStorage.getItem('comprobantePrefillDesdeTransaccion');
+		sessionStorage.removeItem('comprobantePrefillDesdeTransaccion');
+		window.history.replaceState({}, '', '/finanzas/facturacion');
+		if (!crudo) return false;
+		try {
+			const datos = JSON.parse(crudo);
+			activeTab = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)] ?? 'factura';
+			await fetchTab();
+			modalMode = 'create';
+			editingFactura = null;
+			editingDetalle = [];
+			preseleccion = { idCliente: datos.idCliente, idTransaccion: datos.idTransaccion };
+			modalOpen = true;
+			return true;
+		} catch (err) {
+			console.error('[Gestión de Comprobantes] No se pudo leer la precarga de la transacción:', err);
+			toast.error('No se pudo precargar el comprobante — complétalo a mano.');
+			return false;
+		}
+	}
+
+	onMount(async () => {
+		const manejado = await abrirDesdeTransaccionPrefill();
+		if (!manejado) await fetchTab();
 		fetchDynamicOptions();
 	});
+
+	function switchTab(tab: TabValue) {
+		if (tab === activeTab) return;
+		activeTab = tab;
+		pageNum = 1;
+		transaccionesPageNum = 1;
+		search = '';
+		searchInput = '';
+		columnFilters = emptyColumnFilters(tableFields);
+		verEliminados = false;
+		fetchTab();
+	}
+
+	function irAPaginaTransacciones(nueva: number) {
+		transaccionesPageNum = nueva;
+		fetchSuperior();
+	}
 
 	function onSearchInput(value: string) {
 		searchInput = value;
@@ -150,6 +271,18 @@
 		modalMode = 'create';
 		editingFactura = null;
 		editingDetalle = [];
+		preseleccion = null;
+		modalOpen = true;
+	}
+
+	/** Marcar el check de una transacción SIN comprobante en la tabla superior — abre el modal directo,
+	 * con el cliente y esa transacción ya precargados (a pedido explícito del usuario). */
+	function openDesdeTransaccion(t: TransaccionFacturable) {
+		if (t.id_factura != null || t.idCliente == null) return;
+		modalMode = 'create';
+		editingFactura = null;
+		editingDetalle = [];
+		preseleccion = { idCliente: t.idCliente, idTransaccion: t.id_transaccion };
 		modalOpen = true;
 	}
 
@@ -159,6 +292,7 @@
 		modalMode = 'edit';
 		editingFactura = full.factura;
 		editingDetalle = full.detalle;
+		preseleccion = null;
 		modalOpen = true;
 	}
 
@@ -166,21 +300,28 @@
 		modalOpen = false;
 		editingFactura = null;
 		editingDetalle = [];
+		preseleccion = null;
 	}
 
 	async function handleSaved() {
-		await Promise.all([fetchList(), fetchKpis()]);
+		await fetchTab();
 	}
 
-	/** Emitida con imagen guardada → se abre ESA imagen (lo que realmente se autorizó). Borrador/anulada (sin
-	 * imagen) → se regenera la vista previa desde los datos guardados, con sello de agua. */
+	async function abrirSoportesTransaccion(t: TransaccionFacturable) {
+		docsTitle = `Soportes — ${t.categoria ?? 'Ingreso'} ${t.fecha}`;
+		docsLista = await getDocumentosTransaccion(supabase, t);
+		docsOpen = true;
+	}
+
+	/** Emitido con imagen guardada → se abre ESA imagen (lo que realmente se autorizó). Borrador/anulado
+	 * (sin imagen) → se regenera la vista previa desde los datos guardados, con sello de agua. */
 	async function openPreview(item: Factura) {
 		const full = await getFacturaConDetalle(supabase, item.id_factura);
 		if (!full) return;
 		const { factura, detalle, archivos } = full;
 
 		if (factura.estado === 'emitida' && factura.imagen_url) {
-			imagenTitle = `Factura ${factura.folio}`;
+			imagenTitle = `${nombreTab} ${factura.folio}`;
 			imagenDocs = [
 				{ url: factura.imagen_url, label: 'Imagen' },
 				...archivos.filter((a) => a.tipo === 'pdf').map((a) => ({ url: a.url, label: 'PDF' }))
@@ -190,6 +331,7 @@
 		}
 
 		previewDatos = {
+			tipoDocumento: factura.tipo_comprobante,
 			folio: factura.folio,
 			fechaEmision: factura.fecha_emision,
 			formaPago: factura.forma_pago === 'credito' ? 'credito' : 'contado',
@@ -241,7 +383,7 @@
 			if (result.success) {
 				toast.success(result.message);
 				closeConfirmDarDeBaja();
-				await Promise.all([fetchList(), fetchKpis()]);
+				await fetchTab();
 			} else {
 				toast.error(result.message);
 			}
@@ -255,7 +397,7 @@
 			const result = await restaurarFactura(supabase, item.id_factura);
 			if (result.success) {
 				toast.success(result.message);
-				await Promise.all([fetchList(), fetchKpis()]);
+				await fetchTab();
 			} else {
 				toast.error(result.message);
 			}
@@ -285,7 +427,7 @@
 				toast.success(result.message);
 				confirmEliminarPermanenteOpen = false;
 				facturaParaEliminarPermanente = null;
-				await Promise.all([fetchList(), fetchKpis()]);
+				await fetchTab();
 			} else {
 				throw new Error(result.message);
 			}
@@ -300,54 +442,61 @@
 		if (Number.isNaN(date.getTime())) return '—';
 		return date.toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
 	}
+
+	function fmtTransaccion(t: TransaccionFacturable): string {
+		return `${t.tipo_moneda === 'dolares' ? 'US$' : 'S/'} ${t.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+	}
 </script>
 
 <div class="p-4 md:p-6">
-	<div class="flex items-center justify-between mb-6">
+	<div class="flex items-center justify-between mb-4 flex-wrap gap-3">
 		<div class="flex items-center gap-3">
 			<FileText class="text-[#0f3b5e]" size={28} />
 			<div>
-				<h1 class="text-xl font-bold text-[#0f3b5e]">{verEliminados ? 'Facturas eliminadas' : 'Gestión de Facturas'}</h1>
-				<p class="text-sm text-slate-500">
-					{verEliminados ? 'Facturas dadas de baja — restauralas o elimínalas de la base de datos permanentemente.' : 'Factura a tus clientes a partir de sus pagos ya registrados, previsualiza y autoriza antes de emitir'}
-				</p>
+				<h1 class="text-xl font-bold text-[#0f3b5e]">Gestión de Comprobantes</h1>
+				<p class="text-sm text-slate-500">Emite Facturas, Boletas y Notas de Crédito/Débito a partir de tus transacciones ya registradas</p>
 			</div>
 		</div>
-		<div class="flex items-center gap-2">
-			{#if isAdmin()}
-				<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
-					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
-					{verEliminados ? 'Volver' : 'Ver eliminados'}
-				</button>
-			{/if}
-			{#if !verEliminados}
-				<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
-					<Plus size={16} /> Nueva Factura
-				</button>
-			{/if}
-		</div>
+	</div>
+
+	<div class="flex items-center justify-end mb-4 gap-2">
+		{#if isAdmin() && !verEliminados && !esSinTipo}
+			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
+				<Trash2 size={16} /> Ver eliminados
+			</button>
+		{:else if verEliminados}
+			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-white hover:bg-slate-900">
+				<ChevronLeft size={16} /> Volver
+			</button>
+		{/if}
+		{#if !verEliminados}
+			<button type="button" onclick={openCreate} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
+				<Plus size={16} /> Nuevo Comprobante
+			</button>
+		{/if}
 	</div>
 
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<!-- KPIs -->
+	<!-- KPIs (la pestaña "Sin tipo de documento" no tiene comprobantes emitidos propios, no lleva KPIs) -->
+	{#if !esSinTipo}
 	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Total Facturado (Mes Actual)</span>
+				<span class="text-xs font-medium text-slate-500">Total Emitido en {nombreTab} (Mes Actual)</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.totalFacturadoMes)}</p>
 		</div>
 		<div class="bg-white rounded-xl border border-slate-200 p-4" style="background:#eef4fb;border-color:#b7cce6">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-white text-blue-700 flex items-center justify-center shrink-0"><Inbox size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Por Facturar</span>
+				<span class="text-xs font-medium text-slate-500">Por Emitir ({nombreTab})</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.porFacturar)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin factura</p>
+			<p class="text-[11px] text-slate-400 mt-1">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin comprobante</p>
 		</div>
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
@@ -359,11 +508,110 @@
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><CheckCircle2 size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Facturas Emitidas</span>
+				<span class="text-xs font-medium text-slate-500">{pluralTab} Emitidas</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{kpis.facturasEmitidas}</p>
 		</div>
 	</div>
+	{/if}
+
+	<!-- Pestañas (estilo tabs, mismo look que Control Financiero) — a pedido explícito del usuario, van
+	     justo arriba de "Transacciones (…)" en vez de debajo del título de la página. -->
+	<div class="mb-4 flex gap-1 border-b border-slate-200 flex-wrap">
+		{#each TABS as tab (tab.value)}
+			<button
+				type="button"
+				onclick={() => switchTab(tab.value)}
+				class={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === tab.value ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+			>
+				<tab.icon size={16} /> {tab.label}
+			</button>
+		{/each}
+	</div>
+
+	{#if !verEliminados}
+		<!-- Sección superior: transacciones de ingreso clasificadas por el tipo de documento de esta pestaña -->
+		<div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
+			<div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+				<h2 class="text-sm font-semibold text-[#0f3b5e]">Transacciones ({nombreTab})</h2>
+				<div class="flex items-center gap-3 text-[11px] text-slate-500">
+					{#if esSinTipo}
+						<label class="flex items-center gap-1.5 text-slate-600 font-medium">
+							Emitir como
+							<select bind:value={emitirComo} class="rounded-lg border border-slate-300 px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+								{#each TABS.filter((t) => t.value !== 'sin_tipo') as t}
+									<option value={t.value}>{t.label}</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
+					<span class="flex items-center gap-1.5"><span class="inline-block shrink-0 w-4 h-4 rounded border-2" style={`background:${COLOR_SIN_FACTURA.bg};border-color:${COLOR_SIN_FACTURA.border}`}></span>Sin comprobante (seleccionable)</span>
+				</div>
+			</div>
+
+			<div class="overflow-x-auto">
+				<div class="min-w-[900px]">
+					<div class="grid grid-cols-[auto_0.9fr_1.3fr_1.1fr_1.8fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
+						<span class="w-4"></span>
+						<span>Fecha</span>
+						<span>Cliente</span>
+						<span>Categoría</span>
+						<span>Descripción</span>
+						<span>Destino</span>
+						<span class="text-right">Monto</span>
+						<span class="text-center">Soportes</span>
+					</div>
+					{#each transaccionesPendientes as t (t.id_transaccion)}
+						{@const facturada = t.id_factura != null}
+						<div
+							role="button"
+							tabindex="0"
+							onclick={() => openDesdeTransaccion(t)}
+							onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && openDesdeTransaccion(t)}
+							class={`grid grid-cols-[auto_0.9fr_1.3fr_1.1fr_1.8fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2.5 border-b last:border-b-0 text-sm ${facturada ? 'cursor-default' : 'cursor-pointer'}`}
+							style={`background:${facturada ? COLOR_FACTURADA.bg : COLOR_SIN_FACTURA.bg};border-color:${facturada ? COLOR_FACTURADA.border : COLOR_SIN_FACTURA.border}`}
+						>
+							{#if facturada}
+								<span class="w-4 h-4 flex items-center justify-center shrink-0 text-emerald-700" title="Ya emitida"><Check size={14} /></span>
+							{:else}
+								<span class="w-4 h-4 rounded border-2 border-[#5b8fd4] bg-white shrink-0"></span>
+							{/if}
+							<span class="text-slate-700">{t.fecha}</span>
+							<span class="text-slate-700 truncate">{t.clienteNombre ?? '—'}</span>
+							<span class="text-slate-700 truncate">{t.categoria ?? '—'}</span>
+							<span class="text-slate-600 truncate">{t.descripcion ?? '—'}</span>
+							<span class="text-slate-600 truncate">
+								{t.destinoLabel}
+								{#if facturada}<span class="ml-1 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">{t.facturaFolio ?? ''}</span>{/if}
+							</span>
+							<span class="text-right font-semibold text-slate-800">{fmtTransaccion(t)}</span>
+							<span class="flex justify-center">
+								<button type="button" onclick={(e) => { e.stopPropagation(); abrirSoportesTransaccion(t); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
+									<Eye size={16} />
+								</button>
+							</span>
+						</div>
+					{:else}
+						<p class="px-4 py-8 text-center text-xs text-slate-400">{cargandoSuperior ? 'Cargando...' : (esSinTipo ? 'No hay transacciones de ingreso sin tipo de documento pendientes de emitir.' : `No hay transacciones de tipo ${nombreTab} pendientes de emitir.`)}</p>
+					{/each}
+				</div>
+			</div>
+
+			{#if transaccionesTotalPages > 1}
+				<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200">
+					<p class="text-xs text-slate-400">{transaccionesTotal} transacción{transaccionesTotal === 1 ? '' : 'es'} en total</p>
+					<div class="flex items-center gap-2">
+						<button type="button" disabled={transaccionesPageNum <= 1} onclick={() => irAPaginaTransacciones(transaccionesPageNum - 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Anterior</button>
+						<span class="text-sm text-slate-500">{transaccionesPageNum} / {transaccionesTotalPages}</span>
+						<button type="button" disabled={transaccionesPageNum >= transaccionesTotalPages} onclick={() => irAPaginaTransacciones(transaccionesPageNum + 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Siguiente</button>
+					</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	{#if !esSinTipo}
+	<h2 class="text-sm font-semibold text-[#0f3b5e] mb-2">{verEliminados ? `${pluralTab} eliminadas` : 'Documentos emitidos'}</h2>
 
 	<ColumnFilterBar fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
 
@@ -429,7 +677,7 @@
 									</button>
 								{/if}
 							{:else}
-								<button type="button" onclick={() => openPreview(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver factura" aria-label="Ver factura">
+								<button type="button" onclick={() => openPreview(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Ver" aria-label="Ver">
 									<Eye size={16} />
 								</button>
 								{#if item.estado === 'borrador'}
@@ -444,7 +692,7 @@
 						</div>
 					</div>
 				{:else}
-					<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : 'No se encontraron facturas.'}</p>
+					<p class="px-4 py-10 text-center text-slate-400">{loading ? 'Cargando...' : `No se encontraron ${pluralTab.toLowerCase()}.`}</p>
 				{/each}
 			</div>
 		</div>
@@ -452,7 +700,7 @@
 
 	{#if totalPages > 1}
 		<div class="flex items-center justify-between mt-4">
-			<p class="text-xs text-slate-400">{total} factura{total === 1 ? '' : 's'} en total</p>
+			<p class="text-xs text-slate-400">{total} documento{total === 1 ? '' : 's'} en total</p>
 			<div class="flex items-center gap-2">
 				<button type="button" disabled={pageNum <= 1} onclick={() => { pageNum -= 1; fetchList(); }} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Anterior</button>
 				<span class="text-sm text-slate-500">{pageNum} / {totalPages}</span>
@@ -460,17 +708,19 @@
 			</div>
 		</div>
 	{/if}
+	{/if}
 </div>
 
-<FacturaModal open={modalOpen} mode={modalMode} factura={editingFactura} detalleInicial={editingDetalle} onClose={closeModal} onSaved={handleSaved} />
+<FacturaModal open={modalOpen} mode={modalMode} tipoComprobante={comprobanteModal} factura={editingFactura} detalleInicial={editingDetalle} {preseleccion} onClose={closeModal} onSaved={handleSaved} />
 
 <FacturaPreviewModal open={previewOpen} datos={previewDatos} onClose={closePreview} />
 <DocumentPreviewModal open={imagenOpen} documents={imagenDocs} title={imagenTitle} onClose={() => (imagenOpen = false)} />
+<DocumentPreviewModal open={docsOpen} documents={docsLista} title={docsTitle} onClose={() => (docsOpen = false)} />
 
 <ConfirmModal
 	open={confirmDarDeBajaOpen}
-	title="Dar de baja factura"
-	message={facturaParaDarDeBaja ? (facturaParaDarDeBaja.estado === 'emitida' ? `¿Dar de baja la factura ${facturaParaDarDeBaja.folio}? Quedará ANULADA y sus transacciones volverán a estar sin factura (azul). No se puede restaurar.` : `¿Dar de baja la borrador ${facturaParaDarDeBaja.folio}? Quedará marcada como inactiva.`) : ''}
+	title={`Dar de baja ${nombreTab.toLowerCase()}`}
+	message={facturaParaDarDeBaja ? (facturaParaDarDeBaja.estado === 'emitida' ? `¿Dar de baja ${facturaParaDarDeBaja.folio}? Quedará ANULADA y sus transacciones volverán a estar sin comprobante (azul). No se puede restaurar.` : `¿Dar de baja el borrador ${facturaParaDarDeBaja.folio}? Quedará marcado como inactivo.`) : ''}
 	confirmLabel="Dar de baja"
 	onConfirm={confirmarDarDeBaja}
 	onClose={closeConfirmDarDeBaja}
@@ -478,8 +728,8 @@
 
 <AdminConfirmModal
 	open={confirmEliminarPermanenteOpen}
-	title="Eliminar factura permanentemente"
-	message={facturaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE la factura ${facturaParaEliminarPermanente.folio}, su detalle y sus imágenes guardadas. Sus transacciones (si las tenía facturadas) quedarán libres. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
+	title={`Eliminar ${nombreTab.toLowerCase()} permanentemente`}
+	message={facturaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE ${facturaParaEliminarPermanente.folio}, su detalle y sus imágenes guardadas. Sus transacciones (si las tenía) quedarán libres. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
 	confirmLabel="Eliminar permanentemente"
 	onConfirm={confirmarEliminarPermanente}
 	onClose={closeConfirmEliminarPermanente}

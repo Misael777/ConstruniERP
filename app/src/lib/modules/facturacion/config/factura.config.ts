@@ -139,8 +139,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	{
 		key: 'detraccion_cuenta_bn',
 		label: 'N° Cta. Banco de la Nación',
-		tipo: 'text',
-		maxLength: 40,
+		tipo: 'select',
+		// Opciones reales (cuentas ya registradas en Cuentas Bancarias cuyo banco es el Banco de la
+		// Nación) inyectadas en runtime por FacturaModal.svelte — ver getCuentasBancoNacionOptions.
+		options: [],
 		disabledWhen: (values) => String(values.sujeta_detraccion ?? 'no') !== 'si',
 		requiredWhen: (values) => String(values.sujeta_detraccion ?? 'no') === 'si',
 		showInTable: false,

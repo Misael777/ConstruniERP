@@ -187,6 +187,29 @@ export async function getMonedasCuentaBanco(client: SupabaseClient): Promise<Rec
 	return monedas;
 }
 
+/** Para el dropdown "N° Cta. Banco de la Nación" del bloque de detracción en FacturaModal.svelte — a
+ * pedido explícito del usuario: ya no se digita a mano, se elige entre las cuentas bancarias ya
+ * registradas (mismo criterio que getCuentaBancoOptions) cuyo `nombre_banco` sea el Banco de la Nación.
+ * `nombre_banco` es texto libre en cuenta_banco (sin catálogo fijo), así que el filtro compara sin
+ * tildes/mayúsculas en vez de un ILIKE exacto, para tolerar "Banco de la Nación"/"BANCO DE LA NACION"/etc. */
+export async function getCuentasBancoNacionOptions(client: SupabaseClient): Promise<FieldOption[]> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('numero_cuenta, titular_cuenta, nombre_banco')
+		.eq('estado', 'activa')
+		.eq('activo', true)
+		.order('titular_cuenta');
+	if (error) throw error;
+	const normalizar = (s: string) =>
+		s
+			.normalize('NFD')
+			.replace(/[̀-ͯ]/g, '')
+			.toLowerCase();
+	return (data ?? [])
+		.filter((c: any) => normalizar(c.nombre_banco ?? '').includes('nacion'))
+		.map((c: any) => ({ value: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}` }));
+}
+
 export async function deleteCuentaBanco(client: SupabaseClient, id: number): Promise<ServiceResult> {
 	const { error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id);
 	if (error) return { success: false, message: `No se pudo eliminar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };

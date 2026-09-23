@@ -105,13 +105,40 @@ CREATE TABLE IF NOT EXISTS factura_archivo (
 -- "Facturada" = la transacción tiene id_factura. NULL = sin factura (se muestra en azul lino).
 ALTER TABLE transaccion ADD COLUMN IF NOT EXISTS id_factura BIGINT REFERENCES factura(id_factura) ON DELETE SET NULL;
 
--- Folio automático: serie E001 + correlativo de 8 dígitos
+-- ============================================================
+-- v3: 4 tipos de comprobante (Factura/Boleta/Nota de Crédito/Nota de Débito) — "Gestión de
+-- Comprobantes". Las 4 pestañas se clasifican EXACTAMENTE igual (a pedido explícito del usuario:
+-- "cada pestaña debe mostrar la relación de transacciones tipo ingreso según el tipo de documento"):
+-- por transaccion.tipo_documento ('1'=Factura, '2'=Boleta, '10'=Nota de Crédito, '11'=Nota de Débito,
+-- ver transaccion.config.ts) — ninguna es un caso especial, todas nacen de una transacción real.
+-- ============================================================
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS tipo_comprobante VARCHAR(20) NOT NULL DEFAULT 'factura';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'factura_tipo_comprobante_check') THEN
+        ALTER TABLE factura ADD CONSTRAINT factura_tipo_comprobante_check
+            CHECK (tipo_comprobante IN ('factura','boleta','nota_credito','nota_debito'));
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_factura_tipo_comprobante ON factura(tipo_comprobante);
+
+-- Folio automático por tipo de comprobante: cada uno con su propia serie/secuencia (correlativo
+-- independiente, como en SUNAT real). 'E001-' de Factura es la serie REAL de Construni (confirmada
+-- con las imágenes de referencia); 'B001-'/'NC01-'/'ND01-' son series PROVISIONALES hasta que se
+-- confirmen las reales — ajustar en fn_asignar_folio_factura si cambian.
 CREATE SEQUENCE IF NOT EXISTS factura_folio_seq;
+CREATE SEQUENCE IF NOT EXISTS boleta_folio_seq;
+CREATE SEQUENCE IF NOT EXISTS nota_credito_folio_seq;
+CREATE SEQUENCE IF NOT EXISTS nota_debito_folio_seq;
 
 CREATE OR REPLACE FUNCTION fn_asignar_folio_factura() RETURNS trigger AS $$
 BEGIN
     IF NEW.folio IS NULL OR NEW.folio = '' THEN
-        NEW.folio := 'E001-' || LPAD(nextval('factura_folio_seq')::text, 8, '0');
+        NEW.folio := CASE NEW.tipo_comprobante
+            WHEN 'boleta' THEN 'B001-' || LPAD(nextval('boleta_folio_seq')::text, 8, '0')
+            WHEN 'nota_credito' THEN 'NC01-' || LPAD(nextval('nota_credito_folio_seq')::text, 8, '0')
+            WHEN 'nota_debito' THEN 'ND01-' || LPAD(nextval('nota_debito_folio_seq')::text, 8, '0')
+            ELSE 'E001-' || LPAD(nextval('factura_folio_seq')::text, 8, '0')
+        END;
     END IF;
     RETURN NEW;
 END;

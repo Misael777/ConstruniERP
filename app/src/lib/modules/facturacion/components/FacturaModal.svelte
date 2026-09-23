@@ -16,17 +16,21 @@
 	import {
 		getClientesParaFacturar,
 		getTransaccionesDelCliente,
+		getTransaccionesPorIds,
 		getDocumentosTransaccion,
 		calcularTotalesFactura,
 		valorSinIgv,
 		guardarBorradorFactura,
 		autorizarYEmitirFactura,
+		TIPO_DOCUMENTO_POR_COMPROBANTE,
 		type Factura,
 		type FacturaDetalle,
 		type ClienteParaFacturar,
 		type TransaccionFacturable,
-		type LineaFactura
+		type LineaFactura,
+		type TipoComprobante
 	} from '$lib/modules/facturacion/services/facturacion.service';
+	import { getCuentasBancoNacionOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { generarFacturaPdf, type DatosFacturaPdf } from '$lib/shared/facturaPdf';
 	import { DETRACCION_CUENTA_BN_DEFAULT } from '$lib/shared/empresaConstantes';
 	import { permisosState } from '$lib/stores/permisos.svelte';
@@ -36,20 +40,65 @@
 	let {
 		open = false,
 		mode = 'create',
+		tipoComprobante = 'factura',
 		factura = null,
 		detalleInicial = [],
+		preseleccion = null,
 		onClose,
 		onSaved
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
+		/** Determina si esto es "Nueva Factura"/"Nueva Boleta"/"Nueva Nota de Crédito"/"Nueva Nota de
+		 * Débito" — mismo formulario base para las 4: filtra las transacciones por transaccion.
+		 * tipo_documento (ver TIPO_DOCUMENTO_POR_COMPROBANTE en facturacion.service.ts) y define la serie
+		 * del folio (ver fn_asignar_folio_factura en factura_migration.sql). */
+		tipoComprobante?: TipoComprobante;
 		factura: Factura | null;
 		detalleInicial?: FacturaDetalle[];
+		/** Al abrir desde la tabla de "Gestión de Comprobantes" (pestaña Factura/Boleta) marcando el
+		 * check de una transacción — fija el cliente de una vez (sin pasar por el selector) y deja esa
+		 * transacción ya tildada. Solo aplica en mode:'create'. */
+		preseleccion?: { idCliente: number; idTransaccion: number } | null;
 		onClose: () => void;
 		onSaved: () => void | Promise<void>;
 	} = $props();
 
-	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
+	const NOMBRE_POR_COMPROBANTE: Record<TipoComprobante, string> = {
+		factura: 'Factura',
+		boleta: 'Boleta',
+		nota_credito: 'Nota de Crédito',
+		nota_debito: 'Nota de Débito'
+	};
+	const tipoDocumento = $derived(TIPO_DOCUMENTO_POR_COMPROBANTE[tipoComprobante]);
+	const nombreDocumento = $derived(NOMBRE_POR_COMPROBANTE[tipoComprobante]);
+
+	let cuentasBancoNacion = $state<FieldOption[]>([]);
+	// Inyecta las opciones reales (cuentas ya registradas en Cuentas Bancarias cuyo banco es el Banco de
+	// la Nación, ver getCuentasBancoNacionOptions) en el campo "N° Cta. Banco de la Nación" — a pedido
+	// explícito del usuario, ya no se digita a mano. Se arma como derived en vez de mutar FIELDS_CONFIG
+	// (el array de config es compartido/estático a nivel de módulo). Solo depende de cuentasBancoNacion
+	// (NO de formValues): buildInitialValues() usa este array para leer field.key antes de que
+	// `formValues` termine de inicializarse — si este derived leyera formValues, esa lectura ocurriría
+	// en su "temporal dead zone" (ReferenceError) apenas se abre el modal.
+	const formFields = $derived(FIELDS_CONFIG.filter((f) => f.showInForm).map((f) => (f.key === 'detraccion_cuenta_bn' ? { ...f, options: cuentasBancoNacion } : f)));
+
+	// Variante para validar/renderizar (revalidate() y el template, ver abajo): si la factura (borrador
+	// ya guardado) trae un valor viejo en texto libre que ya no coincide con ninguna cuenta activa (dato
+	// de antes de que este campo fuera un dropdown, o la cuenta se dio de baja después), ese valor se
+	// agrega igual como opción — si no, el <select> lo mostraría vacío y `validatePayload` lo rechazaría
+	// como "valor no permitido" al querer guardar, aunque no se haya tocado ese campo.
+	const formFieldsConLegado = $derived(
+		formFields.map((f) => {
+			if (f.key !== 'detraccion_cuenta_bn') return f;
+			const valorActual = formValues.detraccion_cuenta_bn;
+			const opciones =
+				valorActual && !cuentasBancoNacion.some((o) => o.value === valorActual)
+					? [...cuentasBancoNacion, { value: valorActual, label: valorActual }]
+					: cuentasBancoNacion;
+			return { ...f, options: opciones };
+		})
+	);
 
 	// Colores de estado de cada transacción en la lista (a pedido del usuario: azul lino = sin factura).
 	// Bien diferenciados a propósito (el azul lino y el verde pálidos anteriores casi no se distinguían del
@@ -64,7 +113,13 @@
 
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
-		for (const field of formFields) {
+		// FIELDS_CONFIG (no formFields): solo se necesita field.key acá, nunca field.options — leer el
+		// derived reactivo formFields metería a este effect (ver más abajo, se llama desde ahí) una
+		// dependencia de cuentasBancoNacion, que ese mismo effect también escribe de forma asíncrona
+		// (fetch de las cuentas del Banco de la Nación). Eso disparaba un loop infinito: el effect se
+		// reactivaba a sí mismo en cada respuesta del fetch, reseteando formValues sin parar (el
+		// formulario "temblando" sin dejar escribir nada).
+		for (const field of FIELDS_CONFIG.filter((f) => f.showInForm)) {
 			let raw: unknown = factura ? (factura as any)[field.key] : '';
 			if (field.key === 'sujeta_detraccion') raw = factura ? (factura.sujeta_detraccion ? 'si' : 'no') : 'no';
 			values[field.key] = raw === null || raw === undefined ? '' : String(raw);
@@ -101,7 +156,14 @@
 		if (!id) return;
 		cargandoTransacciones = true;
 		try {
-			transacciones = await getTransaccionesDelCliente(supabase, Number(id));
+			let lista = await getTransaccionesDelCliente(supabase, Number(id), tipoDocumento);
+			// Reabriendo un borrador: sus transacciones guardadas deben verse (y quedar tildadas) siempre,
+			// aunque ya no entren en el filtro normal de la lista.
+			if (factura) {
+				const faltantes = detalleInicial.map((d) => d.id_transaccion).filter((v): v is number => v != null && !lista.some((t) => t.id_transaccion === v));
+				if (faltantes.length > 0) lista = [...lista, ...(await getTransaccionesPorIds(supabase, faltantes))];
+			}
+			transacciones = lista;
 		} catch (err) {
 			console.error('[FacturaModal] No se pudieron cargar las transacciones del cliente:', err);
 			toast.error('No se pudieron cargar las transacciones del cliente.');
@@ -115,7 +177,7 @@
 		formValues = buildInitialValues();
 		fieldErrors = {};
 		facturaActual = factura;
-		idCliente = factura ? String(factura.id_cliente) : '';
+		idCliente = factura ? String(factura.id_cliente) : preseleccion ? String(preseleccion.idCliente) : '';
 		seleccion = detalleInicial.map((d) => d.id_transaccion).filter((v): v is number => v != null);
 		descripciones = Object.fromEntries(detalleInicial.filter((d) => d.id_transaccion != null).map((d) => [d.id_transaccion as number, d.descripcion]));
 		previewOpen = false;
@@ -123,11 +185,38 @@
 		getClientesParaFacturar(supabase)
 			.then((data) => (clientes = data))
 			.catch((err) => console.error('[FacturaModal] No se pudieron cargar los clientes:', err));
-		if (factura) cargarTransacciones(String(factura.id_cliente));
-		else transacciones = [];
+		getCuentasBancoNacionOptions(supabase)
+			.then((data) => (cuentasBancoNacion = data))
+			.catch((err) => console.error('[FacturaModal] No se pudieron cargar las cuentas del Banco de la Nación:', err));
+		if (factura) {
+			cargarTransacciones(String(factura.id_cliente));
+		} else if (preseleccion) {
+			// Viene de "Gestión de Comprobantes" con un check ya marcado — se precarga el cliente y, apenas
+			// llegan sus transacciones, se tilda la que originó el check (mismo criterio de "no perder lo
+			// que el usuario ya eligió" que el resto de flujos de preselección del ERP).
+			cargarTransacciones(String(preseleccion.idCliente)).then(() => {
+				seleccion = [preseleccion.idTransaccion];
+			});
+		} else {
+			transacciones = [];
+		}
 	});
 
-	const clienteSeleccionado = $derived(clientes.find((c) => String(c.id_cliente) === idCliente) ?? null);
+	const clienteLista = $derived(clientes.find((c) => String(c.id_cliente) === idCliente) ?? null);
+	// Editando un borrador se muestran los datos del cliente TAL COMO se guardaron (snapshot en la factura:
+	// nombre/documento/dirección), no los actuales de la ficha — y sin depender de que la lista de clientes
+	// ya haya terminado de cargar.
+	const clienteSeleccionado = $derived<ClienteParaFacturar | null>(
+		factura && String(factura.id_cliente) === idCliente
+			? {
+					id_cliente: factura.id_cliente,
+					nombre: factura.cliente_nombre ?? clienteLista?.nombre ?? '',
+					tipo_doc: factura.cliente_tipo_doc ?? clienteLista?.tipo_doc ?? null,
+					num_documento: factura.cliente_documento ?? clienteLista?.num_documento ?? null,
+					direccion: factura.cliente_direccion ?? clienteLista?.direccion ?? null
+				}
+			: clienteLista
+	);
 	const transaccionesSeleccionadas = $derived(transacciones.filter((t) => seleccion.includes(t.id_transaccion)));
 	const primera = $derived(transaccionesSeleccionadas[0] ?? null);
 	const moneda = $derived<'PEN' | 'USD'>(primera?.tipo_moneda === 'dolares' ? 'USD' : 'PEN');
@@ -183,7 +272,11 @@
 	}
 
 	function revalidate() {
-		fieldErrors = validatePayload(FIELDS_CONFIG, formValues);
+		// formFieldsConLegado (no FIELDS_CONFIG) — trae las opciones reales del dropdown "N° Cta. Banco
+		// de la Nación" (ver arriba, incluye el valor viejo de un borrador si ya no está entre las
+		// cuentas activas); FIELDS_CONFIG tiene ese campo con options:[] a propósito, así que validar
+		// contra ese array vacío rechazaría cualquier cuenta elegida.
+		fieldErrors = validatePayload(formFieldsConLegado, formValues);
 		if (!idCliente) fieldErrors = { ...fieldErrors, id_cliente: 'Selecciona un cliente' };
 	}
 
@@ -193,7 +286,7 @@
 
 	const soloLectura = $derived(mode === 'edit' && factura?.estado !== 'borrador');
 	const puedeContinuar = $derived(!!idCliente && lineas.length > 0);
-	const title = $derived(soloLectura ? 'Consultar Factura' : mode === 'create' ? 'Nueva Factura' : 'Editar Factura (Borrador)');
+	const title = $derived(soloLectura ? `Consultar ${nombreDocumento}` : mode === 'create' ? `Nueva ${nombreDocumento}` : `Editar ${nombreDocumento} (Borrador)`);
 
 	function fmt(valor: number): string {
 		return `${moneda === 'USD' ? 'US$' : 'S/'} ${Number(valor || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -219,6 +312,7 @@
 	function construirDatosPdf(folio: string | null, marcaAgua: string | null): DatosFacturaPdf {
 		const c = clienteSeleccionado;
 		return {
+			tipoDocumento: tipoComprobante,
 			folio,
 			fechaEmision: formValues.fecha_emision,
 			formaPago: formValues.forma_pago === 'credito' ? 'credito' : 'contado',
@@ -261,6 +355,7 @@
 			tipoCambio,
 			lineas,
 			permisosState.userName || null,
+			tipoComprobante,
 			facturaActual?.id_factura
 		);
 		if (!result.success || !result.data) {
@@ -343,9 +438,12 @@
 							onchange={(e) => handleClienteChange((e.target as HTMLSelectElement).value)}
 							class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 ${fieldErrors.id_cliente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 						>
-							<option value="" disabled>Selecciona un cliente</option>
+							<option value="" disabled selected={!idCliente}>Selecciona un cliente</option>
+							{#if clienteSeleccionado && !clientes.some((c) => c.id_cliente === clienteSeleccionado.id_cliente)}
+								<option value={String(clienteSeleccionado.id_cliente)} selected>{clienteSeleccionado.nombre}</option>
+							{/if}
 							{#each clientes as c (c.id_cliente)}
-								<option value={String(c.id_cliente)}>{c.nombre}</option>
+								<option value={String(c.id_cliente)} selected={String(c.id_cliente) === idCliente}>{c.nombre}</option>
 							{/each}
 						</select>
 						{#if fieldErrors.id_cliente}<p class="mt-1 text-xs text-red-600">{fieldErrors.id_cliente}</p>{/if}
@@ -431,7 +529,7 @@
 				</div>
 
 				<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-					{#each formFields as field (field.key)}
+					{#each formFieldsConLegado as field (field.key)}
 						<div>
 							<label for={`fac-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
 								{field.label}
