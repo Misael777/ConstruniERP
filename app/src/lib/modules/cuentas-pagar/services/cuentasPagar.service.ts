@@ -747,12 +747,15 @@ export async function restaurarCuentaPagar(client: SupabaseClient, id: number): 
 	return { success: true, message: 'Cuenta por pagar restaurada correctamente' };
 }
 
+/** Tickets #21/#23: la lista de cuotas se mostraba de la última a la primera — ascending:true muestra
+ * la primera cuota arriba, como pidió el cliente. (CuentaPagarModal.svelte ya re-ordenaba esto mismo por
+ * su cuenta al usar este resultado, así que no se ve afectado por este cambio.) */
 export async function getPagos(client: SupabaseClient, idCuentaPagar: number): Promise<Pago[]> {
 	const { data, error } = await client
 		.from(PAGO_TABLE)
 		.select('*, transaccion:id_transaccion(aprobado, aprobado_por)')
 		.eq(PARENT_FK_COLUMN, idCuentaPagar)
-		.order('fecha_pago', { ascending: false });
+		.order('fecha_pago', { ascending: true });
 	if (error) throw error;
 	return (data ?? []) as Pago[];
 }

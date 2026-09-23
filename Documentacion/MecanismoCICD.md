@@ -43,12 +43,13 @@ Por eso este proyecto separa las dos cosas con claridad:
 6. Cuando decido que es momento de publicar una versión (puede juntar varios tickets aprobados a la
    vez), corro UN SOLO comando:
 
-     npm run release -- --patch      (o --minor / --major)
+     deploy.bat   (o `npm run release -- --patch`; --minor / --major). `deploy.bat` solo pide
+     confirmación y llama a `npm run release` — la lógica vive toda en scripts/release.mjs.
 
    Este script (todo en uno — ya NO hay que compilar el APK a mano antes):
      a. Vuelve a correr check+test como último gate (por si algo cambió desde el push).
      b. Sube la versión en package.json/tauri.conf.json.
-     c. Compila el APK de Android (npm run tauri android build -- --debug) DESPUÉS del bump y verifica
+     c. Compila el APK de Android (npm run tauri android build -- --debug --target aarch64) DESPUÉS del bump y verifica
         que lleve la versión nueva incrustada. ⚠️ Por qué importa (ticket #8): la versión que la app
         instalada reporta (y que compara contra `app_release` para mostrar "actualización
         disponible") queda incrustada al COMPILAR. Un APK compilado antes del bump lleva la versión

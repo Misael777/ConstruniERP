@@ -15,6 +15,7 @@
 	import type { CuentaPagar, Pago, FechaCuentaRecurrente, ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	let {
 		open = false,
@@ -360,7 +361,20 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.tipo === 'select' || field.options}
+							{#if field.key === 'id_proveedor'}
+								<!-- Ticket #19: la lista de proveedores va a seguir creciendo — SelectConSaldo.svelte ya
+								     resuelve exactamente esto (buscador que filtra sin distinguir mayúsculas/tildes),
+								     reusado acá sin mostrar ningún saldo (solo lo necesita Cuenta Origen/Destino en
+								     TransaccionModal.svelte). -->
+								<SelectConSaldo
+									id={`ccp-${field.key}`}
+									value={formValues[field.key] ?? ''}
+									options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label }))}
+									disabled={isDisabled(field)}
+									hasError={!!fieldErrors[field.key]}
+									onchange={(value) => handleInput(field.key, value)}
+								/>
+							{:else if field.tipo === 'select' || field.options}
 								<div class="relative">
 									{#if field.optionColors}
 										<span
