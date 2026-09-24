@@ -6,7 +6,6 @@
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { createCuentaCobrar, updateCuentaCobrar, getCobros, computeEstadoCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { CuentaCobrar, ServiceResult } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
@@ -126,42 +125,12 @@
 		}
 	});
 
-	// A pedido explícito del usuario: "Saldo Pendiente" = Valor de venta - la suma de los montos YA
-	// registrados en `transaccion` como ingreso hacia el centro de costo de ese proyecto (no
-	// `cuenta.monto_cobrado`, que es un total aparte llevado por los "cobros" de ESTA cuenta puntual —
-	// acá se pidió específicamente la plata real ya recibida por el proyecto, vía transacciones). Se
-	// recalcula cada vez que cambia el Centro de Costo elegido (distinto proyecto = distinto total
-	// recibido) o se abre el modal.
-	let montoRecibidoCentro = $state(0);
-	$effect(() => {
-		// En el flujo "Préstamo Otorgado", "Centro de Costo" ya NO es el proyecto vendido — es
-		// "Prestamista", NUESTRO propio centro que financia el préstamo (ver labelFor/optionsFor más
-		// abajo). Ese centro puede tener montones de ingresos reales sin ninguna relación con ESTE
-		// préstamo puntual (es un centro de costo interno de uso normal) — restarlos acá hacía que Saldo
-		// Pendiente diera 0 (y Estado "Pagado") para un préstamo que todavía no cobró nada. Bug real
-		// reportado por el usuario, dos veces: primero al CREAR (clienteBloqueado=true ahí, ya cubierto);
-		// después también al EDITAR una transacción de préstamo desde TransaccionModal.svelte (ver
-		// abrirEdicionPrecargadaDesdeTransaccion en finanzas/cuentas-cobrar/+page.svelte), que abre esta
-		// misma cuenta en modo Editar con clienteBloqueado=false (el Cliente sí se puede tocar libremente
-		// ahí) — clienteBloqueado por sí solo ya no alcanza para detectar "esto es un préstamo" en TODOS
-		// los casos. cuenta?.id_transaccion (real desde cuentas_pagar_cobrar_id_transaccion_migration.sql)
-		// es la señal confiable: no-null únicamente en una cuenta que se creó junto con una transacción de
-		// préstamo, sin importar por qué puerta se llegó a editarla.
-		if (!open || !formValues.id_centro_costo || clienteBloqueado || cuenta?.id_transaccion != null) {
-			montoRecibidoCentro = 0;
-			return;
-		}
-		const idCentro = Number(formValues.id_centro_costo);
-		if (!idCentro) {
-			montoRecibidoCentro = 0;
-			return;
-		}
-		(async () => {
-			const montos = await getMontoRecibidoPorCentroCosto(supabase, [idCentro]);
-			montoRecibidoCentro = montos[idCentro] ?? 0;
-		})();
-	});
-	const saldoPendienteReal = $derived(Math.max(Number(formValues.monto || 0) - montoRecibidoCentro, 0));
+	// H6 (ver Documentacion/tests/README.md, decisión del cliente): "Saldo Pendiente" = Valor de venta - lo ya
+	// cobrado a través de los cobros de ESTA cuenta (igual que Cuentas por Pagar con sus pagos). Antes se
+	// restaban todos los ingresos hacia el centro de costo, lo que hacía que un adelanto "pagara" a la vez
+	// todas las cuentas del mismo proyecto. Una cuenta nueva no tiene cobros: 0.
+	const montoCobradoPropio = $derived(mode === 'edit' ? Number(cuenta?.monto_cobrado ?? 0) : 0);
+	const saldoPendienteReal = $derived(Math.max(Number(formValues.monto || 0) - montoCobradoPropio, 0));
 
 	// "Estado" ya no es un select editable a mano (showInForm:false en cuentaCobrar.config.ts, se
 	// recalcula solo en el servicio) — a pedido del usuario, igual se muestra acá como vista previa en

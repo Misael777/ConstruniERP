@@ -13,7 +13,11 @@
 		"test": "vitest run",
 		"tauri": "node --env-file=.env node_modules/@tauri-apps/cli/tauri.js",
 		"release": "node --env-file=.env scripts/release.mjs",
-		"mcp": "node --env-file=.env --experimental-strip-types mcp-server/index.ts"
+		"mcp": "node --env-file=.env --import ./scripts/register-lib-resolver.mjs --experimental-strip-types mcp-server/index.ts",
+		"mcp:dev": "node --env-file=.env.dev --import ./scripts/register-lib-resolver.mjs --experimental-strip-types mcp-server/index.ts",
+		"test:negocio": "node scripts/tests-negocio-cuentas.mjs",
+		"test:negocio:fraccionamiento": "node scripts/tests-negocio-fraccionamiento.mjs",
+		"seed:dev": "node --env-file=.env.dev --experimental-strip-types scripts/seed-dev.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",

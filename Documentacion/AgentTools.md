@@ -86,3 +86,43 @@ credenciales que en realidad ya están configuradas.
 
 Para usarlo desde Claude Code, registralo como servidor MCP del proyecto (`claude mcp add`) apuntando
 a ese mismo comando.
+
+---
+
+## Entornos Dev/Prod y dominios financieros (Fase C del plan de Desarrollo/Testing)
+
+Dos servidores MCP, mismo código, distinta base — el entorno se deduce de la URL de Supabase cargada
+(`mcp-server/index.ts`, nunca de una variable "modo"), y aborta si la URL no es ninguno de los dos
+proyectos conocidos:
+
+| Servidor Claude Code | Comando | Archivo de entorno | Herramientas |
+|---|---|---|---|
+| `construnierp` | `npm run mcp` | `app/.env` (Producción) | Todas las **lecturas** + Tickets |
+| `construnierp-dev` | `npm run mcp:dev` | `app/.env.dev` (Dev) | Todo, incluidas las **escrituras** |
+
+- Una herramienta con `escritura: true` **no se registra en Producción** (`filtrarPorEntorno` en
+  `registry.ts`), salvo que además tenga `escrituraEnProd: true` (excepción explícita del usuario para
+  Tickets/Panel Developer). La BD no tiene RLS fuera de Tickets, así que este filtro ES el candado.
+- `npm run mcp*` usa `--import ./scripts/register-lib-resolver.mjs`: registra `scripts/lib-resolver.mjs`,
+  que resuelve `$lib/...` y los imports relativos sin extensión, para que agent-tools importe los
+  `*.service.ts` reales. Solo sirve para archivos sin acoplamiento a Svelte (`$env/*`, `*.svelte.ts`).
+- Dominios cubiertos: `tools/cuentas-pagar.ts`, `tools/cuentas-cobrar.ts`, `tools/catalogos.ts`
+  (proveedores, clientes, centros de costo, cuentas bancarias, transacciones). Cada uno incluye una
+  herramienta `auditar_*` que recalcula saldos desde la fuente y reporta solo inconsistencias — la base
+  de los tests de negocio de la Fase D.
+- Datos de prueba: `npm run seed:dev` (idempotente, aborta si la URL no es Dev).
+
+### Reglas de negocio confirmadas con estas herramientas
+
+- **Cuentas por Pagar y por Cobrar se comportan igual** (decisión del cliente, 2026-09-25): el saldo de cada una
+  se deriva de SUS PROPIOS pagos/cobros (`fn_recalcular_cuenta_pagar` / `fn_recalcular_cuenta_cobrar`). En
+  Cobrar, `id_centro_costo` sigue siendo el centro que recibe el ingreso, pero los ingresos ajenos a la cuenta
+  no cuentan; un ingreso suelto solo la afecta si se vincula (registrar cobro).
+- Ambas pueden estar en dólares: el monto de la cuenta es siempre en soles (`monto_dolares × tipo_cambio`) y
+  cada pago/cobro descuenta el equivalente en soles de su transacción. Una transacción en dólares exige tipo de
+  cambio (`fn_crear_transaccion`).
+- Pagar una cuota programada con menos que su monto la parte (resto queda programado); con más se rechaza.
+  Ni un pago suelto ni una cuota pueden exceder lo que falta por cubrir.
+- Un calendario de cuotas debe sumar exactamente lo que falta por pagar/cobrar (validado en el servidor).
+- Herramientas de escritura para escenarios: `confirmar_pago_cuota`/`confirmar_cobro_cuota` (pagar una cuota
+  existente), `refraccionar_cuenta_*`, `actualizar_cuenta_*`, `dar_de_baja_cuenta_pagar`.

@@ -40,6 +40,12 @@ export interface AgentTool {
 	 * "operador") no se aplica ningún chequeo todavía — el campo solo documenta qué permiso hace
 	 * falta, para cuando la Fase 3 sí tenga que filtrar herramientas por usuario real. */
 	permiso: string | null;
+	/** true = la herramienta crea/modifica/borra datos. Solo se registra cuando el servidor apunta a
+	 * Dev (ver filtrarPorEntorno) — a menos que también tenga `escrituraEnProd`. */
+	escritura?: boolean;
+	/** true = excepción explícita del usuario: puede escribir directo en Producción (hoy solo el
+	 * dominio Tickets/Panel Developer). Cualquier otra herramienta con `escritura` NUNCA llega a Prod. */
+	escrituraEnProd?: boolean;
 	handler: (input: Record<string, unknown>, ctx: AgentContext) => Promise<unknown>;
 }
 
@@ -48,4 +54,14 @@ export interface AgentTool {
  * archivo en tools/ y pasarlo acá, sin tocar esta función ni el servidor MCP. */
 export function crearRegistro(...grupos: AgentTool[][]): AgentTool[] {
 	return grupos.flat();
+}
+
+export type EntornoAgente = 'dev' | 'prod';
+
+/** Única barrera real entre "herramienta de agente" y "escribe en Producción" — la BD no tiene RLS
+ * fuera de Tickets/Solicitudes, así que el candado es este filtro: en `prod` se descartan las
+ * herramientas de escritura que no tengan `escrituraEnProd`. */
+export function filtrarPorEntorno(tools: AgentTool[], entorno: EntornoAgente): AgentTool[] {
+	if (entorno === 'dev') return tools;
+	return tools.filter((t) => !t.escritura || t.escrituraEnProd);
 }

@@ -15,7 +15,10 @@
  *     id_partida          BIGINT REFERENCES partida(id_partida),
  *     tipo_documento      SMALLINT,
  *     num_documento       VARCHAR(20),
- *     monto_comprometido  NUMERIC NOT NULL,
+ *     monto_comprometido  NUMERIC NOT NULL,   -- SIEMPRE en soles (con moneda='USD' = monto_dolares x tipo_cambio)
+ *     moneda              VARCHAR(3) NOT NULL DEFAULT 'PEN', -- 'PEN' | 'USD'
+ *     monto_dolares       NUMERIC,
+ *     tipo_cambio         NUMERIC(12,2),
  *     monto_pagado        NUMERIC NOT NULL,
  *     saldo_pendiente     NUMERIC NOT NULL,
  *     fotma_pago          SMALLINT,        -- OJO: typo real en BD ("fotma", falta la "r")
@@ -156,9 +159,62 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		regex: /^\d+(\.\d{1,2})?$/,
 		regexMessage: 'Solo números, con máximo 2 decimales',
 		placeholder: '0.00',
+		// H4 (ver Documentacion/tests/README.md): con moneda='USD' este campo (SIEMPRE en soles) se bloquea y
+		// se calcula solo como monto_dolares x tipo_cambio — mismo mecanismo que `monto` en cuentaCobrar.config.ts.
+		disabledWhen: (values) => String(values.moneda ?? '') === 'USD',
+		disabledValue: (values) => {
+			const dolares = Number(values.monto_dolares);
+			const cambio = Number(values.tipo_cambio);
+			return dolares > 0 && cambio > 0 ? Number((dolares * cambio).toFixed(2)) : null;
+		},
+		helpText: 'Con moneda Dólares, este monto (en soles) se calcula solo: Monto en Dólares × Tipo de Cambio.',
 		showInTable: true,
 		showInForm: true,
 		sortable: true
+	},
+	{
+		key: 'moneda',
+		label: 'Moneda',
+		tipo: 'select',
+		options: [
+			{ value: 'PEN', label: 'Soles (PEN)' },
+			{ value: 'USD', label: 'Dólares (USD)' }
+		],
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'monto_dolares',
+		label: 'Monto en Dólares',
+		tipo: 'currency',
+		min: 0.01,
+		mask: currencyMask,
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '0.00',
+		disabledWhen: (values) => String(values.moneda ?? '') !== 'USD',
+		requiredWhen: (values) => String(values.moneda ?? '') === 'USD',
+		helpText: 'Obligatorio si la moneda es Dólares.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'tipo_cambio',
+		label: 'Tipo de Cambio',
+		tipo: 'number',
+		min: 0.01,
+		mask: (raw) => raw.replace(/[^\d.]/g, '').replace(/(\..{2}).+/, '$1'), // hasta 2 decimales
+		regex: /^\d+(\.\d{1,2})?$/,
+		regexMessage: 'Solo números, con máximo 2 decimales',
+		placeholder: '3.75',
+		disabledWhen: (values) => String(values.moneda ?? '') !== 'USD',
+		requiredWhen: (values) => String(values.moneda ?? '') === 'USD',
+		helpText: 'Tipo de cambio del día (S/ por US$). Obligatorio si la moneda es Dólares.',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
 	},
 	{
 		key: 'monto_pagado',
