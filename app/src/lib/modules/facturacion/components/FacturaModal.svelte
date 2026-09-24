@@ -438,19 +438,17 @@
 						<SelectConSaldo
 							id="fac-cliente"
 							value={idCliente}
-							options={clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre }))}
+							options={[
+								...(clienteSeleccionado && !clientes.some((c) => c.id_cliente === clienteSeleccionado.id_cliente)
+									? [{ value: String(clienteSeleccionado.id_cliente), label: clienteSeleccionado.nombre }]
+									: []),
+								...clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre }))
+							]}
+							placeholder="Selecciona un cliente"
 							disabled={mode === 'edit'}
-							onchange={(e) => handleClienteChange((e.target as HTMLSelectElement).value)}
-							class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 ${fieldErrors.id_cliente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-						>
-							<option value="" disabled selected={!idCliente}>Selecciona un cliente</option>
-							{#if clienteSeleccionado && !clientes.some((c) => c.id_cliente === clienteSeleccionado.id_cliente)}
-								<option value={String(clienteSeleccionado.id_cliente)} selected>{clienteSeleccionado.nombre}</option>
-							{/if}
-							{#each clientes as c (c.id_cliente)}
-								<option value={String(c.id_cliente)} selected={String(c.id_cliente) === idCliente}>{c.nombre}</option>
-							{/each}
-						</select>
+							hasError={!!fieldErrors.id_cliente}
+							onchange={(value) => handleClienteChange(value)}
+						/>
 						{#if fieldErrors.id_cliente}<p class="mt-1 text-xs text-red-600">{fieldErrors.id_cliente}</p>{/if}
 					</div>
 					<div>
