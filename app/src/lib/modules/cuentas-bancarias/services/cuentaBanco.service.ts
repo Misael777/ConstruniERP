@@ -103,6 +103,28 @@ export async function getCuentasBanco(client: SupabaseClient, params: ListParams
 const MENSAJE_NUMERO_DUPLICADO =
 	'Ya existe otra cuenta activa con ese número. El número identifica a la cuenta en las transacciones y en su saldo, así que no puede repetirse. Para una caja de efectivo usa un nombre distinto (ej. "EFECTIVO WILLY").';
 
+/** Ticket #32: siguiente identificador libre para una Cuenta Efectivo sin número: EFECTIVO-<n>, con n = 1 + el
+ * mayor sufijo numérico ya usado (activas o no, para no reciclar un número que aún puedan tener transacciones). */
+async function generarNumeroEfectivo(client: SupabaseClient): Promise<string> {
+	const { data } = await client.from(TABLE_NAME).select('numero_cuenta').ilike('numero_cuenta', 'EFECTIVO-%');
+	let max = 0;
+	for (const fila of (data ?? []) as { numero_cuenta: string }[]) {
+		const m = /^EFECTIVO-(\d+)$/i.exec(fila.numero_cuenta ?? '');
+		if (m) max = Math.max(max, Number(m[1]));
+	}
+	return `EFECTIVO-${max + 1}`;
+}
+
+/** Una Cuenta Efectivo sin número recibe uno generado (al crear) o conserva el que ya tenía (al editar). */
+async function conNumeroSiEsEfectivo(client: SupabaseClient, payload: Record<string, unknown>, idExistente?: number): Promise<Record<string, unknown>> {
+	if (payload.tipo_cuenta !== 'efectivo' || String(payload.numero_cuenta ?? '').trim() !== '') return payload;
+	if (idExistente !== undefined) {
+		const { data } = await client.from(TABLE_NAME).select('numero_cuenta').eq(PK_COLUMN, idExistente).maybeSingle();
+		if (data?.numero_cuenta) return { ...payload, numero_cuenta: data.numero_cuenta };
+	}
+	return { ...payload, numero_cuenta: await generarNumeroEfectivo(client) };
+}
+
 /** El `numero_cuenta` es lo que enlaza las transacciones (cuente_origen/cuente_destino) con la cuenta y lo que
  * usa fn_recalcular_saldo_cuenta_banco — dos cuentas activas con el mismo número comparten transacciones y
  * saldo (ticket #32: dos cajas "EFECTIVO" mostraban 25 000 las dos por una única transacción). */
@@ -120,6 +142,7 @@ export async function createCuentaBanco(
 	payload: Record<string, unknown>,
 	usuario: string | null
 ): Promise<ServiceResult<CuentaBanco>> {
+	payload = await conNumeroSiEsEfectivo(client, payload);
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
@@ -146,6 +169,7 @@ export async function updateCuentaBanco(
 	id: number,
 	payload: Record<string, unknown>
 ): Promise<ServiceResult<CuentaBanco>> {
+	payload = await conNumeroSiEsEfectivo(client, payload, id);
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };

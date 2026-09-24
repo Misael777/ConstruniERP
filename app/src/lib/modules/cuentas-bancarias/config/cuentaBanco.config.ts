@@ -61,7 +61,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		key: 'numero_cuenta',
 		label: 'Número de Cuenta',
 		tipo: 'text',
-		required: true,
+		// Ticket #32: obligatorio salvo en "Cuenta Efectivo" — una caja no tiene número de banco, y ponerle a
+		// todas la palabra "EFECTIVO" hacía que compartieran saldo y transacciones (el número es lo que enlaza
+		// las transacciones con la cuenta). Si se deja vacío, el sistema genera uno único: EFECTIVO-<n>.
+		requiredWhen: (v) => v.tipo_cuenta !== 'efectivo',
+		helpText: 'En Cuenta Efectivo puedes dejarlo vacío: el sistema genera un identificador único (EFECTIVO-1, EFECTIVO-2…).',
 		maxLength: 30,
 		placeholder: 'N° de cuenta',
 		showInTable: true,
@@ -73,6 +77,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		validateWhen: (v) => {
 			if (v.tipo_cuenta !== 'efectivo') return null;
 			const numero = String(v.numero_cuenta ?? '');
+			if (numero.trim() === '') return null; // se autogenera como EFECTIVO-<n> al guardar
 			const titular = String(v.titular_cuenta ?? '');
 			if (/efectivo/i.test(numero) || /efectivo/i.test(titular)) return null;
 			return 'Si el Tipo de Cuenta es "Cuenta Efectivo", el Número de Cuenta o el Titular de la Cuenta debe contener la palabra "efectivo".';

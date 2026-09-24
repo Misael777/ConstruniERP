@@ -270,9 +270,10 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260924170000_cuentas_pagar_id_cuenta_pagar_padre` | Columna que encadena series por Frecuencia | sí | **pendiente** |
 | `20260925000000_cuentas_moneda_cuota_parcial_cobros_propios` | Pagar en USD; cuota parcial se parte; Cobrar desde cobros propios; TC obligatorio en dólares | sí | **pendiente** |
 | `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | **pendiente** |
-| `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; **solo se crea si no hay duplicados** (en Producción hay dos cajas `EFECTIVO`: renombrar una antes) | sí | **pendiente** (y requiere corregir los datos) |
+| `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | **pendiente** |
+| `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | **pendiente** |
 
-Las cuatro pendientes deben aplicarse **en ese orden** (la última solo tras renombrar una de las dos cajas `EFECTIVO`) y **junto con la publicación de la app** que trae el código
+Las cinco pendientes deben aplicarse **en ese orden** y **junto con la publicación de la app** que trae el código
 acoplado (servicios y modales). El backfill conserva los saldos de las 6 cuentas por cobrar reales de Producción
 (cada una tenía 0 cobros propios; su saldo salía de ingresos sueltos a su centro).
 

@@ -70,9 +70,10 @@ campos de documento pendiente (migración `20260924160000`, ya en Producción).
 
 - **Dos cuentas bancarias activas con el mismo `numero_cuenta` en Producción** (cajas `EFECTIVO` de GUILLERMO y de
   WILLY): comparten transacciones y saldo (ambas muestran 25 000 por la transacción #259) y rompían el desplegable
-  de Cuenta destino (`each_key_duplicate`). El código ya rechaza duplicados y el desplegable los tolera; falta que
-  el equipo renombre una caja y decida a cuál pertenece la #259. Después se aplica
-  `20260925120000_cuenta_banco_numero_cuenta_unico`.
+  de Cuenta destino (`each_key_duplicate`). El código ya rechaza duplicados, el desplegable los tolera y una Cuenta Efectivo sin número recibe uno
+  generado (`EFECTIVO-<n>`). La migración `20260925130000` renombra la duplicada (`EFECTIVO-16`), recalcula saldos y crea
+  el índice único; la transacción #259 queda con la cuenta más antigua (GUILLERMO) — si era de WILLY, basta corregir
+  su `cuente_destino`.
 - **Sesión perdida sin aviso:** cuando el refresco del token falla, las consultas salen como `anon`; las tablas sin
   RLS siguen funcionando pero `empleados`, `documento_proyecto`, etc. devuelven vacío o `42501`. Ahora la app avisa
   y redirige al login (`onAuthStateChange` en el layout) y `describeError` traduce esos errores.
