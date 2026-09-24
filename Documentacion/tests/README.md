@@ -65,3 +65,16 @@ acoplados a las funciones SQL). El backfill conserva los saldos actuales de las 
 
 Corregido antes: `fn_crear_transaccion` descartaba `categoria`, `tipo_moneda`, `tipo_cambio`, `monto_convertido` y los
 campos de documento pendiente (migración `20260924160000`, ya en Producción).
+
+## Hallazgos de datos y de tickets de cliente (2026-09-25)
+
+- **Dos cuentas bancarias activas con el mismo `numero_cuenta` en Producción** (cajas `EFECTIVO` de GUILLERMO y de
+  WILLY): comparten transacciones y saldo (ambas muestran 25 000 por la transacción #259) y rompían el desplegable
+  de Cuenta destino (`each_key_duplicate`). El código ya rechaza duplicados y el desplegable los tolera; falta que
+  el equipo renombre una caja y decida a cuál pertenece la #259. Después se aplica
+  `20260925120000_cuenta_banco_numero_cuenta_unico`.
+- **Sesión perdida sin aviso:** cuando el refresco del token falla, las consultas salen como `anon`; las tablas sin
+  RLS siguen funcionando pero `empleados`, `documento_proyecto`, etc. devuelven vacío o `42501`. Ahora la app avisa
+  y redirige al login (`onAuthStateChange` en el layout) y `describeError` traduce esos errores.
+- **Guardado de venta no atómico:** el proyecto se inserta antes que sus documentos; ahora se deshace si falla lo
+  demás y el doble clic se bloquea de forma síncrona.

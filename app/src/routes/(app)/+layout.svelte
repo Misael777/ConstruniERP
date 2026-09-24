@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { toast } from '$lib/stores/toast';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
@@ -51,6 +52,19 @@
 			goto('/finanzas/tranzacciones');
 		}
 	}
+
+	// Tickets #33/#35/#36: si el refresco del token falla (red caída, equipo suspendido), supabase-js descarta la
+	// sesión y desde ahí las consultas salen como ANÓNIMAS — las tablas sin RLS siguen respondiendo (así "todo
+	// parece normal"), pero empleados/documento_proyecto/etc. devuelven vacío o "violates row-level security
+	// policy" (listas de Responsable vacías, Asesor "Usuario", ventas a medio guardar). Antes la app no se enteraba.
+	let cerrandoSesionManual = false;
+	const { data: authListener } = supabase.auth.onAuthStateChange((evento, sesion) => {
+		if (evento === 'SIGNED_OUT' && !cerrandoSesionManual && page.url.pathname !== '/login') {
+			toast.error('Tu sesión expiró o se perdió. Vuelve a iniciar sesión para continuar.');
+			goto('/login');
+		}
+	});
+	onDestroy(() => authListener.subscription.unsubscribe());
 
 	onMount(async () => {
 		if (isRunningInTauri()) {
@@ -170,7 +184,7 @@
 		<button
 			type="button"
 			class="px-5 py-2 bg-[#1a233a] text-white rounded-xl hover:bg-[#0f1729] font-medium text-sm transition-colors"
-			onclick={async () => { await supabase.auth.signOut(); goto('/login'); }}
+			onclick={async () => { cerrandoSesionManual = true; await supabase.auth.signOut(); goto('/login'); }}
 		>
 			Cerrar sesión
 		</button>
@@ -206,7 +220,7 @@
 					<button 
 						class="text-slate-400 hover:text-red-500 text-sm ml-2"
 						title="Cerrar sesión"
-						onclick={async () => { await supabase.auth.signOut(); goto('/login'); }}
+						onclick={async () => { cerrandoSesionManual = true; await supabase.auth.signOut(); goto('/login'); }}
 					>
 						<i class="fas fa-sign-out-alt"></i>
 					</button>

@@ -276,6 +276,19 @@
 		toast.success('Fechas actualizadas');
 	}
 
+	/** Ticket #38: ids de los centros de costo cuyo texto visible ("CLI-48 - WENDY & MARTIN") contiene lo
+	 * buscado — sin tildes ni mayúsculas. Los labels ya están precargados (centroCostoLookup). */
+	function idsCentrosQueCoinciden(texto: string): number[] {
+		const normalizar = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+		const buscado = normalizar(texto.trim());
+		if (!buscado) return [];
+		const ids: number[] = [];
+		for (const [id, label] of centroCostoLookup) {
+			if (normalizar(label).includes(buscado)) ids.push(Number(id));
+		}
+		return ids;
+	}
+
 	async function fetchList() {
 		loading = true;
 		try {
@@ -283,6 +296,7 @@
 				page: pageNum,
 				pageSize: DEFAULT_PAGE_SIZE,
 				search,
+				idsCentroCostoBusqueda: idsCentrosQueCoinciden(search),
 				sortBy,
 				sortDir,
 				aprobado: filtroCriterio === 'aprobado' ? true : filtroCriterio === 'desaprobado' ? false : undefined,
@@ -337,7 +351,9 @@
 			return;
 		}
 		try {
-			const [centroCostoCompleto, centroCostoProyectos, centroCostoExternosDestino, centroCostoExternosOrigen, centroCostoSoloCentros, cuentaBancoOptions, productoLookup, empleadoOptions] = await Promise.all([
+			// Tickets #32/#33: antes un Promise.all — si UN solo catálogo fallaba, TODOS los desplegables quedaban
+			// vacíos con un aviso que se perdía. Ahora cada uno es independiente y se avisa cuáles fallaron.
+			const catalogos = await Promise.allSettled([
 				getCentroCostoOptions(supabase),
 				getCentroCostoOptionsProyectos(supabase),
 				getCentroCostoOptionsExternos(supabase),
@@ -347,6 +363,21 @@
 				getCentroCostoProductoLookup(supabase),
 				getEmpleadoOptions(supabase)
 			]);
+			const nombresCatalogo = ['centros de costo', 'centros (proyectos)', 'centros externos (destino)', 'centros externos (origen)', 'centros propios', 'cuentas bancarias', 'productos', 'responsables'];
+			const fallidos = catalogos.flatMap((c, i) => (c.status === 'rejected' ? [nombresCatalogo[i]] : []));
+			if (fallidos.length > 0) {
+				console.error('[Transacciones] Catálogos que no cargaron:', catalogos.filter((c) => c.status === 'rejected'));
+				toast.error(`No se pudieron cargar estas listas: ${fallidos.join(', ')}. Recarga la página; si sigue, cierra sesión y vuelve a ingresar.`);
+			}
+			const valorDe = <T,>(i: number, vacio: T): T => (catalogos[i].status === 'fulfilled' ? ((catalogos[i] as PromiseFulfilledResult<T>).value as T) : vacio);
+			const centroCostoCompleto = valorDe<any[]>(0, []);
+			const centroCostoProyectos = valorDe<any[]>(1, []);
+			const centroCostoExternosDestino = valorDe<any[]>(2, []);
+			const centroCostoExternosOrigen = valorDe<any[]>(3, []);
+			const centroCostoSoloCentros = valorDe<any[]>(4, []);
+			const cuentaBancoOptions = valorDe<any[]>(5, []);
+			const productoLookup = valorDe<any>(6, {});
+			const empleadoOptions = valorDe<any[]>(7, []);
 			centroCostoOptionsCompleto = centroCostoCompleto;
 			centroCostoProductoLookup = productoLookup;
 			dynamicOptions = {

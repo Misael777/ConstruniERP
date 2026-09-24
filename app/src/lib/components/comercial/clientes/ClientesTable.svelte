@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	let {
 		clientes = [],
@@ -130,11 +131,12 @@
 			</div>
 		</div>
 		<div class="flex flex-col gap-1 min-w-[140px]">
-			<select bind:value={tipoFilter} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700">
-				<option value="Todos">Tipo (Todos)</option>
-				<option value="Empresa">Empresa (J)</option>
-				<option value="Persona">Persona (N)</option>
-			</select>
+			<SelectConSaldo
+	value={tipoFilter}
+	options={[{ value: 'Todos', label: 'Tipo (Todos)' }, { value: 'Empresa', label: 'Empresa (J)' }, { value: 'Persona', label: 'Persona (N)' }]}
+	placeholder="Tipo (Todos)"
+	onchange={(v) => (tipoFilter = v)}
+/>
 		</div>
 		<div class="relative">
 			<button onclick={() => (showColumnPanel = !showColumnPanel)} class="px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2">

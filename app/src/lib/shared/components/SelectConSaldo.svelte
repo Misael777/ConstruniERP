@@ -222,7 +222,8 @@
 			/>
 		</div>
 		<div role="listbox" class="flex-1 min-h-0 overflow-y-auto py-1">
-			{#each opcionesFiltradas as opt, i (opt.value)}
+			<!-- La clave incluye el índice: dos opciones con el MISMO value (ej. dos cajas de efectivo con numero_cuenta 'EFECTIVO', ticket #32) rompían el each con clave duplicada y la lista dejaba de poder elegirse. -->
+			{#each opcionesFiltradas as opt, i (`${opt.value}::${i}`)}
 				{#if opt.grupo && (i === 0 || opcionesFiltradas[i - 1].grupo !== opt.grupo)}
 					<p class="px-3 pt-2.5 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">{opt.grupo}</p>
 				{/if}

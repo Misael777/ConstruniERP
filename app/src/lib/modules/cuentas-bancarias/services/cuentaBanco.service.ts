@@ -100,6 +100,21 @@ export async function getCuentasBanco(client: SupabaseClient, params: ListParams
 	};
 }
 
+const MENSAJE_NUMERO_DUPLICADO =
+	'Ya existe otra cuenta activa con ese número. El número identifica a la cuenta en las transacciones y en su saldo, así que no puede repetirse. Para una caja de efectivo usa un nombre distinto (ej. "EFECTIVO WILLY").';
+
+/** El `numero_cuenta` es lo que enlaza las transacciones (cuente_origen/cuente_destino) con la cuenta y lo que
+ * usa fn_recalcular_saldo_cuenta_banco — dos cuentas activas con el mismo número comparten transacciones y
+ * saldo (ticket #32: dos cajas "EFECTIVO" mostraban 25 000 las dos por una única transacción). */
+async function existeCuentaConNumero(client: SupabaseClient, numeroCuenta: string, excluirId?: number): Promise<boolean> {
+	const numero = numeroCuenta.trim();
+	if (!numero) return false;
+	let q = client.from(TABLE_NAME).select('id_cuenta_banco').eq('numero_cuenta', numero).eq('activo', true).limit(1);
+	if (excluirId !== undefined) q = q.neq(PK_COLUMN, excluirId);
+	const { data } = await q;
+	return (data ?? []).length > 0;
+}
+
 export async function createCuentaBanco(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
@@ -109,6 +124,9 @@ export async function createCuentaBanco(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+
+	const duplicada = await existeCuentaConNumero(client, String(payload.numero_cuenta ?? ''));
+	if (duplicada) return { success: false, message: MENSAJE_NUMERO_DUPLICADO };
 
 	const insertData = { ...buildWritablePayload(FIELDS_CONFIG, payload), usuario };
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*').single();
@@ -132,6 +150,9 @@ export async function updateCuentaBanco(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+
+	const duplicada = await existeCuentaConNumero(client, String(payload.numero_cuenta ?? ''), id);
+	if (duplicada) return { success: false, message: MENSAJE_NUMERO_DUPLICADO };
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
 	const { data, error } = await client.from(TABLE_NAME).update(updateData).eq(PK_COLUMN, id).select('*').single();

@@ -13,6 +13,8 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const [entorno, spec] = process.argv.slice(2);
 if (!['dev', 'prod'].includes(entorno) || !spec) {
@@ -57,7 +59,14 @@ if (spec === 'list') {
 	for (const call of JSON.parse(spec)) {
 		const r = await rpc('tools/call', { name: call.name, arguments: call.arguments ?? {} });
 		const bloque = r.result?.content?.[0];
-		const txt = bloque?.type === 'image' ? `[imagen ${bloque.mimeType}, ${bloque.data.length} bytes base64]` : bloque?.text ?? JSON.stringify(r);
+		let txt;
+		if (bloque?.type === 'image') {
+			// Se guarda como archivo para poder abrirla (Read de Claude Code muestra imágenes).
+			const ext = bloque.mimeType.split('/')[1] ?? 'png';
+			const archivo = path.join(tmpdir(), `mcp-img-${Date.now()}-${Math.floor(Math.random() * 1e6)}.${ext}`);
+			writeFileSync(archivo, Buffer.from(bloque.data, 'base64'));
+			txt = `[imagen ${bloque.mimeType} guardada en ${archivo}]`;
+		} else txt = bloque?.text ?? JSON.stringify(r);
 		console.log(`\n### ${call.name}${r.result?.isError ? ' (ERROR)' : ''}\n${txt}`);
 	}
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	const dispatch = createEventDispatcher();
 
@@ -146,30 +147,30 @@
 	<div class="p-4 border-b border-slate-100 grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-center sm:gap-4">
 		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[140px] sm:flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Proyecto</label>
-			<select bind:value={filtroProyecto} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full">
-				<option value="Todos">Todos los proyectos</option>
-				{#each getProyectosDisponibles() as proyecto}
-					<option value={proyecto}>{proyecto}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				value={filtroProyecto}
+				options={[{ value: 'Todos', label: 'Todos los proyectos' }, ...getProyectosDisponibles().map((x) => ({ value: String(x), label: String(x) }))]}
+				placeholder="Todos los proyectos"
+				onchange={(v) => (filtroProyecto = v)}
+			/>
 		</div>
 		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[120px] sm:flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Tipo proyecto</label>
-			<select bind:value={filtroTipo} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full">
-				<option value="Todos">Todos</option>
-				{#each TIPOS_PROYECTO_FILTRO as tipo}
-					<option value={tipo}>{tipo}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				value={filtroTipo}
+				options={[{ value: 'Todos', label: 'Todos' }, ...TIPOS_PROYECTO_FILTRO.map((x) => ({ value: String(x), label: String(x) }))]}
+				placeholder="Todos"
+				onchange={(v) => (filtroTipo = v)}
+			/>
 		</div>
 		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[140px] sm:flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Asesor</label>
-			<select bind:value={filtroAsesor} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full">
-				<option value="Todos">Todos</option>
-				{#each getAsesoresDisponibles() as asesorOption}
-					<option value={asesorOption}>{asesorOption}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				value={filtroAsesor}
+				options={[{ value: 'Todos', label: 'Todos' }, ...getAsesoresDisponibles().map((x) => ({ value: String(x), label: String(x) }))]}
+				placeholder="Todos"
+				onchange={(v) => (filtroAsesor = v)}
+			/>
 		</div>
 		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[130px] sm:flex-1 md:flex-none">
 			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Fecha desde</label>

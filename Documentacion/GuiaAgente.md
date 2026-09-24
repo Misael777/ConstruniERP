@@ -36,9 +36,14 @@ Documentos hermanos: [FlujoDeNegocio.md](FlujoDeNegocio.md) (proceso de negocio 
   lógica corre en el cliente contra Supabase.
 - Código en `app/`. Módulos de negocio en `app/src/lib/modules/*` (cada uno con `services/*.service.ts`, algunos con
   `config/*.config.ts` que definen los campos de formularios/tablas — `FieldConfig`).
-- Seguridad: **RLS solo en las 6 tablas de Solicitudes/Tickets**. El resto del ERP no tiene control de acceso a nivel
-  de base: se controla en la UI (`isAdmin()`, `permisosState`). Consecuencia: **la clave `service_role` (que usa el
-  MCP) puede leer y escribir cualquier tabla**. El único candado real es *a qué proyecto apunta* (ver §3).
+- Seguridad: RLS está activo solo en **algunas** tablas: las de Soporte/Solicitudes/Tickets, más `documento_proyecto`,
+  `empleados`, `roles`, `permisos`, `roles_permisos`, `cronograma_*`, `plantilla_*`, `restriccion` y
+  `app_version_usuario`. Sus políticas son "usuario autenticado puede todo" (o "solo admin" para escribir en
+  empleados/roles/permisos). **Consecuencia importante:** una sesión caducada (rol `anon`) sí falla en esas tablas con
+  `violates row-level security policy` (código 42501), pero **puede seguir insertando** en las demás (`proyecto`,
+  `transaccion`, `cuentas_*`…), que no tienen RLS. El resto del ERP se controla en la UI (`isAdmin()`,
+  `permisosState`). La clave `service_role` (la del MCP) **se salta RLS** y puede leer y escribir cualquier tabla; el
+  único candado real para los agentes es *a qué proyecto apunta* (ver §3).
 - Proceso de negocio (qué se llena primero y qué depende de qué): [FlujoDeNegocio.md](FlujoDeNegocio.md).
 - Regla no obvia central: **casi todo movimiento de dinero es una Transacción entre dos Centros de Costo**
   (`id_centro_costo_origen` → `id_centro_costo_destino`), y los centros de costo de clientes, proveedores, empleados y
@@ -79,7 +84,7 @@ contenedor Docker del CLI no la resuelve (`could not translate host name`).
     `apertura_financiera`, `incidencia`.
   - **Proyectos:** `presupuesto` + `presupuesto_detalle` + `partida`, `cronograma_*`, `plantilla_*`.
   - **Soporte:** `ticket`, `ticket_comentario`, `ticket_evento`, `app_release`, `app_version_usuario`
-    (estas 6 con RLS).
+    (con RLS).
 - **Funciones SQL (RPC) que sostienen la integridad financiera** — nunca las reimplementes en el cliente:
   `fn_crear_transaccion` (bloqueo, chequeo de saldo del centro origen, inserta, recalcula cuentas bancarias),
   `fn_confirmar_pago` / `fn_confirmar_cobro` (atómicas: crean la transacción y el pago/cobro; parten una cuota si
@@ -153,7 +158,7 @@ Ambos están registrados con `claude mcp add` (scope local del proyecto). Herram
    cualquier otro → **aborta**.
 2. Cada herramienta que escribe lleva `escritura: true`. `filtrarPorEntorno` **no las registra en `prod`**, salvo las
    que además tengan `escrituraEnProd: true` (hoy ninguna herramienta MCP; Tickets se escribe con scripts, ver §5.4).
-3. La base no tiene RLS fuera de Tickets, así que **este filtro es la única barrera**. Si añades una herramienta de
+3. La `service_role` se salta RLS, así que **este filtro es la única barrera**. Si añades una herramienta de
    escritura, **márcala `escritura: true`** siempre.
 
 ### 3.4 Cómo usarlo
@@ -265,8 +270,9 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260924170000_cuentas_pagar_id_cuenta_pagar_padre` | Columna que encadena series por Frecuencia | sí | **pendiente** |
 | `20260925000000_cuentas_moneda_cuota_parcial_cobros_propios` | Pagar en USD; cuota parcial se parte; Cobrar desde cobros propios; TC obligatorio en dólares | sí | **pendiente** |
 | `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | **pendiente** |
+| `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; **solo se crea si no hay duplicados** (en Producción hay dos cajas `EFECTIVO`: renombrar una antes) | sí | **pendiente** (y requiere corregir los datos) |
 
-Estas tres pendientes deben aplicarse **en ese orden** y **junto con la publicación de la app** que trae el código
+Las cuatro pendientes deben aplicarse **en ese orden** (la última solo tras renombrar una de las dos cajas `EFECTIVO`) y **junto con la publicación de la app** que trae el código
 acoplado (servicios y modales). El backfill conserva los saldos de las 6 cuentas por cobrar reales de Producción
 (cada una tenía 0 cobros propios; su saldo salía de ingresos sueltos a su centro).
 

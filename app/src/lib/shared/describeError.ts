@@ -5,6 +5,20 @@
  */
 export function describeError(err: any): string {
 	if (!err) return 'Error desconocido';
+	const crudo = describeErrorCrudo(err);
+	// Tickets #35/#36: "Failed to fetch" (sin red) y "violates row-level security policy" (sesión perdida, la
+	// petición salió como anónima) llegaban tal cual a la pantalla y no dicen qué hacer.
+	if (/failed to fetch|networkerror|load failed|network request failed/i.test(crudo)) {
+		return `No se pudo conectar con el servidor. Revisa tu conexión a internet e inténtalo de nuevo — la operación no se completó. (${crudo})`;
+	}
+	if (/row-level security|code=42501|\bjwt (expired|invalid)\b/i.test(crudo)) {
+		return `Tu sesión expiró o se perdió. Cierra sesión, vuelve a ingresar e inténtalo de nuevo. (${crudo})`;
+	}
+	return crudo;
+}
+
+function describeErrorCrudo(err: any): string {
+	if (!err) return 'Error desconocido';
 	if (typeof err === 'string') return err;
 	const parts: string[] = [];
 	if (err.message) parts.push(String(err.message));

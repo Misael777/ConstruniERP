@@ -1061,6 +1061,32 @@ async function copiarCodigoGenerado() {
 	 * venta". Devuelve el id del proyecto recién creado y, en el mismo orden que `proformaFiles`, el
 	 * id_documento de cada proforma ya insertada (para poder elegir "cuál es la final" sin haber
 	 * tenido ids de antemano). Devuelve null (con saveError ya seteado) si algo falla. */
+	/** Best-effort: borra los documentos y el proyecto recién creados cuando falla el resto del guardado. */
+	async function revertirVentaHuerfana(idProyecto: number): Promise<boolean> {
+		try {
+			await supabase.from('documento_proyecto').delete().eq('id_proyecto', idProyecto);
+			const { error } = await supabase.from('proyecto').delete().eq('id_proyecto', idProyecto);
+			if (error) {
+				console.error('[NuevaVentaModal] No se pudo deshacer el proyecto huérfano:', error);
+				return false;
+			}
+			return true;
+		} catch (err) {
+			console.error('[NuevaVentaModal] No se pudo deshacer el proyecto huérfano:', err);
+			return false;
+		}
+	}
+
+	/** Candado SÍNCRONO contra doble clic: isSaving/isClosing se activaban recién después de un await
+	 * (validarYResolverDatosBasicos consulta la BD), así que 3 clics rápidos lanzaban 3 guardados (ticket #35). */
+	let guardadoEnCurso = false;
+	async function haySesionActiva(): Promise<boolean> {
+		const { data } = await supabase.auth.getSession();
+		if (data.session) return true;
+		saveError = 'Tu sesión expiró o se perdió. Cierra sesión, vuelve a ingresar e inténtalo de nuevo — no se guardó nada.';
+		return false;
+	}
+
 	async function crearVentaYSubirDocumentos(
 		basicos: DatosBasicosVenta
 	): Promise<{ proyectoId: number; idCentroCosto: number | string | null; proformaDocIds: (number | null)[]; transaccionAdelanto: Transaccion | null } | null> {
@@ -1205,6 +1231,10 @@ async function copiarCodigoGenerado() {
 			// extrae message/code/details/hint de un error de Supabase, mismo criterio que el resto de
 			// este archivo.
 			saveError = describeError(uploadError);
+			// Tickets #35/#36: el proyecto ya está insertado y, si esto falla, quedaba huérfano en "borrador" — y cada
+			// reintento creaba otro (3 clics = 3 ventas duplicadas). Se deshace lo creado para poder reintentar limpio.
+			const revertido = await revertirVentaHuerfana(nuevoProyectoId);
+			saveError += revertido ? '\nLa venta NO se guardó; puedes volver a intentarlo.' : `\nOJO: pudo quedar una venta en borrador (proyecto #${nuevoProyectoId}); avisa a un administrador antes de reintentar.`;
 			return null;
 		}
 
@@ -1212,6 +1242,19 @@ async function copiarCodigoGenerado() {
 	}
 
 	async function handleGuardar() {
+		if (guardadoEnCurso) return;
+		guardadoEnCurso = true;
+		isSaving = true;
+		try {
+			await handleGuardarInterno();
+		} finally {
+			guardadoEnCurso = false;
+			isSaving = false;
+		}
+	}
+
+	async function handleGuardarInterno() {
+		if (!(await haySesionActiva())) return;
 		const basicos = await validarYResolverDatosBasicos();
 		if (!basicos) return;
 
@@ -1306,7 +1349,20 @@ async function copiarCodigoGenerado() {
 	 * crearVentaYSubirDocumentos, porque el archivo todavía no existía en la BD. */
 	async function handleGuardarYCerrarVenta() {
 		if (!canCloseCreate || selectedFinalFileIndex === null) return;
+		if (guardadoEnCurso) return;
+		guardadoEnCurso = true;
+		isClosing = true;
+		try {
+			await handleGuardarYCerrarVentaInterno();
+		} finally {
+			guardadoEnCurso = false;
+			isClosing = false;
+		}
+	}
 
+	async function handleGuardarYCerrarVentaInterno() {
+		if (selectedFinalFileIndex === null) return;
+		if (!(await haySesionActiva())) return;
 		const basicos = await validarYResolverDatosBasicos();
 		if (!basicos) return;
 
@@ -1434,32 +1490,26 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Departamento *</label>
-								<select
+								<SelectConSaldo
 									value={departamento}
-									onchange={(e) => {
-										departamento = (e.currentTarget as HTMLSelectElement).value;
-										provincia = (PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [])[0] ?? '';
-										distrito = '';
-										distritoNumero = null;
-									}}
-									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-								>
-									{#each DEPARTAMENTOS as d}
-										<option value={d}>{d}</option>
-									{/each}
-								</select>
+									options={DEPARTAMENTOS.map((d) => ({ value: d, label: d }))}
+									placeholder="-- Selecciona --"
+									onchange={(v) => {
+									departamento = v;
+									provincia = (PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [])[0] ?? '';
+									distrito = '';
+									distritoNumero = null;
+								}}
+								/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Provincia *</label>
-								<select
+								<SelectConSaldo
 									value={provincia}
-									onchange={(e) => { provincia = (e.currentTarget as HTMLSelectElement).value; distrito = ''; distritoNumero = null; }}
-									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-								>
-									{#each PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? [] as p}
-										<option value={p}>{p}</option>
-									{/each}
-								</select>
+									options={(PROVINCIAS_POR_DEPARTAMENTO[departamento] ?? []).map((p) => ({ value: p, label: p }))}
+									placeholder="-- Selecciona --"
+									onchange={(v) => { provincia = v; distrito = ''; distritoNumero = null; }}
+								/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
@@ -1489,22 +1539,19 @@ async function copiarCodigoGenerado() {
 								     "Características del proyecto nuevo" (ver infoGeneralCompleta/documentosCierreListos,
 								     que exigen proyectoNombre no vacío). Sincronizado en ambos sentidos con las pestañas
 								     de esa sección — cambiar cualquiera de los dos actualiza el otro. -->
-								<select
-									value={caracteristicasTab ?? ''}
-									disabled={otroTipoBloqueado}
-									title={tabsBloqueadosPorCierre ? 'La venta ya está cerrada — el tipo de proyecto ya no se puede cambiar.' : otroTipoBloqueado ? 'Ya elegiste el Tipo de Proyecto — no se puede cambiar.' : ''}
-									onchange={(e) => {
-										const value = (e.currentTarget as HTMLSelectElement).value;
-										caracteristicasTab = value === 'obra' || value === 'consultoria' ? value : null;
-										if (caracteristicasTab === 'obra' && !tipoObra) tipoObra = 'OBRA';
-										if (caracteristicasTab === 'obra' && distrito && distritoNumero === null) actualizarNumeroDistrito();
-									}}
-									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-								>
-									<option value="" disabled>-- Selecciona --</option>
-									<option value="consultoria">Consultoria</option>
-									<option value="obra">Obra (Obra)</option>
-								</select>
+								<div title={tabsBloqueadosPorCierre ? 'La venta ya está cerrada — el tipo de proyecto ya no se puede cambiar.' : otroTipoBloqueado ? 'Ya elegiste el Tipo de Proyecto — no se puede cambiar.' : ''}>
+									<SelectConSaldo
+										value={caracteristicasTab ?? ''}
+										options={[{ value: 'consultoria', label: 'Consultoria' }, { value: 'obra', label: 'Obra (Obra)' }]}
+										placeholder="-- Selecciona --"
+										disabled={otroTipoBloqueado}
+										onchange={(value) => {
+											caracteristicasTab = value === 'obra' || value === 'consultoria' ? value : null;
+											if (caracteristicasTab === 'obra' && !tipoObra) tipoObra = 'OBRA';
+											if (caracteristicasTab === 'obra' && distrito && distritoNumero === null) actualizarNumeroDistrito();
+										}}
+									/>
+								</div>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Código de proyecto</label>
@@ -1887,30 +1934,33 @@ async function copiarCodigoGenerado() {
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
-								<select bind:value={tipoProyecto} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each TIPO_PROYECTO_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={tipoProyecto}
+	options={TIPO_PROYECTO_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoProyecto = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
-								<select bind:value={estadoPredio} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each ESTADO_PREDIO_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={estadoPredio}
+	options={ESTADO_PREDIO_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (estadoPredio = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
-								<select bind:value={tipoEdificacion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each TIPO_EDIFICACION_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={tipoEdificacion}
+	options={TIPO_EDIFICACION_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoEdificacion = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
@@ -2006,38 +2056,43 @@ async function copiarCodigoGenerado() {
 								     valor es el prefijo del código generado y también decide el centro de costo:
 								     solo OBRA y SUP crean uno propio por proyecto (igual que Consultoría ya
 								     comparte uno único — ver caracteristicasTab en getOrCrearCentroCosto...). -->
-								<select bind:value={tipoObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									<option value="OBRA">Ejecución de obra (OBRA)</option>
-									<option value="SUP">Supervisión de obra (SUP)</option>
-								</select>
+								<SelectConSaldo
+	value={tipoObra}
+	options={[{ value: 'OBRA', label: 'Ejecución de obra (OBRA)' }, { value: 'SUP', label: 'Supervisión de obra (SUP)' }]}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoObra = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Permiso Municipal *</label>
-								<select bind:value={tipoTramite} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each PERMISO_MUNICIPAL_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={tipoTramite}
+	options={PERMISO_MUNICIPAL_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoTramite = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Alcance de Obra *</label>
-								<select bind:value={tipoIntervencion} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each ALCANCE_OBRA_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={tipoIntervencion}
+	options={ALCANCE_OBRA_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoIntervencion = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Contratación *</label>
-								<select bind:value={tipoEdificacionObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									{#each TIPO_CONTRATACION_OPTIONS as opt}
-										<option value={opt.value}>{opt.label} ({opt.value})</option>
-									{/each}
-								</select>
+								<SelectConSaldo
+	value={tipoEdificacionObra}
+	options={TIPO_CONTRATACION_OPTIONS.map((opt) => ({ value: opt.value, label: `${opt.label} (${opt.value})` }))}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (tipoEdificacionObra = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">N° de proyecto en el distrito</label>
@@ -2050,21 +2105,13 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Mes *</label>
-								<select bind:value={mesObra} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
-									<option value="">-- Selecciona --</option>
-									<option value="01">Enero</option>
-									<option value="02">Febrero</option>
-									<option value="03">Marzo</option>
-									<option value="04">Abril</option>
-									<option value="05">Mayo</option>
-									<option value="06">Junio</option>
-									<option value="07">Julio</option>
-									<option value="08">Agosto</option>
-									<option value="09">Septiembre</option>
-									<option value="10">Octubre</option>
-									<option value="11">Noviembre</option>
-									<option value="12">Diciembre</option>
-								</select>
+								<SelectConSaldo
+	value={mesObra}
+	options={[{ value: '01', label: 'Enero' }, { value: '02', label: 'Febrero' }, { value: '03', label: 'Marzo' }, { value: '04', label: 'Abril' }, { value: '05', label: 'Mayo' }, { value: '06', label: 'Junio' }, { value: '07', label: 'Julio' }, { value: '08', label: 'Agosto' }, { value: '09', label: 'Septiembre' }, { value: '10', label: 'Octubre' }, { value: '11', label: 'Noviembre' }, { value: '12', label: 'Diciembre' }]}
+	placeholder="-- Selecciona --"
+	disabled={!documentosCierreListos}
+	onchange={(v) => (mesObra = v)}
+/>
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Año *</label>

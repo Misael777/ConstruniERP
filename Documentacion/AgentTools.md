@@ -102,7 +102,7 @@ proyectos conocidos:
 
 - Una herramienta con `escritura: true` **no se registra en Producción** (`filtrarPorEntorno` en
   `registry.ts`), salvo que además tenga `escrituraEnProd: true` (excepción explícita del usuario para
-  Tickets/Panel Developer). La BD no tiene RLS fuera de Tickets, así que este filtro ES el candado.
+  Tickets/Panel Developer). La `service_role` se salta RLS (que además solo existe en algunas tablas), así que este filtro ES el candado.
 - `npm run mcp*` usa `--import ./scripts/register-lib-resolver.mjs`: registra `scripts/lib-resolver.mjs`,
   que resuelve `$lib/...` y los imports relativos sin extensión, para que agent-tools importe los
   `*.service.ts` reales. Solo sirve para archivos sin acoplamiento a Svelte (`$env/*`, `*.svelte.ts`).

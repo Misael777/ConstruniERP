@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud } from '$lib/modules/aprobaciones/services/aprobaciones.service';
@@ -180,19 +181,24 @@
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div class="flex flex-col gap-1 md:col-span-1">
 							<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Persona *</label>
-							<select bind:value={tipPersona} disabled={isSaving} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-								<option value="J">Jurídica (Empresa)</option>
-								<option value="N">Natural (Persona)</option>
-							</select>
+							<SelectConSaldo
+	value={tipPersona}
+	options={[{ value: 'J', label: 'Jurídica (Empresa)' }, { value: 'N', label: 'Natural (Persona)' }]}
+	placeholder="Selecciona"
+	disabled={isSaving}
+	onchange={(v) => (tipPersona = v)}
+/>
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-1">
 							<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Documento *</label>
-							<select bind:value={tipoDoc} disabled={isSaving} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
-								<option value="RUC">RUC</option>
-								<option value="DNI">DNI</option>
-								<option value="CE">CE</option>
-							</select>
+							<SelectConSaldo
+	value={tipoDoc}
+	options={[{ value: 'RUC', label: 'RUC' }, { value: 'DNI', label: 'DNI' }, { value: 'CE', label: 'CE' }]}
+	placeholder="Selecciona"
+	disabled={isSaving}
+	onchange={(v) => (tipoDoc = v)}
+/>
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">

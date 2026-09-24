@@ -207,6 +207,12 @@ export interface ListParams {
 	 * como 'activo' igual que cualquier transacción, ver resolveEstadoTransaccion, se filtra por este
 	 * campo directamente en vez de por estado). */
 	tipoAlcance?: string;
+	/** Ticket #38: ids de los centros de costo cuyo nombre/código coincide con `search`. El buscador solo miraba
+	 * columnas propias de la transacción (N° documento, descripción, usuario), pero lo que se lee en cada fila
+	 * es el nombre de sus centros de costo (cliente, proyecto, proveedor…), que vive en otra tabla — por eso solo
+	 * aparecían las coincidencias "de casualidad". Con estos ids la búsqueda también trae las transacciones cuyo
+	 * origen o destino sea uno de esos centros, en TODAS las páginas. */
+	idsCentroCostoBusqueda?: number[];
 }
 
 export interface ListResult<T> {
@@ -399,8 +405,12 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 	const search = params.search?.trim();
 	if (search) {
 		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
-		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
-		query = query.or(orFilter);
+		const filtros = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`);
+		const ids = (params.idsCentroCostoBusqueda ?? []).filter((n) => Number.isFinite(n)).slice(0, 400);
+		if (ids.length > 0) {
+			filtros.push(`id_centro_costo_origen.in.(${ids.join(',')})`, `id_centro_costo_destino.in.(${ids.join(',')})`);
+		}
+		query = query.or(filtros.join(','));
 	}
 	if (params.aprobado !== undefined) query = query.eq('aprobado', params.aprobado);
 	if (params.fecha) query = query.eq('fecha', params.fecha);
