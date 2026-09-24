@@ -33,7 +33,6 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
-import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { computeEstadoCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 
 export const PANORAMA_IDS = [1, 2] as const;
@@ -819,14 +818,20 @@ export async function getResumenCobros(client: SupabaseClient): Promise<ResumenC
 	if (error) throw error;
 
 	const rows = (data ?? []) as any[];
-	const idsCentro = [...new Set(rows.filter((r) => r.id_centro_costo != null).map((r) => r.id_centro_costo as number))];
-	const montoRecibidoMap = idsCentro.length > 0 ? await getMontoRecibidoPorCentroCosto(client, idsCentro) : {};
+	// H6: lo cobrado de cada cuenta sale de SUS PROPIOS cobros 'cobrado', no de los ingresos al centro de costo.
+	const idsCuentas = rows.map((r) => r.id_cuenta_cobrar as number);
+	const { data: cobradosRows } =
+		idsCuentas.length > 0 ? await client.from('cobros').select('id_cuenta_cobrar, monto').in('id_cuenta_cobrar', idsCuentas).eq('estado_cobro', 'cobrado') : { data: [] };
+	const cobradoMap: Record<number, number> = {};
+	for (const c of (cobradosRows ?? []) as { id_cuenta_cobrar: number; monto: number }[]) {
+		cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+	}
 
 	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
 	const recalculadas = rows
 		.map((r) => {
-			const recibido = r.id_centro_costo != null ? montoRecibidoMap[r.id_centro_costo] ?? 0 : Number(r.monto_cobrado ?? 0);
-			const saldo = r.id_centro_costo != null ? Math.max(Number(r.monto) - recibido, 0) : Number(r.saldo_pendiente);
+			const recibido = cobradoMap[r.id_cuenta_cobrar] ?? 0;
+			const saldo = Math.max(Number(r.monto) - recibido, 0);
 			const estado = computeEstadoCuentaCobrar(saldo, r.fecha_vencimiento);
 			const sinCambios = estado === r.estado && Math.abs(saldo - Number(r.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(r.monto_cobrado ?? 0)) < 0.01;
 			if (!sinCambios) actualizaciones.push({ id: r.id_cuenta_cobrar, estado, saldo, recibido });

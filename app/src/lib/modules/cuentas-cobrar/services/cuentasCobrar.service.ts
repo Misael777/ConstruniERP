@@ -18,7 +18,6 @@ import {
 import { construirPayloadTransaccionPorCobro, construirInsertDataTransaccion } from '../../transacciones/services/transacciones.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
-import { getMontoRecibidoPorCentroCosto } from '../../centro-costos/services/centroCostos.service';
 
 /** Embed proyecto con los campos que generarCodigoProyecto necesita (mismo criterio que
  * getProyectoOptions más abajo) — a pedido explícito del usuario, para agregar el código del proyecto
@@ -201,15 +200,17 @@ export function computeEstadoCuentaCobrar(saldoPendiente: number, fechaVencimien
  * registren cobros reales sobre ESTA cuenta puntual (ver getCobros/sincronizarCuotasProgramadas). */
 async function calcularMontoCobradoYEstado(
 	client: SupabaseClient,
-	idCentroCosto: number | null,
+	idCuentaCobrar: number | null,
 	monto: number,
-	fechaVencimiento: string | null,
-	esPrestamo: boolean = false
+	fechaVencimiento: string | null
 ): Promise<{ montoCobrado: number; saldoPendiente: number; estado: string }> {
+	// H6 (ver Documentacion/tests/README.md): el cobrado de una cuenta sale de SUS PROPIOS cobros 'cobrado'
+	// (igual que Pagar sale de sus pagos), no de todos los ingresos hacia el centro de costo destino. Una
+	// cuenta que todavía no existe (alta) no tiene cobros: 0.
 	let montoCobrado = 0;
-	if (!esPrestamo && idCentroCosto != null && Number.isFinite(idCentroCosto)) {
-		const montos = await getMontoRecibidoPorCentroCosto(client, [idCentroCosto]);
-		montoCobrado = montos[idCentroCosto] ?? 0;
+	if (idCuentaCobrar != null) {
+		const { data } = await client.from(COBRO_TABLE).select('monto').eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'cobrado');
+		montoCobrado = Number((data ?? []).reduce((s: number, c: any) => s + Number(c.monto), 0).toFixed(2));
 	}
 	const saldoPendiente = Math.max(monto - montoCobrado, 0);
 	return { montoCobrado, saldoPendiente, estado: computeEstadoCuentaCobrar(saldoPendiente, fechaVencimiento) };
@@ -223,21 +224,20 @@ async function calcularMontoCobradoYEstado(
  * ya corregida. Mismo patrón que autoCorregirVencidos en cuentasPagar.service.ts.
  */
 async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCobrar[]): Promise<CuentaCobrar[]> {
-	// Cuentas de "Préstamo Otorgado" (id_transaccion no-null, ver esPrestamo en
-	// calcularMontoCobradoYEstado) quedan FUERA de esta auto-corrección: su id_centro_costo es
-	// "Prestamista" (nuestro propio fondo), no un proyecto vendido, y sumar sus ingresos reales acá
-	// volvía a marcar "Pagado" una cuenta de préstamo que nunca cobró nada — mismo bug, esta vez en la
-	// pasada que corre cada vez que se lista Cuentas por Cobrar, no solo al crear/editar una puntual.
-	const conCentro = items.filter((item) => item.id_centro_costo != null && item.id_transaccion == null);
-	if (conCentro.length === 0) return items;
+	// H6: el cobrado sale de los cobros 'cobrado' PROPIOS de cada cuenta (ya no de los ingresos al centro de
+	// costo), así que aplica igual a todas — incluidas las de "Préstamo Otorgado".
+	if (items.length === 0) return items;
 
-	const ids = [...new Set(conCentro.map((item) => item.id_centro_costo as number))];
-	const montoRecibidoMap = await getMontoRecibidoPorCentroCosto(client, ids);
+	const ids = items.map((item) => item.id_cuenta_cobrar);
+	const { data: cobros } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, monto').in(PARENT_FK_COLUMN, ids).eq('estado_cobro', 'cobrado');
+	const cobradoMap: Record<number, number> = {};
+	for (const c of (cobros ?? []) as { id_cuenta_cobrar: number; monto: number }[]) {
+		cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+	}
 
 	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
 	const resultado = items.map((item) => {
-		if (item.id_centro_costo == null || item.id_transaccion != null) return item;
-		const recibido = montoRecibidoMap[item.id_centro_costo] ?? 0;
+		const recibido = cobradoMap[item.id_cuenta_cobrar] ?? 0;
 		const saldo = Math.max(Number(item.monto) - recibido, 0);
 		const estado = computeEstadoCuentaCobrar(saldo, item.fecha_vencimiento);
 		const sinCambios = estado === item.estado && Math.abs(saldo - Number(item.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(item.monto_cobrado)) < 0.01;
@@ -331,6 +331,27 @@ export async function getMontoFiltrado(
 	return (data ?? []).reduce((sum: number, r: any) => sum + Number(r[CAMPO_MONTO] ?? 0), 0);
 }
 
+
+/**
+ * H1 (ver Documentacion/tests/README.md): la suma de las cuotas programadas debe ser EXACTAMENTE lo que
+ * todavía falta por cobrar (monto - lo ya cobrado) — antes solo lo exigía FraccionamientoModal.svelte, así
+ * que cualquier otro camino (importación, otra pantalla, un agente) dejaba calendarios que no cuadran con la
+ * cuenta. Un arreglo vacío es válido (cuenta sin cuotas). null = válido.
+ */
+export function validarSumaFracciones(montoPendiente: number, fracciones: { fecha: string; monto: number }[]): string | null {
+	if (fracciones.length === 0) return null;
+	for (const f of fracciones) {
+		if (!Number.isFinite(Number(f.monto)) || Number(f.monto) <= 0) return 'Cada cuota debe tener un monto mayor a 0.';
+		if (!f.fecha || Number.isNaN(new Date(f.fecha).getTime())) return 'Cada cuota debe tener una fecha válida.';
+	}
+	const suma = Number(fracciones.reduce((s, f) => s + Number(f.monto), 0).toFixed(2));
+	const esperado = Number(Number(montoPendiente).toFixed(2));
+	if (Math.abs(suma - esperado) >= 0.01) {
+		return `Las cuotas suman ${formatCurrency(suma)} pero lo que falta por cobrar es ${formatCurrency(esperado)}. Ajusta las cuotas para que cuadren.`;
+	}
+	return null;
+}
+
 export async function createCuentaCobrar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
@@ -342,11 +363,13 @@ export async function createCuentaCobrar(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
-	const saldoInicial = Number(payload.monto);
+	const saldoInicial = Number(buildWritablePayload(FIELDS_CONFIG, payload).monto);
+	const errorFracciones = validarSumaFracciones(saldoInicial, fraccionesPersonalizadas);
+	if (errorFracciones) return { success: false, message: errorFracciones };
 	const idCentroCosto = payload.id_centro_costo != null && payload.id_centro_costo !== '' ? Number(payload.id_centro_costo) : null;
 	const fechaVencimiento = (payload.fecha_vencimiento as string) || null;
 	const esPrestamo = payload.id_transaccion != null;
-	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCosto, saldoInicial, fechaVencimiento, esPrestamo);
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, null, saldoInicial, fechaVencimiento);
 	const insertData: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		monto_cobrado: montoCobrado,
@@ -400,6 +423,12 @@ export async function sincronizarCuotasProgramadas(
 	idCuentaCobrar: number,
 	fracciones: { fecha: string; monto: number }[]
 ): Promise<{ success: boolean; message: string }> {
+	if (fracciones.length > 0) {
+		const { data: cuenta } = await client.from(TABLE_NAME).select('monto, monto_cobrado').eq(PK_COLUMN, idCuentaCobrar).single();
+		const pendiente = Math.max(Number(cuenta?.monto ?? 0) - Number(cuenta?.monto_cobrado ?? 0), 0);
+		const errorFracciones = validarSumaFracciones(pendiente, fracciones);
+		if (errorFracciones) return { success: false, message: errorFracciones };
+	}
 	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
@@ -447,7 +476,12 @@ export async function updateCuentaCobrar(
 	// id_transaccion no es editable a mano (no está en FIELDS_CONFIG) — se lee del registro actual, no
 	// del formulario, mismo motivo que esPrestamo en createCuentaCobrar.
 	const esPrestamo = current?.id_transaccion != null;
-	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, idCentroCostoFinal, montoFinal, fechaVencimientoFinal, esPrestamo);
+	const { montoCobrado, saldoPendiente, estado } = await calcularMontoCobradoYEstado(client, id, montoFinal, fechaVencimientoFinal);
+	const { data: cuotasActuales } = await client.from(COBRO_TABLE).select('fecha_cobro, monto').eq(PARENT_FK_COLUMN, id).eq('estado_cobro', 'programado');
+	const firma = (xs: { fecha: string; monto: number }[]) => JSON.stringify(xs.map((x) => [x.fecha, Number(x.monto)]).sort());
+	const sinCambios = firma((cuotasActuales ?? []).map((c: any) => ({ fecha: c.fecha_cobro, monto: c.monto }))) === firma(fraccionesPersonalizadas);
+	const errorFracciones = sinCambios ? null : validarSumaFracciones(saldoPendiente, fraccionesPersonalizadas);
+	if (errorFracciones) return { success: false, message: errorFracciones };
 	updateData.monto_cobrado = montoCobrado;
 	updateData.saldo_pendiente = saldoPendiente;
 	updateData.estado = estado;
@@ -614,6 +648,51 @@ export async function createCobro(
  * 'cancelado' (ya no se hará), directo desde el modal de edición. Mismo comportamiento que
  * updatePago en cuentasPagar.service.ts.
  */
+/**
+ * Lápiz de una cuota (ver Documentacion/tests/lapiz-cuotas.md, H8-H10): valida el cambio de monto ANTES de
+ * guardarlo. Antes, subir una cuota por encima de lo que falta por cobrar dejaba la última cuota en negativo
+ * (-7000 en las pruebas), editar la única cuota pendiente descuadraba la cuenta, y se podía cambiar el monto de
+ * una cuota ya cobrada aunque su transacción de respaldo quedara con otro monto. null = válido.
+ */
+async function validarEdicionMontoCuota(
+	client: SupabaseClient,
+	idCuenta: number,
+	idCuota: number,
+	estadoAnterior: string,
+	montoActual: number,
+	nuevoMonto: number
+): Promise<string | null> {
+	if (Math.abs(nuevoMonto - montoActual) < 0.01) return null;
+	if (estadoAnterior === 'cobrado') {
+		return 'No se puede cambiar el monto de una cuota ya cobrada: su transacción de respaldo quedaría con otro monto. Corrige la transacción o registra un cobro adicional.';
+	}
+	if (estadoAnterior !== 'programado') return null;
+
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuenta).single();
+	const { data: filas } = await client.from(COBRO_TABLE).select('id_cobro, monto, estado_cobro, fecha_cobro').eq(PARENT_FK_COLUMN, idCuenta);
+	const fijos = (filas ?? []).filter((p: any) => p.estado_cobro === 'cobrado').reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const otros = (filas ?? [])
+		.filter((p: any) => p.estado_cobro === 'programado' && p.id_cobro !== idCuota)
+		.sort((a: any, b: any) => new Date(a.fecha_cobro).getTime() - new Date(b.fecha_cobro).getTime());
+	const resto = Number(cuenta?.monto ?? 0) - fijos;
+	const sumaOtros = otros.reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const diferencia = Number((resto - (nuevoMonto + sumaOtros)).toFixed(2));
+
+	if (otros.length === 0) {
+		if (Math.abs(diferencia) >= 0.01) {
+			return `Es la única cuota pendiente: su monto debe ser ${formatCurrency(resto)} (lo que falta por cobrar). Para repartir distinto, usa "Configurar Cuotas".`;
+		}
+		return null;
+	}
+	const ultima = otros[otros.length - 1];
+	const nuevaUltima = Number((Number(ultima.monto) + diferencia).toFixed(2));
+	if (nuevaUltima < 0.01) {
+		const maximo = Number((resto - sumaOtros + Number(ultima.monto) - 0.01).toFixed(2));
+		return `Ese monto es demasiado alto: la última cuota quedaría en ${formatCurrency(nuevaUltima)}. El máximo para esta cuota es ${formatCurrency(Math.max(maximo, 0))}.`;
+	}
+	return null;
+}
+
 export async function updateCobro(
 	client: SupabaseClient,
 	idCobro: number,
@@ -629,7 +708,7 @@ export async function updateCobro(
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro').eq(COBRO_PK, idCobro).single();
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro, monto').eq(COBRO_PK, idCobro).single();
 	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
 	const estadoAnterior = cobroActual.estado_cobro as 'programado' | 'cobrado' | 'cancelado';
 
@@ -653,6 +732,10 @@ export async function updateCobro(
 	// guardan normalmente en este mismo update.
 	const pasandoACobrado = estadoCobro === 'cobrado' && estadoAnterior !== 'cobrado';
 	const updateData: Record<string, unknown> = buildWritablePayload(COBRO_FIELDS, payload);
+	if (!pasandoACobrado && estadoCobro !== 'cancelado') {
+		const errorMonto = await validarEdicionMontoCuota(client, cobroActual.id_cuenta_cobrar, idCobro, estadoAnterior, Number(cobroActual.monto), Number(updateData.monto));
+		if (errorMonto) return { success: false, message: errorMonto };
+	}
 	if (estadoCobro && !pasandoACobrado) updateData.estado_cobro = estadoCobro;
 
 	const { data, error } = await client.from(COBRO_TABLE).update(updateData).eq(COBRO_PK, idCobro).select('*').single();

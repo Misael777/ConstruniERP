@@ -12,6 +12,7 @@
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	let {
 		isOpen = false,
@@ -1418,13 +1419,14 @@ async function copiarCodigoGenerado() {
 									     venta — se muestra como texto de solo lectura en vez de un <select> editable. -->
 									<input type="text" readonly value={getClienteNombreActual() || `Cliente #${selectedClienteId}`} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								{:else}
-									<select bind:value={selectedClienteId} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none text-slate-700">
-										<option value="">-- Selecciona cliente --</option>
-										{#each clientes as c}
-											<option value={c.id_cliente}>{c.nombre}</option>
-										{/each}
-										<option value="__new__">+ Nuevo cliente</option>
-									</select>
+									<!-- Ticket #29: la lista de clientes va a seguir creciendo — mismo combo con
+									     buscador que el resto de Finanzas/Facturación (SelectConSaldo.svelte). -->
+									<SelectConSaldo
+										value={selectedClienteId}
+										options={[...clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre })), { value: '__new__', label: '+ Nuevo cliente' }]}
+										placeholder="-- Selecciona cliente --"
+										onchange={(value) => (selectedClienteId = value)}
+									/>
 									{#if selectedClienteId === '__new__'}
 										<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
 									{/if}
@@ -1465,24 +1467,19 @@ async function copiarCodigoGenerado() {
 								     agrega un número consecutivo al guardar (ej. "Breña_1", "Breña_2" — ver
 								     actualizarNumeroDistrito/distritoParaGuardar). No usa bind:value porque hace
 								     falta interceptar el cambio para disparar esa resolución. -->
-								<select
+								<!-- Ticket #29: provincias grandes (ej. Lima) tienen decenas de distritos — mismo
+								     combo con buscador que el resto de Finanzas (SelectConSaldo.svelte). -->
+								<SelectConSaldo
 									value={distrito}
-									onchange={(e) => {
-										distrito = (e.currentTarget as HTMLSelectElement).value;
+									options={(DISTRITOS_POR_PROVINCIA[provincia] ?? []).map((d) => ({ value: d, label: d }))}
+									placeholder={(DISTRITOS_POR_PROVINCIA[provincia] ?? []).length === 0 ? `-- Sin distritos cargados para ${provincia} --` : '-- Selecciona --'}
+									disabled={(DISTRITOS_POR_PROVINCIA[provincia] ?? []).length === 0}
+									onchange={(value) => {
+										distrito = value;
 										distritoNumero = null;
 										actualizarNumeroDistrito();
 									}}
-									class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-								>
-									{#if (DISTRITOS_POR_PROVINCIA[provincia] ?? []).length === 0}
-										<option value="" disabled>-- Sin distritos cargados para {provincia} --</option>
-									{:else}
-										<option value="">-- Selecciona --</option>
-										{#each DISTRITOS_POR_PROVINCIA[provincia] as d}
-											<option value={d}>{d}</option>
-										{/each}
-									{/if}
-								</select>
+								/>
 							</div>
 							<div class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Proyecto *</label>

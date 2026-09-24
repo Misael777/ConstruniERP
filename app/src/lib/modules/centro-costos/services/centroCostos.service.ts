@@ -56,6 +56,14 @@ export interface CentroCosto {
 	 * de ese proveedor (columna real `proveedor.vendedor`, ver ProveedorModal.svelte) — se trae con un
 	 * embed, no es una columna propia de centro_costo. null para filas sin proveedor vinculado. */
 	producto: string | null;
+	/** Ticket #28: "Cuentas Internas" mostraba el ID crudo guardado en `centro.nombre` para los centros
+	 * vinculados directo a un cliente/proveedor/empleado (sin pasar por un proyecto) — ver
+	 * getOrCrearCentroCostoParaEntidad, que guarda ahí `String(idEntidad)`. Estos tres se traen con
+	 * embeds (igual que `proyecto` de más abajo) para poder mostrar el nombre real; null si el centro
+	 * no está vinculado a esa entidad en particular. */
+	razonSocialProveedor: string | null;
+	nombreClienteDirecto: string | null;
+	nombreEmpleado: string | null;
 	/** Datos del proyecto vinculado (solo si id_proyecto no es null), traídos con un embed — a pedido
 	 * del usuario, "Centro de Costos y Cuentas Internas" (pestaña Centros de Costos) los usa para
 	 * mostrar el código real del proyecto (ver generarCodigoProyecto en codigoProyecto.ts) y su tipo de
@@ -231,7 +239,7 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	let query = client
 		.from(TABLE_NAME)
 		.select(
-			'*, proveedor(vendedor), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
+			'*, proveedor(vendedor, razon_social), clienteDirecto:id_cliente(nombre), empleadoDirecto:id_empleado(nombre), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
 			{ count: 'exact' }
 		)
 		.range(from, to);
@@ -271,7 +279,14 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	const { data, error, count } = await query;
 	if (error) throw error;
 
-	const items = ((data ?? []) as any[]).map((row) => ({ ...row, producto: row.proveedor?.vendedor ?? null }));
+	const unwrap = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
+	const items = ((data ?? []) as any[]).map((row) => ({
+		...row,
+		producto: unwrap(row.proveedor)?.vendedor ?? null,
+		razonSocialProveedor: unwrap(row.proveedor)?.razon_social ?? null,
+		nombreClienteDirecto: unwrap(row.clienteDirecto)?.nombre ?? null,
+		nombreEmpleado: unwrap(row.empleadoDirecto)?.nombre ?? null
+	}));
 
 	const total = count ?? 0;
 	return {

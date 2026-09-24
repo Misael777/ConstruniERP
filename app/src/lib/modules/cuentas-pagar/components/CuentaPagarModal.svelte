@@ -75,6 +75,8 @@
 		// un Ingreso "Préstamo"); en ese caso `cuenta` no es null pero tampoco trae responsable/
 		// frecuencia_pago, así que estos defaults deben seguir aplicando igual.
 		if ((cuenta as any)?.responsable == null && 'responsable' in values) values.responsable = permisosState.userName;
+		// H4: Moneda arranca en Soles para una cuenta nueva; en edición se respeta la guardada.
+		if ((cuenta as any)?.moneda == null && !values.moneda) values.moneda = 'PEN';
 		// A pedido del usuario: "Frecuencia de Pago" arranca en 'Sin periodicidad' al crear —
 		// `frecuencia_pago` es NOT NULL en la BD (con DEFAULT 'sin_periodicidad', pero un INSERT que
 		// manda explícitamente null no cae en ese default, hay que mandar el valor real) — dejarlo vacío
@@ -236,7 +238,7 @@
 				continue;
 			}
 			if (field.disabledWhen?.(formValues)) {
-				const forzado = String(field.disabledValue ?? '');
+				const forzado = typeof field.disabledValue === 'function' ? String(field.disabledValue(formValues) ?? '') : String(field.disabledValue ?? '');
 				if (formValues[field.key] !== forzado) formValues[field.key] = forzado;
 			}
 		}
@@ -361,11 +363,12 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.key === 'id_proveedor'}
-								<!-- Ticket #19: la lista de proveedores va a seguir creciendo — SelectConSaldo.svelte ya
-								     resuelve exactamente esto (buscador que filtra sin distinguir mayúsculas/tildes),
-								     reusado acá sin mostrar ningún saldo (solo lo necesita Cuenta Origen/Destino en
-								     TransaccionModal.svelte). -->
+							{#if field.optionsSource}
+								<!-- Ticket #19 (Proveedor) + #29 (todas las listas): cualquier campo con lista
+								     cargada en runtime (Proveedor/Centro de Costo/Responsable — listas que
+								     crecen con el tiempo) usa el mismo combo con buscador (SelectConSaldo.svelte,
+								     filtra sin distinguir mayúsculas/tildes), sin mostrar ningún saldo (eso solo
+								     lo necesita Cuenta Origen/Destino en TransaccionModal.svelte). -->
 								<SelectConSaldo
 									id={`ccp-${field.key}`}
 									value={formValues[field.key] ?? ''}

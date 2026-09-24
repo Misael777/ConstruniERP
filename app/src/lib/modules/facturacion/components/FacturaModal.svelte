@@ -5,14 +5,18 @@
 	// seleccionar; las ya facturadas quedan en verde/deshabilitadas → Vista previa → "Autorizar y emitir"
 	// (guarda la imagen en Drive y marca esas transacciones como facturadas).
 	//
-	// Cliente usa <select> NATIVO a propósito (un <select> nativo ya trae "escribe para saltar a la
-	// opción" gratis del navegador, ver feedback_dropdown_typeahead en memoria). Los campos simples de
-	// cabecera se dibujan desde FIELDS_CONFIG (mismo motor genérico que el resto de Finanzas).
+	// Cliente usaba <select> NATIVO a propósito (el type-ahead del navegador alcanzaba). Ticket #29:
+	// ese type-ahead no existe en touch (Android vía Tauri) — tocar el <select> abre el picker nativo
+	// del sistema, no hay teclado físico con el que "escribir para saltar" — así que pasa a
+	// SelectConSaldo.svelte, mismo combo con buscador que el resto de listas largas de Finanzas. Los
+	// campos simples de cabecera se dibujan desde FIELDS_CONFIG (mismo motor genérico que el resto de
+	// Finanzas).
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, Eye, Check, Lock } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/facturacion/config/factura.config';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import {
 		getClientesParaFacturar,
 		getTransaccionesDelCliente,
@@ -431,21 +435,20 @@
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
 					<div>
 						<label for="fac-cliente" class="block text-sm font-medium text-[#0f3b5e] mb-1">Cliente (Señor/es) <span class="text-red-500">*</span></label>
-						<select
+						<SelectConSaldo
 							id="fac-cliente"
 							value={idCliente}
+							options={[
+								...(clienteSeleccionado && !clientes.some((c) => c.id_cliente === clienteSeleccionado.id_cliente)
+									? [{ value: String(clienteSeleccionado.id_cliente), label: clienteSeleccionado.nombre }]
+									: []),
+								...clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre }))
+							]}
+							placeholder="Selecciona un cliente"
 							disabled={mode === 'edit'}
-							onchange={(e) => handleClienteChange((e.target as HTMLSelectElement).value)}
-							class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-500 ${fieldErrors.id_cliente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-						>
-							<option value="" disabled selected={!idCliente}>Selecciona un cliente</option>
-							{#if clienteSeleccionado && !clientes.some((c) => c.id_cliente === clienteSeleccionado.id_cliente)}
-								<option value={String(clienteSeleccionado.id_cliente)} selected>{clienteSeleccionado.nombre}</option>
-							{/if}
-							{#each clientes as c (c.id_cliente)}
-								<option value={String(c.id_cliente)} selected={String(c.id_cliente) === idCliente}>{c.nombre}</option>
-							{/each}
-						</select>
+							hasError={!!fieldErrors.id_cliente}
+							onchange={(value) => handleClienteChange(value)}
+						/>
 						{#if fieldErrors.id_cliente}<p class="mt-1 text-xs text-red-600">{fieldErrors.id_cliente}</p>{/if}
 					</div>
 					<div>

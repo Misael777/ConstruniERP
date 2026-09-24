@@ -36,6 +36,10 @@ export interface CuentaPagar {
 	tipo_documento: number | null;
 	num_documento: string | null;
 	monto_comprometido: number;
+	/** 'PEN' | 'USD' — con USD, monto_comprometido (en soles) = monto_dolares x tipo_cambio. */
+	moneda: string;
+	monto_dolares: number | null;
+	tipo_cambio: number | null;
 	monto_pagado: number;
 	saldo_pendiente: number;
 	fotma_pago: number | null;
@@ -445,20 +449,56 @@ async function autoCorregirVencidos(client: SupabaseClient, items: CuentaPagar[]
 	return resultado;
 }
 
+
+/** H4: con moneda='USD' el monto (siempre en soles) es monto_dolares x tipo_cambio. La pantalla lo deja
+ * calculado en el formulario antes de guardar, pero cualquier otro llamador (agentes, importaciones) manda
+ * solo dólares y tipo de cambio — y monto_imponible/monto_igv (computeValue) se derivan de
+ * monto_comprometido, así que hay que resolverlo ANTES de armar el payload a guardar. */
+function conMontoEnSoles(payload: Record<string, unknown>): Record<string, unknown> {
+	if (String(payload.moneda ?? '') !== 'USD') return payload;
+	const dolares = Number(payload.monto_dolares);
+	const cambio = Number(payload.tipo_cambio);
+	return dolares > 0 && cambio > 0 ? { ...payload, monto_comprometido: Number((dolares * cambio).toFixed(2)) } : payload;
+}
+
+/**
+ * H1 (ver Documentacion/tests/README.md): la suma de las cuotas programadas debe ser EXACTAMENTE lo que
+ * todavía falta por pagar (monto - lo ya pagado) — antes solo lo exigía FraccionamientoModal.svelte, así
+ * que cualquier otro camino (importación, otra pantalla, un agente) dejaba calendarios que no cuadran con la
+ * cuenta. Un arreglo vacío es válido (cuenta sin cuotas). null = válido.
+ */
+export function validarSumaFracciones(montoPendiente: number, fracciones: { fecha: string; monto: number }[]): string | null {
+	if (fracciones.length === 0) return null;
+	for (const f of fracciones) {
+		if (!Number.isFinite(Number(f.monto)) || Number(f.monto) <= 0) return 'Cada cuota debe tener un monto mayor a 0.';
+		if (!f.fecha || Number.isNaN(new Date(f.fecha).getTime())) return 'Cada cuota debe tener una fecha válida.';
+	}
+	const suma = Number(fracciones.reduce((s, f) => s + Number(f.monto), 0).toFixed(2));
+	const esperado = Number(Number(montoPendiente).toFixed(2));
+	if (Math.abs(suma - esperado) >= 0.01) {
+		return `Las cuotas suman ${formatCurrency(suma)} pero lo que falta por pagar es ${formatCurrency(esperado)}. Ajusta las cuotas para que cuadren.`;
+	}
+	return null;
+}
+
 export async function createCuentaPagar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	usuarioRegistro: string | null,
 	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaPagar>> {
+	payload = conMontoEnSoles(payload);
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 
-	const saldoInicial = Number(payload.monto_comprometido);
+	const saldoInicial = Number(buildWritablePayload(FIELDS_CONFIG, payload).monto_comprometido);
+	const errorFracciones = validarSumaFracciones(saldoInicial, fraccionesPersonalizadas);
+	if (errorFracciones) return { success: false, message: errorFracciones };
 	const insertData: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
+		moneda: (payload.moneda as string) || 'PEN',
 		monto_pagado: 0,
 		saldo_pendiente: saldoInicial,
 		estado: computeEstadoCuentaPagar(saldoInicial, (payload.fecha_vencimiento as string) || null, (payload.fecha_pago_programada as string) || null),
@@ -584,6 +624,7 @@ export async function createCuentasPagarRecurrentes(
 	usuarioRegistro: string | null,
 	fechas: FechaCuentaRecurrente[]
 ): Promise<ServiceResult<CuentaPagar[]>> {
+	payload = conMontoEnSoles(payload);
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
@@ -593,10 +634,11 @@ export async function createCuentasPagarRecurrentes(
 	}
 
 	const base = buildWritablePayload(FIELDS_CONFIG, payload);
-	const saldoInicial = Number(payload.monto_comprometido);
+	const saldoInicial = Number(base.monto_comprometido);
 
 	const filas = fechas.map((f) => ({
 		...base,
+		moneda: (payload.moneda as string) || 'PEN',
 		fecha_emision: f.fecha_emision,
 		fecha_vencimiento: f.fecha_vencimiento,
 		fecha_pago_programada: f.fecha_pago_programada,
@@ -640,6 +682,12 @@ export async function sincronizarCuotasProgramadas(
 	idCuentaPagar: number,
 	fracciones: { fecha: string; monto: number }[]
 ): Promise<{ success: boolean; message: string }> {
+	if (fracciones.length > 0) {
+		const { data: cuenta } = await client.from(TABLE_NAME).select('monto_comprometido, monto_pagado').eq(PK_COLUMN, idCuentaPagar).single();
+		const pendiente = Math.max(Number(cuenta?.monto_comprometido ?? 0) - Number(cuenta?.monto_pagado ?? 0), 0);
+		const errorFracciones = validarSumaFracciones(pendiente, fracciones);
+		if (errorFracciones) return { success: false, message: errorFracciones };
+	}
 	const { error: deleteError } = await client.from(PAGO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaPagar).eq('estado_pago', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores:', deleteError);
@@ -663,6 +711,7 @@ export async function updateCuentaPagar(
 	esAdmin: boolean = false,
 	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
 ): Promise<ServiceResult<CuentaPagar>> {
+	payload = conMontoEnSoles(payload);
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
@@ -676,6 +725,13 @@ export async function updateCuentaPagar(
 	const pagado = Number(current?.monto_pagado ?? 0);
 	const comprometido = typeof updateData.monto_comprometido === 'number' ? updateData.monto_comprometido : Number(current?.monto_comprometido ?? 0);
 	const saldo = Math.max(comprometido - pagado, 0);
+	// Si el calendario que llega es idéntico al ya guardado (el modal lo rehidrata tal cual al editar otros
+	// campos), no se revalida: no bloquear la edición de cuentas viejas cuyo calendario ya venía descuadrado.
+	const { data: cuotasActuales } = await client.from(PAGO_TABLE).select('fecha_pago, monto').eq(PARENT_FK_COLUMN, id).eq('estado_pago', 'programado');
+	const firma = (xs: { fecha: string; monto: number }[]) => JSON.stringify(xs.map((x) => [x.fecha, Number(x.monto)]).sort());
+	const sinCambios = firma((cuotasActuales ?? []).map((c: any) => ({ fecha: c.fecha_pago, monto: c.monto }))) === firma(fraccionesPersonalizadas);
+	const errorFracciones = sinCambios ? null : validarSumaFracciones(saldo, fraccionesPersonalizadas);
+	if (errorFracciones) return { success: false, message: errorFracciones };
 	updateData.saldo_pendiente = saldo;
 	updateData.estado = computeEstadoCuentaPagar(saldo, (updateData.fecha_vencimiento as string) || null, (updateData.fecha_pago_programada as string) || null);
 
@@ -846,6 +902,51 @@ export async function createPago(
  * el usuario pueda pasar una cuota a 'pagado' (se pagó antes o después de lo programado) o
  * 'cancelado' (ya no se hará), directo desde el modal de edición.
  */
+/**
+ * Lápiz de una cuota (ver Documentacion/tests/lapiz-cuotas.md, H8-H10): valida el cambio de monto ANTES de
+ * guardarlo. Antes, subir una cuota por encima de lo que falta por pagar dejaba la última cuota en negativo
+ * (-7000 en las pruebas), editar la única cuota pendiente descuadraba la cuenta, y se podía cambiar el monto de
+ * una cuota ya pagada aunque su transacción de respaldo quedara con otro monto. null = válido.
+ */
+async function validarEdicionMontoCuota(
+	client: SupabaseClient,
+	idCuenta: number,
+	idCuota: number,
+	estadoAnterior: string,
+	montoActual: number,
+	nuevoMonto: number
+): Promise<string | null> {
+	if (Math.abs(nuevoMonto - montoActual) < 0.01) return null;
+	if (estadoAnterior === 'pagado') {
+		return 'No se puede cambiar el monto de una cuota ya pagada: su transacción de respaldo quedaría con otro monto. Corrige la transacción o registra un pago adicional.';
+	}
+	if (estadoAnterior !== 'programado') return null;
+
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto_comprometido').eq(PK_COLUMN, idCuenta).single();
+	const { data: filas } = await client.from(PAGO_TABLE).select('id_pago, monto, estado_pago, fecha_pago').eq(PARENT_FK_COLUMN, idCuenta);
+	const fijos = (filas ?? []).filter((p: any) => p.estado_pago === 'pagado').reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const otros = (filas ?? [])
+		.filter((p: any) => p.estado_pago === 'programado' && p.id_pago !== idCuota)
+		.sort((a: any, b: any) => new Date(a.fecha_pago).getTime() - new Date(b.fecha_pago).getTime());
+	const resto = Number(cuenta?.monto_comprometido ?? 0) - fijos;
+	const sumaOtros = otros.reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const diferencia = Number((resto - (nuevoMonto + sumaOtros)).toFixed(2));
+
+	if (otros.length === 0) {
+		if (Math.abs(diferencia) >= 0.01) {
+			return `Es la única cuota pendiente: su monto debe ser ${formatCurrency(resto)} (lo que falta por pagar). Para repartir distinto, usa "Configurar Cuotas".`;
+		}
+		return null;
+	}
+	const ultima = otros[otros.length - 1];
+	const nuevaUltima = Number((Number(ultima.monto) + diferencia).toFixed(2));
+	if (nuevaUltima < 0.01) {
+		const maximo = Number((resto - sumaOtros + Number(ultima.monto) - 0.01).toFixed(2));
+		return `Ese monto es demasiado alto: la última cuota quedaría en ${formatCurrency(nuevaUltima)}. El máximo para esta cuota es ${formatCurrency(Math.max(maximo, 0))}.`;
+	}
+	return null;
+}
+
 export async function updatePago(
 	client: SupabaseClient,
 	idPago: number,
@@ -861,7 +962,7 @@ export async function updatePago(
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago').eq(PAGO_PK, idPago).single();
+	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago, monto').eq(PAGO_PK, idPago).single();
 	if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
 	const estadoAnterior = pagoActual.estado_pago as 'programado' | 'pagado' | 'cancelado';
 
@@ -885,6 +986,10 @@ export async function updatePago(
 	// normalmente en este mismo update.
 	const pasandoAPagado = estadoPago === 'pagado' && estadoAnterior !== 'pagado';
 	const updateData: Record<string, unknown> = buildWritablePayload(PAGO_FIELDS, payload);
+	if (!pasandoAPagado && estadoPago !== 'cancelado') {
+		const errorMonto = await validarEdicionMontoCuota(client, pagoActual.id_cuenta_pagar, idPago, estadoAnterior, Number(pagoActual.monto), Number(updateData.monto));
+		if (errorMonto) return { success: false, message: errorMonto };
+	}
 	if (estadoPago && !pasandoAPagado) updateData.estado_pago = estadoPago;
 
 	const { data, error } = await client.from(PAGO_TABLE).update(updateData).eq(PAGO_PK, idPago).select('*').single();
