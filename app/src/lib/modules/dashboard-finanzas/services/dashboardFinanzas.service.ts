@@ -43,6 +43,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
+import { CENTRO_COSTO_EMBEDS_NOMBRE, centroCostoNombreVisible } from '$lib/modules/transacciones/services/transacciones.service';
 
 export interface ConcentracionCategoria {
 	categoria: string;
@@ -93,22 +94,51 @@ export interface FiltrosFinanzas {
 	idCentroCosto?: number | null;
 }
 
-export const TIPO_CENTRO_COSTO_OPTIONS: FieldOption[] = [
-	{ value: 'obra', label: 'Obra' },
-	{ value: 'consultoria', label: 'Consultoría' },
-	{ value: 'bolsa general', label: 'Corporativo' }, // Ticket #24: renombrado a pedido del cliente — el valor de BD ('bolsa general') no cambia, solo la etiqueta.
-	{ value: 'area', label: 'Área' },
-	{ value: 'otro', label: 'Otro' },
-	{ value: 'proyecto', label: 'Proyecto' },
-	{ value: 'cliente', label: 'Cliente' },
-	{ value: 'proveedor', label: 'Proveedor' },
-	{ value: 'empleado', label: 'Empleado' },
-	{ value: 'subcontratista', label: 'Subcontratista' }
-];
+/** Etiqueta de CADA valor posible de centro_costo.tipo (tabla de rendimiento, grafo de flujo) — incluye
+ * los que ya no se ofrecen en el filtro (ver TIPO_CENTRO_COSTO_OPTIONS) por si alguna fila vieja los tuviera. */
+export const TIPO_CENTRO_COSTO_LABELS: Record<string, string> = {
+	obra: 'Obra',
+	consultoria: 'Consultoría',
+	'bolsa general': 'Corporativo', // Ticket #24: renombrado a pedido del cliente — el valor de BD ('bolsa general') no cambia, solo la etiqueta.
+	area: 'Área',
+	otro: 'Otro',
+	prestamo: 'Préstamo',
+	proyecto: 'Proyecto',
+	cliente: 'Cliente',
+	proveedor: 'Proveedor',
+	subcontratista: 'Subcontratista',
+	empleado: 'Empleado'
+};
 
-export const TIPO_CENTRO_COSTO_LABELS: Record<string, string> = Object.fromEntries(
-	TIPO_CENTRO_COSTO_OPTIONS.map((o) => [o.value, o.label])
-);
+/** Opciones del filtro 'Tipo de Centro de Costo' de Control Financiero. Ticket #24: antes ofrecía
+ * 'Área' (sin ninguna fila en la base) y omitía 'Préstamo'; 'Obra'/'Consultoría' tampoco devolvían nada
+ * porque los proyectos con venta cerrada son tipo 'proyecto' en la base (la distinción obra/consultoría
+ * vive en proyecto.tipo_venta) — ver centroCumpleTipoFiltro. 'Proyecto' ya no se ofrece aparte: sus
+ * centros son exactamente los de Obra + Consultoría. */
+export const TIPO_CENTRO_COSTO_OPTIONS: FieldOption[] = [
+	'obra',
+	'consultoria',
+	'bolsa general',
+	'prestamo',
+	'otro',
+	'cliente',
+	'proveedor',
+	'subcontratista',
+	'empleado'
+].map((value) => ({ value, label: TIPO_CENTRO_COSTO_LABELS[value] }));
+
+/** ¿Un centro (su tipo real + el tipo_venta de su proyecto, si tiene) entra en el filtro elegido? 'Obra' y
+ * 'Consultoría' incluyen también a los centros de tipo 'proyecto' según el tipo_venta de su proyecto
+ * (sin dato = Obra, mismo criterio que la pantalla de Ventas). El resto compara el tipo tal cual. */
+export function centroCumpleTipoFiltro(filtro: string | undefined | null, tipo: string, tipoVenta: string | null): boolean {
+	if (!filtro) return true;
+	if (filtro === 'obra' || filtro === 'consultoria') {
+		if (tipo === filtro) return true;
+		if (tipo !== 'proyecto') return false;
+		return (tipoVenta === 'consultoria' ? 'consultoria' : 'obra') === filtro;
+	}
+	return tipo === filtro;
+}
 
 /** Catálogo PCGE clase 6 — mismo que cuentaPagar.config.ts (categoria_gasto). */
 const CATEGORIA_GASTO_LABELS: Record<string, string> = {
@@ -147,17 +177,34 @@ function etiquetaAnioMes(clave: string): string {
 	return `${MESES_CORTOS[Number(mes) - 1]} ${anio.slice(2)}`;
 }
 
-/** Opciones para el selector "Código de Proyecto / Centro de Costo" — cualquier tipo, no solo proyecto. */
-export async function getCentrosCostoOptions(client: SupabaseClient): Promise<FieldOption[]> {
+/** Opción del selector "Centro de Costo" — además del value/label lleva el `tipo` (y el `tipo_venta` del
+ * proyecto vinculado) para poder acotar la lista al "Tipo de Centro de Costo" elegido (ticket #24). */
+export interface CentroCostoOpcion extends FieldOption {
+	tipo: string;
+	tipoVenta: string | null;
+}
+
+/** Opciones para el selector "Código de Proyecto / Centro de Costo" — cualquier tipo, no solo proyecto.
+ * Ticket #25: la etiqueta ahora muestra el NOMBRE real (cliente, proveedor, empleado, proyecto) y no el
+ * id crudo que `centro_costo.nombre` guarda para los vinculados ("CLI-37 — 37"). */
+export async function getCentrosCostoOptions(client: SupabaseClient): Promise<CentroCostoOpcion[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre')
+		.select(`id_centro_costo, codigo, nombre, tipo, ${CENTRO_COSTO_EMBEDS_NOMBRE}`)
 		.eq('estado', 'activo')
 		.order('codigo');
 	if (error) throw error;
 	return (data ?? [])
 		.filter((c: any) => !esCentroExterno(c.codigo))
-		.map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} — ${c.nombre}` }));
+		.map((c: any) => {
+			const proyecto = Array.isArray(c.proyecto) ? c.proyecto[0] : c.proyecto;
+			return {
+				value: String(c.id_centro_costo),
+				label: `${c.codigo} — ${centroCostoNombreVisible(c)}`,
+				tipo: c.tipo as string,
+				tipoVenta: (proyecto?.tipo_venta as string | null | undefined) ?? null
+			};
+		});
 }
 
 /**
@@ -171,13 +218,21 @@ export async function getRendimientoPorCentroCosto(
 	// 1. Centros de costo (cualquier tipo) + filtros directos por CdC puntual y/o tipo
 	let ccQuery = client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre, tipo, id_proyecto')
+		.select(`id_centro_costo, codigo, nombre, tipo, id_proyecto, ${CENTRO_COSTO_EMBEDS_NOMBRE}`)
 		.eq('estado', 'activo');
 	if (filtros.idCentroCosto) ccQuery = ccQuery.eq('id_centro_costo', filtros.idCentroCosto);
-	if (filtros.tipo) ccQuery = ccQuery.eq('tipo', filtros.tipo);
+	// Ticket #24: 'obra'/'consultoria' también cubren a los centros de tipo 'proyecto' (su tipo_venta decide cuál es) —
+	// se traen ambos tipos y se afina en JS con centroCumpleTipoFiltro.
+	if (filtros.tipo) {
+		ccQuery = filtros.tipo === 'obra' || filtros.tipo === 'consultoria' ? ccQuery.in('tipo', [filtros.tipo, 'proyecto']) : ccQuery.eq('tipo', filtros.tipo);
+	}
 	const { data: centrosRaw, error: ccError } = await ccQuery;
 	if (ccError) throw ccError;
-	const centrosFinal = (centrosRaw ?? []).filter((c: any) => !esCentroExterno(c.codigo));
+	const centrosFinal = (centrosRaw ?? []).filter((c: any) => {
+		if (esCentroExterno(c.codigo)) return false;
+		const proyecto = Array.isArray(c.proyecto) ? c.proyecto[0] : c.proyecto;
+		return centroCumpleTipoFiltro(filtros.tipo, c.tipo, proyecto?.tipo_venta ?? null);
+	});
 	if (centrosFinal.length === 0) return [];
 
 	// 2. Proyectos vinculados (join en JS por simplicidad/consistencia, aunque id_proyecto ya es FK real)
@@ -278,7 +333,7 @@ export async function getRendimientoPorCentroCosto(
 		return {
 			id_centro_costo: c.id_centro_costo,
 			codigo: c.codigo,
-			nombre: c.nombre,
+			nombre: centroCostoNombreVisible(c),
 			tipo: c.tipo,
 			id_proyecto: c.id_proyecto,
 			nombre_proyecto: proyecto?.nombre_proyecto ?? null,
@@ -354,7 +409,7 @@ export interface FlujoDeNodos {
 export async function getFlujoDeNodos(client: SupabaseClient): Promise<FlujoDeNodos> {
 	const { data: centrosRaw, error: ccError } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre, tipo')
+		.select(`id_centro_costo, codigo, nombre, tipo, ${CENTRO_COSTO_EMBEDS_NOMBRE}`)
 		.eq('estado', 'activo');
 	if (ccError) throw ccError;
 	const centros = (centrosRaw ?? []).filter((c: any) => !esCentroExterno(c.codigo));
@@ -402,7 +457,7 @@ export async function getFlujoDeNodos(client: SupabaseClient): Promise<FlujoDeNo
 		.map((c: any) => ({
 			id: c.id_centro_costo,
 			codigo: c.codigo,
-			nombre: c.nombre,
+			nombre: centroCostoNombreVisible(c),
 			tipo: c.tipo,
 			saldo: saldos.get(c.id_centro_costo) ?? 0
 		}));

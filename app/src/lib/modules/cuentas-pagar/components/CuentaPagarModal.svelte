@@ -361,11 +361,12 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.key === 'id_proveedor'}
-								<!-- Ticket #19: la lista de proveedores va a seguir creciendo — SelectConSaldo.svelte ya
-								     resuelve exactamente esto (buscador que filtra sin distinguir mayúsculas/tildes),
-								     reusado acá sin mostrar ningún saldo (solo lo necesita Cuenta Origen/Destino en
-								     TransaccionModal.svelte). -->
+							{#if field.optionsSource}
+								<!-- Ticket #19 (Proveedor) + #29 (todas las listas): cualquier campo con lista
+								     cargada en runtime (Proveedor/Centro de Costo/Responsable — listas que
+								     crecen con el tiempo) usa el mismo combo con buscador (SelectConSaldo.svelte,
+								     filtra sin distinguir mayúsculas/tildes), sin mostrar ningún saldo (eso solo
+								     lo necesita Cuenta Origen/Destino en TransaccionModal.svelte). -->
 								<SelectConSaldo
 									id={`ccp-${field.key}`}
 									value={formValues[field.key] ?? ''}

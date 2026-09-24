@@ -6,6 +6,7 @@
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transDetalle.config';
 	import { createTransDetalle, updateTransDetalle } from '$lib/modules/transacciones/services/transacciones.service';
 	import type { TransDetalle } from '$lib/modules/transacciones/services/transacciones.service';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	let {
 		open = false,
@@ -115,7 +116,18 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 
-							{#if field.tipo === 'select' || field.options}
+							{#if field.optionsSource}
+								<!-- Ticket #29: Partida (lista que crece con la obra) usa el mismo combo con
+								     buscador que ya tienen Proveedor/Cliente/Centro de Costo en el resto de
+								     Finanzas (SelectConSaldo.svelte), en vez del <select> nativo. -->
+								<SelectConSaldo
+									id={`td-${field.key}`}
+									value={formValues[field.key] ?? ''}
+									options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label }))}
+									hasError={!!fieldErrors[field.key]}
+									onchange={(value) => handleInput(field.key, value)}
+								/>
+							{:else if field.tipo === 'select' || field.options}
 								<select
 									id={`td-${field.key}`}
 									name={field.key}

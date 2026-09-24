@@ -332,7 +332,11 @@
 		if (activeTab === 'centros' && item.proyecto) {
 			return item.proyecto.clienteNombre || item.proyecto.cliente?.nombre || item.nombre;
 		}
-		return item.nombre;
+		// Ticket #28: en "Cuentas Internas" (cliente/proveedor/empleado directos, sin proyecto de por
+		// medio) `centro.nombre` solo guarda el ID crudo de la entidad — se usa el nombre real, traído
+		// con un embed (ver getCentroCostos). Los "Centros de Costos" manuales (Obra/Consultoría/Otro/
+		// Préstamo/Corporativo) no tienen ninguno de estos tres, así que caen igual al `return item.nombre`.
+		return item.nombreClienteDirecto || item.razonSocialProveedor || item.nombreEmpleado || item.nombre;
 	}
 
 	function cellValue(field: (typeof tableFields)[number], item: CentroCosto) {

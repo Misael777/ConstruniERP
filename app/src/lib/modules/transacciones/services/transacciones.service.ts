@@ -49,23 +49,37 @@ const CENTRO_COSTO_CLIENTE_EMBED = 'cliente:id_cliente(nombre)';
 const CENTRO_COSTO_PROVEEDOR_EMBED = 'proveedor:id_proveedor(razon_social)';
 const CENTRO_COSTO_EMPLEADO_EMBED = 'empleado:id_empleado(nombre)';
 
-function centroCostoOptionLabel(c: {
+/** Los cuatro embeds juntos — para cualquier consulta a `centro_costo` que necesite mostrar el NOMBRE
+ * real de un centro vinculado a una entidad (ver centroCostoNombreVisible). Ticket #25: Control
+ * Financiero mostraba "CLI-37 — 37" porque no los usaba. */
+export const CENTRO_COSTO_EMBEDS_NOMBRE = `${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`;
+
+type CentroCostoConEmbeds = {
 	codigo: string;
 	nombre: string;
 	proyecto?: ProyectoCodigoFields | ProyectoCodigoFields[] | null;
 	cliente?: { nombre: string } | { nombre: string }[] | null;
 	proveedor?: { razon_social: string } | { razon_social: string }[] | null;
 	empleado?: { nombre: string } | { nombre: string }[] | null;
-}): string {
+};
+
+/** Nombre "de verdad" de un centro de costo, sin el código: el de su proyecto/cliente/proveedor/empleado
+ * si está vinculado a uno (`centro_costo.nombre` guarda ahí solo el id crudo, ver el comentario de
+ * CENTRO_COSTO_CLIENTE_EMBED), o su propio `nombre` si es uno manual. */
+export function centroCostoNombreVisible(c: CentroCostoConEmbeds): string {
 	const proyecto = Array.isArray(c.proyecto) ? c.proyecto[0] : c.proyecto;
-	if (proyecto) return `${c.codigo} - ${generarCodigoProyecto(proyecto)}`;
+	if (proyecto) return generarCodigoProyecto(proyecto);
 	const cliente = Array.isArray(c.cliente) ? c.cliente[0] : c.cliente;
-	if (cliente) return `${c.codigo} - ${cliente.nombre}`;
+	if (cliente) return cliente.nombre;
 	const proveedor = Array.isArray(c.proveedor) ? c.proveedor[0] : c.proveedor;
-	if (proveedor) return `${c.codigo} - ${proveedor.razon_social}`;
+	if (proveedor) return proveedor.razon_social;
 	const empleado = Array.isArray(c.empleado) ? c.empleado[0] : c.empleado;
-	if (empleado) return `${c.codigo} - ${empleado.nombre}`;
-	return `${c.codigo} - ${c.nombre}`;
+	if (empleado) return empleado.nombre;
+	return c.nombre;
+}
+
+function centroCostoOptionLabel(c: CentroCostoConEmbeds): string {
+	return `${c.codigo} - ${centroCostoNombreVisible(c)}`;
 }
 
 export interface Transaccion {

@@ -9,6 +9,7 @@
 	import { getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	let {
 		open = false,
@@ -404,6 +405,19 @@
 									value={prestamoDestinoNombre}
 									disabled
 									class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-slate-100 text-slate-600 disabled:cursor-not-allowed"
+								/>
+							{:else if field.optionsSource}
+								<!-- Ticket #29: cualquier campo con lista cargada en runtime (cliente/centro de
+								     costo/proyecto/responsable — listas que crecen con el tiempo) usa el mismo
+								     combo con buscador que ya se agregó a Proveedor en Cuentas por Pagar
+								     (ticket #19), en vez del <select> nativo. -->
+								<SelectConSaldo
+									id={`ccb-${field.key}`}
+									value={formValues[field.key] ?? ''}
+									options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label }))}
+									disabled={isDisabled(field)}
+									hasError={!!fieldErrors[field.key]}
+									onchange={(value) => handleInput(field.key, value)}
 								/>
 							{:else if field.tipo === 'select' || field.options}
 								<div class="relative">

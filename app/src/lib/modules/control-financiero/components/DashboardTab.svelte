@@ -28,6 +28,8 @@
 		getProyeccionFutura,
 		TIPO_CENTRO_COSTO_OPTIONS,
 		TIPO_CENTRO_COSTO_LABELS,
+		centroCumpleTipoFiltro,
+		type CentroCostoOpcion,
 		type CentroCostoRendimiento,
 		type FlujoDeNodos,
 		type ResumenGeneralDashboard,
@@ -72,7 +74,10 @@
 	let serieHistorica = $state<SerieMensualFlujoCaja>({ labels: [], ingresos: [], egresos: [] });
 	let proyeccion = $state<ProyeccionFutura>({ labels: [], ingresosProyectados: [], egresosProyectados: [] });
 
-	let centrosOptions = $state<{ value: string; label: string }[]>([]);
+	let centrosOptions = $state<CentroCostoOpcion[]>([]);
+	// Ticket #24: el desplegable "Centro de Costo" solo ofrece los del "Tipo de Centro de Costo" elegido
+	// (antes listaba todos siempre, y combinar un tipo con un centro de otro tipo dejaba la pantalla vacía).
+	const centrosVisibles = $derived(centrosOptions.filter((o) => centroCumpleTipoFiltro(filtroTipo || undefined, o.tipo, o.tipoVenta)));
 	let filtroTipo = $state('');
 	let filtroCentro = $state('');
 	let items = $state<CentroCostoRendimiento[]>([]);
@@ -201,6 +206,12 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	/** Al cambiar el tipo, el centro puntual elegido antes puede ya no corresponder a ese tipo — se limpia. */
+	function onCambioTipo() {
+		if (filtroCentro && !centrosVisibles.some((o) => o.value === filtroCentro)) filtroCentro = '';
+		reloadRendimiento();
 	}
 
 	async function reloadRendimiento() {
@@ -539,7 +550,7 @@
 	<div class="flex flex-wrap items-end gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
 		<div class="flex flex-col gap-1">
 			<label for="ff-tipo" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tipo de Centro de Costo</label>
-			<select id="ff-tipo" bind:value={filtroTipo} onchange={reloadRendimiento} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[170px]">
+			<select id="ff-tipo" bind:value={filtroTipo} onchange={onCambioTipo} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[170px]">
 				<option value="">Todos</option>
 				{#each TIPO_CENTRO_COSTO_OPTIONS as opt}
 					<option value={opt.value}>{opt.label}</option>
@@ -550,7 +561,7 @@
 			<label for="ff-centro" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Centro de Costo</label>
 			<select id="ff-centro" bind:value={filtroCentro} onchange={reloadRendimiento} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[260px]">
 				<option value="">Todos los centros de costo</option>
-				{#each centrosOptions as opt}
+				{#each centrosVisibles as opt}
 					<option value={opt.value}>{opt.label}</option>
 				{/each}
 			</select>
