@@ -158,6 +158,11 @@
 		// "Documento pendiente" arranca en 'no' — mismo criterio que tipo_moneda arriba (ver
 		// transaccion_documento_pendiente_migration.sql).
 		if (!values.documento_pendiente) values.documento_pendiente = 'no';
+		// "Tipo de Comprobante de ERP" (tipo_documento, solo visible/editable en Ingreso — ver el bloque
+		// más abajo) arranca en 'Factura' ('1') si no trae ya uno de los 4 valores de ese catálogo — así
+		// una transacción vieja (de antes de este campo, o con un tipo_documento de otro flujo) no
+		// aparece con un valor extraño ni vacío. A pedido explícito del usuario.
+		if (values.tipo === 'ingreso' && !['1', '2', '10', '11'].includes(values.tipo_documento)) values.tipo_documento = '1';
 		return values;
 	}
 
@@ -165,6 +170,8 @@
 	let fieldErrors = $state<Record<string, string>>({});
 	let submitting = $state(false);
 	let aprobando = $state(false);
+	/** Ver nota junto al bloque "Tipo de Comprobante de ERP" — Sí/No de una sola vez, nunca se persiste. */
+	let generarComprobanteErp = $state<'si' | 'no'>('no');
 
 	// "Monto Convertido" (= Monto (reconocido) × Tipo de Cambio) — a pedido explícito del usuario, se
 	// calcula solo, no es editable a mano (ver disabledValue en transaccion.config.ts, que guarda este
@@ -509,6 +516,10 @@
 			fechaLocked = false;
 			montoLocked = false;
 			numOperacionLocked = false;
+			// "Generar comprobante ERP" (ver bloque "Tipo de Comprobante de ERP" más abajo) es solo un
+			// disparador de una sola vez, no una columna real de `transaccion` — arranca en 'no' siempre,
+			// también al editar (nunca se guarda, así que no hay valor previo que recuperar).
+			generarComprobanteErp = 'no';
 			claseDestino = '';
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
@@ -1534,6 +1545,28 @@
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo buscar la Cuenta por Pagar/Cobrar vinculada:', err);
 			toast.error('No se pudo buscar la Cuenta por Pagar/Cobrar vinculada — actualízala a mano si hace falta.');
+		}
+	}
+
+	/** "Generar comprobante ERP" = Sí (ver bloque "Tipo de Comprobante de ERP" más arriba) — la
+	 * transacción ya se guardó, esto solo abre (mejor esfuerzo, nunca deshace lo ya guardado) "Nuevo
+	 * Comprobante" en Gestión de Comprobantes con esa transacción y su cliente ya precargados, en la
+	 * pestaña que corresponda a `tipo_documento`. El cliente se resuelve desde el Centro de Costo
+	 * Origen (mismo criterio que getTransaccionesFacturables en facturacion.service.ts) — si ese
+	 * origen no es un centro de cliente (ej. Corporativo/Socio o Banca), no hay cliente que precargar
+	 * y se avisa en vez de redirigir a medias. */
+	async function redirigirANuevoComprobanteErp(idTransaccion: number, idCentroCostoOrigen: string, tipoDocumento: string): Promise<void> {
+		try {
+			const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(idCentroCostoOrigen)).maybeSingle();
+			if (!centro?.id_cliente) {
+				toast.info('No se pudo identificar un cliente para generar el comprobante automáticamente — créalo a mano en Gestión de Comprobantes.');
+				return;
+			}
+			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente: centro.id_cliente, idTransaccion, tipoDocumento }));
+			goto('/finanzas/facturacion?nuevoComprobanteDesdeTransaccion=1');
+		} catch (err) {
+			console.error('[TransaccionModal] No se pudo preparar el nuevo comprobante:', err);
+			toast.error('No se pudo abrir Gestión de Comprobantes — créalo a mano.');
 		}
 	}
 
@@ -2754,6 +2787,16 @@
 					// actualizó, esto solo abre (mejor esfuerzo, nunca bloquea ni deshace lo ya guardado) la
 					// Cuenta por Pagar/Cobrar vinculada para que el usuario confirme el mismo cambio ahí.
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
+					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
+					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
+					if (generarComprobanteErp === 'si' && formValues.tipo === 'ingreso') {
+						if (transaccion?.id_factura) {
+							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
+						} else {
+							const idParaComprobante = (result.data as any)?.id_transaccion ?? transaccion?.id_transaccion;
+							if (idParaComprobante) await redirigirANuevoComprobanteErp(idParaComprobante, formValues.id_centro_costo_origen, formValues.tipo_documento);
+						}
+					}
 				}
 			} else {
 				toast.error(result.message ?? 'Ocurrió un error al guardar');
@@ -3339,6 +3382,28 @@
 								     transaccion_documento_pendiente_migration.sql). Como quedan fuera del DOM con
 								     "No", no hace falta disabledWhen en la config: un campo que no está montado no
 								     puede recibir texto que luego haya que limpiar al guardar. -->
+								<!-- "Documento pendiente" (Sí/No) — a pedido explícito del usuario: solo aplica a
+								     Ingreso/Egreso, marca que todavía falta el documento de respaldo (factura/
+								     boleta) de esta transacción. "Responsable"/"Fecha de Vencimiento" vuelven a
+								     ocultarse por completo si es "No" (a pedido explícito del usuario, corrigiendo
+								     un cambio anterior que los dejaba siempre visibles) — pero SIN el asterisco de
+								     obligatorio de antes: siguen siendo opcionales incluso con "Sí" (ver
+								     transaccion_documento_pendiente_migration.sql). Como quedan fuera del DOM con
+								     "No", no hace falta disabledWhen en la config: un campo que no está montado no
+								     puede recibir texto que luego haya que limpiar al guardar.
+
+								     "Tipo de Comprobante"/"Generar Comprobante" (solo Ingreso, ver más abajo) ocupan
+								     los 2 espacios que "Documento pendiente" deja libres en su misma fila (a pedido
+								     explícito del usuario, para no dejar una fila aparte con espacio vacío) —
+								     "Tipo de Comprobante" es el mismo transaccion.tipo_documento de siempre (nunca
+								     antes se mostraba en este formulario), restringido a las 4 opciones que
+								     clasifica "Gestión de Comprobantes" (ver TIPO_DOCUMENTO_POR_COMPROBANTE en
+								     facturacion.service.ts). "Generar Comprobante" NO se guarda (no es una columna
+								     real de `transaccion`) — es solo el disparador de una sola vez: si es "Sí", al
+								     guardar la transacción se abre "Nuevo Comprobante" con esta transacción y su
+								     cliente ya precargados (ver redirigirANuevoComprobanteErp más abajo). Si
+								     "Documento pendiente" = Sí Y el Tipo es Ingreso a la vez (raro, ambos activos),
+								     esos 2 campos ya no caben en la misma fila y bajan a una fila propia debajo. -->
 								{#if formValues.tipo === 'ingreso' || formValues.tipo === 'egreso'}
 									<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 										<div>
@@ -3393,8 +3458,83 @@
 													<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
 												{/if}
 											</div>
+										{:else if formValues.tipo === 'ingreso'}
+											<div>
+												<label for="tr-tipo-comprobante-erp" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>
+												<div class="relative">
+													<select
+														id="tr-tipo-comprobante-erp"
+														value={formValues.tipo_documento}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('tipo_documento', (e.target as HTMLSelectElement).value)}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="1">Factura</option>
+														<option value="2">Boleta</option>
+														<option value="10">Nota de Crédito</option>
+														<option value="11">Nota de Débito</option>
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+											</div>
+											<div>
+												<label for="tr-generar-comprobante-erp" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Generar Comprobante</label>
+												<div class="relative">
+													<select
+														id="tr-generar-comprobante-erp"
+														value={generarComprobanteErp}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => (generarComprobanteErp = (e.target as HTMLSelectElement).value === 'si' ? 'si' : 'no')}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="no">No</option>
+														<option value="si">Sí</option>
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+											</div>
 										{/if}
 									</div>
+									{#if formValues.documento_pendiente === 'si' && formValues.tipo === 'ingreso'}
+										<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+											<div>
+												<label for="tr-tipo-comprobante-erp-2" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>
+												<div class="relative">
+													<select
+														id="tr-tipo-comprobante-erp-2"
+														value={formValues.tipo_documento}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => handleInput('tipo_documento', (e.target as HTMLSelectElement).value)}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="1">Factura</option>
+														<option value="2">Boleta</option>
+														<option value="10">Nota de Crédito</option>
+														<option value="11">Nota de Débito</option>
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+											</div>
+											<div>
+												<label for="tr-generar-comprobante-erp-2" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Generar Comprobante</label>
+												<div class="relative">
+													<select
+														id="tr-generar-comprobante-erp-2"
+														value={generarComprobanteErp}
+														disabled={bloqueadaPorAprobacion}
+														onchange={(e) => (generarComprobanteErp = (e.target as HTMLSelectElement).value === 'si' ? 'si' : 'no')}
+														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+													>
+														<option value="no">No</option>
+														<option value="si">Sí</option>
+													</select>
+													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												</div>
+												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+											</div>
+										</div>
+									{/if}
 								{/if}
 							</div>
 						</div>

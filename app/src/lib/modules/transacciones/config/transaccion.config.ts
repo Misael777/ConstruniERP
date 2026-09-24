@@ -539,7 +539,13 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			// "Recibo" — a pedido explícito del usuario, para el "RECIBO DE PAGO" que este mismo ERP
 			// autogenera (ver reciboPagoEfectivo.ts) cuando se vuelve a adjuntar como comprobante — antes
 			// cualquiera de esos caía en "Otros" por no tener opción propia en el catálogo.
-			{ value: '9', label: 'Recibo' }
+			{ value: '9', label: 'Recibo' },
+			// Nota de Crédito/Débito — a pedido explícito del usuario: el submódulo Facturación
+			// (finanzas/facturacion) clasifica las transacciones de Ingreso en sus 4 pestañas
+			// (Factura/Boleta/Nota de Crédito/Nota de Débito) exactamente por este mismo campo, igual
+			// criterio que ya usa para Factura('1')/Boleta('2') — ver facturacion.service.ts.
+			{ value: '10', label: 'Nota de Crédito' },
+			{ value: '11', label: 'Nota de Débito' }
 		],
 		// En Interna, un comprobante externo (factura/boleta/etc.) no aplica — solo talonario/boucher
 		// internos. En Externa se mantiene el catálogo original — ver TransaccionModal.svelte, que

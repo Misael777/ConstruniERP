@@ -30,9 +30,34 @@ export interface FacturaDetalle {
 	orden: number;
 }
 
+export type TipoComprobante = 'factura' | 'boleta' | 'nota_credito' | 'nota_debito';
+
+/** transaccion.tipo_documento correspondiente a cada pestaña de "Gestión de Comprobantes" — mismo
+ * campo/catálogo que ya usa Transacciones (ver transaccion.config.ts): '1'=Factura, '2'=Boleta de
+ * venta, '10'=Nota de Crédito, '11'=Nota de Débito. Las 4 pestañas se clasifican EXACTAMENTE igual
+ * (a pedido explícito del usuario: "cada pestaña debe mostrar la relación de transacciones tipo
+ * ingreso según el tipo de documento") — ninguna es un caso especial. */
+export const TIPO_DOCUMENTO_POR_COMPROBANTE: Record<TipoComprobante, string> = {
+	factura: '1',
+	boleta: '2',
+	nota_credito: '10',
+	nota_debito: '11'
+};
+
+/** Inversa de TIPO_DOCUMENTO_POR_COMPROBANTE — para saber a qué pestaña de "Gestión de Comprobantes"
+ * pertenece una transacción, a partir de su tipo_documento (ver redirigirANuevoComprobanteErp en
+ * TransaccionModal.svelte). */
+export const COMPROBANTE_POR_TIPO_DOCUMENTO: Record<string, TipoComprobante> = {
+	'1': 'factura',
+	'2': 'boleta',
+	'10': 'nota_credito',
+	'11': 'nota_debito'
+};
+
 export interface Factura {
 	id_factura: number;
 	folio: string;
+	tipo_comprobante: TipoComprobante;
 	id_cliente: number;
 	cliente_nombre: string | null;
 	cliente_tipo_doc: string | null;
@@ -93,6 +118,7 @@ export interface ListParams {
 	sortDir?: 'asc' | 'desc';
 	columnFilters?: ColumnFilters;
 	soloEliminados?: boolean;
+	tipoComprobante?: TipoComprobante;
 }
 
 export interface ListResult<T> {
@@ -116,6 +142,7 @@ export async function getFacturas(client: SupabaseClient, params: ListParams = {
 	const to = from + pageSize - 1;
 
 	let query = client.from(TABLE_NAME).select(FACTURA_SELECT, { count: 'exact' }).order(sortField, { ascending: sortDir === 'asc' }).range(from, to);
+	if (params.tipoComprobante) query = query.eq('tipo_comprobante', params.tipoComprobante);
 
 	const search = params.search?.trim();
 	if (search) {
@@ -193,25 +220,53 @@ export interface TransaccionFacturable {
 	facturaFolio: string | null;
 	/** Imagen guardada en Drive de la factura EMITIDA que ya facturó esta transacción (null si no hay). */
 	facturaImagenUrl: string | null;
+	/** Solo poblado por getTransaccionesFacturables (cruza todos los clientes) — null en
+	 * getTransaccionesDelCliente, que ya está scoped a un cliente conocido de antemano. */
+	idCliente: number | null;
+	clienteNombre: string | null;
 }
 
 /** Transacciones de ingreso (externas, activas) cuyo ORIGEN es el centro de costo del cliente — es decir,
  * lo que ese cliente ya pagó. El vínculo cliente↔transacción es `id_centro_costo_origen` → `centro_costo.
- * id_cliente` (no hay FK real en `transaccion`, por eso se resuelve en dos pasos). */
-export async function getTransaccionesDelCliente(client: SupabaseClient, idCliente: number): Promise<TransaccionFacturable[]> {
+ * id_cliente` (no hay FK real en `transaccion`, por eso se resuelve en dos pasos). `tipoDocumento` (ver
+ * transaccion.config.ts: '1'=Factura, '2'=Boleta de venta) filtra a solo las de ESE tipo — dentro del
+ * modal de "Nueva Factura"/"Nueva Boleta" no tiene sentido ofrecer transacciones del otro tipo. */
+export async function getTransaccionesDelCliente(client: SupabaseClient, idCliente: number, tipoDocumento?: string): Promise<TransaccionFacturable[]> {
 	const { data: centro } = await client.from('centro_costo').select('id_centro_costo').eq('id_cliente', idCliente).maybeSingle();
 	if (!centro?.id_centro_costo) return [];
 
-	const { data, error } = await client
+	let query = client
 		.from('transaccion')
 		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura')
 		.eq('tipo', 'ingreso')
 		.eq('estado', 'activo')
 		.eq('tipo_alcance', 'externa')
-		.eq('id_centro_costo_origen', centro.id_centro_costo)
+		.eq('id_centro_costo_origen', centro.id_centro_costo);
+	// Las que aún no tienen tipo de documento también son facturables desde cualquier pestaña (a pedido
+	// explícito del usuario) — quien factura decide el tipo al emitir.
+	if (tipoDocumento) query = query.or(`tipo_documento.eq.${tipoDocumento},tipo_documento.is.null`);
+	const { data, error } = await query.order('fecha', { ascending: false });
+	if (error) throw error;
+	return armarTransaccionesFacturables(client, (data ?? []) as any[]);
+}
+
+/** Transacciones por id, sin filtrar por tipo de documento/estado — para reabrir un borrador: las líneas
+ * con que se guardó deben verse siempre, aunque esa transacción ya no cumpla el filtro de la lista normal
+ * (ej. se le cambió el tipo de documento después). */
+export async function getTransaccionesPorIds(client: SupabaseClient, ids: number[]): Promise<TransaccionFacturable[]> {
+	if (ids.length === 0) return [];
+	const { data, error } = await client
+		.from('transaccion')
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura')
+		.in('id_transaccion', ids)
 		.order('fecha', { ascending: false });
 	if (error) throw error;
-	const filas = (data ?? []) as any[];
+	return armarTransaccionesFacturables(client, (data ?? []) as any[]);
+}
+
+/** Arma TransaccionFacturable[] a partir de filas crudas de `transaccion` — helper compartido entre
+ * getTransaccionesDelCliente (un cliente) y getTransaccionesFacturables (todos los clientes). */
+async function armarTransaccionesFacturables(client: SupabaseClient, filas: any[]): Promise<TransaccionFacturable[]> {
 	if (filas.length === 0) return [];
 
 	const idsFactura = [...new Set(filas.map((t) => t.id_factura).filter((v) => v != null))];
@@ -237,8 +292,52 @@ export async function getTransaccionesDelCliente(client: SupabaseClient, idClien
 		factura_url: t.factura_url,
 		id_factura: t.id_factura ?? null,
 		facturaFolio: t.id_factura != null ? (facturasPorId.get(t.id_factura)?.folio ?? null) : null,
-		facturaImagenUrl: t.id_factura != null && facturasPorId.get(t.id_factura)?.estado === 'emitida' ? (facturasPorId.get(t.id_factura)?.imagen_url ?? null) : null
+		facturaImagenUrl: t.id_factura != null && facturasPorId.get(t.id_factura)?.estado === 'emitida' ? (facturasPorId.get(t.id_factura)?.imagen_url ?? null) : null,
+		idCliente: t.idCliente ?? null,
+		clienteNombre: t.clienteNombre ?? null
 	}));
+}
+
+/** Igual que getTransaccionesDelCliente pero cruzando TODOS los clientes — para las pestañas
+ * Factura/Boleta/Nota de Crédito/Nota de Débito de "Gestión de Comprobantes" (mismo patrón de
+ * centro_costo→cliente ya usado en getKpisFacturacion para "Por Facturar"). Cada fila trae
+ * `idCliente`/`clienteNombre` para poder precargar el cliente correcto al marcar el check de una
+ * transacción. Paginado server-side (mismo ListResult<T> que getFacturas) — a pedido explícito del
+ * usuario: con muchas transacciones esta lista no debe traerlas todas de una vez. */
+export async function getTransaccionesFacturables(
+	client: SupabaseClient,
+	/** null = las que NO tienen tipo de documento (pestaña "Sin tipo de documento"). */
+	tipoDocumento: string | null,
+	params: { page?: number; pageSize?: number } = {}
+): Promise<ListResult<TransaccionFacturable>> {
+	const page = Math.max(1, Math.floor(params.page ?? 1));
+	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
+	const from = (page - 1) * pageSize;
+	const to = from + pageSize - 1;
+
+	const { data: centros } = await client.from('centro_costo').select('id_centro_costo, id_cliente, cliente:id_cliente(nombre)').not('id_cliente', 'is', null);
+	const filasCentro = (centros ?? []) as any[];
+	if (filasCentro.length === 0) return { items: [], total: 0, page, pageSize, totalPages: 1 };
+	const clientePorCentro = new Map(filasCentro.map((c) => [c.id_centro_costo, { idCliente: c.id_cliente, clienteNombre: c.cliente?.nombre ?? null }]));
+
+	// Solo las que todavía NO tienen comprobante emitido — a pedido explícito del usuario: las ya emitidas
+	// se ven en "Documentos emitidos", no en esta lista de pendientes.
+	let query = client
+		.from('transaccion')
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_origen, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura', { count: 'exact' })
+		.eq('tipo', 'ingreso')
+		.eq('estado', 'activo')
+		.eq('tipo_alcance', 'externa')
+		.is('id_factura', null)
+		.in('id_centro_costo_origen', [...clientePorCentro.keys()]);
+	query = tipoDocumento === null ? query.is('tipo_documento', null) : query.eq('tipo_documento', tipoDocumento);
+	const { data, error, count } = await query.order('fecha', { ascending: false }).range(from, to);
+	if (error) throw error;
+
+	const filas = (data ?? []).map((t: any) => ({ ...t, ...(clientePorCentro.get(t.id_centro_costo_origen) ?? {}) }));
+	const items = await armarTransaccionesFacturables(client, filas);
+	const total = count ?? 0;
+	return { items, total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)) };
 }
 
 /** Soportes (documentos) de una transacción para el visor — mismo armado que openComprobantePreview en
@@ -313,7 +412,8 @@ export function calcularTotalesFactura(montosConIgv: number[], sujetaDetraccion:
 // ─────────────────────────────────────────────────────────────
 
 export interface LineaFactura {
-	id_transaccion: number;
+	/** null para la línea única de una Nota (no referencia ninguna transacción real). */
+	id_transaccion: number | null;
 	descripcion: string;
 	unidad: string;
 	cantidad: number;
@@ -358,6 +458,7 @@ export async function guardarBorradorFactura(
 	tipoCambio: number | null,
 	lineas: LineaFactura[],
 	usuarioRegistro: string | null,
+	tipoComprobante: TipoComprobante,
 	idFactura?: number
 ): Promise<ServiceResult<Factura>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
@@ -373,6 +474,7 @@ export async function guardarBorradorFactura(
 	const t = calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0));
 	const datos: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
+		tipo_comprobante: tipoComprobante,
 		sujeta_detraccion: sujeta,
 		id_cliente: cliente.id_cliente,
 		cliente_nombre: cliente.nombre,
@@ -427,10 +529,11 @@ function dataUrlABytes(dataUrl: string) {
 	return base64ToUint8Array(dataUrl.slice(dataUrl.indexOf(',') + 1));
 }
 
-/** Autorización final: sube la imagen (PNG) y el PDF a Google Drive, y RECIÉN entonces emite la factura
- * de forma atómica (fn_emitir_factura). Si la subida falla, la factura queda en borrador y las
- * transacciones sin tocar; si el RPC falla (ej. una transacción ya facturada), se borran los archivos
- * recién subidos (mejor esfuerzo). `pngDataUrl`/`pdfBase64` deben venir ya con el folio REAL impreso. */
+/** Autorización final: sube la imagen (PNG) y el PDF a Google Drive, y RECIÉN entonces emite el
+ * documento de forma atómica (fn_emitir_factura, genérico para los 4 tipos de comprobante). Si la
+ * subida falla, el documento queda en borrador y las transacciones sin tocar; si el RPC falla (ej. una
+ * transacción ya emitida por otra persona), se borran los archivos recién subidos (mejor esfuerzo).
+ * `pngDataUrl`/`pdfBase64` deben venir ya con el folio REAL impreso. */
 export async function autorizarYEmitirFactura(
 	client: SupabaseClient,
 	factura: Pick<Factura, 'id_factura' | 'folio'>,
@@ -441,9 +544,9 @@ export async function autorizarYEmitirFactura(
 	let pngUrl: string;
 	let pdfUrl: string;
 	try {
-		const png = new File([dataUrlABytes(pngDataUrl)], `Factura_${factura.folio}.png`, { type: 'image/png' });
-		const pdf = new File([base64ToUint8Array(pdfBase64)], `Factura_${factura.folio}.pdf`, { type: 'application/pdf' });
-		// type 'comprobante': reutiliza la carpeta de Drive de comprobantes (no exige una carpeta/env nueva).
+		const png = new File([dataUrlABytes(pngDataUrl)], `Comprobante_${factura.folio}.png`, { type: 'image/png' });
+		const pdf = new File([base64ToUint8Array(pdfBase64)], `Comprobante_${factura.folio}.pdf`, { type: 'application/pdf' });
+		// type 'comprobante': reutiliza la carpeta de Drive ya existente, sin exigir una carpeta/env nueva.
 		const [subidoPng, subidoPdf] = await Promise.all([
 			uploadProjectDocument(png, { type: 'comprobante', documentName: png.name }),
 			uploadProjectDocument(pdf, { type: 'comprobante', documentName: pdf.name })
@@ -451,24 +554,24 @@ export async function autorizarYEmitirFactura(
 		pngUrl = subidoPng.url;
 		pdfUrl = subidoPdf.url;
 	} catch (err: any) {
-		console.error('[facturacion.service] No se pudo subir la factura a Drive:', err);
-		return { success: false, message: `No se pudo guardar la imagen de la factura: ${err?.message ?? 'error inesperado'}. La factura sigue en borrador.` };
+		console.error('[facturacion.service] No se pudo subir el documento a Drive:', err);
+		return { success: false, message: `No se pudo guardar la imagen del documento: ${err?.message ?? 'error inesperado'}. Sigue en borrador.` };
 	}
 
 	const { data, error } = await client.rpc('fn_emitir_factura', { p_id_factura: factura.id_factura, p_imagen_url: pngUrl, p_usuario: usuario });
 	if (error) {
 		await Promise.allSettled([deleteProjectDocumentFile(pngUrl), deleteProjectDocumentFile(pdfUrl)]);
 		const hint = (error as any).hint as string | undefined;
-		return { success: false, message: (hint && MENSAJES_EMISION[hint]) || `No se pudo emitir la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+		return { success: false, message: (hint && MENSAJES_EMISION[hint]) || `No se pudo emitir el documento: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 	}
 
 	const { error: archivoError } = await client.from('factura_archivo').insert([
-		{ id_factura: factura.id_factura, tipo: 'png', url: pngUrl, nombre_archivo: `Factura_${factura.folio}.png`, usuario_registro: usuario },
-		{ id_factura: factura.id_factura, tipo: 'pdf', url: pdfUrl, nombre_archivo: `Factura_${factura.folio}.pdf`, usuario_registro: usuario }
+		{ id_factura: factura.id_factura, tipo: 'png', url: pngUrl, nombre_archivo: `Comprobante_${factura.folio}.png`, usuario_registro: usuario },
+		{ id_factura: factura.id_factura, tipo: 'pdf', url: pdfUrl, nombre_archivo: `Comprobante_${factura.folio}.pdf`, usuario_registro: usuario }
 	]);
-	if (archivoError) console.error('[facturacion.service] La factura se emitió pero no se registró en factura_archivo:', archivoError);
+	if (archivoError) console.error('[facturacion.service] El documento se emitió pero no se registró en factura_archivo:', archivoError);
 
-	return { success: true, message: 'Factura emitida y guardada correctamente', data: data as unknown as Factura };
+	return { success: true, message: 'Documento emitido y guardado correctamente', data: data as unknown as Factura };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -483,14 +586,17 @@ export interface KpisFacturacion {
 	facturasEmitidas: number;
 }
 
-export async function getKpisFacturacion(client: SupabaseClient): Promise<KpisFacturacion> {
+/** KPIs de cada una de las 4 pestañas — mismas tarjetas para las 4, filtradas al `tipoComprobante` de
+ * la pestaña activa (antes cruzaban TODA la tabla `factura`, sin distinguir tipo). */
+export async function getKpisComprobante(client: SupabaseClient, tipoComprobante: TipoComprobante): Promise<KpisFacturacion> {
+	const tipoDocumento = TIPO_DOCUMENTO_POR_COMPROBANTE[tipoComprobante];
 	const inicioMes = new Date();
 	inicioMes.setDate(1);
 	inicioMes.setHours(0, 0, 0, 0);
 	const inicioMesStr = inicioMes.toISOString().slice(0, 10);
 
 	const [{ data: emitidas }, { data: centrosCliente }] = await Promise.all([
-		client.from(TABLE_NAME).select('monto_total, monto_detraccion, fecha_emision').eq('activo', true).eq('estado', 'emitida'),
+		client.from(TABLE_NAME).select('monto_total, monto_detraccion, fecha_emision').eq('activo', true).eq('estado', 'emitida').eq('tipo_comprobante', tipoComprobante),
 		client.from('centro_costo').select('id_centro_costo').not('id_cliente', 'is', null)
 	]);
 
@@ -507,6 +613,7 @@ export async function getKpisFacturacion(client: SupabaseClient): Promise<KpisFa
 			.eq('tipo', 'ingreso')
 			.eq('estado', 'activo')
 			.eq('tipo_alcance', 'externa')
+			.eq('tipo_documento', tipoDocumento)
 			.is('id_factura', null)
 			.in('id_centro_costo_origen', idsCentros);
 		porFacturar = (pendientes ?? []).reduce((s: number, t: any) => s + Number(t.monto_total ?? 0), 0);

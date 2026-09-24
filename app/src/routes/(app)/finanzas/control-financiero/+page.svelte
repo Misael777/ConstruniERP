@@ -5,12 +5,13 @@
 	// Mismo patrón de tabs que finanzas/centros-de-costos/+page.svelte. Cada pestaña es su propio
 	// componente con su propio fetch/estado — no se precargan las 4 de una, solo la que está visible.
 	import DashboardTab from '$lib/modules/control-financiero/components/DashboardTab.svelte';
+	import IgvTab from '$lib/modules/control-financiero/components/IgvTab.svelte';
 	import ConsistenciaTab from '$lib/modules/control-financiero/components/ConsistenciaTab.svelte';
 	import ConciliacionTab from '$lib/modules/control-financiero/components/ConciliacionTab.svelte';
 	import IncidenciasTab from '$lib/modules/control-financiero/components/IncidenciasTab.svelte';
 	import { Shield } from '@lucide/svelte';
 
-	let activeTab = $state<'dashboard' | 'consistencia' | 'conciliacion' | 'incidencias'>('dashboard');
+	let activeTab = $state<'dashboard' | 'igv' | 'consistencia' | 'conciliacion' | 'incidencias'>('dashboard');
 </script>
 
 <svelte:head>
@@ -34,6 +35,15 @@
 		}`}
 	>
 		Dashboard
+	</button>
+	<button
+		type="button"
+		onclick={() => (activeTab = 'igv')}
+		class={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+			activeTab === 'igv' ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'
+		}`}
+	>
+		Control de IGV
 	</button>
 	<button
 		type="button"
@@ -66,6 +76,8 @@
 
 {#if activeTab === 'dashboard'}
 	<DashboardTab />
+{:else if activeTab === 'igv'}
+	<IgvTab />
 {:else if activeTab === 'consistencia'}
 	<ConsistenciaTab />
 {:else if activeTab === 'conciliacion'}
