@@ -186,6 +186,157 @@ export async function getComprobantesDelPeriodo(client: SupabaseClient, desde: s
 }
 
 // ─────────────────────────────────────────────────────────────
+// "Control Mensual" (popup) — hoja de cálculo replicada: 12 meses (Ene-Dic) de un año, con estado
+// REAL (datos ya registrados) o PROYECCIÓN (los meses restantes, con el PROMEDIO de los meses reales) y
+// arrastre de Saldo a Favor mes a mes (crédito fiscal cuando Compras > Ventas). A diferencia de
+// getResumenIgv/sumarVentasCompras (que usan la Tasa IGV fija del 18%), acá la Tasa IGV, la Tasa de pago
+// a cuenta (Renta) y la cantidad de "meses reales cargados" son parámetros editables por el usuario, tal
+// como en la hoja Excel de referencia — por eso se separan en dos pasos:
+//   1) getDatosCrudosPorMes: trae de Supabase Ventas (factura.valor_venta, ya sin IGV) y Compras
+//      (transaccion.monto_total, CON IGV) mes a mes — esto sí necesita ir a la base de datos.
+//   2) calcularControlMensual: 100% cálculo en memoria (aplica la Tasa IGV para separar la base
+//      imponible de Compras, promedia para proyectar, arrastra el saldo a favor) — se puede repetir sin
+//      volver a consultar Supabase cada vez que el usuario cambia una tasa en el popup.
+// ─────────────────────────────────────────────────────────────
+
+export interface DatosCrudosMes {
+	/** factura.valor_venta (ya excluye IGV, no depende de la Tasa IGV elegida). */
+	ventasBase: number;
+	/** transaccion.monto_total (INCLUYE IGV) — calcularControlMensual la separa según la Tasa IGV. */
+	comprasTotal: number;
+}
+
+function rangoMesNum(anio: number, mes1a12: number): { desde: string; hasta: string } {
+	const desde = `${anio}-${String(mes1a12).padStart(2, '0')}-01`;
+	const hasta = new Date(anio, mes1a12, 0).toISOString().slice(0, 10);
+	return { desde, hasta };
+}
+
+/** Trae Ventas/Compras crudas de los primeros `cantidadMeses` meses de `anio` (uno por uno, en paralelo) —
+ * son los "meses reales cargados" del popup. */
+export async function getDatosCrudosPorMes(client: SupabaseClient, anio: number, cantidadMeses: number): Promise<DatosCrudosMes[]> {
+	const meses = Math.min(12, Math.max(0, Math.floor(cantidadMeses)));
+	return Promise.all(
+		Array.from({ length: meses }, (_, i) => i + 1).map(async (m) => {
+			const { desde, hasta } = rangoMesNum(anio, m);
+			const [{ data: facturas, error: errF }, { data: transacciones, error: errT }] = await Promise.all([
+				client.from('factura').select('valor_venta').eq('estado', 'emitida').eq('activo', true).gte('fecha_emision', desde).lte('fecha_emision', hasta),
+				client.from('transaccion').select('monto_total').eq('tipo', 'egreso').eq('estado', 'activo').eq('tipo_alcance', 'externa').gte('fecha', desde).lte('fecha', hasta)
+			]);
+			if (errF) throw errF;
+			if (errT) throw errT;
+			return {
+				ventasBase: round2((facturas ?? []).reduce((s: number, f: any) => s + Number(f.valor_venta ?? 0), 0)),
+				comprasTotal: round2((transacciones ?? []).reduce((s: number, t: any) => s + Number(t.monto_total ?? 0), 0))
+			};
+		})
+	);
+}
+
+const NOMBRE_MES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SETIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+
+export interface FilaControlMensual {
+	mes: number; // 1-12
+	label: string; // 'ENERO', ...
+	estado: 'REAL' | 'PROYECCION';
+	ventas: number;
+	igvVentas: number;
+	compras: number;
+	igvCompras: number;
+	resultadoIgvMes: number;
+	saldoAFavorAnterior: number;
+	igvAPagar: number;
+	saldoAFavorSiguiente: number;
+	rentaMensual: number;
+	tributosDelMes: number;
+	etiquetaTributos: 'IGV por pagar' | 'Saldo a favor';
+}
+
+export interface ControlMensualResultado {
+	filas: FilaControlMensual[];
+	totales: {
+		ventas: number;
+		igvVentas: number;
+		compras: number;
+		igvCompras: number;
+		resultadoIgvMes: number;
+		igvAPagar: number;
+		saldoAFavorFinal: number;
+		rentaMensual: number;
+		tributosDelMes: number;
+	};
+}
+
+/** Cálculo puro (sin I/O) a partir de los datos crudos ya cargados — se puede volver a llamar cada vez
+ * que el usuario cambia Tasa IGV/Tasa de pago a cuenta en el popup, sin golpear la base de datos de
+ * nuevo. Los meses más allá de `crudos.length` se proyectan con el PROMEDIO de los meses reales (mismo
+ * criterio que la hoja Excel de referencia: promedia Ventas y Compras, no el IGV ya calculado). El
+ * Saldo a Favor se arrastra mes a mes: si el resultado del mes (IGV Ventas − IGV Compras) menos el saldo
+ * a favor anterior es positivo, eso es lo que corresponde pagar; si es negativo, se acumula como nuevo
+ * saldo a favor para el siguiente mes. */
+export function calcularControlMensual(crudos: DatosCrudosMes[], mesesRealesCargados: number, tasaIgv: number, tasaPagoACuenta: number): ControlMensualResultado {
+	// Acotado también por crudos.length: mientras getDatosCrudosPorMes todavía está en vuelo (recién
+	// abierto el popup, o el usuario acaba de subir "Meses reales cargados"), mesesRealesCargados ya
+	// cambió pero crudos aún no trae esa cantidad de meses — sin este tope se intentaba leer un mes
+	// "real" inexistente y explotaba. Mientras carga, esos meses se muestran como PROYECCIÓN (0) hasta
+	// que crudos llegue.
+	const meses = Math.min(12, Math.max(0, Math.floor(mesesRealesCargados)), crudos.length);
+	const basesReales = crudos.slice(0, meses).map((c) => ({ ventas: c.ventasBase, compras: round2(c.comprasTotal / (1 + tasaIgv)) }));
+	const promedio = (arr: number[]) => (arr.length === 0 ? 0 : round2(arr.reduce((s, v) => s + v, 0) / arr.length));
+	const ventasProm = promedio(basesReales.map((b) => b.ventas));
+	const comprasProm = promedio(basesReales.map((b) => b.compras));
+
+	const filas: FilaControlMensual[] = [];
+	let saldoAnterior = 0;
+	for (let m = 1; m <= 12; m++) {
+		const esReal = m <= meses;
+		const base = esReal ? basesReales[m - 1] : { ventas: ventasProm, compras: comprasProm };
+		const igvVentas = round2(base.ventas * tasaIgv);
+		const igvCompras = round2(base.compras * tasaIgv);
+		const resultadoIgvMes = round2(igvVentas - igvCompras);
+		const netoIgv = round2(resultadoIgvMes - saldoAnterior);
+		const igvAPagar = netoIgv > 0 ? netoIgv : 0;
+		const saldoSiguiente = netoIgv > 0 ? 0 : round2(-netoIgv);
+		const rentaMensual = round2(base.ventas * tasaPagoACuenta);
+		const tributosDelMes = round2(igvAPagar + rentaMensual);
+
+		filas.push({
+			mes: m,
+			label: NOMBRE_MES[m - 1],
+			estado: esReal ? 'REAL' : 'PROYECCION',
+			ventas: base.ventas,
+			igvVentas,
+			compras: base.compras,
+			igvCompras,
+			resultadoIgvMes,
+			saldoAFavorAnterior: saldoAnterior,
+			igvAPagar,
+			saldoAFavorSiguiente: saldoSiguiente,
+			rentaMensual,
+			tributosDelMes,
+			etiquetaTributos: igvAPagar > 0 ? 'IGV por pagar' : 'Saldo a favor'
+		});
+		saldoAnterior = saldoSiguiente;
+	}
+
+	const suma = (sel: (f: FilaControlMensual) => number) => round2(filas.reduce((s, f) => s + sel(f), 0));
+	return {
+		filas,
+		totales: {
+			ventas: suma((f) => f.ventas),
+			igvVentas: suma((f) => f.igvVentas),
+			compras: suma((f) => f.compras),
+			igvCompras: suma((f) => f.igvCompras),
+			resultadoIgvMes: suma((f) => f.resultadoIgvMes),
+			igvAPagar: suma((f) => f.igvAPagar),
+			saldoAFavorFinal: filas[11].saldoAFavorSiguiente,
+			rentaMensual: suma((f) => f.rentaMensual),
+			tributosDelMes: suma((f) => f.tributosDelMes)
+		}
+	};
+}
+
+// ─────────────────────────────────────────────────────────────
 // Objetivo mensual (IGV máximo a pagar) — único valor persistido, ver migración.
 // ─────────────────────────────────────────────────────────────
 

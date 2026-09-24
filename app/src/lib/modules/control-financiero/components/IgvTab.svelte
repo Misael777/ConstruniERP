@@ -13,6 +13,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
+	import ControlMensualModal from './ControlMensualModal.svelte';
 	import {
 		getResumenIgv,
 		getEvolucionIgv,
@@ -81,6 +82,9 @@
 	let resumen = $state<ResumenIgv | null>(null);
 	let evolucion = $state<PuntoEvolucionIgv[]>([]);
 	let objetivo = $state(5000);
+
+	// ── Control Mensual (popup, réplica de la hoja Excel de referencia) ──────
+	let controlMensualAbierto = $state(false);
 
 	// ── Configurar objetivo ──────────────────────────────────────────────────
 	let editandoObjetivo = $state(false);
@@ -324,6 +328,9 @@
 			{/each}
 		</select>
 	</div>
+	<button type="button" onclick={() => (controlMensualAbierto = true)} class="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50">
+		<Calendar size={15} /> Control Mensual
+	</button>
 	<button type="button" onclick={abrirEditarObjetivo} class="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-blue-200 bg-white text-blue-700 text-sm font-semibold hover:bg-blue-50">
 		<Settings size={15} /> Configurar objetivo
 	</button>
@@ -748,3 +755,5 @@
 		</div>
 	</div>
 {/if}
+
+<ControlMensualModal open={controlMensualAbierto} onClose={() => (controlMensualAbierto = false)} />
