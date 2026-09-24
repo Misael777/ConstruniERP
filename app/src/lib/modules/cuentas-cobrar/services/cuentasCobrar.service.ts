@@ -648,6 +648,51 @@ export async function createCobro(
  * 'cancelado' (ya no se hará), directo desde el modal de edición. Mismo comportamiento que
  * updatePago en cuentasPagar.service.ts.
  */
+/**
+ * Lápiz de una cuota (ver Documentacion/tests/lapiz-cuotas.md, H8-H10): valida el cambio de monto ANTES de
+ * guardarlo. Antes, subir una cuota por encima de lo que falta por cobrar dejaba la última cuota en negativo
+ * (-7000 en las pruebas), editar la única cuota pendiente descuadraba la cuenta, y se podía cambiar el monto de
+ * una cuota ya cobrada aunque su transacción de respaldo quedara con otro monto. null = válido.
+ */
+async function validarEdicionMontoCuota(
+	client: SupabaseClient,
+	idCuenta: number,
+	idCuota: number,
+	estadoAnterior: string,
+	montoActual: number,
+	nuevoMonto: number
+): Promise<string | null> {
+	if (Math.abs(nuevoMonto - montoActual) < 0.01) return null;
+	if (estadoAnterior === 'cobrado') {
+		return 'No se puede cambiar el monto de una cuota ya cobrada: su transacción de respaldo quedaría con otro monto. Corrige la transacción o registra un cobro adicional.';
+	}
+	if (estadoAnterior !== 'programado') return null;
+
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuenta).single();
+	const { data: filas } = await client.from(COBRO_TABLE).select('id_cobro, monto, estado_cobro, fecha_cobro').eq(PARENT_FK_COLUMN, idCuenta);
+	const fijos = (filas ?? []).filter((p: any) => p.estado_cobro === 'cobrado').reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const otros = (filas ?? [])
+		.filter((p: any) => p.estado_cobro === 'programado' && p.id_cobro !== idCuota)
+		.sort((a: any, b: any) => new Date(a.fecha_cobro).getTime() - new Date(b.fecha_cobro).getTime());
+	const resto = Number(cuenta?.monto ?? 0) - fijos;
+	const sumaOtros = otros.reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const diferencia = Number((resto - (nuevoMonto + sumaOtros)).toFixed(2));
+
+	if (otros.length === 0) {
+		if (Math.abs(diferencia) >= 0.01) {
+			return `Es la única cuota pendiente: su monto debe ser ${formatCurrency(resto)} (lo que falta por cobrar). Para repartir distinto, usa "Configurar Cuotas".`;
+		}
+		return null;
+	}
+	const ultima = otros[otros.length - 1];
+	const nuevaUltima = Number((Number(ultima.monto) + diferencia).toFixed(2));
+	if (nuevaUltima < 0.01) {
+		const maximo = Number((resto - sumaOtros + Number(ultima.monto) - 0.01).toFixed(2));
+		return `Ese monto es demasiado alto: la última cuota quedaría en ${formatCurrency(nuevaUltima)}. El máximo para esta cuota es ${formatCurrency(Math.max(maximo, 0))}.`;
+	}
+	return null;
+}
+
 export async function updateCobro(
 	client: SupabaseClient,
 	idCobro: number,
@@ -663,7 +708,7 @@ export async function updateCobro(
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro').eq(COBRO_PK, idCobro).single();
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, estado_cobro, monto').eq(COBRO_PK, idCobro).single();
 	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
 	const estadoAnterior = cobroActual.estado_cobro as 'programado' | 'cobrado' | 'cancelado';
 
@@ -687,6 +732,10 @@ export async function updateCobro(
 	// guardan normalmente en este mismo update.
 	const pasandoACobrado = estadoCobro === 'cobrado' && estadoAnterior !== 'cobrado';
 	const updateData: Record<string, unknown> = buildWritablePayload(COBRO_FIELDS, payload);
+	if (!pasandoACobrado && estadoCobro !== 'cancelado') {
+		const errorMonto = await validarEdicionMontoCuota(client, cobroActual.id_cuenta_cobrar, idCobro, estadoAnterior, Number(cobroActual.monto), Number(updateData.monto));
+		if (errorMonto) return { success: false, message: errorMonto };
+	}
 	if (estadoCobro && !pasandoACobrado) updateData.estado_cobro = estadoCobro;
 
 	const { data, error } = await client.from(COBRO_TABLE).update(updateData).eq(COBRO_PK, idCobro).select('*').single();

@@ -5,7 +5,7 @@
  * periódicas — solo fraccionamiento en cuotas.
  */
 import type { AgentTool } from '../registry.ts';
-import { computeEstadoCuentaCobrar, confirmarCobroCobrado, createCuentaCobrar, registrarCobroDesdeTransaccion, updateCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+import { computeEstadoCuentaCobrar, confirmarCobroCobrado, createCuentaCobrar, registrarCobroDesdeTransaccion, updateCobro, updateCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 import { NOMBRE_AGENTE, USUARIO_AGENTE, desempaquetar, exigirNumero, exigirObjeto, limiteDe, redondear } from './_util.ts';
 
 const CAMPOS_LISTADO =
@@ -196,4 +196,26 @@ const actualizarCuentaCobrar: AgentTool = {
 	}
 };
 
-export const cuentasCobrarTools: AgentTool[] = [listarCuentasCobrar, verCuentaCobrar, auditarCuentasCobrar, crearCuentaCobrar, registrarCobroCuentaCobrar, confirmarCobroCuota, refraccionarCuentaCobrar, actualizarCuentaCobrar];
+const editarCuotaCobro: AgentTool = {
+	name: 'editar_cuota_cobro',
+	escritura: true,
+	description:
+		'[SOLO DEV] El "lápiz" de una cuota de cobro: edita monto/fecha/medio/referencia de UNA fila de cobros (updateCobro). `cambios` se mezcla sobre los valores actuales; `estado_cobro` opcional ("programado"|"cancelado"). Si cambia el monto de una cuota programada, la ÚLTIMA cuota programada se reajusta para que el total siga cuadrando.',
+	inputSchema: {
+		type: 'object',
+		properties: { id_cobro: { type: 'number' }, cambios: { type: 'object' }, estado_cobro: { type: 'string', enum: ['programado', 'cancelado'] } },
+		required: ['id_cobro', 'cambios'],
+		additionalProperties: false
+	},
+	permiso: 'editar_cuentas_cobrar',
+	async handler(input, ctx) {
+		const id = exigirNumero(input.id_cobro, 'id_cobro');
+		const { data: fila, error } = await ctx.client.from('cobros').select('monto, fecha_cobro, medio_cobro, cuenta_banco, num_operacion, referencia').eq('id_cobro', id).maybeSingle();
+		if (error) throw new Error(error.message);
+		if (!fila) throw new Error(`No existe ningún cobro con id_cobro=${id}.`);
+		const payload = { ...Object.fromEntries(Object.entries(fila).map(([k, v]) => [k, v ?? ''])), ...exigirObjeto(input.cambios, 'cambios') };
+		return desempaquetar(await updateCobro(ctx.client, id, payload, input.estado_cobro as 'programado' | 'cancelado' | undefined, true));
+	}
+};
+
+export const cuentasCobrarTools: AgentTool[] = [listarCuentasCobrar, verCuentaCobrar, auditarCuentasCobrar, crearCuentaCobrar, registrarCobroCuentaCobrar, confirmarCobroCuota, refraccionarCuentaCobrar, actualizarCuentaCobrar, editarCuotaCobro];

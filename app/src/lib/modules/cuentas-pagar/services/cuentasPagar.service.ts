@@ -902,6 +902,51 @@ export async function createPago(
  * el usuario pueda pasar una cuota a 'pagado' (se pagó antes o después de lo programado) o
  * 'cancelado' (ya no se hará), directo desde el modal de edición.
  */
+/**
+ * Lápiz de una cuota (ver Documentacion/tests/lapiz-cuotas.md, H8-H10): valida el cambio de monto ANTES de
+ * guardarlo. Antes, subir una cuota por encima de lo que falta por pagar dejaba la última cuota en negativo
+ * (-7000 en las pruebas), editar la única cuota pendiente descuadraba la cuenta, y se podía cambiar el monto de
+ * una cuota ya pagada aunque su transacción de respaldo quedara con otro monto. null = válido.
+ */
+async function validarEdicionMontoCuota(
+	client: SupabaseClient,
+	idCuenta: number,
+	idCuota: number,
+	estadoAnterior: string,
+	montoActual: number,
+	nuevoMonto: number
+): Promise<string | null> {
+	if (Math.abs(nuevoMonto - montoActual) < 0.01) return null;
+	if (estadoAnterior === 'pagado') {
+		return 'No se puede cambiar el monto de una cuota ya pagada: su transacción de respaldo quedaría con otro monto. Corrige la transacción o registra un pago adicional.';
+	}
+	if (estadoAnterior !== 'programado') return null;
+
+	const { data: cuenta } = await client.from(TABLE_NAME).select('monto_comprometido').eq(PK_COLUMN, idCuenta).single();
+	const { data: filas } = await client.from(PAGO_TABLE).select('id_pago, monto, estado_pago, fecha_pago').eq(PARENT_FK_COLUMN, idCuenta);
+	const fijos = (filas ?? []).filter((p: any) => p.estado_pago === 'pagado').reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const otros = (filas ?? [])
+		.filter((p: any) => p.estado_pago === 'programado' && p.id_pago !== idCuota)
+		.sort((a: any, b: any) => new Date(a.fecha_pago).getTime() - new Date(b.fecha_pago).getTime());
+	const resto = Number(cuenta?.monto_comprometido ?? 0) - fijos;
+	const sumaOtros = otros.reduce((s: number, p: any) => s + Number(p.monto), 0);
+	const diferencia = Number((resto - (nuevoMonto + sumaOtros)).toFixed(2));
+
+	if (otros.length === 0) {
+		if (Math.abs(diferencia) >= 0.01) {
+			return `Es la única cuota pendiente: su monto debe ser ${formatCurrency(resto)} (lo que falta por pagar). Para repartir distinto, usa "Configurar Cuotas".`;
+		}
+		return null;
+	}
+	const ultima = otros[otros.length - 1];
+	const nuevaUltima = Number((Number(ultima.monto) + diferencia).toFixed(2));
+	if (nuevaUltima < 0.01) {
+		const maximo = Number((resto - sumaOtros + Number(ultima.monto) - 0.01).toFixed(2));
+		return `Ese monto es demasiado alto: la última cuota quedaría en ${formatCurrency(nuevaUltima)}. El máximo para esta cuota es ${formatCurrency(Math.max(maximo, 0))}.`;
+	}
+	return null;
+}
+
 export async function updatePago(
 	client: SupabaseClient,
 	idPago: number,
@@ -917,7 +962,7 @@ export async function updatePago(
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
 
-	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago').eq(PAGO_PK, idPago).single();
+	const { data: pagoActual } = await client.from(PAGO_TABLE).select('id_cuenta_pagar, estado_pago, monto').eq(PAGO_PK, idPago).single();
 	if (!pagoActual) return { success: false, message: 'Pago no encontrado' };
 	const estadoAnterior = pagoActual.estado_pago as 'programado' | 'pagado' | 'cancelado';
 
@@ -941,6 +986,10 @@ export async function updatePago(
 	// normalmente en este mismo update.
 	const pasandoAPagado = estadoPago === 'pagado' && estadoAnterior !== 'pagado';
 	const updateData: Record<string, unknown> = buildWritablePayload(PAGO_FIELDS, payload);
+	if (!pasandoAPagado && estadoPago !== 'cancelado') {
+		const errorMonto = await validarEdicionMontoCuota(client, pagoActual.id_cuenta_pagar, idPago, estadoAnterior, Number(pagoActual.monto), Number(updateData.monto));
+		if (errorMonto) return { success: false, message: errorMonto };
+	}
 	if (estadoPago && !pasandoAPagado) updateData.estado_pago = estadoPago;
 
 	const { data, error } = await client.from(PAGO_TABLE).update(updateData).eq(PAGO_PK, idPago).select('*').single();

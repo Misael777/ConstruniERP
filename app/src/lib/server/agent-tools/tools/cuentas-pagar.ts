@@ -5,7 +5,7 @@
  * negocio que la UI — nunca un INSERT crudo.
  */
 import type { AgentTool } from '../registry.ts';
-import { calcularFechasRecurrentes, computeEstadoCuentaPagar, createCuentaPagar, confirmarPagoPagado, createCuentasPagarRecurrentes, darDeBajaCuentaPagar, registrarPagoDesdeTransaccion, updateCuentaPagar } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+import { calcularFechasRecurrentes, computeEstadoCuentaPagar, createCuentaPagar, confirmarPagoPagado, createCuentasPagarRecurrentes, darDeBajaCuentaPagar, registrarPagoDesdeTransaccion, updateCuentaPagar, updatePago } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 import { NOMBRE_AGENTE, USUARIO_AGENTE, desempaquetar, exigirNumero, exigirObjeto, limiteDe, redondear } from './_util.ts';
 
 const CAMPOS_LISTADO =
@@ -223,4 +223,26 @@ const darDeBajaCuentaPagarTool: AgentTool = {
 	}
 };
 
-export const cuentasPagarTools: AgentTool[] = [listarCuentasPagar, verCuentaPagar, auditarCuentasPagar, crearCuentaPagar, crearSerieCuentasPagar, registrarPagoCuentaPagar, confirmarPagoCuota, refraccionarCuentaPagar, actualizarCuentaPagar, darDeBajaCuentaPagarTool];
+const editarCuotaPago: AgentTool = {
+	name: 'editar_cuota_pago',
+	escritura: true,
+	description:
+		'[SOLO DEV] El "lápiz" de una cuota: edita monto/fecha/medio/referencia de UNA fila de pagos (updatePago, mismas validaciones y reajustes que la UI). `cambios` se mezcla sobre los valores actuales (ej. {"monto":1500}); `estado_pago` opcional ("programado"|"cancelado" — pasar a "pagado" se hace con confirmar_pago_cuota). Si cambia el monto de una cuota programada, el sistema reajusta la ÚLTIMA cuota programada para que el total siga cuadrando.',
+	inputSchema: {
+		type: 'object',
+		properties: { id_pago: { type: 'number' }, cambios: { type: 'object' }, estado_pago: { type: 'string', enum: ['programado', 'cancelado'] } },
+		required: ['id_pago', 'cambios'],
+		additionalProperties: false
+	},
+	permiso: 'editar_cuentas_pagar',
+	async handler(input, ctx) {
+		const id = exigirNumero(input.id_pago, 'id_pago');
+		const { data: fila, error } = await ctx.client.from('pagos').select('monto, fecha_pago, medio_pago, num_operacion, referencia').eq('id_pago', id).maybeSingle();
+		if (error) throw new Error(error.message);
+		if (!fila) throw new Error(`No existe ningún pago con id_pago=${id}.`);
+		const payload = { ...Object.fromEntries(Object.entries(fila).map(([k, v]) => [k, v ?? ''])), ...exigirObjeto(input.cambios, 'cambios') };
+		return desempaquetar(await updatePago(ctx.client, id, payload, input.estado_pago as 'programado' | 'cancelado' | undefined, true));
+	}
+};
+
+export const cuentasPagarTools: AgentTool[] = [listarCuentasPagar, verCuentaPagar, auditarCuentasPagar, crearCuentaPagar, crearSerieCuentasPagar, registrarPagoCuentaPagar, confirmarPagoCuota, refraccionarCuentaPagar, actualizarCuentaPagar, darDeBajaCuentaPagarTool, editarCuotaPago];

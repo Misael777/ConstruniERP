@@ -17,6 +17,7 @@
 		"mcp:dev": "node --env-file=.env.dev --import ./scripts/register-lib-resolver.mjs --experimental-strip-types mcp-server/index.ts",
 		"test:negocio": "node scripts/tests-negocio-cuentas.mjs",
 		"test:negocio:fraccionamiento": "node scripts/tests-negocio-fraccionamiento.mjs",
+		"test:negocio:lapiz": "node scripts/tests-negocio-lapiz.mjs",
 		"seed:dev": "node --env-file=.env.dev --experimental-strip-types scripts/seed-dev.mjs"
 	},
 	"devDependencies": {

@@ -41,6 +41,7 @@ la fuente y reportan inconsistencias; se pueden llamar en cualquier momento, tam
 | Cuentas por Pagar | [cuentas-pagar.md](cuentas-pagar.md) | 27 casos ejecutados (2026-09-25) |
 | Cuentas por Cobrar | [cuentas-cobrar.md](cuentas-cobrar.md) | 13 casos ejecutados (2026-09-25) |
 | Cambio de periodicidad a mitad de plan (Pagar y Cobrar) | [fraccionamiento.md](fraccionamiento.md) | 22 casos ejecutados (2026-09-25) — `npm run test:negocio:fraccionamiento` |
+| El lápiz de las cuotas y montos desiguales | [lapiz-cuotas.md](lapiz-cuotas.md) | 12 casos ejecutados (2026-09-25) — `npm run test:negocio:lapiz` |
 | Transacciones, Centro de Costos, Cuentas Bancarias, Ventas, Facturación, Control Financiero | — | pendientes |
 
 ## Hallazgos (resumen)
@@ -56,6 +57,7 @@ Verificados en Dev. Detalle e impacto en cada documento.
 | H5 | El saldo guardado de una cuenta por cobrar se desactualizaba cuando entraba un ingreso ajeno | Resuelto por H6 |
 | H6 | El saldo de Cobrar salía de todos los ingresos al centro (doble conteo). Decisión del cliente: que salga de los cobros propios, como Pagar | Corregido en Dev con backfill; **pendiente en Producción** |
 | H7 | Pagar una cuota de 1000 con una transacción de 600 dejaba la cuota en 1000. Ahora la parte (600 pagado + 400 programado); una transacción mayor se rechaza | Corregido en Dev; **pendiente en Producción** |
+| H8-H10 | Lápiz de cuotas: una cuota podía quedar en negativo, la única cuota pendiente descuadraba la cuenta y se podía cambiar el monto de una cuota ya pagada | Corregido en Dev (solo código de la app); **pendiente en Producción** |
 
 **Pendiente en Producción, en este orden:** migraciones `20260924170000`, `20260925000000` y
 `20260925000100`, y publicar la versión de la app que trae el código (los cambios de servicios y modales van
