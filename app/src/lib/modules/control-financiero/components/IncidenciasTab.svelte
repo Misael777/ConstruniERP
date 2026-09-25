@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
@@ -220,19 +221,18 @@
 		<p class="text-sm text-slate-500 mt-1">Hallazgos de Consistencia/Conciliación (o dados de alta a mano) y su ciclo de investigación y resolución.</p>
 	</div>
 	<div class="flex items-center gap-2">
-		<select bind:value={filtroEstado} onchange={cargar} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-			<option value="">Todos los estados (sin cerradas)</option>
-			{#each ESTADOS as e}
-				<option value={e}>{ESTADO_LABELS[e]}</option>
-			{/each}
-		</select>
-		<select bind:value={filtroSeveridad} onchange={cargar} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-			<option value="">Toda severidad</option>
-			<option value="baja">Baja</option>
-			<option value="media">Media</option>
-			<option value="alta">Alta</option>
-			<option value="critica">Crítica</option>
-		</select>
+		<SelectConSaldo
+			value={filtroEstado}
+			options={[{ value: '', label: 'Todos los estados (sin cerradas)' }, ...ESTADOS.map((e) => ({ value: String(e), label: `${ESTADO_LABELS[e]}` }))]}
+			placeholder="Todos los estados (sin cerradas)"
+			onchange={(v) => { filtroEstado = v; cargar(); }}
+		/>
+		<SelectConSaldo
+			value={filtroSeveridad}
+			options={[{ value: '', label: 'Toda severidad' }, { value: 'baja', label: 'Baja' }, { value: 'media', label: 'Media' }, { value: 'alta', label: 'Alta' }, { value: 'critica', label: 'Crítica' }]}
+			placeholder="Toda severidad"
+			onchange={(v) => { filtroSeveridad = v; cargar(); }}
+		/>
 		<button type="button" onclick={cargar} class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 			<RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
 		</button>

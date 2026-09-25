@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
@@ -433,12 +434,12 @@
 				</div>
 				<ChevronDown size={16} class="shrink-0 text-slate-400" />
 			</div>
-			<select bind:value={numeroCuentaBanco} aria-label="Filtrar por cuenta bancaria" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
-				<option value="">Todas las cuentas</option>
-				{#each cuentaBancoOptions as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				value={numeroCuentaBanco}
+				options={[{ value: '', label: 'Todas las cuentas' }, ...cuentaBancoOptions.map((opt) => ({ value: String(opt.value), label: opt.label }))]}
+				placeholder="Todas las cuentas"
+				onchange={(v) => (numeroCuentaBanco = v)}
+			/>
 		</div>
 	</div>
 
@@ -553,20 +554,23 @@
 				<!-- Reemplaza al filtro "Cuenta Bancaria" (redundante con el selector prominente del
 				     encabezado, que ya controla numeroCuentaBanco) — a pedido explícito del usuario. -->
 				<label for="mc-documento-pendiente" class="block text-xs font-medium text-slate-500 mb-1">Documento pendiente</label>
-				<select id="mc-documento-pendiente" bind:value={documentoPendienteFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					<option value="si">Sí</option>
-					<option value="no">No</option>
-				</select>
+				<SelectConSaldo
+					id="mc-documento-pendiente"
+					value={documentoPendienteFiltro}
+					options={[{ value: '', label: 'Todos' }, { value: 'si', label: 'Sí' }, { value: 'no', label: 'No' }]}
+					placeholder="Todos"
+					onchange={(v) => (documentoPendienteFiltro = v as typeof documentoPendienteFiltro)}
+				/>
 			</div>
 			<div>
 				<label for="mc-tipo" class="block text-xs font-medium text-slate-500 mb-1">Tipo</label>
-				<select id="mc-tipo" bind:value={tipoFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					<option value="ingreso">Ingreso</option>
-					<option value="egreso">Egreso</option>
-					<option value="financiamiento">Financiamiento</option>
-				</select>
+				<SelectConSaldo
+					id="mc-tipo"
+					value={tipoFiltro}
+					options={[{ value: '', label: 'Todos' }, { value: 'ingreso', label: 'Ingreso' }, { value: 'egreso', label: 'Egreso' }, { value: 'financiamiento', label: 'Financiamiento' }]}
+					placeholder="Todos"
+					onchange={(v) => (tipoFiltro = v as typeof tipoFiltro)}
+				/>
 			</div>
 			<div>
 				<label for="mc-desde" class="block text-xs font-medium text-slate-500 mb-1">Fecha inicio</label>
@@ -578,20 +582,23 @@
 			</div>
 			<div>
 				<label for="mc-centro-costo" class="block text-xs font-medium text-slate-500 mb-1">Proyecto/Servicio</label>
-				<select id="mc-centro-costo" bind:value={idCentroCosto} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					{#each centroCostoOptions as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
-				</select>
+				<SelectConSaldo
+					id="mc-centro-costo"
+					value={idCentroCosto}
+					options={[{ value: '', label: 'Todos' }, ...centroCostoOptions.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+					placeholder="Todos"
+					onchange={(v) => (idCentroCosto = v)}
+				/>
 			</div>
 			<div>
 				<label for="mc-estado" class="block text-xs font-medium text-slate-500 mb-1">Estado de aprobación</label>
-				<select id="mc-estado" bind:value={estadoFiltro} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-					<option value="">Todos</option>
-					<option value="aprobado">Aprobado</option>
-					<option value="pendiente">Pendiente</option>
-				</select>
+				<SelectConSaldo
+					id="mc-estado"
+					value={estadoFiltro}
+					options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'pendiente', label: 'Pendiente' }]}
+					placeholder="Todos"
+					onchange={(v) => (estadoFiltro = v as typeof estadoFiltro)}
+				/>
 			</div>
 		</div>
 		<div class="flex flex-wrap items-end gap-3 mt-3">

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Panel Developer — bandeja completa de tickets (developer/admin, permiso 'ver_soporte_developer'),
 	// a pedido explícito del usuario: "para mí y el administrador... verificar que falta y ver que se
 	// ha avanzado o corregido, y ver el progreso, aprobación o rechazo de cada ticket". Solo Admin
@@ -196,18 +197,16 @@
 
 <div class="mb-4 flex items-center gap-2">
 	<label for="filtro-estado" class="text-sm text-slate-500">Filtrar por estado:</label>
-	<select
+	<SelectConSaldo
 		id="filtro-estado"
 		value={filtroEstado}
-		onchange={(e) => {
-			filtroEstado = (e.target as HTMLSelectElement).value as EstadoTicket | '';
+		options={[{ value: '', label: 'Todos' }, ...Object.entries(ETIQUETA_ESTADO).map(([value, label]) => ({ value: String(value), label: `${label}` }))]}
+		placeholder="Todos"
+		onchange={(v) => {
+			filtroEstado = v as EstadoTicket | '';
 			fetchList();
 		}}
-		class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-	>
-		<option value="">Todos</option>
-		{#each Object.entries(ETIQUETA_ESTADO) as [value, label]}<option {value}>{label}</option>{/each}
-	</select>
+	/>
 </div>
 
 {#snippet filaTicket(t: Ticket)}

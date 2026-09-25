@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
@@ -126,16 +127,12 @@
 					{#if mode === 'edit'}
 						<div>
 							<label for="pg-estado_pago" class="block text-sm font-medium text-[#0f3b5e] mb-1">Estado</label>
-							<select
+							<SelectConSaldo
 								id="pg-estado_pago"
 								value={estadoPago}
-								onchange={(e) => (estadoPago = (e.target as HTMLSelectElement).value as typeof estadoPago)}
-								class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-							>
-								{#each ESTADO_OPCIONES as opt}
-									<option value={opt.value}>{opt.label}</option>
-								{/each}
-							</select>
+								options={[...ESTADO_OPCIONES.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+								onchange={(v) => ((estadoPago = v as typeof estadoPago))}
+							/>
 							<p class="mt-1 text-xs text-slate-400">
 								Pásala a "Pagado" si se pagó antes o después de lo programado, o a "Cancelado" si ya no se hará.
 								{#if estadoPago === 'pagado' && pago?.estado_pago !== 'pagado'}
@@ -156,18 +153,13 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 							{#if field.options}
-								<select
+								<SelectConSaldo
 									id={`pg-${field.key}`}
-									name={field.key}
 									value={formValues[field.key]}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each field.options as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+									options={[...field.options.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+									placeholder="Selecciona una opción"
+									onchange={(v) => (handleInput(field.key, v))}
+								/>
 							{:else}
 								<input
 									id={`pg-${field.key}`}

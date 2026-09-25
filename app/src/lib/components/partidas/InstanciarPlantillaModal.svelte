@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Checklist de partidas al instanciar una Plantilla en el presupuesto de un proyecto — a pedido
 	// explícito del usuario: antes se insertaban TODAS las filas de la plantilla sin excepción
 	// (instanciarPlantilla, ahora reemplazada por instanciarPlantillaSeleccion). Compartido por los dos
@@ -136,16 +137,13 @@
 				{#if !idProyectoInicial}
 					<div>
 						<label for="ipm-proyecto" class="block text-sm font-medium text-[#0f3b5e] mb-1"> Proyecto destino * </label>
-						<select
+						<SelectConSaldo
 							id="ipm-proyecto"
-							bind:value={idProyectoSeleccionado}
-							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-						>
-							<option value={null}>— Elige un proyecto —</option>
-							{#each $proyectosList as p}
-								<option value={p.id_proyecto}>{p.nombre_proyecto}</option>
-							{/each}
-						</select>
+							value={idProyectoSeleccionado === null ? '' : String(idProyectoSeleccionado)}
+							options={[{ value: '', label: '— Elige un proyecto —' }, ...$proyectosList.map((p) => ({ value: String(p.id_proyecto), label: p.nombre_proyecto }))]}
+							placeholder="— Elige un proyecto —"
+							onchange={(v) => (idProyectoSeleccionado = v === '' ? null : Number(v))}
+						/>
 					</div>
 				{/if}
 

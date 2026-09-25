@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { supabase } from '$lib/supabaseClient';
@@ -832,21 +833,21 @@
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
 							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Rol de Acceso</label>
-							<select bind:value={nuevoRolId} onchange={onInputChange} class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm">
-								<option value={null}>Sin Rol / Acceso Restringido</option>
-								{#each roles as rol}
-									<option value={rol.id}>{rol.nombre}</option>
-								{/each}
-							</select>
+							<SelectConSaldo
+								value={nuevoRolId === null ? '' : String(nuevoRolId)}
+								options={[{ value: '', label: 'Sin Rol / Acceso Restringido' }, ...roles.map((rol) => ({ value: String(rol.id), label: rol.nombre }))]}
+								placeholder="Sin Rol / Acceso Restringido"
+								onchange={(v) => { nuevoRolId = v === '' ? null : Number(v); onInputChange(); }}
+							/>
 						</div>
 						<div>
 							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Área / Departamento</label>
-							<select bind:value={nuevoAreaId} onchange={onInputChange} class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm">
-								<option value={null}>Sin Área Asignada</option>
-								{#each areas as area}
-									<option value={area.id}>{area.nombre}</option>
-								{/each}
-							</select>
+							<SelectConSaldo
+								value={nuevoAreaId === null ? '' : String(nuevoAreaId)}
+								options={[{ value: '', label: 'Sin Área Asignada' }, ...areas.map((area) => ({ value: String(area.id), label: area.nombre }))]}
+								placeholder="Sin Área Asignada"
+								onchange={(v) => { nuevoAreaId = v === '' ? null : Number(v); onInputChange(); }}
+							/>
 						</div>
 					</div>
 				</div>

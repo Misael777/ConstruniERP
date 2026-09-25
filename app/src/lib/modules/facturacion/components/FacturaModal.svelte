@@ -539,18 +539,14 @@
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 							{#if field.tipo === 'select' || field.options}
-								<select
+								<SelectConSaldo
 									id={`fac-${field.key}`}
 									value={formValues[field.key]}
+									options={(field.options ?? [])}
+									placeholder="Selecciona una opción"
 									disabled={isDisabled(field) || soloLectura}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each (field.options ?? []) as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+									onchange={(v) => handleInput(field.key, v)}
+								/>
 							{:else}
 								<input
 									id={`fac-${field.key}`}

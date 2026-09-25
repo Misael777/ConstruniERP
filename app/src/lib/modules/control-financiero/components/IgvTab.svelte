@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// "Control de IGV" — pestaña de Control Financiero, a pedido explícito del usuario (imagen de
 	// referencia): estima el IGV a pagar del mes cruzando Ventas (facturas emitidas, IGV real) contra
 	// Compras (transacciones de egreso, crédito fiscal derivado — ver igv.service.ts) contra un
@@ -318,15 +319,11 @@
 <div class="flex flex-wrap items-center justify-end gap-2 mb-4">
 	<div class="relative">
 		<Calendar size={15} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-		<select
+		<SelectConSaldo
 			value={mesSeleccionadoKey}
-			onchange={(e) => cambiarMes((e.target as HTMLSelectElement).value)}
-			class="pl-9 pr-8 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
-		>
-			{#each MESES_OPCIONES as m}
-				<option value={claveMes(m)}>{etiquetaMes(m)}</option>
-			{/each}
-		</select>
+			options={[...MESES_OPCIONES.map((m) => ({ value: String(claveMes(m)), label: `${etiquetaMes(m)}` }))]}
+			onchange={(v) => (cambiarMes(v))}
+		/>
 	</div>
 	<button type="button" onclick={() => (controlMensualAbierto = true)} class="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50">
 		<Calendar size={15} /> Control Mensual

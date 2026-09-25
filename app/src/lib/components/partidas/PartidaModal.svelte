@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
     import { createEventDispatcher } from 'svelte';
     import { X } from '@lucide/svelte';
     import { createPartida, updatePartida, deletePartida, partidasTree, type PartidaNode } from '$lib/stores/partidas';
@@ -209,19 +210,12 @@
                     <label class="block text-sm font-medium text-[#0f3b5e] mb-1">
                         Partida Padre (Opcional)
                     </label>
-                    <select 
-                        bind:value={formData.id_partida_padre}
-                        class="w-full px-3 py-2 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    >
-                        <option value={null}>Sin partida padre</option>
-                        {#each allPartidas as p}
-                            {#if !partida || p.id_partida !== partida.id_partida}
-                                <option value={p.id_partida}>
-                                    {"&nbsp;".repeat(p.nivel * 2)}{p.codigo} - {p.descripcion}
-                                </option>
-                            {/if}
-                        {/each}
-                    </select>
+                    <SelectConSaldo
+                    	value={formData.id_partida_padre == null ? '' : String(formData.id_partida_padre)}
+                    	options={[{ value: '', label: 'Sin partida padre' }, ...allPartidas.filter((p) => !partida || p.id_partida !== partida.id_partida).map((p) => ({ value: String(p.id_partida), label: `${'\u00a0'.repeat(p.nivel * 2)}${p.codigo} - ${p.descripcion}` }))]}
+                    	placeholder="Sin partida padre"
+                    	onchange={(v) => (formData.id_partida_padre = v === '' ? null : Number(v))}
+                    />
                 </div>
             </div>
             

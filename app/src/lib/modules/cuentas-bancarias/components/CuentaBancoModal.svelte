@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
@@ -134,19 +135,13 @@
 							</label>
 
 							{#if field.tipo === 'select' || field.options}
-								<select
+								<SelectConSaldo
 									id={`cb-${field.key}`}
-									name={field.key}
 									value={formValues[field.key]}
-									{disabled}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each field.options ?? [] as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+									options={[...(field.options ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+									placeholder="Selecciona una opción"
+									onchange={(v) => (handleInput(field.key, v))}
+								/>
 							{:else if field.key === 'saldo_inicial'}
 								<!-- A pedido explícito del usuario: prefijo con el símbolo real de la moneda
 								     elegida en "Tipo de Moneda" (Dólares '$', Soles 'S/.') — antes este campo se

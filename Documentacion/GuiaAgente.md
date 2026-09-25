@@ -267,15 +267,13 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 |---|---|---|---|
 | `20260924144941_baseline` | Estructura completa | sí | sí (marcada aplicada) |
 | `20260924160000_fn_crear_transaccion_columnas_faltantes` | La función descartaba `categoria`, `tipo_moneda`, `tipo_cambio`, `monto_convertido`, documento pendiente | sí | sí |
-| `20260924170000_cuentas_pagar_id_cuenta_pagar_padre` | Columna que encadena series por Frecuencia | sí | **pendiente** |
-| `20260925000000_cuentas_moneda_cuota_parcial_cobros_propios` | Pagar en USD; cuota parcial se parte; Cobrar desde cobros propios; TC obligatorio en dólares | sí | **pendiente** |
-| `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | **pendiente** |
-| `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | **pendiente** |
-| `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | **pendiente** |
+| `20260924170000_cuentas_pagar_id_cuenta_pagar_padre` | Columna que encadena series por Frecuencia | sí | sí |
+| `20260925000000_cuentas_moneda_cuota_parcial_cobros_propios` | Pagar en USD; cuota parcial se parte; Cobrar desde cobros propios; TC obligatorio en dólares | sí | sí |
+| `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | sí |
+| `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
+| `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
 
-Las cinco pendientes deben aplicarse **en ese orden** y **junto con la publicación de la app** que trae el código
-acoplado (servicios y modales). El backfill conserva los saldos de las 6 cuentas por cobrar reales de Producción
-(cada una tenía 0 cobros propios; su saldo salía de ingresos sueltos a su centro).
+Todas las migraciones están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
 
 ### 4.5 Datos de prueba de Dev
 - `cd app && npm run seed:dev` (idempotente; **aborta si la URL no es Dev**). Crea: 2 empleados, 2 clientes, 2
@@ -419,6 +417,16 @@ está por decidir si el adelanto de cierre de venta debe crear también un cobro
 7. **Si hay ticket asociado**, ciérralo según §5.4 con un comentario veraz.
 
 ---
+
+## 7b. Convención de interfaz: desplegables con buscador
+
+Por pedido explícito de la cliente (ticket #29), **toda lista desplegable de la app debe permitir buscar**. No uses
+`<select>` nativo: usa `$lib/shared/components/SelectConSaldo.svelte` (props `value`, `options` `{value,label,grupo?,saldo?}`,
+`placeholder`, `disabled`, `hasError`, `onchange(value: string)`; `value` y las opciones son siempre **texto** — para
+ids numéricos convierte con `String()`/`Number()`). Ya no queda ningún `<select>` funcional en la app; la única
+excepción es el selector de "filas por página" de `VentasTable.svelte`, que hoy no está conectado a nada. El
+panel del combo usa `z-[200]`, por encima de los modales (máx. `z-[120]`). Limitación conocida: no muestra colores
+por opción (por ejemplo, el de Prioridad en Cuentas por Pagar/Cobrar).
 
 ## 8. Glosario rápido
 

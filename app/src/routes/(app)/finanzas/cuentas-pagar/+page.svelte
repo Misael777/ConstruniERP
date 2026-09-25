@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
@@ -882,15 +883,11 @@
 			{/if}
 		</div>
 
-		<select
+		<SelectConSaldo
 			value={sortBy}
-			onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
-			class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-		>
-			{#each tableFields.filter((f) => f.sortable) as field}
-				<option value={field.key}>Ordenar: {field.label}</option>
-			{/each}
-		</select>
+			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
+			onchange={(v) => (toggleSort(v, true))}
+		/>
 		<button
 			type="button"
 			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount } from 'svelte';
 	import {
 		Chart as ChartJS,
@@ -550,21 +551,23 @@
 	<div class="flex flex-wrap items-end gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
 		<div class="flex flex-col gap-1">
 			<label for="ff-tipo" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tipo de Centro de Costo</label>
-			<select id="ff-tipo" bind:value={filtroTipo} onchange={onCambioTipo} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[170px]">
-				<option value="">Todos</option>
-				{#each TIPO_CENTRO_COSTO_OPTIONS as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				id="ff-tipo"
+				value={filtroTipo}
+				options={[{ value: '', label: 'Todos' }, ...TIPO_CENTRO_COSTO_OPTIONS.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+				placeholder="Todos"
+				onchange={(v) => { filtroTipo = v; onCambioTipo(); }}
+			/>
 		</div>
 		<div class="flex flex-col gap-1">
 			<label for="ff-centro" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Centro de Costo</label>
-			<select id="ff-centro" bind:value={filtroCentro} onchange={reloadRendimiento} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 min-w-[260px]">
-				<option value="">Todos los centros de costo</option>
-				{#each centrosVisibles as opt}
-					<option value={opt.value}>{opt.label}</option>
-				{/each}
-			</select>
+			<SelectConSaldo
+				id="ff-centro"
+				value={filtroCentro}
+				options={[{ value: '', label: 'Todos los centros de costo' }, ...centrosVisibles.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+				placeholder="Todos los centros de costo"
+				onchange={(v) => { filtroCentro = v; reloadRendimiento(); }}
+			/>
 		</div>
 		<span class="text-xs text-slate-400 ml-auto">{items.length} centro{items.length === 1 ? '' : 's'} de costo en el filtro actual</span>
 	</div>

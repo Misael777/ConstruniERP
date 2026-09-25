@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
     import { createEventDispatcher } from 'svelte';
     import { X } from '@lucide/svelte';
     import { createPlantilla, updatePlantilla, deletePlantilla, type Plantilla } from '$lib/stores/partidas';
@@ -103,17 +104,14 @@
 
                 <div>
                     <label for="pm-tipo" class="block text-sm font-medium text-[#0f3b5e] mb-1">Tipo</label>
-                    <select
-                        id="pm-tipo"
-                        bind:value={tipo}
-                        class="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        disabled={isLoading}
-                    >
-                        <option value="">— Sin tipo —</option>
-                        {#each TIPOS as t}
-                            <option value={t}>{t}</option>
-                        {/each}
-                    </select>
+                    <SelectConSaldo
+                    	id="pm-tipo"
+                    	value={tipo}
+                    	options={[{ value: '', label: '— Sin tipo —' }, ...TIPOS.map((t) => ({ value: String(t), label: `${t}` }))]}
+                    	placeholder="— Sin tipo —"
+                    	disabled={isLoading}
+                    	onchange={(v) => (tipo = v)}
+                    />
                 </div>
 
                 <div>

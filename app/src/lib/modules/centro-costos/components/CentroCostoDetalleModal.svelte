@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { X, Link, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { getOptionLabel, formatCurrency, FIELDS_CONFIG } from '$lib/modules/centro-costos/config/centroCostos.config';
@@ -160,11 +161,12 @@
 								<Link size={16} class="shrink-0" />
 								<span>Compartido por {proyectosConsultoria.length} proyecto{proyectosConsultoria.length === 1 ? '' : 's'} de Consultoría:</span>
 							</div>
-							<select class="w-full px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 outline-none focus:ring-2 focus:ring-blue-500">
-								{#each proyectosConsultoria as p (p.id_proyecto)}
-									<option value={p.id_proyecto}>{p.codigo}</option>
-								{/each}
-							</select>
+							<SelectConSaldo
+								value=""
+								options={proyectosConsultoria.map((p) => ({ value: String(p.id_proyecto), label: p.codigo }))}
+								placeholder={`Proyectos de consultoría (${proyectosConsultoria.length})`}
+								onchange={() => {}}
+							/>
 						{:else}
 							<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
 								Centro compartido de Consultoría — todavía no tiene ninguna venta cerrada vinculada.

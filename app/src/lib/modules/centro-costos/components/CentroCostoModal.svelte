@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, Link } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
@@ -171,22 +172,13 @@
 							</label>
 
 							{#if field.tipo === 'select'}
-								<select
+								<SelectConSaldo
 									id={`ccf-${field.key}`}
-									name={field.key}
 									value={formValues[field.key]}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
-										fieldErrors[field.key]
-											? 'border-red-400 focus:ring-red-200'
-											: 'border-slate-300 focus:ring-blue-200'
-									}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each field.formOptions ?? field.options ?? [] as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+									options={[...(field.formOptions ?? field.options ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+									placeholder="Selecciona una opción"
+									onchange={(v) => (handleInput(field.key, v))}
+								/>
 							{:else}
 								<input
 									id={`ccf-${field.key}`}

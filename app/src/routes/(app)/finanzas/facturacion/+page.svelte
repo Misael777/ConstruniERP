@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Gestión de Comprobantes (Finanzas) — 4 pestañas (Factura / Boleta / Nota de Crédito / Nota de
 	// Débito), TODAS con el mismo mecanismo (a pedido explícito del usuario: "cada pestaña debe mostrar
 	// la relación de transacciones tipo ingreso según el tipo de documento"): se clasifican las
@@ -538,11 +539,11 @@
 					{#if esSinTipo}
 						<label class="flex items-center gap-1.5 text-slate-600 font-medium">
 							Emitir como
-							<select bind:value={emitirComo} class="rounded-lg border border-slate-300 px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
-								{#each TABS.filter((t) => t.value !== 'sin_tipo') as t}
-									<option value={t.value}>{t.label}</option>
-								{/each}
-							</select>
+							<SelectConSaldo
+								value={emitirComo}
+								options={[...TABS.filter((t) => t.value !== 'sin_tipo').map((t) => ({ value: String(t.value), label: `${t.label}` }))]}
+								onchange={(v) => (emitirComo = v as typeof emitirComo)}
+							/>
 						</label>
 					{/if}
 					<span class="flex items-center gap-1.5"><span class="inline-block shrink-0 w-4 h-4 rounded border-2" style={`background:${COLOR_SIN_FACTURA.bg};border-color:${COLOR_SIN_FACTURA.border}`}></span>Sin comprobante (seleccionable)</span>
@@ -631,11 +632,11 @@
 				</button>
 			{/if}
 		</div>
-		<select value={sortBy} onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)} class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200">
-			{#each tableFields.filter((f) => f.sortable) as field}
-				<option value={field.key}>Ordenar: {field.label}</option>
-			{/each}
-		</select>
+		<SelectConSaldo
+			value={sortBy}
+			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
+			onchange={(v) => (toggleSort(v, true))}
+		/>
 		<button type="button" onclick={() => toggleSort(sortBy)} class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50" title={sortDir === 'asc' ? 'Ascendente' : 'Descendente'} aria-label="Cambiar dirección de orden">
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>

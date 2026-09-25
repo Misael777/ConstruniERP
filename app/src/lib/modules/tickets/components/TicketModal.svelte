@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Modal "Nuevo Ticket" — a pedido explícito del usuario: reemplaza el reporte de reclamos/
 	// sugerencias/incidencias/requerimientos por WhatsApp. Cualquier usuario con el permiso
 	// 'ver_soporte_tickets' (otorgado a todos los roles, ver ticket_module_migration.sql) puede
@@ -132,23 +133,32 @@
 				<div class="grid grid-cols-2 gap-3">
 					<div>
 						<label for="ticket-tipo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Tipo</label>
-						<select id="ticket-tipo" bind:value={tipo} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200">
-							{#each OPCIONES_TIPO as opt}<option value={opt.value}>{opt.label}</option>{/each}
-						</select>
+						<SelectConSaldo
+							id="ticket-tipo"
+							value={tipo}
+							options={[...OPCIONES_TIPO.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+							onchange={(v) => (tipo = v as typeof tipo)}
+						/>
 					</div>
 					<div>
 						<label for="ticket-prioridad" class="block text-sm font-bold text-[#0f3b5e] mb-1">Prioridad</label>
-						<select id="ticket-prioridad" bind:value={prioridad} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200">
-							{#each OPCIONES_PRIORIDAD as opt}<option value={opt.value}>{opt.label}</option>{/each}
-						</select>
+						<SelectConSaldo
+							id="ticket-prioridad"
+							value={prioridad}
+							options={[...OPCIONES_PRIORIDAD.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+							onchange={(v) => (prioridad = v as typeof prioridad)}
+						/>
 					</div>
 				</div>
 				<div>
 					<label for="ticket-modulo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Módulo</label>
-					<select id="ticket-modulo" bind:value={modulo} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200">
-						<option value="">Otro / No aplica</option>
-						{#each opcionesModulo as opt}<option value={opt.value}>{opt.label}</option>{/each}
-					</select>
+					<SelectConSaldo
+						id="ticket-modulo"
+						value={modulo}
+						options={[{ value: '', label: 'Otro / No aplica' }, ...opcionesModulo.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+						placeholder="Otro / No aplica"
+						onchange={(v) => (modulo = v)}
+					/>
 				</div>
 				<div>
 					<label for="ticket-titulo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Título <span class="text-red-500">*</span></label>

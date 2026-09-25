@@ -128,18 +128,13 @@
 									onchange={(value) => handleInput(field.key, value)}
 								/>
 							{:else if field.tipo === 'select' || field.options}
-								<select
+								<SelectConSaldo
 									id={`td-${field.key}`}
-									name={field.key}
 									value={formValues[field.key]}
-									onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-									class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-								>
-									<option value="" disabled>Selecciona una opción</option>
-									{#each optionsFor(field) as opt}
-										<option value={opt.value}>{opt.label}</option>
-									{/each}
-								</select>
+									options={optionsFor(field)}
+									placeholder="Selecciona una opción"
+									onchange={(v) => handleInput(field.key, v)}
+								/>
 							{:else}
 								<input
 									id={`td-${field.key}`}

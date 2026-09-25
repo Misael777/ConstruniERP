@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { dndzone } from 'svelte-dnd-action';
@@ -646,39 +647,39 @@
 
 			{#if filtrosExpanded}
 				<div class="flex flex-col gap-2 mb-2">
-					<select value={filtroObra} onchange={(e) => { filtroObra = (e.target as HTMLSelectElement).value; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-						<option value="">Todas las obras</option>
-						{#each proyectoOptions as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
-					<select value={filtroCliente} onchange={(e) => { filtroCliente = (e.target as HTMLSelectElement).value; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-						<option value="">Todos los clientes</option>
-						{#each clienteOptions as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
-					<select value={filtroPrioridad} onchange={(e) => { filtroPrioridad = (e.target as HTMLSelectElement).value as any; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-						<option value="">Prioridad: Todas</option>
-						<option value="alto">Prioridad: Alto</option>
-						<option value="medio">Prioridad: Medio</option>
-						<option value="bajo">Prioridad: Bajo</option>
-					</select>
-					<select value={filtroEstado} onchange={(e) => { filtroEstado = (e.target as HTMLSelectElement).value as any; refetchOnFilterChange(); }} class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-						<option value="">Estado: Todas</option>
-						<option value="pendiente">Estado: Pendiente</option>
-						<option value="vencido">Estado: Vencido</option>
-					</select>
+					<SelectConSaldo
+						value={filtroObra}
+						options={[{ value: '', label: 'Todas las obras' }, ...proyectoOptions.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+						placeholder="Todas las obras"
+						onchange={(v) => { filtroObra = v; refetchOnFilterChange(); }}
+					/>
+					<SelectConSaldo
+						value={filtroCliente}
+						options={[{ value: '', label: 'Todos los clientes' }, ...clienteOptions.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+						placeholder="Todos los clientes"
+						onchange={(v) => { filtroCliente = v; refetchOnFilterChange(); }}
+					/>
+					<SelectConSaldo
+						value={filtroPrioridad}
+						options={[{ value: '', label: 'Prioridad: Todas' }, { value: 'alto', label: 'Prioridad: Alto' }, { value: 'medio', label: 'Prioridad: Medio' }, { value: 'bajo', label: 'Prioridad: Bajo' }]}
+						placeholder="Prioridad: Todas"
+						onchange={(v) => { filtroPrioridad = v as any; refetchOnFilterChange(); }}
+					/>
+					<SelectConSaldo
+						value={filtroEstado}
+						options={[{ value: '', label: 'Estado: Todas' }, { value: 'pendiente', label: 'Estado: Pendiente' }, { value: 'vencido', label: 'Estado: Vencido' }]}
+						placeholder="Estado: Todas"
+						onchange={(v) => { filtroEstado = v as any; refetchOnFilterChange(); }}
+					/>
 				</div>
 			{/if}
 
 			<div class="flex items-center gap-1 mb-3">
-				<select value={bandejaSortBy} onchange={(e) => onBandejaSortChange((e.target as HTMLSelectElement).value as BandejaSortBy)} class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm">
-					<option value="fechaVencimiento">Ordenar: Vencimiento</option>
-					<option value="monto">Ordenar: Monto</option>
-					<option value="nombre">Ordenar: Cliente</option>
-					<option value="prioridad">Ordenar: Prioridad</option>
-				</select>
+				<SelectConSaldo
+					value={bandejaSortBy}
+					options={[{ value: 'fechaVencimiento', label: 'Ordenar: Vencimiento' }, { value: 'monto', label: 'Ordenar: Monto' }, { value: 'nombre', label: 'Ordenar: Cliente' }, { value: 'prioridad', label: 'Ordenar: Prioridad' }]}
+					onchange={(v) => (onBandejaSortChange(v as BandejaSortBy))}
+				/>
 				<button type="button" onclick={toggleBandejaSortDir} class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 shrink-0" title={bandejaSortDir === 'asc' ? 'Ascendente' : 'Descendente'} aria-label="Cambiar dirección de orden">
 					{bandejaSortDir === 'asc' ? '↑' : '↓'}
 				</button>

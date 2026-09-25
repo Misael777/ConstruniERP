@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
@@ -249,12 +250,13 @@
 			</div>
 			<div class="flex flex-col gap-1">
 				<label for="cf-cuenta-manual" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cuenta (vacío = consolidado)</label>
-				<select id="cf-cuenta-manual" bind:value={cuentaManual} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-					<option value="">Consolidado (todas las cuentas)</option>
-					{#each cuentaOptions as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
-				</select>
+				<SelectConSaldo
+					id="cf-cuenta-manual"
+					value={cuentaManual}
+					options={[{ value: '', label: 'Consolidado (todas las cuentas)' }, ...cuentaOptions.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+					placeholder="Consolidado (todas las cuentas)"
+					onchange={(v) => (cuentaManual = v)}
+				/>
 			</div>
 			<div class="flex flex-col gap-1">
 				<label for="cf-monto-manual" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Monto según el banco</label>
@@ -330,11 +332,12 @@
 			</div>
 			<div class="flex flex-col gap-1">
 				<label for="af-fuente" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Fuente</label>
-				<select id="af-fuente" bind:value={fuenteApertura} class="px-3 py-2 rounded-lg border border-slate-300 text-sm bg-white">
-					{#each Object.entries(FUENTE_LABELS) as [value, label]}
-						<option {value}>{label}</option>
-					{/each}
-				</select>
+				<SelectConSaldo
+					id="af-fuente"
+					value={fuenteApertura}
+					options={[...Object.entries(FUENTE_LABELS).map(([value, label]) => ({ value: String(value), label: `${label}` }))]}
+					onchange={(v) => (fuenteApertura = v as typeof fuenteApertura)}
+				/>
 			</div>
 			<div class="flex flex-col gap-1">
 				<label for="af-obs" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Observaciones</label>

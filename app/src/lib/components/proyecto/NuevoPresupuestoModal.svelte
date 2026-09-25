@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Popup "Nuevo Presupuesto" del módulo independiente Presupuesto — a pedido explícito del usuario,
 	// el campo "Nombre" no es texto libre: es un selector con los proyectos de venta cerrada,
 	// etiquetados con su código generado (ver getProyectoOptionsVentaCerrada). Elegir uno decide a la
@@ -85,17 +86,14 @@
 					<label for="np-nombre" class="block text-sm font-medium text-[#0f3b5e] mb-1">
 						Nombre <span class="text-red-500">*</span>
 					</label>
-					<select
+					<SelectConSaldo
 						id="np-nombre"
-						bind:value={idProyecto}
+						value={idProyecto}
+						options={[{ value: '', label: `${loadingOpciones ? 'Cargando proyectos...' : '— Elige un proyecto —'}` }, ...opciones.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+						placeholder="{loadingOpciones ? 'Cargando proyectos...' : '— Elige un proyecto —'}"
 						disabled={isLoading || loadingOpciones}
-						class="w-full px-3 py-2 border border-slate-300 rounded text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
-					>
-						<option value="">{loadingOpciones ? 'Cargando proyectos...' : '— Elige un proyecto —'}</option>
-						{#each opciones as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
+						onchange={(v) => (idProyecto = v)}
+					/>
 					<p class="mt-1 text-xs text-slate-400">Solo proyectos con venta cerrada. El nombre del presupuesto será el código de ese proyecto.</p>
 				</div>
 			</div>

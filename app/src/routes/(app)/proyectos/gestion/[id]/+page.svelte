@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onDestroy, onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabaseClient';
@@ -457,11 +458,12 @@
 					</div>
 					<div>
 						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Tipo de Proyecto</label>
-						<select bind:value={form.tip_proyecto} class="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all text-sm font-medium text-slate-800">
-							<option value="">Sin especificar</option>
-							<option value="O">Obra</option>
-							<option value="M">Mantenimiento</option>
-						</select>
+						<SelectConSaldo
+							value={form?.tip_proyecto ?? ''}
+							options={[{ value: '', label: 'Sin especificar' }, { value: 'O', label: 'Obra' }, { value: 'M', label: 'Mantenimiento' }]}
+							placeholder="Sin especificar"
+							onchange={(v) => { if (form) form.tip_proyecto = v; }}
+						/>
 					</div>
 					<div class="md:col-span-2">
 						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Descripción</label>

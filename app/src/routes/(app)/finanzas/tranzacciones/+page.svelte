@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
@@ -742,16 +743,11 @@
 		</div>
 
 		<div class="relative">
-			<select
+			<SelectConSaldo
 				value={sortBy}
-				onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
-				class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-			>
-				{#each tableFields.filter((f) => f.sortable) as field}
-					<option value={field.key}>Ordenar: {field.label}</option>
-				{/each}
-			</select>
-			<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+				options={tableFields.filter((f) => f.sortable).map((f) => ({ value: f.key, label: `Ordenar: ${f.label}` }))}
+				onchange={(v) => toggleSort(v, true)}
+			/>
 		</div>
 		<button
 			type="button"
@@ -764,20 +760,12 @@
 		</button>
 
 		<div class="relative">
-			<select
+			<SelectConSaldo
 				value={filtroCriterio}
-				onchange={(e) => onFiltroCriterioChange((e.target as HTMLSelectElement).value)}
-				class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-			>
-				<option value="">Todos</option>
-				<option value="aprobado">Aprobado</option>
-				<option value="desaprobado">Desaprobado</option>
-				<option value="ingreso">Ingreso</option>
-				<option value="egreso">Egreso</option>
-				<option value="fecha">Fecha</option>
-				<option value="estado">Estado</option>
-			</select>
-			<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+				options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'desaprobado', label: 'Desaprobado' }, { value: 'ingreso', label: 'Ingreso' }, { value: 'egreso', label: 'Egreso' }, { value: 'fecha', label: 'Fecha' }, { value: 'estado', label: 'Estado' }]}
+				placeholder="Todos"
+				onchange={(v) => (onFiltroCriterioChange(v))}
+			/>
 		</div>
 		{#if filtroCriterio === 'fecha'}
 			<input
@@ -788,17 +776,12 @@
 			/>
 		{:else if filtroCriterio === 'estado'}
 			<div class="relative">
-				<select
+				<SelectConSaldo
 					value={filtroEstado}
-					onchange={(e) => onFiltroEstadoChange((e.target as HTMLSelectElement).value)}
-					class="appearance-none rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-200"
-				>
-					<option value="">Todos los estados</option>
-					<option value="activo">Activo</option>
-					<option value="anulado">Anulado</option>
-					<option value="consulta">Consulta</option>
-				</select>
-				<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+					options={[{ value: '', label: 'Todos los estados' }, { value: 'activo', label: 'Activo' }, { value: 'anulado', label: 'Anulado' }, { value: 'consulta', label: 'Consulta' }]}
+					placeholder="Todos los estados"
+					onchange={(v) => (onFiltroEstadoChange(v))}
+				/>
 			</div>
 		{/if}
 

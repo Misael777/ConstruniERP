@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// "Control Mensual" — popup dentro de Control de IGV que replica la hoja Excel de referencia entregada
 	// por el usuario: 12 meses (Ene-Dic) de un año, con estado REAL (datos ya registrados en el ERP) o
 	// PROYECCIÓN (los meses restantes, con el PROMEDIO de los meses reales), arrastre de Saldo a Favor mes
@@ -75,11 +76,12 @@
 			<div class="flex flex-wrap items-end gap-4 px-6 py-4 border-b border-slate-100 bg-slate-50 flex-shrink-0">
 				<div class="flex flex-col gap-1">
 					<label for="cm-anio" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Año</label>
-					<select id="cm-anio" bind:value={anio} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
-						{#each [ANIO_ACTUAL, ANIO_ACTUAL - 1, ANIO_ACTUAL - 2] as a}
-							<option value={a}>{a}</option>
-						{/each}
-					</select>
+					<SelectConSaldo
+						id="cm-anio"
+						value={String(anio)}
+						options={[...[ANIO_ACTUAL, ANIO_ACTUAL - 1, ANIO_ACTUAL - 2].map((a) => ({ value: String(a), label: `${a}` }))]}
+						onchange={(v) => (anio = Number(v))}
+					/>
 				</div>
 				<div class="flex flex-col gap-1">
 					<label for="cm-tasa-igv" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tasa IGV</label>

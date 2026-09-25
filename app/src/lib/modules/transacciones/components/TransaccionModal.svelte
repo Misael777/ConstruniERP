@@ -2846,20 +2846,14 @@
 			{/if}
 		{:else if field.tipo === 'select' || field.options}
 			<div class="relative">
-				<select
+				<SelectConSaldo
 					id={`tr-${field.key}`}
-					name={field.key}
 					value={formValues[field.key]}
+					options={optionsFor(field)}
+					placeholder="Selecciona una opción"
 					disabled={isDisabled}
-					onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-					class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-				>
-					<option value="" disabled>Selecciona una opción</option>
-					{#each optionsFor(field) as opt}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
-				</select>
-				<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+					onchange={(v) => handleInput(field.key, v)}
+				/>
 			</div>
 		{:else}
 			<input
@@ -3048,19 +3042,14 @@
 										</label>
 										<div class="flex flex-col gap-2">
 											<div class="relative">
-												<select
+												<SelectConSaldo
 													id="tr-categoria-otros-grupo"
 													value={detalleCatalogoGrupoEfectivo}
+													options={[{ value: '', label: 'Categoría' }, ...catalogoDetalleActual.map((grupo) => ({ value: String(grupo.key), label: `${grupo.label}` }))]}
+													placeholder="Categoría"
 													disabled={bloqueadaPorAprobacion}
-													onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Categoría</option>
-													{#each catalogoDetalleActual as grupo}
-														<option value={grupo.key}>{grupo.label}</option>
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => (handleDetalleCatalogoGrupoChange(v))}
+												/>
 											</div>
 											<div class="relative">
 												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
@@ -3068,27 +3057,14 @@
 												     <optgroup> nativo (más simple que un 3er selector aparte): el rol se ve
 												     como encabezado de grupo y sus especialidades debajo, un solo clic para
 												     elegir. -->
-												<select
+												<SelectConSaldo
 													id="tr-categoria-otros-subcategoria"
 													value={formValues.categoria}
+													options={[{ value: '', label: 'Subcategoría' }, ...(catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? []).flatMap((opt) => (SUBOPCIONES_SUBCONTRATA[opt] ? SUBOPCIONES_SUBCONTRATA[opt].map((sub) => ({ value: sub, label: sub, grupo: opt })) : [{ value: opt, label: opt }]))]}
+													placeholder="Subcategoría"
 													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-													onchange={(e) => handleInput('categoria', (e.target as HTMLSelectElement).value)}
-													class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.categoria ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-												>
-													<option value="">Subcategoría</option>
-													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-														{#if SUBOPCIONES_SUBCONTRATA[opt]}
-															<optgroup label={opt}>
-																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
-																	<option value={sub}>{sub}</option>
-																{/each}
-															</optgroup>
-														{:else}
-															<option value={opt}>{opt}</option>
-														{/if}
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => handleInput('categoria', v)}
+												/>
 											</div>
 										</div>
 										{#if fieldErrors.categoria}<p class="mt-1 text-xs text-red-500">{fieldErrors.categoria}</p>{/if}
@@ -3179,19 +3155,14 @@
 										<div>
 											<label for="tr-clase-destino" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Clase</label>
 											<div class="relative">
-												<select
+												<SelectConSaldo
 													id="tr-clase-destino"
 													value={claseDestino}
+													options={[...OPCIONES_CLASE_DESTINO.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+													placeholder="Selecciona una opción"
 													disabled={bloqueadaPorAprobacion}
-													onchange={(e) => handleClaseDestinoChange((e.target as HTMLSelectElement).value)}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="" disabled>Selecciona una opción</option>
-													{#each OPCIONES_CLASE_DESTINO as opt}
-														<option value={opt.value}>{opt.label}</option>
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => (handleClaseDestinoChange(v))}
+												/>
 											</div>
 											<p class="mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
 										</div>
@@ -3209,17 +3180,13 @@
 									<div>
 										<label for="tr-tipo-moneda" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Tipo de Moneda</label>
 										<div class="relative">
-											<select
+											<SelectConSaldo
 												id="tr-tipo-moneda"
 												value={formValues.tipo_moneda}
+												options={[{ value: 'soles', label: 'Soles' }, { value: 'dolares', label: 'Dólares' }]}
 												disabled={bloqueadaPorAprobacion}
-												onchange={(e) => handleInput('tipo_moneda', (e.target as HTMLSelectElement).value)}
-												class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-											>
-												<option value="soles">Soles</option>
-												<option value="dolares">Dólares</option>
-											</select>
-											<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+												onchange={(v) => (handleInput('tipo_moneda', v))}
+											/>
 										</div>
 									</div>
 								</div>
@@ -3409,36 +3376,27 @@
 										<div>
 											<label for="tr-documento-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Documento pendiente</label>
 											<div class="relative">
-												<select
+												<SelectConSaldo
 													id="tr-documento-pendiente"
 													value={formValues.documento_pendiente}
+													options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
 													disabled={bloqueadaPorAprobacion}
-													onchange={(e) => handleInput('documento_pendiente', (e.target as HTMLSelectElement).value)}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="no">No</option>
-													<option value="si">Sí</option>
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => (handleInput('documento_pendiente', v))}
+												/>
 											</div>
 										</div>
 										{#if formValues.documento_pendiente === 'si'}
 											<div>
 												<label for="tr-responsable-doc-pendiente" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Responsable</label>
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														id="tr-responsable-doc-pendiente"
 														value={formValues.responsable_documento_pendiente}
+														options={[...(dynamicOptions.responsable_documento_pendiente ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+														placeholder="Selecciona una opción"
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('responsable_documento_pendiente', (e.target as HTMLSelectElement).value)}
-														class={`w-full appearance-none rounded-lg border px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${fieldErrors.responsable_documento_pendiente ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-													>
-														<option value="" disabled>Selecciona una opción</option>
-														{#each dynamicOptions.responsable_documento_pendiente ?? [] as opt}
-															<option value={opt.value}>{opt.label}</option>
-														{/each}
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => (handleInput('responsable_documento_pendiente', v))}
+													/>
 												</div>
 												{#if fieldErrors.responsable_documento_pendiente}
 													<p class="mt-1 text-xs text-red-600">{fieldErrors.responsable_documento_pendiente}</p>
@@ -3462,35 +3420,25 @@
 											<div>
 												<label for="tr-tipo-comprobante-erp" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														id="tr-tipo-comprobante-erp"
 														value={formValues.tipo_documento}
+														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('tipo_documento', (e.target as HTMLSelectElement).value)}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="1">Factura</option>
-														<option value="2">Boleta</option>
-														<option value="10">Nota de Crédito</option>
-														<option value="11">Nota de Débito</option>
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => (handleInput('tipo_documento', v))}
+													/>
 												</div>
 											</div>
 											<div>
 												<label for="tr-generar-comprobante-erp" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Generar Comprobante</label>
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														id="tr-generar-comprobante-erp"
 														value={generarComprobanteErp}
+														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => (generarComprobanteErp = (e.target as HTMLSelectElement).value === 'si' ? 'si' : 'no')}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="no">No</option>
-														<option value="si">Sí</option>
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
+													/>
 												</div>
 												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
 											</div>
@@ -3501,35 +3449,25 @@
 											<div>
 												<label for="tr-tipo-comprobante-erp-2" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														id="tr-tipo-comprobante-erp-2"
 														value={formValues.tipo_documento}
+														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => handleInput('tipo_documento', (e.target as HTMLSelectElement).value)}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="1">Factura</option>
-														<option value="2">Boleta</option>
-														<option value="10">Nota de Crédito</option>
-														<option value="11">Nota de Débito</option>
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => (handleInput('tipo_documento', v))}
+													/>
 												</div>
 											</div>
 											<div>
 												<label for="tr-generar-comprobante-erp-2" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Generar Comprobante</label>
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														id="tr-generar-comprobante-erp-2"
 														value={generarComprobanteErp}
+														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => (generarComprobanteErp = (e.target as HTMLSelectElement).value === 'si' ? 'si' : 'no')}
-														class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-													>
-														<option value="no">No</option>
-														<option value="si">Sí</option>
-													</select>
-													<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
+													/>
 												</div>
 												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
 											</div>
@@ -3931,19 +3869,14 @@
 										<div>
 											<label for="tr-detalle-catalogo" class="block text-sm font-bold text-[#0f3b5e] mb-1">Categoría</label>
 											<div class="relative">
-												<select
+												<SelectConSaldo
 													id="tr-detalle-catalogo"
 													value={detalleCatalogoGrupoEfectivo}
+													options={[{ value: '', label: 'Selecciona una opción' }, ...catalogoDetalleActual.map((grupo) => ({ value: String(grupo.key), label: `${grupo.label}` }))]}
+													placeholder="Selecciona una opción"
 													disabled={bloqueadaPorAprobacion}
-													onchange={(e) => handleDetalleCatalogoGrupoChange((e.target as HTMLSelectElement).value)}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Selecciona una opción</option>
-													{#each catalogoDetalleActual as grupo}
-														<option value={grupo.key}>{grupo.label}</option>
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => (handleDetalleCatalogoGrupoChange(v))}
+												/>
 											</div>
 										</div>
 										<div>
@@ -3953,31 +3886,14 @@
 												     agrupada en el MISMO dropdown vía <optgroup> nativo (más simple que un 3er
 												     selector aparte): elegir una especialidad agrega la fila directo, igual que
 												     cualquier otra opción de esta lista. -->
-												<select
+												<SelectConSaldo
 													id="tr-detalle-subcatalogo"
 													value=""
+													options={[...(catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? []).flatMap((opt) => (SUBOPCIONES_SUBCONTRATA[opt] ? SUBOPCIONES_SUBCONTRATA[opt].map((sub) => ({ value: sub, label: sub, grupo: opt })) : [{ value: opt, label: opt }]))]}
+													placeholder="Elige una opción para agregarla"
 													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-													onchange={(e) => {
-														const target = e.target as HTMLSelectElement;
-														agregarFilaDesdeCatalogo(target.value);
-														target.value = '';
-													}}
-													class="w-full appearance-none rounded-lg border border-slate-300 px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												>
-													<option value="">Elige una opción para agregarla</option>
-													{#each catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? [] as opt}
-														{#if SUBOPCIONES_SUBCONTRATA[opt]}
-															<optgroup label={opt}>
-																{#each SUBOPCIONES_SUBCONTRATA[opt] as sub}
-																	<option value={sub}>{sub}</option>
-																{/each}
-															</optgroup>
-														{:else}
-															<option value={opt}>{opt}</option>
-														{/if}
-													{/each}
-												</select>
-												<ChevronDown size={16} class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+													onchange={(v) => agregarFilaDesdeCatalogo(v)}
+												/>
 											</div>
 										</div>
 									</div>
@@ -4046,16 +3962,12 @@
 												</td>
 												<td class="px-2 py-1.5">
 													<div class="relative">
-														<select
-															bind:value={fila.unidad}
+														<SelectConSaldo
+															value={fila.unidad ?? ''}
+															options={[...UNIDADES_DETALLE.map((u) => ({ value: String(u), label: `${u}` }))]}
 															disabled={bloqueadaPorAprobacion}
-															class="w-full appearance-none rounded-md border border-slate-200 px-2 py-1 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
-														>
-															{#each UNIDADES_DETALLE as u}
-																<option value={u}>{u}</option>
-															{/each}
-														</select>
-														<ChevronDown size={13} class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400" />
+															onchange={(v) => (fila.unidad = v)}
+														/>
 													</div>
 												</td>
 												<td class="px-2 py-1.5">
@@ -4171,18 +4083,13 @@
 											</td>
 											<td class="px-2 py-1.5">
 												<div class="relative">
-													<select
+													<SelectConSaldo
 														value={fila.tipo_documento ?? ''}
+														options={[{ value: '', label: 'Selecciona' }, ...optionsFor(tipoDocumentoField).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+														placeholder="Selecciona"
 														disabled={bloqueadaPorAprobacion}
-														onchange={(e) => (fila.tipo_documento = (e.target as HTMLSelectElement).value)}
-														class="w-full appearance-none rounded-md border border-slate-200 px-2 py-1 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60"
-													>
-														<option value="">Selecciona</option>
-														{#each optionsFor(tipoDocumentoField) as opt}
-															<option value={opt.value}>{opt.label}</option>
-														{/each}
-													</select>
-													<ChevronDown size={13} class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400" />
+														onchange={(v) => ((fila.tipo_documento = v))}
+													/>
 												</div>
 											</td>
 											<td class="px-2 py-1.5">

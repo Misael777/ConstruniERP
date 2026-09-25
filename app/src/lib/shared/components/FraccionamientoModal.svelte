@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	/**
 	 * Ventana reutilizable "Fraccionar este pago" — reemplaza al viejo campo inline "Número de Cuotas"
 	 * en Cuentas por Cobrar y Cuentas por Pagar. El "Método de fraccionamiento" tiene dos modos reales:
@@ -357,15 +358,11 @@
 
 					<div>
 						<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Periodicidad</span>
-						<select
+						<SelectConSaldo
 							value={periodicidad}
-							onchange={(e) => (periodicidad = (e.target as HTMLSelectElement).value as Periodicidad)}
-							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-						>
-							<option value="mensual">Mensual</option>
-							<option value="quincenal">Quincenal</option>
-							<option value="semanal">Semanal</option>
-						</select>
+							options={[{ value: 'mensual', label: 'Mensual' }, { value: 'quincenal', label: 'Quincenal' }, { value: 'semanal', label: 'Semanal' }]}
+							onchange={(v) => ((periodicidad = v as Periodicidad))}
+						/>
 						<p class="mt-1 text-xs text-slate-400">
 							Cada cuota cae {periodicidad === 'mensual' ? 'un mes' : periodicidad === 'quincenal' ? '15 días' : '7 días'} después de la anterior, contando desde la Fecha de Emisión (o desde hoy si todavía no la llenaste).
 						</p>
@@ -373,15 +370,11 @@
 
 					<div>
 						<span class="block text-sm font-bold text-[#0f3b5e] mb-1">Método de fraccionamiento</span>
-						<select
+						<SelectConSaldo
 							value={metodo}
-							onchange={(e) => (metodo = (e.target as HTMLSelectElement).value as 'montos_iguales' | 'montos_desiguales' | 'por_porcentaje')}
-							class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-						>
-							<option value="montos_iguales">Montos iguales</option>
-							<option value="montos_desiguales">Montos desiguales</option>
-							<option value="por_porcentaje">Por porcentaje (%)</option>
-						</select>
+							options={[{ value: 'montos_iguales', label: 'Montos iguales' }, { value: 'montos_desiguales', label: 'Montos desiguales' }, { value: 'por_porcentaje', label: 'Por porcentaje (%)' }]}
+							onchange={(v) => ((metodo = v as 'montos_iguales' | 'montos_desiguales' | 'por_porcentaje'))}
+						/>
 						{#if metodo === 'montos_iguales'}
 							<p class="mt-1 text-xs text-slate-400">El monto de cada fracción se calcula solo y no se puede editar.</p>
 						{:else if metodo === 'por_porcentaje'}

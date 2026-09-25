@@ -385,19 +385,14 @@
 											style={`background-color:${field.optionColors[formValues[field.key]] ?? '#cbd5e1'}`}
 										></span>
 									{/if}
-									<select
+									<SelectConSaldo
 										id={`ccp-${field.key}`}
-										name={field.key}
 										value={formValues[field.key]}
+										options={optionsFor(field)}
+										placeholder="Selecciona una opción"
 										disabled={isDisabled(field)}
-										onchange={(e) => handleInput(field.key, (e.target as HTMLSelectElement).value)}
-										class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${field.optionColors ? 'pl-7' : ''} ${fieldErrors[field.key] ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
-									>
-										<option value="" disabled>Selecciona una opción</option>
-										{#each optionsFor(field) as opt}
-											<option value={opt.value} style={field.optionColors?.[opt.value] ? `color:${field.optionColors[opt.value]}` : undefined}>{opt.label}</option>
-										{/each}
-									</select>
+										onchange={(v) => handleInput(field.key, v)}
+									/>
 								</div>
 							{:else}
 								<input

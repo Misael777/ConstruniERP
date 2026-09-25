@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
     import { onMount } from 'svelte';
     import { supabase } from '$lib/supabaseClient';
     import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
@@ -286,16 +287,12 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                 placeholder="Buscar documento..."
                 class="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-1 focus:ring-orange-400 focus:bg-white transition-colors"
             />
-            <select
-                bind:value={filterEstado}
-                class="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-slate-50 focus:outline-none focus:ring-1 focus:ring-orange-400 transition-colors"
-            >
-                <option value="">Todos los estados</option>
-                <option value="borrador">Borrador</option>
-                <option value="revision">En Revisión</option>
-                <option value="aprobado">Aprobado</option>
-                <option value="rechazado">Rechazado</option>
-            </select>
+            <SelectConSaldo
+            	value={filterEstado}
+            	options={[{ value: '', label: 'Todos los estados' }, { value: 'borrador', label: 'Borrador' }, { value: 'revision', label: 'En Revisión' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'rechazado', label: 'Rechazado' }]}
+            	placeholder="Todos los estados"
+            	onchange={(v) => (filterEstado = v)}
+            />
         </div>
 
         <!-- Document list -->
@@ -787,15 +784,12 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                 <!-- Tipo -->
                 <div>
                     <label for="doc-tipo" class="block text-xs font-bold text-slate-600 mb-1">Tipo de documento</label>
-                    <select
-                        id="doc-tipo"
-                        bind:value={uploadTipo}
-                        class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400"
-                    >
-                        {#each TIPOS_DOC as t}
-                            <option value={t}>{t}</option>
-                        {/each}
-                    </select>
+                    <SelectConSaldo
+                    	id="doc-tipo"
+                    	value={uploadTipo}
+                    	options={[...TIPOS_DOC.map((t) => ({ value: String(t), label: `${t}` }))]}
+                    	onchange={(v) => (uploadTipo = v)}
+                    />
                 </div>
 
                 <!-- Responsable -->

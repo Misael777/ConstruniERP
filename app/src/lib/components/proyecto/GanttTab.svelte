@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import GanttTimeline from './GanttTimeline.svelte';
 	import { buildTree, fillMissingAncestors, flattenSubtree } from '$lib/utils/tree';
@@ -674,30 +675,23 @@
 			<!-- Tolerancia -->
 			<div class="flex items-center gap-1 ml-1">
 				<span class="text-slate-400">Tolerancia:</span>
-				<select
-					class="border border-slate-200 rounded px-1.5 py-1 bg-white text-slate-700 font-medium"
-					bind:value={tolerancia}
-				>
-					{#each [0, 10, 20, 30, 50] as t}
-						<option value={t}>{t}%</option>
-					{/each}
-				</select>
+				<SelectConSaldo
+					value={String(tolerancia)}
+					options={[...[0, 10, 20, 30, 50].map((t) => ({ value: String(t), label: `${t}%` }))]}
+					onchange={(v) => (tolerancia = Number(v))}
+				/>
 			</div>
 
 			<!-- Activity picker: lets you select an activity even if it has no
 			     dates yet (and so no bar to click on in the gantt) -->
 			<div class="flex items-center gap-1 ml-1">
 				<span class="text-slate-400">Actividad:</span>
-				<select
-					class="border border-slate-200 rounded px-1.5 py-1 bg-white text-slate-700 font-medium max-w-[180px]"
-					value={selectedId ?? ''}
-					onchange={(e) => { const v = (e.target as HTMLSelectElement).value; selectedId = v ? Number(v) : null; }}
-				>
-					<option value="">Seleccionar…</option>
-					{#each actividades as a}
-						<option value={a.id_cronograma_actividad}>{'—'.repeat(Math.max(a.nivel - 1, 0))} {a.nombre_actividad}</option>
-					{/each}
-				</select>
+				<SelectConSaldo
+					value={selectedId === null || selectedId === undefined ? '' : String(selectedId)}
+					options={[{ value: '', label: 'Seleccionar…' }, ...actividades.map((a) => ({ value: String(a.id_cronograma_actividad), label: `${'—'.repeat(Math.max(a.nivel - 1, 0))} ${a.nombre_actividad}` }))]}
+					placeholder="Seleccionar…"
+					onchange={(v) => { selectedId = v ? Number(v) : null; }}
+				/>
 			</div>
 
 			<!-- Selected activity actions + manual date/duration editing -->
@@ -763,19 +757,15 @@
 
 					<span class="text-slate-300">|</span>
 
-					<select
-						class="border border-slate-200 rounded px-1 py-0.5 bg-white text-xs"
-						onchange={(e) => {
-							const v = Number((e.target as HTMLSelectElement).value);
-							if (v && selectedId) createDep(v, selectedId);
-							(e.target as HTMLSelectElement).value = '';
+					<SelectConSaldo
+						value=""
+						options={actividades.filter((a) => a.id_cronograma_actividad !== selectedId).map((a) => ({ value: String(a.id_cronograma_actividad), label: a.nombre_actividad }))}
+						placeholder="Depende de…"
+						onchange={(v) => {
+							const n = Number(v);
+							if (n && selectedId) createDep(n, selectedId);
 						}}
-					>
-						<option value="">Depende de…</option>
-						{#each actividades.filter(a => a.id_cronograma_actividad !== selectedId) as a}
-							<option value={a.id_cronograma_actividad}>{a.nombre_actividad}</option>
-						{/each}
-					</select>
+					/>
 					<button class="text-slate-300 hover:text-slate-500" onclick={() => selectedId = null}><i class="fas fa-times text-[10px]"></i></button>
 				</div>
 			{/if}
@@ -961,21 +951,16 @@
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 					<div class="sm:col-span-2">
 						<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Vincular a actividad del cronograma (opcional)</label>
-						<select
-							class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-300"
-							value={newR.idActividad ?? ''}
-							onchange={(e) => {
-								const v = (e.target as HTMLSelectElement).value;
+						<SelectConSaldo
+							value={newR.idActividad === null || newR.idActividad === undefined ? '' : String(newR.idActividad)}
+							options={[{ value: '', label: '— Sin vincular (solo texto libre) —' }, ...actividades.map((a) => ({ value: String(a.id_cronograma_actividad), label: `${'—'.repeat(Math.max(a.nivel - 1, 0))} ${a.nombre_actividad}` }))]}
+							placeholder="— Sin vincular (solo texto libre) —"
+							onchange={(v) => {
 								newR.idActividad = v ? Number(v) : null;
 								const a = actividades.find(x => x.id_cronograma_actividad === newR.idActividad);
 								if (a) newR.actividad = a.nombre_actividad;
 							}}
-						>
-							<option value="">— Sin vincular (solo texto libre) —</option>
-							{#each actividades as a}
-								<option value={a.id_cronograma_actividad}>{'—'.repeat(Math.max(a.nivel - 1, 0))} {a.nombre_actividad}</option>
-							{/each}
-						</select>
+						/>
 						<p class="text-[10px] text-slate-400 mt-1">Al vincularla aparecerá con ⚠ en el cronograma, sobre la barra de esa actividad.</p>
 					</div>
 					<div class="sm:col-span-2">
@@ -984,16 +969,12 @@
 					</div>
 					<div>
 						<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Tipo</label>
-						<select class="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" bind:value={newR.tipo}>
-							<option value="">Sin clasificar</option>
-							<option value="Diseño">Diseño / Ingeniería</option>
-							<option value="Materiales">Materiales</option>
-							<option value="Equipos">Equipos</option>
-							<option value="Mano de Obra">Mano de Obra</option>
-							<option value="Permisos">Permisos / Legal</option>
-							<option value="Financiero">Financiero</option>
-							<option value="Externo">Externo</option>
-						</select>
+						<SelectConSaldo
+							value={newR.tipo}
+							options={[{ value: '', label: 'Sin clasificar' }, { value: 'Diseño', label: 'Diseño / Ingeniería' }, { value: 'Materiales', label: 'Materiales' }, { value: 'Equipos', label: 'Equipos' }, { value: 'Mano de Obra', label: 'Mano de Obra' }, { value: 'Permisos', label: 'Permisos / Legal' }, { value: 'Financiero', label: 'Financiero' }, { value: 'Externo', label: 'Externo' }]}
+							placeholder="Sin clasificar"
+							onchange={(v) => (newR.tipo = v)}
+						/>
 					</div>
 					<div>
 						<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Responsable</label>
@@ -1069,18 +1050,11 @@
 										</span>
 									</td>
 									<td class="px-3 py-2">
-										<select
-											class="border rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer focus:outline-none
-												{r.estado === 'abierta' ? 'bg-rose-50 border-rose-200 text-rose-700' :
-												 r.estado === 'en_seguimiento' ? 'bg-amber-50 border-amber-200 text-amber-700' :
-												 'bg-emerald-50 border-emerald-200 text-emerald-700'}"
+										<SelectConSaldo
 											value={r.estado}
-											onchange={(e) => setEstado(r.id_restriccion, (e.target as HTMLSelectElement).value)}
-										>
-											<option value="abierta">Abierta</option>
-											<option value="en_seguimiento">Seguimiento</option>
-											<option value="resuelta">Resuelta</option>
-										</select>
+											options={[{ value: 'abierta', label: 'Abierta' }, { value: 'en_seguimiento', label: 'Seguimiento' }, { value: 'resuelta', label: 'Resuelta' }]}
+											onchange={(v) => (setEstado(r.id_restriccion, v))}
+										/>
 									</td>
 									<td class="px-3 py-2 text-center">
 										<button
@@ -1121,16 +1095,12 @@
 			</div>
 			<div>
 				<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Tipo</label>
-				<select class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-orange-300" bind:value={quickR.tipo}>
-					<option value="">Sin clasificar</option>
-					<option value="Diseño">Diseño / Ingeniería</option>
-					<option value="Materiales">Materiales</option>
-					<option value="Equipos">Equipos</option>
-					<option value="Mano de Obra">Mano de Obra</option>
-					<option value="Permisos">Permisos / Legal</option>
-					<option value="Financiero">Financiero</option>
-					<option value="Externo">Externo</option>
-				</select>
+				<SelectConSaldo
+					value={quickR?.tipo ?? ''}
+					options={[{ value: '', label: 'Sin clasificar' }, { value: 'Diseño', label: 'Diseño / Ingeniería' }, { value: 'Materiales', label: 'Materiales' }, { value: 'Equipos', label: 'Equipos' }, { value: 'Mano de Obra', label: 'Mano de Obra' }, { value: 'Permisos', label: 'Permisos / Legal' }, { value: 'Financiero', label: 'Financiero' }, { value: 'Externo', label: 'Externo' }]}
+					placeholder="Sin clasificar"
+					onchange={(v) => { if (quickR) quickR.tipo = v; }}
+				/>
 			</div>
 			<div>
 				<label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Descripción</label>
