@@ -272,8 +272,9 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | sí |
 | `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
 | `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
+| `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | **pendiente** (SQL a mano + `migration repair`) |
 
-Todas las migraciones están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
+Todas las migraciones hasta `20260925130000` están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
 
 ### 4.5 Datos de prueba de Dev
 - `cd app && npm run seed:dev` (idempotente; **aborta si la URL no es Dev**). Crea: 2 empleados, 2 clientes, 2

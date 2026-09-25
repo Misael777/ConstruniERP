@@ -268,7 +268,9 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 	let query = client
 		.from(TABLE_NAME)
 		.select('*, cliente(nombre), proyecto(nombre_proyecto)', { count: 'exact' })
-		.order(sortField, { ascending: sortDir === 'asc' })
+		// Prioridad se ordena por su equivalente numérico (alto=1, medio=2, bajo=3): por el texto saldría alfabético.
+		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })
+		.order('id_cuenta_cobrar', { ascending: false })
 		.range(from, to);
 
 	const search = params.search?.trim();
