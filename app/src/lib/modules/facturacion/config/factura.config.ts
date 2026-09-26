@@ -22,16 +22,34 @@
  * en transaccion.config.ts) y el service lo convierte al BOOLEAN real al guardar.
  */
 
-import type { FieldConfig } from '$lib/shared/fieldConfig';
+import type { FieldConfig, FieldOption } from '$lib/shared/fieldConfig';
+import { DETRACCION_TIPOS_OPERACION, DETRACCION_BIENES_SERVICIOS, DETRACCION_CODIGOS_BIEN_SERVICIO, DETRACCION_MEDIOS_PAGO } from './detraccionCatalogos';
 
 export const TABLE_NAME = 'factura';
 export const PK_COLUMN = 'id_factura';
 export const SEARCHABLE_COLUMNS = ['folio', 'cliente_nombre'] as const;
-export const DEFAULT_PAGE_SIZE = 10;
+export const DEFAULT_PAGE_SIZE = 20;
 export const DEFAULT_SORT_FIELD = 'created_at';
 export const DEFAULT_SORT_DIR: 'asc' | 'desc' = 'desc';
 
 const soloDecimales = (raw: string) => raw.replace(/[^\d.]/g, '').replace(/(\..{2}).+/, '$1');
+
+/** "Tipo de nota de crédito" (lista entregada por el usuario, en su orden). El valor guardado es el código del
+ * catálogo SUNAT N° 09 (Tipo de nota de crédito electrónica). */
+export const TIPOS_NOTA_CREDITO: FieldOption[] = [
+	{ value: '01', label: 'Anulación de la Operación' },
+	{ value: '02', label: 'Anulación por Error en el RUC' },
+	{ value: '04', label: 'Descuento Global' },
+	{ value: '06', label: 'Devolución Total' },
+	{ value: '03', label: 'Corrección por error en la descripción' },
+	{ value: '07', label: 'Devolución por ítem' },
+	{ value: '05', label: 'Descuento por ítem' },
+	{ value: '08', label: 'Bonificación' },
+	{ value: '09', label: 'Disminución en el valor' },
+	{ value: '11', label: 'Ajuste de operaciones de exportación' },
+	{ value: '10', label: 'Otros Conceptos' },
+	{ value: '13', label: 'Ajustes – montos y/o fechas de pago' }
+];
 
 export const FIELDS_CONFIG: FieldConfig[] = [
 	{
@@ -84,6 +102,37 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		key: 'tipo_nota',
+		label: 'Tipo de nota de crédito',
+		tipo: 'select',
+		options: TIPOS_NOTA_CREDITO,
+		// Solo aplica a Nota de Crédito: FacturaModal lo oculta en los demás comprobantes y lo vuelve
+		// obligatorio en Nota de Crédito (esta config no conoce el tipo de comprobante).
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'folio_referencia',
+		label: 'Número de FE respecto de la cual se emite la Nota de Crédito',
+		tipo: 'text',
+		maxLength: 20,
+		// Solo "Anulación por Error en el RUC": FacturaModal los muestra (con serie/número separados) y los
+		// vuelve obligatorios únicamente en ese caso.
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'folio_nueva_factura',
+		label: 'Número de la Nueva Factura Electrónica',
+		tipo: 'text',
+		maxLength: 20,
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
 		key: 'sujeta_detraccion',
 		label: 'Sujeta a detracción',
 		tipo: 'select',
@@ -111,11 +160,36 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		sortable: false
 	},
 	{
+		key: 'detraccion_tipo_operacion',
+		label: 'Tipo de operación',
+		tipo: 'select',
+		// Catálogo SUNAT (ver detraccionCatalogos.ts). Se guarda el código ('1001', ...).
+		options: DETRACCION_TIPOS_OPERACION.map((t) => ({ value: t.codigo, label: t.nombre })),
+		disabledWhen: (values) => String(values.sujeta_detraccion ?? 'no') !== 'si',
+		requiredWhen: (values) => String(values.sujeta_detraccion ?? 'no') === 'si',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
 		key: 'detraccion_bien_servicio',
 		label: 'Bien o Servicio',
-		tipo: 'text',
-		maxLength: 200,
-		placeholder: 'Ej. Servicios de construcción',
+		tipo: 'select',
+		// Se guarda el NOMBRE del bien/servicio (es lo que imprime el PDF y lo que ya guardaban las facturas
+		// viejas en texto libre). Al elegirlo se propone su % de detracción — ver handleInput en
+		// FacturaModal.svelte. Es independiente de "Código de Bien/Servicio" (otra lista de SUNAT).
+		options: DETRACCION_BIENES_SERVICIOS.map((b) => ({ value: b.nombre, label: `${b.nombre} (${b.porcentaje}%)` })),
+		disabledWhen: (values) => String(values.sujeta_detraccion ?? 'no') !== 'si',
+		requiredWhen: (values) => String(values.sujeta_detraccion ?? 'no') === 'si',
+		showInTable: false,
+		showInForm: true,
+		sortable: false
+	},
+	{
+		key: 'detraccion_codigo_bien',
+		label: 'Código de Bien/Servicio sujeto a detracción',
+		tipo: 'select',
+		options: DETRACCION_CODIGOS_BIEN_SERVICIO.map((b) => ({ value: b.codigo, label: `${b.codigo} - ${b.nombre}` })),
 		disabledWhen: (values) => String(values.sujeta_detraccion ?? 'no') !== 'si',
 		requiredWhen: (values) => String(values.sujeta_detraccion ?? 'no') === 'si',
 		showInTable: false,
@@ -124,12 +198,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'detraccion_medio_pago',
-		label: 'Medio de pago (detracción)',
+		label: 'Medio de pago',
 		tipo: 'select',
-		options: [
-			{ value: 'Depósito en cuenta', label: 'Depósito en cuenta' },
-			{ value: 'Transferencia de fondos', label: 'Transferencia de fondos' }
-		],
+		// Catálogo SUNAT. Se guarda el NOMBRE (compatible con lo que ya guardaban las facturas viejas:
+		// 'Depósito en cuenta' / 'Transferencia de fondos'), el código solo se muestra en la lista.
+		options: DETRACCION_MEDIOS_PAGO.map((m) => ({ value: m.nombre, label: `${m.codigo} - ${m.nombre}` })),
 		disabledWhen: (values) => String(values.sujeta_detraccion ?? 'no') !== 'si',
 		requiredWhen: (values) => String(values.sujeta_detraccion ?? 'no') === 'si',
 		showInTable: false,

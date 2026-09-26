@@ -1,5 +1,4 @@
 <script lang="ts">
-	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	// Gestión de Comprobantes (Finanzas) — 4 pestañas (Factura / Boleta / Nota de Crédito / Nota de
 	// Débito), TODAS con el mismo mecanismo (a pedido explícito del usuario: "cada pestaña debe mostrar
 	// la relación de transacciones tipo ingreso según el tipo de documento"): se clasifican las
@@ -42,6 +41,8 @@
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import type { DatosFacturaPdf } from '$lib/shared/facturaPdf';
+import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaPdfDatos';
+	import { FIELDS_CONFIG as TRANSACCION_FIELDS } from '$lib/modules/transacciones/config/transaccion.config';
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
@@ -56,24 +57,52 @@
 	const COLOR_SIN_FACTURA = { bg: '#bcd3f2', border: '#5b8fd4' };
 	const COLOR_FACTURADA = { bg: '#a8dfb9', border: '#3c9b5c' };
 
-	// 'sin_tipo' = transacciones de ingreso sin tipo de documento (a pedido explícito del usuario, última
-	// pestaña): no tiene comprobantes emitidos propios; al marcar una se elige "Emitir como" qué comprobante.
-	type TabValue = TipoComprobante | 'sin_tipo';
-	const TABS: { value: TabValue; label: string; plural: string; icon: typeof FileText }[] = [
-		{ value: 'factura', label: 'Factura', plural: 'Facturas', icon: FileText },
-		{ value: 'boleta', label: 'Boleta', plural: 'Boletas', icon: Receipt },
-		{ value: 'nota_credito', label: 'Nota de Crédito', plural: 'Notas de Crédito', icon: FileMinus },
-		{ value: 'nota_debito', label: 'Nota de Débito', plural: 'Notas de Débito', icon: FilePlus },
-		{ value: 'sin_tipo', label: 'Sin tipo de documento', plural: 'Sin tipo de documento', icon: Inbox }
+	// Filtros (segmentado compacto) por tipo de documento — a pedido explícito del usuario: 'todos' (pantalla
+	// inicial: TODAS las transacciones de ingreso) | Facturas | Boletas de venta | Notas de crédito | Notas de
+	// débito.
+	type TabValue = TipoComprobante | 'todos';
+	const TABS: { value: TabValue; label: string; plural: string; filtro: string; icon: typeof FileText }[] = [
+		{ value: 'todos', label: 'Comprobantes', plural: 'Comprobantes', filtro: 'Todas', icon: FileText },
+		{ value: 'factura', label: 'Factura', plural: 'Facturas', filtro: 'Facturas', icon: FileText },
+		{ value: 'boleta', label: 'Boleta', plural: 'Boletas', filtro: 'Boletas de venta', icon: Receipt },
+		{ value: 'nota_credito', label: 'Nota de Crédito', plural: 'Notas de Crédito', filtro: 'Notas de crédito', icon: FileMinus },
+		{ value: 'nota_debito', label: 'Nota de Débito', plural: 'Notas de Débito', filtro: 'Notas de débito', icon: FilePlus }
 	];
 
-	let activeTab = $state<TabValue>('factura');
-	const esSinTipo = $derived(activeTab === 'sin_tipo');
-	let emitirComo = $state<TipoComprobante>('factura');
-	const comprobanteModal = $derived<TipoComprobante>(activeTab === 'sin_tipo' ? emitirComo : activeTab);
+	let activeTab = $state<TabValue>('todos');
 	const tabActual = $derived(TABS.find((t) => t.value === activeTab)!);
 	const nombreTab = $derived(tabActual.label);
 	const pluralTab = $derived(tabActual.plural);
+
+		// Tab inferior: transacciones sin emisión de comprobantes | comprobantes emitidos.
+	type VistaTx = 'pendientes' | 'emitidas';
+	let vistaTx = $state<VistaTx>('pendientes');
+
+		// Desplegable POR FILA — a pedido explícito del usuario: en el tab "sin emisión de comprobantes" (columna
+	// "Tipo de documento") solo Emitir Factura / Emitir Boleta, con el tipo registrado como valor por defecto
+	// (Boleta de venta→Emitir Boleta; cualquier otro o sin tipo→Emitir Factura). En el tab "con comprobantes
+	// emitidos" (columna "Emitir nota") solo Nota de Crédito / Nota de Débito.
+	const ACCIONES_EMISION: { value: TipoComprobante; label: string }[] = [
+		{ value: 'factura', label: 'Emitir Factura' },
+		{ value: 'boleta', label: 'Emitir Boleta' }
+	];
+	const ACCIONES_NOTA: { value: TipoComprobante; label: string }[] = [
+		{ value: 'nota_credito', label: 'Nota de Crédito' },
+		{ value: 'nota_debito', label: 'Nota de Débito' }
+	];
+	let accionFila = $state<Record<number, TipoComprobante>>({});
+	function accionDeFila(t: TransaccionFacturable): TipoComprobante {
+		const registrado = t.tipo_documento ? COMPROBANTE_POR_TIPO_DOCUMENTO[t.tipo_documento] : undefined;
+		return accionFila[t.id_transaccion] ?? (registrado === 'boleta' ? 'boleta' : 'factura');
+	}
+// Tipo de comprobante con el que se abre el formulario (Nueva Factura/Boleta/Nota…).
+	let tipoModal = $state<TipoComprobante>('factura');
+
+// Etiqueta legible del tipo de documento de una transacción (mismo catálogo de Transacciones).
+	const TIPO_DOC_LABEL = new Map<string, string>((TRANSACCION_FIELDS.find((f) => f.key === 'tipo_documento')?.options ?? []).map((o) => [o.value, o.label]));
+	function tipoDocLabel(v: string | null): string {
+		return v ? (TIPO_DOC_LABEL.get(v) ?? v) : '—';
+	}
 
 	// ── Documentos emitidos (sección inferior, todas las pestañas) ──────────────────────────────
 	let items = $state<Factura[]>([]);
@@ -102,8 +131,7 @@
 	let transaccionesTotal = $state(0);
 	let transaccionesPageNum = $state(1);
 	let transaccionesTotalPages = $state(1);
-	let cargandoSuperior = $state(false);
-
+		let cargandoSuperior = $state(false);
 	let docsOpen = $state(false);
 	let docsTitle = $state('');
 	let docsLista = $state<{ url: string; label: string }[]>([]);
@@ -113,7 +141,8 @@
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingFactura = $state<Factura | null>(null);
 	let editingDetalle = $state<FacturaDetalle[]>([]);
-	let preseleccion = $state<{ idCliente: number; idTransaccion: number } | null>(null);
+	let preseleccion = $state<{ idCliente: number; idTransaccion: number | null } | null>(null);
+	let folioReferenciaModal = $state<string | null>(null);
 
 	let previewOpen = $state(false);
 	let previewDatos = $state<DatosFacturaPdf | null>(null);
@@ -128,17 +157,10 @@
 	let eliminandoPermanente = $state(false);
 
 	async function fetchList() {
-		if (activeTab === 'sin_tipo') {
-			items = [];
-			total = 0;
-			totalPages = 1;
-			loading = false;
-			return;
-		}
 		loading = true;
 		loadError = '';
 		try {
-			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados, tipoComprobante: activeTab });
+			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados, tipoComprobante: activeTab === 'todos' ? undefined : activeTab });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -153,9 +175,8 @@
 	}
 
 	async function fetchKpis() {
-		if (activeTab === 'sin_tipo') return;
 		try {
-			kpis = await getKpisComprobante(supabase, activeTab);
+			kpis = await getKpisComprobante(supabase, activeTab === 'todos' ? null : activeTab);
 		} catch (err) {
 			console.error('[Gestión de Comprobantes] No se pudieron cargar los KPIs:', err);
 		}
@@ -164,7 +185,7 @@
 	async function fetchSuperior() {
 		cargandoSuperior = true;
 		try {
-			const result = await getTransaccionesFacturables(supabase, activeTab === 'sin_tipo' ? null : TIPO_DOCUMENTO_POR_COMPROBANTE[activeTab], { page: transaccionesPageNum, pageSize: DEFAULT_PAGE_SIZE });
+			const result = await getTransaccionesFacturables(supabase, activeTab === 'todos' ? undefined : TIPO_DOCUMENTO_POR_COMPROBANTE[activeTab], { page: transaccionesPageNum, pageSize: DEFAULT_PAGE_SIZE, vista: 'pendientes' });
 			transaccionesPendientes = result.items;
 			transaccionesTotal = result.total;
 			transaccionesTotalPages = result.totalPages;
@@ -199,7 +220,10 @@
 		if (!crudo) return false;
 		try {
 			const datos = JSON.parse(crudo);
-			activeTab = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)] ?? 'factura';
+				const tipoPrecarga = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)] ?? 'factura';
+				activeTab = tipoPrecarga;
+				tipoModal = tipoPrecarga;
+				vistaTx = 'pendientes';
 			await fetchTab();
 			modalMode = 'create';
 			editingFactura = null;
@@ -232,7 +256,12 @@
 		fetchTab();
 	}
 
-	function irAPaginaTransacciones(nueva: number) {
+		function switchVista(v: VistaTx) {
+		if (v === vistaTx) return;
+		vistaTx = v;
+	}
+
+function irAPaginaTransacciones(nueva: number) {
 		transaccionesPageNum = nueva;
 		fetchSuperior();
 	}
@@ -269,22 +298,34 @@
 	}
 
 	function openCreate() {
+		tipoModal = activeTab === 'todos' ? 'factura' : activeTab;
+		abrirModalCrear(null);
+	}
+
+	function abrirModalCrear(pre: { idCliente: number; idTransaccion: number | null } | null, folioReferencia: string | null = null) {
 		modalMode = 'create';
 		editingFactura = null;
 		editingDetalle = [];
-		preseleccion = null;
+		preseleccion = pre;
+		folioReferenciaModal = folioReferencia;
 		modalOpen = true;
 	}
 
-	/** Marcar el check de una transacción SIN comprobante en la tabla superior — abre el modal directo,
-	 * con el cliente y esa transacción ya precargados (a pedido explícito del usuario). */
-	function openDesdeTransaccion(t: TransaccionFacturable) {
-		if (t.id_factura != null || t.idCliente == null) return;
-		modalMode = 'create';
-		editingFactura = null;
-		editingDetalle = [];
-		preseleccion = { idCliente: t.idCliente, idTransaccion: t.id_transaccion };
-		modalOpen = true;
+		/** Elegir una fila de la tabla de transacciones (sin comprobante): abre el formulario del tipo elegido en el
+	 * desplegable de esa fila (por defecto, su tipo de documento registrado), con el cliente y la transacción ya
+	 * precargados. */
+	function clickTransaccion(t: TransaccionFacturable) {
+		if (t.idCliente == null) return;
+		tipoModal = accionDeFila(t);
+		abrirModalCrear({ idCliente: t.idCliente, idTransaccion: t.id_transaccion });
+	}
+
+	/** Tab "con comprobantes emitidos": Nota de Crédito/Débito sobre un comprobante EMITIDO — se abre con su cliente
+	 * y, en la Nota de Crédito, el número de ese comprobante como referencia. */
+	function emitirNotaDesdeDocumento(item: Factura, tipo: TipoComprobante) {
+		if (item.estado !== 'emitida') return;
+		tipoModal = tipo;
+		abrirModalCrear({ idCliente: item.id_cliente, idTransaccion: null }, item.folio);
 	}
 
 	async function openEdit(item: Factura) {
@@ -294,6 +335,7 @@
 		editingFactura = full.factura;
 		editingDetalle = full.detalle;
 		preseleccion = null;
+		folioReferenciaModal = null;
 		modalOpen = true;
 	}
 
@@ -302,6 +344,7 @@
 		editingFactura = null;
 		editingDetalle = [];
 		preseleccion = null;
+		folioReferenciaModal = null;
 	}
 
 	async function handleSaved() {
@@ -322,7 +365,7 @@
 		const { factura, detalle, archivos } = full;
 
 		if (factura.estado === 'emitida' && factura.imagen_url) {
-			imagenTitle = `${nombreTab} ${factura.folio}`;
+			imagenTitle = `${TABS.find((x) => x.value === factura.tipo_comprobante)?.label ?? 'Comprobante'} ${factura.folio}`;
 			imagenDocs = [
 				{ url: factura.imagen_url, label: 'Imagen' },
 				...archivos.filter((a) => a.tipo === 'pdf').map((a) => ({ url: a.url, label: 'PDF' }))
@@ -331,36 +374,7 @@
 			return;
 		}
 
-		previewDatos = {
-			tipoDocumento: factura.tipo_comprobante,
-			folio: factura.folio,
-			fechaEmision: factura.fecha_emision,
-			formaPago: factura.forma_pago === 'credito' ? 'credito' : 'contado',
-			clienteNombre: factura.cliente_nombre ?? factura.cliente?.nombre ?? '',
-			clienteDocumentoLabel: factura.cliente_tipo_doc ?? 'RUC',
-			clienteDocumento: factura.cliente_documento ?? '',
-			clienteDireccion: factura.cliente_direccion ?? '',
-			moneda: factura.moneda === 'USD' ? 'USD' : 'PEN',
-			observacion: factura.observacion ?? '',
-			lineas: detalle.map((d) => ({ cantidad: Number(d.cantidad), unidad: d.unidad ?? 'Servicio', descripcion: d.descripcion, valorUnitario: Number(d.precio_unitario) })),
-			subTotalVentas: Number(factura.sub_total_ventas),
-			anticipos: Number(factura.anticipos),
-			descuentos: Number(factura.descuentos),
-			valorVenta: Number(factura.valor_venta),
-			isc: Number(factura.isc),
-			igv: Number(factura.monto_igv),
-			otrosCargos: Number(factura.otros_cargos),
-			otrosTributos: Number(factura.otros_tributos),
-			redondeo: Number(factura.redondeo),
-			importeTotal: Number(factura.monto_total),
-			sujetaDetraccion: factura.sujeta_detraccion,
-			porcentajeDetraccion: Number(factura.porcentaje_detraccion ?? 0),
-			montoDetraccion: Number(factura.monto_detraccion ?? 0),
-			detraccionBienServicio: factura.detraccion_bien_servicio ?? '',
-			detraccionMedioPago: factura.detraccion_medio_pago ?? '',
-			detraccionCuentaBn: factura.detraccion_cuenta_bn ?? '',
-			marcaAgua: factura.estado === 'anulada' ? 'ANULADA' : 'BORRADOR'
-		};
+		previewDatos = datosPdfDesdeFactura(factura, detalle, factura.estado === 'anulada' ? 'ANULADA' : 'BORRADOR');
 		previewOpen = true;
 	}
 
@@ -449,19 +463,95 @@
 	}
 </script>
 
+{#snippet tablaTx(lista: TransaccionFacturable[], cargando: boolean, vacio: string)}
+	<div class="overflow-x-auto">
+		<div class="min-w-[1000px]">
+			<div class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_1fr_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
+				<span class="w-4"></span>
+				<span>Fecha</span>
+				<span>Cliente</span>
+				<span>Categoría</span>
+				<span>Tipo de documento</span>
+				<span>Descripción</span>
+				<span>Destino</span>
+				<span class="text-right">Monto</span>
+				<span class="text-center">Soportes</span>
+			</div>
+			{#each lista as t (t.id_transaccion)}
+				{@const facturada = t.id_factura != null}
+				<div
+					role="button"
+					tabindex="0"
+					onclick={() => clickTransaccion(t)}
+					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && clickTransaccion(t)}
+					class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_1fr_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2.5 border-b last:border-b-0 text-sm cursor-pointer"
+					style={`background:${facturada ? COLOR_FACTURADA.bg : COLOR_SIN_FACTURA.bg};border-color:${facturada ? COLOR_FACTURADA.border : COLOR_SIN_FACTURA.border}`}
+				>
+					{#if facturada}
+						<span class="w-4 h-4 flex items-center justify-center shrink-0 text-emerald-700" title="Ya emitida"><Check size={14} /></span>
+					{:else}
+						<span class="w-4 h-4 rounded border-2 border-[#5b8fd4] bg-white shrink-0"></span>
+					{/if}
+					<span class="text-slate-700">{t.fecha}</span>
+					<span class="text-slate-700 truncate">{t.clienteNombre ?? '—'}</span>
+					<span class="text-slate-700 truncate">{t.categoria ?? '—'}</span>
+					<select
+						value={accionDeFila(t)}
+						title={`Tipo de documento registrado: ${tipoDocLabel(t.tipo_documento)}`}
+						onclick={(e) => e.stopPropagation()}
+						onkeydown={(e) => e.stopPropagation()}
+						onchange={(e) => (accionFila = { ...accionFila, [t.id_transaccion]: (e.target as HTMLSelectElement).value as TipoComprobante })}
+						class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[11px] font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
+					>
+						{#each ACCIONES_EMISION as a (a.value)}
+							<option value={a.value}>{a.label}</option>
+						{/each}
+					</select>
+					<span class="text-slate-600 truncate">{t.descripcion ?? '—'}</span>
+					<span class="text-slate-600 truncate">
+						{t.destinoLabel}
+						{#if facturada}<span class="ml-1 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">{t.facturaFolio ?? ''}</span>{/if}
+					</span>
+					<span class="text-right font-semibold text-slate-800">{fmtTransaccion(t)}</span>
+					<span class="flex justify-center">
+						<button type="button" onclick={(e) => { e.stopPropagation(); abrirSoportesTransaccion(t); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
+							<Eye size={16} />
+						</button>
+					</span>
+				</div>
+			{:else}
+				<p class="px-4 py-8 text-center text-xs text-slate-400">{cargando ? 'Cargando...' : vacio}</p>
+			{/each}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet paginacionTx(totalItems: number, pagina: number, paginas: number, irA: (n: number) => void)}
+	{#if paginas > 1}
+		<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200">
+			<p class="text-xs text-slate-400">{totalItems} transacción{totalItems === 1 ? '' : 'es'} en total</p>
+			<div class="flex items-center gap-2">
+				<button type="button" disabled={pagina <= 1} onclick={() => irA(pagina - 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Anterior</button>
+				<span class="text-sm text-slate-500">{pagina} / {paginas}</span>
+				<button type="button" disabled={pagina >= paginas} onclick={() => irA(pagina + 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Siguiente</button>
+			</div>
+		</div>
+	{/if}
+{/snippet}
+
 <div class="p-4 md:p-6">
 	<div class="flex items-center justify-between mb-4 flex-wrap gap-3">
 		<div class="flex items-center gap-3">
 			<FileText class="text-[#0f3b5e]" size={28} />
 			<div>
-				<h1 class="text-xl font-bold text-[#0f3b5e]">Gestión de Comprobantes</h1>
-				<p class="text-sm text-slate-500">Emite Facturas, Boletas y Notas de Crédito/Débito a partir de tus transacciones ya registradas</p>
+				<h1 class="text-xl font-bold text-[#0f3b5e]">Emisión de Comprobantes</h1>
+				<p class="text-sm text-slate-500">Factura a tus clientes a partir de sus pagos ya registrados, previsualiza y autoriza antes de emitir</p>
 			</div>
 		</div>
 	</div>
 
 	<div class="flex items-center justify-end mb-4 gap-2">
-		{#if isAdmin() && !verEliminados && !esSinTipo}
+		{#if isAdmin() && !verEliminados}
 			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
 				<Trash2 size={16} /> Ver eliminados
 			</button>
@@ -481,20 +571,19 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<!-- KPIs (la pestaña "Sin tipo de documento" no tiene comprobantes emitidos propios, no lleva KPIs) -->
-	{#if !esSinTipo}
+	<!-- KPIs -->
 	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Total Emitido en {nombreTab} (Mes Actual)</span>
+				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Total Emitido' : `Total Emitido en ${nombreTab}`} (Mes Actual)</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.totalFacturadoMes)}</p>
 		</div>
 		<div class="bg-white rounded-xl border border-slate-200 p-4" style="background:#eef4fb;border-color:#b7cce6">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-white text-blue-700 flex items-center justify-center shrink-0"><Inbox size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Por Emitir ({nombreTab})</span>
+				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Por Emitir' : `Por Emitir (${nombreTab})`}</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.porFacturar)}</p>
 			<p class="text-[11px] text-slate-400 mt-1">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin comprobante</p>
@@ -509,155 +598,118 @@
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-2">
 				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><CheckCircle2 size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">{pluralTab} Emitidas</span>
+				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Comprobantes Emitidos' : `${pluralTab} Emitidas`}</span>
 			</div>
 			<p class="text-xl font-bold text-slate-800">{kpis.facturasEmitidas}</p>
 		</div>
 	</div>
-	{/if}
 
-	<!-- Pestañas (estilo tabs, mismo look que Control Financiero) — a pedido explícito del usuario, van
-	     justo arriba de "Transacciones (…)" en vez de debajo del título de la página. -->
-	<div class="mb-4 flex gap-1 border-b border-slate-200 flex-wrap">
-		{#each TABS as tab (tab.value)}
+	<!-- Filtros compactos (por tipo de documento) + desplegable de acción, alineados a la derecha — a pedido
+	     explícito del usuario: más chicos y fuera del centro de la página. -->
+	<div class="mb-3 flex flex-wrap items-center justify-start gap-x-5 gap-y-2">
+		<div class="flex items-center gap-1.5">
+			<span class="text-[10px] font-bold uppercase tracking-wide text-slate-700">Filtrar</span>
+			<div class="inline-flex flex-wrap overflow-hidden rounded-md border border-slate-200 bg-white">
+				{#each TABS as tab, i (tab.value)}
+					<button
+						type="button"
+						onclick={() => switchTab(tab.value)}
+						class={`px-2.5 py-1 text-[11px] font-bold transition-colors ${i > 0 ? 'border-l border-slate-200' : ''} ${activeTab === tab.value ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+					>
+						{tab.filtro}
+					</button>
+				{/each}
+			</div>
+		</div>
+			</div>
+
+		{#if !verEliminados}
+		<!-- INFERIOR: 2 tabs — transacciones sin emisión de comprobantes | transacciones con comprobantes emitidos. -->
+		<div class="mb-3 flex flex-wrap items-center gap-1 border-b border-slate-200">
 			<button
 				type="button"
-				onclick={() => switchTab(tab.value)}
-				class={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === tab.value ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+				onclick={() => switchVista('pendientes')}
+				class={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${vistaTx === 'pendientes' ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
 			>
-				<tab.icon size={16} /> {tab.label}
+				Transacciones sin emisión de comprobantes
+				<span class="px-1.5 py-0.5 rounded-full bg-slate-100 text-[10px] font-semibold text-slate-600">{transaccionesTotal}</span>
 			</button>
-		{/each}
-	</div>
-
-	{#if !verEliminados}
-		<!-- Sección superior: transacciones de ingreso clasificadas por el tipo de documento de esta pestaña -->
-		<div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
-			<div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
-				<h2 class="text-sm font-semibold text-[#0f3b5e]">Transacciones ({nombreTab})</h2>
-				<div class="flex items-center gap-3 text-[11px] text-slate-500">
-					{#if esSinTipo}
-						<label class="flex items-center gap-1.5 text-slate-600 font-medium">
-							Emitir como
-							<SelectConSaldo
-								value={emitirComo}
-								options={[...TABS.filter((t) => t.value !== 'sin_tipo').map((t) => ({ value: String(t.value), label: `${t.label}` }))]}
-								onchange={(v) => (emitirComo = v as typeof emitirComo)}
-							/>
-						</label>
-					{/if}
-					<span class="flex items-center gap-1.5"><span class="inline-block shrink-0 w-4 h-4 rounded border-2" style={`background:${COLOR_SIN_FACTURA.bg};border-color:${COLOR_SIN_FACTURA.border}`}></span>Sin comprobante (seleccionable)</span>
-				</div>
-			</div>
-
-			<div class="overflow-x-auto">
-				<div class="min-w-[900px]">
-					<div class="grid grid-cols-[auto_0.9fr_1.3fr_1.1fr_1.8fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
-						<span class="w-4"></span>
-						<span>Fecha</span>
-						<span>Cliente</span>
-						<span>Categoría</span>
-						<span>Descripción</span>
-						<span>Destino</span>
-						<span class="text-right">Monto</span>
-						<span class="text-center">Soportes</span>
-					</div>
-					{#each transaccionesPendientes as t (t.id_transaccion)}
-						{@const facturada = t.id_factura != null}
-						<div
-							role="button"
-							tabindex="0"
-							onclick={() => openDesdeTransaccion(t)}
-							onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && openDesdeTransaccion(t)}
-							class={`grid grid-cols-[auto_0.9fr_1.3fr_1.1fr_1.8fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2.5 border-b last:border-b-0 text-sm ${facturada ? 'cursor-default' : 'cursor-pointer'}`}
-							style={`background:${facturada ? COLOR_FACTURADA.bg : COLOR_SIN_FACTURA.bg};border-color:${facturada ? COLOR_FACTURADA.border : COLOR_SIN_FACTURA.border}`}
-						>
-							{#if facturada}
-								<span class="w-4 h-4 flex items-center justify-center shrink-0 text-emerald-700" title="Ya emitida"><Check size={14} /></span>
-							{:else}
-								<span class="w-4 h-4 rounded border-2 border-[#5b8fd4] bg-white shrink-0"></span>
-							{/if}
-							<span class="text-slate-700">{t.fecha}</span>
-							<span class="text-slate-700 truncate">{t.clienteNombre ?? '—'}</span>
-							<span class="text-slate-700 truncate">{t.categoria ?? '—'}</span>
-							<span class="text-slate-600 truncate">{t.descripcion ?? '—'}</span>
-							<span class="text-slate-600 truncate">
-								{t.destinoLabel}
-								{#if facturada}<span class="ml-1 inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-100 text-emerald-700">{t.facturaFolio ?? ''}</span>{/if}
-							</span>
-							<span class="text-right font-semibold text-slate-800">{fmtTransaccion(t)}</span>
-							<span class="flex justify-center">
-								<button type="button" onclick={(e) => { e.stopPropagation(); abrirSoportesTransaccion(t); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-white hover:text-blue-600" title="Ver documentos" aria-label="Ver documentos">
-									<Eye size={16} />
-								</button>
-							</span>
-						</div>
-					{:else}
-						<p class="px-4 py-8 text-center text-xs text-slate-400">{cargandoSuperior ? 'Cargando...' : (esSinTipo ? 'No hay transacciones de ingreso sin tipo de documento pendientes de emitir.' : `No hay transacciones de tipo ${nombreTab} pendientes de emitir.`)}</p>
-					{/each}
-				</div>
-			</div>
-
-			{#if transaccionesTotalPages > 1}
-				<div class="flex items-center justify-between px-4 py-3 border-t border-slate-200">
-					<p class="text-xs text-slate-400">{transaccionesTotal} transacción{transaccionesTotal === 1 ? '' : 'es'} en total</p>
-					<div class="flex items-center gap-2">
-						<button type="button" disabled={transaccionesPageNum <= 1} onclick={() => irAPaginaTransacciones(transaccionesPageNum - 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Anterior</button>
-						<span class="text-sm text-slate-500">{transaccionesPageNum} / {transaccionesTotalPages}</span>
-						<button type="button" disabled={transaccionesPageNum >= transaccionesTotalPages} onclick={() => irAPaginaTransacciones(transaccionesPageNum + 1)} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Siguiente</button>
-					</div>
-				</div>
-			{/if}
+			<button
+				type="button"
+				onclick={() => switchVista('emitidas')}
+				class={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${vistaTx === 'emitidas' ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+			>
+				Transacciones con comprobantes emitidos
+				<span class="px-1.5 py-0.5 rounded-full bg-slate-100 text-[10px] font-semibold text-slate-600">{total}</span>
+			</button>
 		</div>
 	{/if}
 
-	{#if !esSinTipo}
+	{#if !verEliminados && vistaTx === 'pendientes'}
+		<div class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-6">
+			{@render tablaTx(transaccionesPendientes, cargandoSuperior, 'No hay transacciones de ingreso pendientes de emitir' + (activeTab === 'todos' ? '.' : ` (${tabActual.filtro}).`))}
+			{@render paginacionTx(transaccionesTotal, transaccionesPageNum, transaccionesTotalPages, irAPaginaTransacciones)}
+		</div>
+	{:else}
 	<h2 class="text-sm font-semibold text-[#0f3b5e] mb-2">{verEliminados ? `${pluralTab} eliminadas` : 'Documentos emitidos'}</h2>
 
-	<ColumnFilterBar fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
-
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="relative flex-1 min-w-[220px] max-w-sm">
-			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+	<!-- Filtros de los comprobantes emitidos: pequeños y en UNA sola línea (a pedido explícito del usuario). -->
+	<div class="mb-3 flex flex-wrap items-start gap-2">
+		<div class="[&>div]:mb-0 [&>div>button]:py-1.5 [&>div>button]:text-xs">
+			<ColumnFilterBar fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
+		</div>
+		<div class="relative w-60 max-w-full">
+			<Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
 				type="text"
 				value={searchInput}
 				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
 				placeholder="Buscar por Folio o Cliente..."
-				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+				class="w-full pl-8 pr-7 py-1.5 rounded-lg border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-200"
 			/>
 			{#if searchInput}
 				<button type="button" onclick={() => onSearchInput('')} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label="Limpiar búsqueda">
-					<X size={14} />
+					<X size={12} />
 				</button>
 			{/if}
 		</div>
-		<SelectConSaldo
+		<select
 			value={sortBy}
-			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
-			onchange={(v) => (toggleSort(v, true))}
-		/>
-		<button type="button" onclick={() => toggleSort(sortBy)} class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50" title={sortDir === 'asc' ? 'Ascendente' : 'Descendente'} aria-label="Cambiar dirección de orden">
-			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+			onchange={(e) => toggleSort((e.target as HTMLSelectElement).value, true)}
+			class="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
+			aria-label="Ordenar por"
+		>
+			{#if !tableFields.some((x) => x.sortable && x.key === sortBy)}
+				<option value={sortBy}>Ordenar: Más recientes</option>
+			{/if}
+			{#each tableFields.filter((x) => x.sortable) as field (field.key)}
+				<option value={String(field.key)}>Ordenar: {field.label}</option>
+			{/each}
+		</select>
+		<button type="button" onclick={() => toggleSort(sortBy)} class="p-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50" title={sortDir === 'asc' ? 'Ascendente' : 'Descendente'} aria-label="Cambiar dirección de orden">
+			{#if sortDir === 'asc'}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
 		</button>
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
-			<div class="min-w-[860px]">
-				<div class="grid grid-cols-[1.2fr_1fr_2fr_1fr_1.1fr_0.9fr_104px] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-					<span>Folio</span>
+			<div class="min-w-[1100px]">
+				<div class="grid grid-cols-[1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_150px_104px] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+											<span>Folio</span>
+						<span>Tipo</span>
 					<span>Fecha</span>
 					<span>Cliente</span>
 					<span>Forma de pago</span>
 					<span class="text-right pr-4">Importe Total</span>
 					<span>Estado</span>
-					<span class="text-right">Acciones</span>
+					<span>Emitir nota</span>
+						<span class="text-right">Acciones</span>
 				</div>
 
 				{#each items as item (item.id_factura)}
-					<div class="grid grid-cols-[1.2fr_1fr_2fr_1fr_1.1fr_0.9fr_104px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
-						<span class="font-semibold text-slate-700 text-sm">{item.folio}</span>
+					<div class="grid grid-cols-[1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_150px_104px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+												<span class="font-semibold text-slate-700 text-sm">{item.folio}</span>
+						<span class="text-xs text-slate-600">{TABS.find((x) => x.value === item.tipo_comprobante)?.label ?? '—'}</span>
 						<span class="text-sm text-slate-600">{formatDate(item.fecha_emision)}</span>
 						<span class="text-sm text-slate-600 truncate">{item.cliente_nombre ?? item.cliente?.nombre ?? 'Sin cliente'}</span>
 						<span class="text-sm text-slate-600">{getOptionLabel(formaPagoField, item.forma_pago)}</span>
@@ -667,6 +719,24 @@
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						</span>
+						{#if !verEliminados && item.estado === 'emitida'}
+							<select
+								value=""
+								onchange={(e) => {
+									const sel = e.target as HTMLSelectElement;
+									if (sel.value) emitirNotaDesdeDocumento(item, sel.value as TipoComprobante);
+									sel.value = '';
+								}}
+								class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[11px] font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
+							>
+								<option value="" disabled>Emitir…</option>
+								{#each ACCIONES_NOTA as a (a.value)}
+									<option value={a.value}>{a.label}</option>
+								{/each}
+							</select>
+						{:else}
+							<span class="text-xs text-slate-300">—</span>
+						{/if}
 						<div class="flex items-center gap-1 justify-end">
 							{#if verEliminados}
 								<button type="button" onclick={() => handleRestaurar(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-emerald-50 hover:text-emerald-600" title="Restaurar" aria-label="Restaurar">
@@ -712,7 +782,7 @@
 	{/if}
 </div>
 
-<FacturaModal open={modalOpen} mode={modalMode} tipoComprobante={comprobanteModal} factura={editingFactura} detalleInicial={editingDetalle} {preseleccion} onClose={closeModal} onSaved={handleSaved} />
+<FacturaModal open={modalOpen} mode={modalMode} tipoComprobante={tipoModal} factura={editingFactura} detalleInicial={editingDetalle} {preseleccion} folioReferenciaInicial={folioReferenciaModal} onClose={closeModal} onSaved={handleSaved} />
 
 <FacturaPreviewModal open={previewOpen} datos={previewDatos} onClose={closePreview} />
 <DocumentPreviewModal open={imagenOpen} documents={imagenDocs} title={imagenTitle} onClose={() => (imagenOpen = false)} />
@@ -720,7 +790,7 @@
 
 <ConfirmModal
 	open={confirmDarDeBajaOpen}
-	title={`Dar de baja ${nombreTab.toLowerCase()}`}
+	title="Dar de baja comprobante"
 	message={facturaParaDarDeBaja ? (facturaParaDarDeBaja.estado === 'emitida' ? `¿Dar de baja ${facturaParaDarDeBaja.folio}? Quedará ANULADA y sus transacciones volverán a estar sin comprobante (azul). No se puede restaurar.` : `¿Dar de baja el borrador ${facturaParaDarDeBaja.folio}? Quedará marcado como inactivo.`) : ''}
 	confirmLabel="Dar de baja"
 	onConfirm={confirmarDarDeBaja}
@@ -729,7 +799,7 @@
 
 <AdminConfirmModal
 	open={confirmEliminarPermanenteOpen}
-	title={`Eliminar ${nombreTab.toLowerCase()} permanentemente`}
+	title="Eliminar comprobante permanentemente"
 	message={facturaParaEliminarPermanente ? `Vas a eliminar PERMANENTEMENTE ${facturaParaEliminarPermanente.folio}, su detalle y sus imágenes guardadas. Sus transacciones (si las tenía) quedarán libres. Esta acción no se puede deshacer. Ingresa el correo y la contraseña de un administrador para continuar.` : ''}
 	confirmLabel="Eliminar permanentemente"
 	onConfirm={confirmarEliminarPermanente}

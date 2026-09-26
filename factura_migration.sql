@@ -53,6 +53,17 @@ ALTER TABLE factura ADD COLUMN IF NOT EXISTS monto_detraccion NUMERIC(14,2);
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS detraccion_bien_servicio VARCHAR(200);
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS detraccion_medio_pago VARCHAR(50);
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS detraccion_cuenta_bn VARCHAR(40);
+-- Catálogos SUNAT de la detracción (ver detraccionCatalogos.ts): tipo de operación ('1001'...'1004') y
+-- código de bien/servicio ('001'...'041'). detraccion_bien_servicio guarda el nombre y
+-- detraccion_medio_pago el nombre del medio de pago — algunos nombres del catálogo pasan de 150 caracteres (por eso TEXT).
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS detraccion_tipo_operacion VARCHAR(4);
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS detraccion_codigo_bien VARCHAR(3);
+ALTER TABLE factura ALTER COLUMN detraccion_medio_pago TYPE TEXT;
+-- Tipo de nota de crédito (catálogo SUNAT 09: '01' Anulación de la operación, ...) — solo Nota de Crédito.
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS tipo_nota VARCHAR(2);
+-- Nota de Crédito "Anulación por Error en el RUC": folio de la factura que anula y de la nueva factura.
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS folio_referencia VARCHAR(20);
+ALTER TABLE factura ADD COLUMN IF NOT EXISTS folio_nueva_factura VARCHAR(20);
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS imagen_url TEXT;
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS autorizado_por VARCHAR(200);
 ALTER TABLE factura ADD COLUMN IF NOT EXISTS fecha_autorizacion TIMESTAMPTZ;
@@ -174,18 +185,22 @@ BEGIN
         RAISE EXCEPTION 'Solo se puede emitir una factura en borrador' USING HINT = 'FACTURA_NO_EMITIBLE';
     END IF;
 
-    SELECT COUNT(DISTINCT id_transaccion) INTO v_total
-    FROM factura_detalle WHERE id_factura = p_id_factura AND id_transaccion IS NOT NULL;
-    IF v_total = 0 THEN
-        RAISE EXCEPTION 'La factura no tiene transacciones seleccionadas' USING HINT = 'FACTURA_SIN_TRANSACCIONES';
-    END IF;
+    -- Una Nota de Crédito por "Anulación por Error en el RUC" referencia otra factura y NO consume
+    -- transacciones: solo se emite. Todo lo demás exige transacciones y las marca como facturadas.
+    IF NOT (v_factura.tipo_comprobante = 'nota_credito' AND v_factura.folio_referencia IS NOT NULL) THEN
+        SELECT COUNT(DISTINCT id_transaccion) INTO v_total
+        FROM factura_detalle WHERE id_factura = p_id_factura AND id_transaccion IS NOT NULL;
+        IF v_total = 0 THEN
+            RAISE EXCEPTION 'La factura no tiene transacciones seleccionadas' USING HINT = 'FACTURA_SIN_TRANSACCIONES';
+        END IF;
 
-    UPDATE transaccion SET id_factura = p_id_factura
-    WHERE id_factura IS NULL
-      AND id_transaccion IN (SELECT id_transaccion FROM factura_detalle WHERE id_factura = p_id_factura AND id_transaccion IS NOT NULL);
-    GET DIAGNOSTICS v_asignadas = ROW_COUNT;
-    IF v_asignadas <> v_total THEN
-        RAISE EXCEPTION 'Alguna de las transacciones ya fue facturada' USING HINT = 'TRANSACCION_YA_FACTURADA';
+        UPDATE transaccion SET id_factura = p_id_factura
+        WHERE id_factura IS NULL
+          AND id_transaccion IN (SELECT id_transaccion FROM factura_detalle WHERE id_factura = p_id_factura AND id_transaccion IS NOT NULL);
+        GET DIAGNOSTICS v_asignadas = ROW_COUNT;
+        IF v_asignadas <> v_total THEN
+            RAISE EXCEPTION 'Alguna de las transacciones ya fue facturada' USING HINT = 'TRANSACCION_YA_FACTURADA';
+        END IF;
     END IF;
 
     UPDATE factura

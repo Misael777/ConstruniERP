@@ -58,6 +58,11 @@ export interface Factura {
 	id_factura: number;
 	folio: string;
 	tipo_comprobante: TipoComprobante;
+	/** Solo Nota de Crédito: código del "Tipo de nota de crédito" (ver TIPOS_NOTA_CREDITO). */
+	tipo_nota: string | null;
+	/** Nota de Crédito por "Anulación por Error en el RUC": factura que anula y nueva factura (folios). */
+	folio_referencia: string | null;
+	folio_nueva_factura: string | null;
 	id_cliente: number;
 	cliente_nombre: string | null;
 	cliente_tipo_doc: string | null;
@@ -81,7 +86,9 @@ export interface Factura {
 	sujeta_detraccion: boolean;
 	porcentaje_detraccion: number | null;
 	monto_detraccion: number | null;
+	detraccion_tipo_operacion: string | null;
 	detraccion_bien_servicio: string | null;
+	detraccion_codigo_bien: string | null;
 	detraccion_medio_pago: string | null;
 	detraccion_cuenta_bn: string | null;
 	imagen_url: string | null;
@@ -179,6 +186,13 @@ export async function getFacturaConDetalle(
 	return { factura: factura as unknown as Factura, detalle: (detalle ?? []) as FacturaDetalle[], archivos: (archivos ?? []) as FacturaArchivo[] };
 }
 
+/** Factura/boleta/nota por su folio (ej. 'E001-00000042') con su detalle y archivos — null si no existe. */
+export async function getFacturaPorFolio(client: SupabaseClient, folio: string) {
+	const { data } = await client.from(TABLE_NAME).select(PK_COLUMN).eq('folio', folio).eq('activo', true).maybeSingle();
+	if (!data) return null;
+	return getFacturaConDetalle(client, (data as any)[PK_COLUMN] as number);
+}
+
 // ─────────────────────────────────────────────────────────────
 // Clientes y sus transacciones (soportes) facturables
 // ─────────────────────────────────────────────────────────────
@@ -224,6 +238,8 @@ export interface TransaccionFacturable {
 	 * getTransaccionesDelCliente, que ya está scoped a un cliente conocido de antemano. */
 	idCliente: number | null;
 	clienteNombre: string | null;
+	/** Tipo de documento de la transacción (catálogo de transaccion.config.ts); null = sin tipo. */
+	tipo_documento: string | null;
 }
 
 /** Transacciones de ingreso (externas, activas) cuyo ORIGEN es el centro de costo del cliente — es decir,
@@ -237,7 +253,7 @@ export async function getTransaccionesDelCliente(client: SupabaseClient, idClien
 
 	let query = client
 		.from('transaccion')
-		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura')
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura, tipo_documento')
 		.eq('tipo', 'ingreso')
 		.eq('estado', 'activo')
 		.eq('tipo_alcance', 'externa')
@@ -257,7 +273,7 @@ export async function getTransaccionesPorIds(client: SupabaseClient, ids: number
 	if (ids.length === 0) return [];
 	const { data, error } = await client
 		.from('transaccion')
-		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura')
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura, tipo_documento')
 		.in('id_transaccion', ids)
 		.order('fecha', { ascending: false });
 	if (error) throw error;
@@ -294,7 +310,8 @@ async function armarTransaccionesFacturables(client: SupabaseClient, filas: any[
 		facturaFolio: t.id_factura != null ? (facturasPorId.get(t.id_factura)?.folio ?? null) : null,
 		facturaImagenUrl: t.id_factura != null && facturasPorId.get(t.id_factura)?.estado === 'emitida' ? (facturasPorId.get(t.id_factura)?.imagen_url ?? null) : null,
 		idCliente: t.idCliente ?? null,
-		clienteNombre: t.clienteNombre ?? null
+		clienteNombre: t.clienteNombre ?? null,
+		tipo_documento: t.tipo_documento ?? null
 	}));
 }
 
@@ -306,9 +323,9 @@ async function armarTransaccionesFacturables(client: SupabaseClient, filas: any[
  * usuario: con muchas transacciones esta lista no debe traerlas todas de una vez. */
 export async function getTransaccionesFacturables(
 	client: SupabaseClient,
-	/** null = las que NO tienen tipo de documento (pestaña "Sin tipo de documento"). */
-	tipoDocumento: string | null,
-	params: { page?: number; pageSize?: number } = {}
+	/** undefined = todas (sin filtrar por tipo); null = las que NO tienen tipo de documento; texto = ese tipo. */
+	tipoDocumento: string | null | undefined,
+	params: { page?: number; pageSize?: number; vista?: 'pendientes' | 'emitidas' } = {}
 ): Promise<ListResult<TransaccionFacturable>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -324,13 +341,15 @@ export async function getTransaccionesFacturables(
 	// se ven en "Documentos emitidos", no en esta lista de pendientes.
 	let query = client
 		.from('transaccion')
-		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_origen, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura', { count: 'exact' })
+		.select('id_transaccion, fecha, categoria, descripcion, num_documento, monto_total, tipo_moneda, tipo_cambio, id_centro_costo_origen, id_centro_costo_destino, comprobante_url, comprobante_autogenerado_url, factura_url, id_factura, tipo_documento', { count: 'exact' })
 		.eq('tipo', 'ingreso')
 		.eq('estado', 'activo')
 		.eq('tipo_alcance', 'externa')
-		.is('id_factura', null)
 		.in('id_centro_costo_origen', [...clientePorCentro.keys()]);
-	query = tipoDocumento === null ? query.is('tipo_documento', null) : query.eq('tipo_documento', tipoDocumento);
+	// Vista: sin comprobante emitido (default) o con comprobante ya emitido.
+	query = params.vista === 'emitidas' ? query.not('id_factura', 'is', null) : query.is('id_factura', null);
+	if (tipoDocumento === null) query = query.is('tipo_documento', null);
+	else if (tipoDocumento !== undefined) query = query.eq('tipo_documento', tipoDocumento);
 	const { data, error, count } = await query.order('fecha', { ascending: false }).range(from, to);
 	if (error) throw error;
 
@@ -462,6 +481,7 @@ export async function guardarBorradorFactura(
 	idFactura?: number
 ): Promise<ServiceResult<Factura>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
+	if (tipoComprobante === 'nota_credito' && !String(payload.tipo_nota ?? '').trim()) errors.tipo_nota = 'Tipo de nota de crédito es obligatorio';
 	if (Object.keys(errors).length > 0) return { success: false, message: 'Revisa los campos marcados', errors };
 	if (lineas.length === 0) return { success: false, message: 'Selecciona al menos una transacción para facturar.' };
 
@@ -588,15 +608,16 @@ export interface KpisFacturacion {
 
 /** KPIs de cada una de las 4 pestañas — mismas tarjetas para las 4, filtradas al `tipoComprobante` de
  * la pestaña activa (antes cruzaban TODA la tabla `factura`, sin distinguir tipo). */
-export async function getKpisComprobante(client: SupabaseClient, tipoComprobante: TipoComprobante): Promise<KpisFacturacion> {
-	const tipoDocumento = TIPO_DOCUMENTO_POR_COMPROBANTE[tipoComprobante];
+export async function getKpisComprobante(client: SupabaseClient, tipoComprobante: TipoComprobante | null): Promise<KpisFacturacion> {
+	// null = todos los tipos de comprobante (pantalla inicial de Emisión de Comprobantes).
+	const tipoDocumento = tipoComprobante ? TIPO_DOCUMENTO_POR_COMPROBANTE[tipoComprobante] : null;
 	const inicioMes = new Date();
 	inicioMes.setDate(1);
 	inicioMes.setHours(0, 0, 0, 0);
 	const inicioMesStr = inicioMes.toISOString().slice(0, 10);
 
 	const [{ data: emitidas }, { data: centrosCliente }] = await Promise.all([
-		client.from(TABLE_NAME).select('monto_total, monto_detraccion, fecha_emision').eq('activo', true).eq('estado', 'emitida').eq('tipo_comprobante', tipoComprobante),
+		client.from(TABLE_NAME).select('monto_total, monto_detraccion, fecha_emision').eq('activo', true).eq('estado', 'emitida').match(tipoComprobante ? { tipo_comprobante: tipoComprobante } : {}),
 		client.from('centro_costo').select('id_centro_costo').not('id_cliente', 'is', null)
 	]);
 
@@ -613,7 +634,7 @@ export async function getKpisComprobante(client: SupabaseClient, tipoComprobante
 			.eq('tipo', 'ingreso')
 			.eq('estado', 'activo')
 			.eq('tipo_alcance', 'externa')
-			.eq('tipo_documento', tipoDocumento)
+			.match(tipoDocumento ? { tipo_documento: tipoDocumento } : {})
 			.is('id_factura', null)
 			.in('id_centro_costo_origen', idsCentros);
 		porFacturar = (pendientes ?? []).reduce((s: number, t: any) => s + Number(t.monto_total ?? 0), 0);
