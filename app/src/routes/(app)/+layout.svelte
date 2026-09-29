@@ -16,6 +16,7 @@
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { mobileFabState } from '$lib/stores/mobileFab.svelte';
 	import MobileFab from '$lib/shared/components/MobileFab.svelte';
+	import ConfirmDialogHost from '$lib/shared/components/ConfirmDialogHost.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
 
 	let { children } = $props();
@@ -263,4 +264,5 @@
 	{/if}
 
 	<Toast />
+	<ConfirmDialogHost />
 {/if}

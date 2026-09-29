@@ -1,6 +1,8 @@
 <script lang="ts">
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
+	import { toast } from '$lib/stores/toast';
 	import GanttTimeline from './GanttTimeline.svelte';
 	import { buildTree, fillMissingAncestors, flattenSubtree } from '$lib/utils/tree';
 	import {
@@ -272,7 +274,7 @@
 			draftDates = new Map();
 			draftConflict = null;
 		} else {
-			alert('No se pudieron guardar los cambios: ' + res.error);
+			toast.error('No se pudieron guardar los cambios: ' + res.error);
 		}
 	}
 
@@ -499,7 +501,7 @@
 
 	// ── DELETE ─────────────────────────────────────────────────────────────────
 	async function deleteActividad(id: number) {
-		if (!confirm('¿Eliminar esta actividad?')) return;
+		if (!(await confirmar({ title: 'Eliminar actividad', message: '¿Eliminar esta actividad? También se eliminan sus subactividades.', confirmLabel: 'Eliminar' }))) return;
 		const ids = new Set<number>([id]);
 		// collect children recursively
 		let changed = true;

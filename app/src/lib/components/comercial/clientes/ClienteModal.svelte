@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
+	import { toast } from '$lib/stores/toast';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
@@ -110,7 +111,7 @@
 						payloadAnterior
 					});
 					if (!result.success) throw new Error(result.message || 'No se pudo enviar la solicitud.');
-					alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
+					toast.info('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
 					onSave();
 					onClose();
 					return;

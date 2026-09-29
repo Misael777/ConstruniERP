@@ -429,6 +429,21 @@ excepción es el selector de "filas por página" de `VentasTable.svelte`, que ho
 panel del combo usa `z-[200]`, por encima de los modales (máx. `z-[120]`). Limitación conocida: no muestra colores
 por opción (por ejemplo, el de Prioridad en Cuentas por Pagar/Cobrar).
 
+## 7c. Convención de interfaz: diálogos y enlaces multiplataforma
+
+Todo cambio debe funcionar igual en navegador, Tauri Windows y Tauri Android. En Tauri, `alert()`/`confirm()`
+nativos dependen del plugin de diálogos (pueden fallar por permisos ACL) y `window.open`/`<a target="_blank">` no
+tienen pestañas donde abrirse. Por eso:
+
+- **Confirmar (Sí/No):** `const ok = await confirmar({ title, message, confirmLabel, danger })`
+  (`$lib/stores/confirmDialog.svelte`). Usa `ConfirmModal`, montado una sola vez en `(app)/+layout.svelte`
+  (`ConfirmDialogHost`). Con contraseña de admin: `AdminConfirmModal`. Nunca `confirm()`.
+- **Avisos y errores:** `toast.success/info/error` (`$lib/stores/toast`), con `describeError(err)` en los errores.
+  Nunca `alert()`.
+- **Abrir una URL externa:** `abrirEnlaceExterno(url)` (`$lib/shared/enlaceExterno`); en Tauri usa `openUrl` del
+  plugin opener. Para un `<a target="_blank">`, agrega `onclick={(e) => interceptarEnlaceExterno(e, url)}`.
+- **Guardar un archivo:** `guardarArchivoDeTexto` / `guardarArchivoBinario` (`$lib/shared/saveFile`).
+
 ## 8. Glosario rápido
 
 - **Centro de Costo:** cuenta interna de origen/destino de todo dinero; los de cliente/proveedor/empleado/proyecto se

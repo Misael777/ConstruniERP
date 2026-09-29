@@ -4,6 +4,7 @@
     import { supabase } from '$lib/supabaseClient';
     import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
     import { generateUniqueFileName } from '$lib/shared/fileNaming';
+    import { interceptarEnlaceExterno } from '$lib/shared/enlaceExterno';
 
     const { projectId, projectName = 'Proyecto' } = $props<{
         projectId: number | string;
@@ -412,6 +413,7 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                                 <a
                                     href={selectedDoc.storage_url}
                                     target="_blank"
+                                    onclick={(e) => interceptarEnlaceExterno(e, selectedDoc?.storage_url)}
                                     rel="noopener noreferrer"
                                     class="px-3 py-1.5 bg-white border border-slate-200 hover:border-slate-300 hover:shadow-sm text-slate-700 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5"
                                 >
@@ -469,6 +471,7 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                                     <a
                                         href={selectedDoc.storage_url}
                                         target="_blank"
+                                        onclick={(e) => interceptarEnlaceExterno(e, selectedDoc?.storage_url)}
                                         rel="noopener noreferrer"
                                         class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center gap-2"
                                     >
@@ -587,6 +590,7 @@ async function uploadDocumentToDrive(file: File, tipo: string, nombre: string) {
                                         <a
                                             href={selectedDoc.storage_url}
                                             target="_blank"
+                                            onclick={(e) => interceptarEnlaceExterno(e, selectedDoc?.storage_url)}
                                             rel="noopener noreferrer"
                                             class="w-full text-left px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors flex items-center gap-2"
                                         >

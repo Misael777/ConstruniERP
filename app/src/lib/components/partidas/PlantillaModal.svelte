@@ -4,6 +4,7 @@
     import { X } from '@lucide/svelte';
     import { createPlantilla, updatePlantilla, deletePlantilla, type Plantilla } from '$lib/stores/partidas';
     import { toast } from '$lib/stores/toast';
+    import { confirmar } from '$lib/stores/confirmDialog.svelte';
 
     const dispatch = createEventDispatcher();
     let { isOpen = false, plantilla = null }: { isOpen: boolean; plantilla?: Plantilla | null } = $props();
@@ -51,7 +52,7 @@
 
     async function handleDelete() {
         if (!plantilla) return;
-        if (!confirm(`¿Eliminar la plantilla "${plantilla.nombre}"? También se eliminan sus partidas asociadas (solo de la plantilla, no del catálogo). Esta acción no se puede deshacer.`)) return;
+        if (!(await confirmar({ title: 'Eliminar plantilla', message: `¿Eliminar la plantilla "${plantilla.nombre}"? También se eliminan sus partidas asociadas (solo de la plantilla, no del catálogo). Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }))) return;
 
         errorMsg = '';
         isLoading = true;

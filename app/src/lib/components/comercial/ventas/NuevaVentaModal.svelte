@@ -5,6 +5,8 @@
 	import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
 	import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 	import { describeError } from '$lib/shared/describeError';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
+	import { toast } from '$lib/stores/toast';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
@@ -722,7 +724,7 @@ async function copiarCodigoGenerado() {
 	}
 
 	async function handleEliminarProformaGestion(doc: any) {
-		if (!confirm(`¿Eliminar la proforma "${doc.nombre}"? Esta acción no se puede deshacer.`)) return;
+		if (!(await confirmar({ title: 'Eliminar proforma', message: `¿Eliminar la proforma "${doc.nombre}"? Esta acción no se puede deshacer.`, confirmLabel: 'Eliminar' }))) return;
 		try {
 			await deleteProjectDocumentFile(doc.storage_url);
 			const { error } = await supabase.from('documento_proyecto').delete().eq('id_documento', doc.id_documento);
@@ -973,7 +975,7 @@ async function copiarCodigoGenerado() {
 			if (result.data) onTransaccionSugerida(result.data, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
-			alert(`No se pudo cerrar la venta.\n${describeError(err)}`);
+			toast.error(`No se pudo cerrar la venta. ${describeError(err)}`);
 		} finally {
 			isClosing = false;
 		}
@@ -1317,7 +1319,7 @@ async function copiarCodigoGenerado() {
 					saveError = `No se pudo enviar la solicitud. ${result.message ?? ''}`;
 					return;
 				}
-				alert('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
+				toast.info('No tienes permisos de administrador. Los cambios se enviaron para que un administrador los apruebe.');
 				onSaved();
 				onClose();
 				return;

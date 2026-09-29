@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -815,7 +816,7 @@
 
 	async function handleDesaprobar() {
 		if (!transaccion) return;
-		if (!confirm('¿Quitar la aprobación de este comprobante? Volverá a poder editarse/eliminarse normalmente.')) return;
+		if (!(await confirmar({ title: 'Quitar aprobación', message: '¿Quitar la aprobación de este comprobante? Volverá a poder editarse/eliminarse normalmente.', confirmLabel: 'Quitar aprobación', danger: false }))) return;
 		aprobando = true;
 		try {
 			const result = await desaprobarTransaccion(supabase, transaccion.id_transaccion, isAdmin());
@@ -835,12 +836,13 @@
 
 	async function handleAnular() {
 		if (!transaccion) return;
-		if (
-			!confirm(
-				'¿Anular esta transacción? Si respalda un pago o cobro ya confirmado, ese pago/cobro volverá a quedar programado (sin transacción de respaldo) y la cuenta se recalculará.'
-			)
-		)
-			return;
+		const confirmado = await confirmar({
+			title: 'Anular transacción',
+			message:
+				'¿Anular esta transacción? Si respalda un pago o cobro ya confirmado, ese pago/cobro volverá a quedar programado (sin transacción de respaldo) y la cuenta se recalculará.',
+			confirmLabel: 'Anular'
+		});
+		if (!confirmado) return;
 		anulando = true;
 		try {
 			const result = await anularTransaccion(supabase, transaccion.id_transaccion, isAdmin());

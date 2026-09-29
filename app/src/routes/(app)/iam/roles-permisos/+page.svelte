@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
+	import { describeError } from '$lib/shared/describeError';
 
 	type Rol = { id: number; nombre: string; descripcion: string };
 	type Permiso = { id: number; nombre: string; descripcion: string };
@@ -181,7 +184,7 @@
 	}
 
 	async function eliminarRol(id: number, nombre: string) {
-		const ok = confirm(`¿Estás seguro de eliminar el rol "${nombre}"?\nEsta acción afectará a todos los empleados con este rol asignado.`);
+		const ok = await confirmar({ title: 'Eliminar rol', message: `¿Estás seguro de eliminar el rol "${nombre}"? Esta acción afectará a todos los empleados con este rol asignado.`, confirmLabel: 'Eliminar' });
 		if (!ok) return;
 
 		try {
@@ -193,7 +196,7 @@
 			rolesPermisos = rolesPermisos.filter(rp => rp.rol_id !== id);
 		} catch (error: any) {
 			console.error("Error al eliminar rol:", error);
-			alert("Error al eliminar el rol: " + error.message);
+			toast.error("Error al eliminar el rol: " + describeError(error));
 		}
 	}
 
@@ -208,15 +211,17 @@
 		const isAdding = !currentStatus;
 		try {
 			if (isAdding) {
-				await supabase.from('roles_permisos').insert({ rol_id: rolId, permiso_id: permisoId });
+				const { error } = await supabase.from('roles_permisos').insert({ rol_id: rolId, permiso_id: permisoId });
+				if (error) throw error;
 				rolesPermisos = [...rolesPermisos, { rol_id: rolId, permiso_id: permisoId }];
 			} else {
-				await supabase.from('roles_permisos').delete().match({ rol_id: rolId, permiso_id: permisoId });
+				const { error } = await supabase.from('roles_permisos').delete().match({ rol_id: rolId, permiso_id: permisoId });
+				if (error) throw error;
 				rolesPermisos = rolesPermisos.filter(rp => !(rp.rol_id === rolId && rp.permiso_id === permisoId));
 			}
 		} catch (error) {
 			console.error("Error al cambiar permiso:", error);
-			alert("Error al guardar el permiso. Verifica que seas administrador.");
+			toast.error(`Error al guardar el permiso. Verifica que seas administrador. ${describeError(error)}`);
 		}
 	}
 </script>
