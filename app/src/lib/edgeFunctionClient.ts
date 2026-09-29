@@ -213,6 +213,33 @@ async function restaurarEmpleadoInterno(authUserId: string) {
 }
 
 /**
+ * ¿Se puede crear el primer administrador? (true solo si `empleados` está vacía). Pasa por la Edge
+ * Function porque sin sesión la RLS de `empleados` devuelve 0 filas siempre — contarla desde el cliente
+ * daría un falso "vacía". Funciona igual en navegador, Tauri Windows y Tauri Android.
+ */
+export async function getFirstAdminStatus(): Promise<boolean> {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'first-admin-status');
+	const response = await fetchWithApiKey(url.toString(), { method: 'GET' });
+	const data = await handleResponse(response);
+	return data.canCreate === true;
+}
+
+/**
+ * Crea el primer administrador (cuenta de Auth + empleado con rol 'administrador'). La Edge Function lo
+ * rechaza si ya existe algún empleado.
+ */
+export async function createFirstAdmin(payload: { nombre: string; email: string; password: string }) {
+	const url = new URL(getUserAdminUrl());
+	url.searchParams.set('action', 'first-admin');
+	const response = await fetchWithApiKey(url.toString(), {
+		method: 'POST',
+		body: JSON.stringify(payload)
+	});
+	return handleResponse(response);
+}
+
+/**
  * Resetea la contraseña de un usuario
  */
 export async function resetPassword(authUserId: string, newPassword: string) {

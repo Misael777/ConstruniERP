@@ -273,6 +273,7 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
 | `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
 | `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | **pendiente** (SQL a mano + `migration repair`) |
+| `20260929155944_centro_costo_corporativo_unico` | Crea el centro Corporativo (`bolsa general`) si falta e índice único `uq_centro_costo_corporativo_activo` (un solo Corporativo activo). "Nuevo Centro de Costo" ya solo crea Otro/Préstamo | **pendiente** | **pendiente** |
 
 Todas las migraciones hasta `20260925130000` están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
 
@@ -428,22 +429,6 @@ ids numéricos convierte con `String()`/`Number()`). Ya no queda ningún `<selec
 excepción es el selector de "filas por página" de `VentasTable.svelte`, que hoy no está conectado a nada. El
 panel del combo usa `z-[200]`, por encima de los modales (máx. `z-[120]`). Limitación conocida: no muestra colores
 por opción (por ejemplo, el de Prioridad en Cuentas por Pagar/Cobrar).
-
-## 7c. Animación de carga (Snoopy, ticket #9)
-
-Espera larga (subir a Drive, generar un PDF/comprobante, OCR, la Edge Function de Empleados, login/arranque,
-buscar-descargar una actualización) muestra un overlay de pantalla completa con Snoopy — NUNCA los guardados
-rápidos de formularios, que conservan su spinner en el botón. Un solo store (`$lib/stores/loading.svelte.ts`,
-`iniciarCarga`/`conCarga`/`actualizar`/`cerrar`) enganchado en los puntos centrales, no en cada modal:
-`driveUploadClient.ts` (`uploadToDriveClient`), la rama web de `uploadProjectDocument.ts`,
-`pdfHtmlRender.ts`-derivados (`facturaPdf.ts`, `reciboPagoEfectivo.ts`, `reciboPagoProveedor.ts`,
-`comprobanteTransferenciaInterna.ts`), `ocrComprobante.ts`, `edgeFunctionClient.ts` (las mutaciones, no
-`listUsers`/`getUser`) y `BotonActualizar.svelte`. El login (`(auth)/login/+page.svelte`) y el arranque
-(`(app)/+layout.svelte`) usan `SnoopyLoader.svelte` a pantalla completa directo, sin pasar por el store — el
-login mantiene la pantalla completa **incluso en el `finally`** solo en el camino de error; el camino de éxito
-la deja abierta a propósito para que no haya hueco hasta que el layout del ERP termine su propio arranque.
-Asset: `static/snoopy-loading.webp` (WebP animado transparente, ~660 KB) — los 86 MB de fotogramas en bruto de
-`app/assets/Animacion_loading_frames*/` están en `.gitignore`, nunca se commitean.
 
 ## 8. Glosario rápido
 

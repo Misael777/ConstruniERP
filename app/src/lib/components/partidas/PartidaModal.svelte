@@ -4,6 +4,7 @@
     import { X } from '@lucide/svelte';
     import { createPartida, updatePartida, deletePartida, partidasTree, type PartidaNode } from '$lib/stores/partidas';
     import { toast } from '$lib/stores/toast';
+    import { confirmar } from '$lib/stores/confirmDialog.svelte';
     
     const dispatch = createEventDispatcher();
     let { isOpen = false, partida = null } = $props<{ isOpen: boolean; partida: PartidaNode | null }>();
@@ -80,7 +81,7 @@
 
     async function handleDelete() {
         if (!partida) return;
-        if (!confirm('¿Está seguro que desea eliminar esta partida?')) return;
+        if (!(await confirmar({ title: 'Eliminar partida', message: '¿Está seguro que desea eliminar esta partida?', confirmLabel: 'Eliminar' }))) return;
 
         errorMessage = '';
         isLoading = true;

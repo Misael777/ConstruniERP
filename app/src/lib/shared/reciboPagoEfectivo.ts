@@ -54,6 +54,9 @@ export interface DatosReciboPago {
 	 * depósito — solo cuando esEfectivo es false. Sin fuente en el formulario principal ni en ningún
 	 * popup; queda "—" si no hay dato (ver TransaccionModal.svelte, construirDatosReciboPagoAuto). */
 	nombreTitularCuenta?: string;
+	/** Título de la sección 1 — por defecto "POR CONCEPTO DE". En un Ingreso de Categoría "Préstamo" es
+	 * "BENEFICIARIO" (ver construirDatosReciboPagoAuto en TransaccionModal.svelte). */
+	tituloSeccionConcepto?: string;
 }
 
 // Iconos SVG inline (calcados de Lucide "Banknote"/"Smartphone"/"Landmark") — a propósito, NO emojis:
@@ -98,7 +101,7 @@ function construirVoucherHtml(esCopia: boolean, datos: DatosReciboPago, sinMarca
 			<div class="v-intro">Yo, ${escapeHtml(datos.clienteNombre)}, identificado con RUC/DNI ${escapeHtml(datos.clienteDni)}, <b>dejo constancia de haber pagado a favor de ${escapeHtml(EMPRESA_NOMBRE)}</b>, identificado con RUC ${escapeHtml(EMPRESA_RUC)}, el importe que se detalla a continuación:</div>
 
 			<div class="v-seccion">
-				<div class="v-seccion-titulo"><span class="v-num-circulo">1</span> POR CONCEPTO DE</div>
+				<div class="v-seccion-titulo"><span class="v-num-circulo">1</span> ${escapeHtml(datos.tituloSeccionConcepto || 'POR CONCEPTO DE')}</div>
 				<div class="v-caja v-caja-1col">
 					<div class="v-col-nombre" style="font-size:13px;font-weight:700;color:#1e293b;">${escapeHtml(datos.proyectoNombre)}</div>
 					<div class="v-col-nombre">Código: ${escapeHtml(datos.proyectoCodigo)}</div>

@@ -231,10 +231,11 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 			{ value: 'subcontratista', label: 'Subcontratista (automático)' },
 			{ value: 'empleado', label: 'Empleado (automático)' }
 		],
+		// A pedido del usuario, "Nuevo Centro de Costo" solo crea Otro y Préstamo. Obra/Consultoría salen
+		// solos al cerrar una venta, y el Corporativo es ÚNICO y se genera solo (ver TIPO_CORPORATIVO y
+		// getOrCrearCentroCostoCorporativo en centroCostos.service.ts). Los centros ya existentes de esos
+		// tipos se siguen mostrando con su etiqueta vía `options`.
 		formOptions: [
-			{ value: 'obra', label: 'Obra' },
-			{ value: 'consultoria', label: 'Consultoría' },
-			{ value: 'bolsa general', label: 'Corporativa' },
 			{ value: 'otro', label: 'Otro' },
 			{ value: 'prestamo', label: 'Préstamo' }
 		],
@@ -247,8 +248,11 @@ export const FIELDS_CONFIG: CentroCostoFieldConfig[] = [
 		key: 'monto_actual', // nombre real de la columna en BD (ver nota sobre el typo de los .sql arriba)
 		label: 'Monto Actual',
 		tipo: 'currency',
-		required: true,
-		min: 0.01, // AJUSTAR: representa ">0"; súbelo si el ERP exige un monto mínimo mayor.
+		// Opcional (a pedido del usuario): no es condición para crear un centro de costo, así que no
+		// lleva el asterisco rojo. Si se deja vacío se guarda 0 (ver buildWritablePayload en
+		// centroCostos.service.ts); si se escribe, no puede ser negativo.
+		required: false,
+		min: 0,
 		// Máscara: conserva solo dígitos y un único punto decimal, con máximo 2 decimales,
 		// mientras el usuario escribe (el separador de miles solo se aplica al MOSTRAR el valor,
 		// no mientras se edita, para no pelear con la posición del cursor).

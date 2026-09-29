@@ -67,9 +67,6 @@
 	}
 	
 	let passwordInputRef = $state<HTMLInputElement>();
-	function isTauriApp() {
-		return isRunningInTauri();
-	}
 
 	function getSavedEmail() {
 		if (typeof localStorage === 'undefined') return null;
@@ -101,41 +98,18 @@
 	async function checkFirstAdminAvailability() {
 		checkingFirstAdmin = true;
 		console.log('[Login] Checking first-admin availability...');
+		// Vía la Edge Function user-admin (service_role del lado de Supabase), igual en navegador, Tauri
+		// Windows y Tauri Android — antes Tauri usaba un comando Rust y el navegador /api/first-admin, y los
+		// dos necesitaban SUPABASE_SERVICE_ROLE_KEY local, que la app instalada no tiene.
 		try {
-			if (isTauriApp()) {
-				// @ts-ignore: module may only exist in desktop runtime
-				const core = await import('@tauri-apps/api/core');
-				const canCreate = await core.invoke('check_first_admin_available');
-				console.log('[Login] Tauri first-admin availability result:', canCreate);
-				allowFirstAdmin = Boolean(canCreate);
-				return;
-			}
-
-			const response = await fetchApi('/api/first-admin');
-			const result = await parseJsonResponse(response);
-			console.log('[Login] /api/first-admin response status:', response.status, 'result:', result);
-			allowFirstAdmin = response.ok && result.canCreate === true;
+			allowFirstAdmin = await getFirstAdminStatus();
 			console.log('[Login] allowFirstAdmin set to', allowFirstAdmin);
-			if (!response.ok) {
-				console.warn('[Login] first-admin availability failed:', result);
-			}
 		} catch (err) {
-			console.warn('[Login] first-admin availability error, trying fallback:', err);
-			try {
-				const { count, error } = await supabase
-					.from('empleados')
-					.select('id', { head: true, count: 'exact' });
-				if (error) {
-					console.error('[Login] client-side empleados count failed:', error);
-					allowFirstAdmin = false;
-				} else {
-					console.log('[Login] client-side empleados count:', count);
-					allowFirstAdmin = !count || count === 0;
-				}
-			} catch (fallbackError) {
-				console.error('[Login] Error during fallback empleados count:', fallbackError);
-				allowFirstAdmin = false;
-			}
+			// Sin verificación confiable no se ofrece crear el primer administrador. No se cuenta `empleados`
+			// desde el cliente: sin sesión (rol anon) la RLS de esa tabla devuelve 0 filas siempre, lo que
+			// mostraría "crear primer administrador" aunque la base ya tenga empleados.
+			console.warn('[Login] first-admin availability error — no se ofrece crear el primer administrador:', err);
+			allowFirstAdmin = false;
 		} finally {
 			checkingFirstAdmin = false;
 		}
@@ -375,51 +349,9 @@ async function handleSetupPassword(e: Event) {
 		pantallaCompletaCarga = true;
 		mensajeCargaPantallaCompleta = 'Creando el primer administrador…';
 		try {
-			if (isTauriApp()) {
-				// @ts-ignore: module may only exist in desktop runtime
-				const core = await import('@tauri-apps/api/core');
-				const response = await core.invoke<{ success: boolean; message?: string }>('create_first_admin', {
-					nombre: firstAdminName,
-					email: firstAdminEmail,
-					password: firstAdminPassword
-				});
-
-				console.log('[Login] Tauri create_first_admin response:', response);
-				if (!response || !response.success) {
-					firstAdminError = response?.message || 'No se pudo crear el administrador.';
-					return;
-				}
-			} else {
-				const response = await fetchApi('/api/first-admin', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						nombre: firstAdminName,
-						email: firstAdminEmail,
-						password: firstAdminPassword
-					})
-				});
-
-				let result: any = null;
-				try {
-					result = await parseJsonResponse(response);
-				} catch (parseError) {
-					console.error('[Login] Failed to parse first-admin response:', parseError);
-					firstAdminError = `Error al crear administrador: ${parseError instanceof Error ? parseError.message : 'Respuesta inválida del servidor'}`;
-					return;
-				}
-
-				if (!response.ok || !result?.success) {
-					const serverMessage = result?.error || result?.message || `HTTP ${response.status}`;
-					console.error('[Login] first-admin creation failed:', {
-						status: response.status,
-						statusText: response.statusText,
-						result
-					});
-					firstAdminError = `Error al crear administrador: ${serverMessage}`;
-					return;
-				}
-			}
+			// Edge Function user-admin — mismo camino en navegador, Tauri Windows y Tauri Android.
+			await crearPrimerAdministrador({ nombre: firstAdminName.trim(), email: firstAdminEmail.trim(), password: firstAdminPassword });
+			allowFirstAdmin = false;
 
 			firstAdminSuccess = 'Primer administrador creado con éxito. Ahora puedes iniciar sesión.';
 			firstAdminError = '';

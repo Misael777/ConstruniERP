@@ -1,7 +1,7 @@
 <script lang="ts">
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, Link } from '@lucide/svelte';
+	import { X, Loader2, Link, Lock } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import {
 		FIELDS_CONFIG,
@@ -9,7 +9,7 @@
 		applyFieldMask,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { createCentroCosto, updateCentroCosto, resolveEntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { createCentroCosto, updateCentroCosto, resolveEntidadVinculada, TIPO_CORPORATIVO } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import type { CentroCosto, EntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
@@ -49,6 +49,9 @@
 	// entidad se renombró después) y lo muestra arriba del formulario.
 	let linkedEntity = $state<EntidadVinculada | null>(null);
 	let loadingLink = $state(false);
+	// El Corporativo es único y solo se edita tras autorización de administrador (ver el candado en
+	// centros-de-costos/+page.svelte) — acá solo se avisa; el tipo nunca cambia en edición (ver abajo).
+	const esCorporativo = $derived(mode === 'edit' && centro?.tipo === TIPO_CORPORATIVO);
 	const hasLink = $derived(
 		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado)
 	);
@@ -141,7 +144,12 @@
 				</button>
 			</div>
 
-			{#if mode === 'edit'}
+			{#if esCorporativo}
+				<div class="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+					<Lock size={16} class="shrink-0" />
+					<span>Centro de costo <strong>Corporativo</strong> — único del sistema, editable solo con autorización de administrador.</span>
+				</div>
+			{:else if mode === 'edit'}
 				{#if loadingLink}
 					<div class="mx-6 mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400">
 						Buscando entidad vinculada...
@@ -172,10 +180,13 @@
 							</label>
 
 							{#if field.tipo === 'select'}
+								<!-- Al editar, el tipo queda fijo y se muestra con su etiqueta real aunque ya no sea un tipo que se
+								     pueda crear a mano (ej. Corporativo/Consultoría) — ver formOptions en centroCostos.config.ts. -->
 								<SelectConSaldo
 									id={`ccf-${field.key}`}
 									value={formValues[field.key]}
-									options={[...(field.formOptions ?? field.options ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+									disabled={mode === 'edit' && field.key === 'tipo'}
+									options={[...((mode === 'edit' && field.key === 'tipo' ? field.options : (field.formOptions ?? field.options)) ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
 									placeholder="Selecciona una opción"
 									onchange={(v) => (handleInput(field.key, v))}
 								/>

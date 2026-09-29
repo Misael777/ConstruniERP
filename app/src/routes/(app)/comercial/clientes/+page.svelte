@@ -96,9 +96,9 @@
 				payloadCambios: { modulo: 'clientes' }
 			});
 			if (result.success) {
-				alert('No tienes permisos de administrador. Se envió una solicitud de exportación para que un administrador la apruebe.');
+				toast.info('No tienes permisos de administrador. Se envió una solicitud de exportación para que un administrador la apruebe.');
 			} else {
-				alert(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
+				toast.error(`No se pudo enviar la solicitud. ${result.message ?? ''}`);
 			}
 			return;
 		}
@@ -106,7 +106,7 @@
 		isExporting = true;
 		try {
 			const result = await exportarClientesXLSX(supabase);
-			if (!result.success) alert(`No se pudo exportar. ${result.message ?? ''}`);
+			if (!result.success) toast.error(`No se pudo exportar. ${result.message ?? ''}`);
 		} finally {
 			isExporting = false;
 		}

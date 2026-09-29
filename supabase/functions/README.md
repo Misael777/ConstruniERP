@@ -61,6 +61,18 @@ Esta carpeta contiene la función de Supabase para CRUD completo de usuarios en 
   }
   ```
 
+### Primer administrador (solo con `empleados` vacía)
+Lo usa el login (`app/src/routes/(auth)/login/+page.svelte`) en navegador, Tauri Windows y Tauri Android. Son
+públicas (se llaman antes de iniciar sesión) y no hacen nada en cuanto existe algún empleado.
+- `GET .../user-admin?action=first-admin-status` → `{ "success": true, "canCreate": true|false }`
+- `POST .../user-admin?action=first-admin`
+- Body JSON:
+  ```json
+  { "nombre": "Nombre", "email": "admin@example.com", "password": "secret123" }
+  ```
+  Crea el rol `administrador` si falta, la cuenta de Auth, el empleado (`password_configurado = true`) y su
+  centro de costo. Responde 403 si ya hay empleados.
+
 ### Resetear contraseña
 - `POST https://<project>.supabase.co/functions/v1/user-admin?action=reset-password`
 - Body JSON:

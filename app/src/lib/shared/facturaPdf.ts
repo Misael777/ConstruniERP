@@ -15,7 +15,14 @@ import { renderHtmlToPngDataUrl, ensamblarPdfUnaCopiaMultipagina } from './pdfHt
 import { escapeHtml } from './pdfVoucherEstilos';
 import { conCarga } from '$lib/stores/loading.svelte';
 
-const ANCHO_PLANTILLA_PX = 820;
+// A4 (210 × 297 mm) con 20 mm en blanco a la IZQUIERDA (para perforar las hojas impresas) y 10 mm en los
+// otros 3 lados → contenido de 180 × 277 mm. La plantilla se renderiza a ese ancho EXACTO (180 mm a
+// 96 dpi) y se coloca a escala 1:1 en el PDF, así mm/pt del CSS = mm/pt reales al imprimir.
+const MM_A_PX = 96 / 25.4;
+const ANCHO_CONTENIDO_MM = 180;
+const ANCHO_PLANTILLA_PX = ANCHO_CONTENIDO_MM * MM_A_PX;
+const MARGEN_IZQUIERDO_MM = 20;
+const MARGEN_SUPERIOR_INFERIOR_MM = 10;
 const FILAS_MINIMAS = 5;
 
 export interface DatosFacturaLineaPdf {
@@ -53,7 +60,12 @@ export interface DatosFacturaPdf {
 	sujetaDetraccion: boolean;
 	porcentajeDetraccion: number;
 	montoDetraccion: number;
+	/** Solo Nota de Crédito: texto del "Tipo de nota de crédito" (ej. "Devolución Total"). */
+	tipoNota?: string;
+	detraccionTipoOperacion: string;
 	detraccionBienServicio: string;
+	/** "030 - Contratos de construcción" (catálogo "Código de Bien/Servicio sujeto a detracción"). */
+	detraccionCodigoBien: string;
 	detraccionMedioPago: string;
 	detraccionCuentaBn: string;
 	/** Sello de agua opcional (ej. 'VISTA PREVIA' antes de autorizar, 'ANULADA'). */
@@ -80,65 +92,72 @@ const TITULO_CAJA: Record<DatosFacturaPdf['tipoDocumento'], string> = {
 };
 
 const ESTILOS = `
-	/* min-height = proporción A4 (820px de ancho × 297/210): la factura ocupa una hoja completa con la nota y el
-	   pie pegados al fondo (margin-top:auto en .fx-nota), con o sin bloque de detracción. Si el contenido es más
-	   alto (muchas líneas), crece y ensamblarPdfUnaCopiaMultipagina lo reparte en más páginas. */
+	/* Sello de agua (VISTA PREVIA / BORRADOR / ANULADA), común a todas las plantillas. */
 	.fx-agua { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none; z-index: 20; }
 	.fx-agua span { font-weight: 800; font-size: 78px; letter-spacing: 0.12em; color: rgba(100,116,139,0.20); transform: rotate(-28deg); white-space: nowrap; }
-	.fx-c { text-align: center; }
-	.fx-r { text-align: right; white-space: nowrap; }
-	.fx-nota { margin-top: auto; background: #e7edf6; border: 1px solid #c9d6e8; border-radius: 6px; text-align: center; font-size: 10px; color: #334155; padding: 7px 10px; margin-bottom: 12px; line-height: 1.4; }
-	.fx-pie { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #1e3a6d; padding: 6px 0 0; font-size: 9.5px; color: #64748b; }
-	.fx-pie b { color: #fff; background: #f26a21; font-weight: 800; font-size: 10.5px; padding: 3px 9px; border-radius: 3px; }
-
-	/* Plantilla Factura v4 — formato de referencia entregado por el usuario (caja de cabecera navy con
-	   título/RUC/N° apilados a la derecha, grilla de 2 columnas para los datos del cliente en vez de filas
-	   apiladas, panel de totales a la derecha con caja gris "SON" a la izquierda, y una barra naranja de
-	   vigencia a todo el ancho pegada al fondo de la hoja). Mantiene el logo/RUC/dirección reales de
-	   Construni y el detalle completo (todas las líneas de totales + detracción) — solo cambia la
-	   disposición visual, no los datos. */
-	.fv { position: relative; display: flex; flex-direction: column; min-height: 1160px; font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; background: #fff; padding: 26px 30px 0; box-sizing: border-box; border: 2px solid #1e3a6d; overflow: hidden; }
-	.fv * { box-sizing: border-box; }
-	.fv-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 18px; }
-	.fv-logo-section { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
-	.fv-logo-img { width: 56px; height: auto; display: block; flex-shrink: 0; }
-	.fv-company-info h1 { margin: 0; font-weight: 800; font-size: 18px; color: #1e3a6d; line-height: 1.2; }
-	.fv-company-info p { margin: 4px 0 0; font-size: 10.5px; color: #475569; line-height: 1.35; }
-	.fv-ruc-box { width: 240px; flex-shrink: 0; border: 2px solid #1e3a6d; border-radius: 4px; overflow: hidden; text-align: center; }
-	.fv-ruc-header { background: #1e3a6d; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: 0.02em; padding: 6px 8px; }
-	.fv-ruc-number { color: #1e3a6d; font-weight: 700; font-size: 12.5px; padding: 6px 8px; border-bottom: 1px solid #1e3a6d; }
-	.fv-doc-number { color: #1e3a6d; font-weight: 800; font-size: 12.5px; padding: 6px 8px; }
-	.fv-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; margin-bottom: 14px; }
-	.fv-input-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 11px; }
-	.fv-input-label { width: 130px; flex-shrink: 0; font-weight: 700; color: #1e3a6d; }
-	.fv-input-field { flex: 1; min-width: 0; background: #e7edf6; border: 1px solid #c9d6e8; border-radius: 3px; padding: 3px 8px; min-height: 18px; color: #0f172a; display: flex; align-items: center; }
-	.fv-table-container { margin-bottom: 12px; }
-	.fv-items-table { width: 100%; border-collapse: collapse; }
-	.fv-items-table th { background: #1e3a6d; color: #fff; font-size: 11px; font-weight: 700; padding: 8px 8px; border-bottom: 3px solid #f26a21; text-align: center; }
-	.fv-items-table td { font-size: 11.5px; padding: 6px 8px; border: 1px solid #cbd5e1; height: 26px; vertical-align: top; }
-	.fv-bottom-section { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
-	.fv-left-panel { flex: 1; min-width: 0; }
-	.fv-right-panel { width: 300px; flex-shrink: 0; }
-	.fv-gray-box { background: #e7edf6; border: 1px solid #c9d6e8; border-radius: 3px; padding: 9px 12px; font-size: 11.5px; min-height: 60px; margin-top: 8px; }
-	.fv-gray-box b { color: #1e3a6d; font-size: 12px; margin-right: 6px; }
-	.fv-total-row { display: flex; justify-content: space-between; font-size: 11.5px; padding: 4px 2px; border-bottom: 1px solid #e2e8f0; }
-	.fv-total-row span:first-child { font-weight: 700; color: #1e3a6d; }
-	.fv-total-row span:last-child { color: #334155; }
-	.fv-grand-total { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; background: #f26a21; color: #fff; border-radius: 5px; padding: 8px 10px; font-weight: 800; font-size: 13px; }
-	.fv-detraction-box { background: #1e3a6d; color: #fff; font-weight: 800; font-size: 11.5px; padding: 7px 12px; margin-bottom: 2px; letter-spacing: 0.02em; }
-	.fv-detraction-content { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 9px 12px; margin-bottom: 12px; }
-	.fv-detraction-row { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: #334155; font-weight: 600; }
-	.fv-detraction-label { width: 140px; flex-shrink: 0; color: #1e3a6d; }
-	.fv-detraction-val { flex: 1; min-width: 0; background: #fff; border: 1px solid #cbd5e1; border-radius: 3px; min-height: 18px; padding: 2px 6px; color: #0f172a; font-weight: 500; }
-	.fv-bottom-bar { height: 6px; background: #f26a21; margin: 6px -30px 0; }
-	.fv-validity { text-align: center; font-size: 9.5px; color: #64748b; padding: 5px 0 0; }
+	/* Plantilla Factura A4 — copia exacta del formato de referencia (imagen entregada por el usuario) en
+	   MEDIDAS REALES: todo va en mm/pt y el contenedor mide 180 mm (A4 210 − 20 mm de margen izquierdo
+	   en blanco para perforar − 10 mm derecho), que generarFacturaPdf coloca a escala 1:1 en la hoja.
+	   min-height ≈ alto útil A4 (297 − 10 − 10 mm): ocupa una hoja completa con la nota y el pie pegados
+	   al fondo; si hay muchas líneas crece y ensamblarPdfUnaCopiaMultipagina lo reparte en más páginas. */
+	.fa { position: relative; display: flex; flex-direction: column; justify-content: space-between; box-sizing: border-box; width: 100%; min-height: 276mm; background: #fff; color: #1e3a6d; font-family: Arial, Helvetica, sans-serif; }
+	.fa * { box-sizing: border-box; }
+	.fa-box { display: flex; align-items: center; min-height: 5.2mm; padding: 0 1.6mm; background: #dde5f1; border: 0.2mm solid #c3d0e4; border-radius: 0.8mm; font-size: 8pt; font-weight: 400; color: #0f172a; }
+	.fa-lbl { font-weight: 700; font-size: 8pt; color: #1e3a6d; white-space: nowrap; }
+	.fa-dp { width: 3mm; flex-shrink: 0; text-align: center; font-weight: 700; font-size: 8pt; color: #1e3a6d; }
+	.fa-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2mm; }
+	.fa-logo { display: flex; flex-direction: column; align-items: center; width: 34mm; flex-shrink: 0; }
+	.fa-logo img { width: 17mm; height: auto; display: block; }
+	.fa-logo-txt { margin-top: 1.5mm; font-weight: 800; font-size: 19pt; letter-spacing: -0.03em; line-height: 1; color: #1e3a6d; }
+	.fa-emisor { flex: 1; min-width: 0; padding: 0 4mm 0 5mm; }
+	.fa-emisor-nombre { font-weight: 800; font-size: 13pt; line-height: 1.15; text-transform: uppercase; }
+	.fa-emisor-dir { margin-top: 1.5mm; max-width: 78mm; font-size: 6pt; line-height: 1.5; letter-spacing: 0.02em; color: #475569; }
+	.fa-ruc { width: 60mm; flex-shrink: 0; border: 0.6mm solid #1e3a6d; border-radius: 3mm; overflow: hidden; text-align: center; }
+	.fa-ruc-tit { background: #1e3a6d; color: #fff; font-weight: 800; font-size: 10.5pt; letter-spacing: 0.02em; padding: 2.4mm 1mm; }
+	.fa-ruc-num { font-weight: 800; font-size: 12pt; padding: 2mm 1mm 1.2mm; }
+	.fa-ruc-nro { display: flex; align-items: center; justify-content: center; gap: 1.5mm; font-weight: 800; font-size: 10.5pt; padding: 0 2mm 2.2mm; }
+	.fa-ruc-nro .fa-box { min-width: 30mm; min-height: 5mm; justify-content: center; font-weight: 700; }
+	.fa-datos { margin-bottom: 2mm; }
+	.fa-fila { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2mm; }
+	.fa-grupo { display: flex; align-items: center; }
+	.fa-tabla { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2mm; }
+	.fa-tabla th { height: 9mm; background: #1e3a6d; color: #fff; font-size: 8pt; font-weight: 700; text-align: center; border: 0.2mm solid #1e3a6d; border-bottom: 0.9mm solid #f26a21; }
+	.fa-tabla td { height: 6.6mm; padding: 0 1.6mm; font-size: 8pt; color: #0f172a; border: 0.25mm solid #2b4a7a; overflow: hidden; }
+	.fa-c { text-align: center; }
+	.fa-r { text-align: right; white-space: nowrap; }
+	.fa-bajo { display: flex; align-items: flex-start; gap: 6mm; margin-bottom: 2mm; }
+	.fa-bajo-izq { width: 94mm; flex-shrink: 0; }
+	.fa-grat { display: flex; align-items: center; }
+	.fa-grat .fa-lbl { font-size: 6.5pt; }
+	.fa-grat .fa-box { width: 28mm; justify-content: space-between; }
+	.fa-son { margin-top: 3mm; min-height: 27mm; padding: 2mm 2.4mm; background: #dde5f1; border: 0.2mm solid #c3d0e4; border-radius: 1mm; font-size: 8pt; line-height: 1.4; color: #0f172a; }
+	.fa-son b { margin-right: 1.5mm; font-size: 10pt; color: #1e3a6d; }
+	.fa-tot { flex: 1; min-width: 0; padding: 2mm 2mm 0; border: 0.3mm solid #2b4a7a; border-radius: 1.5mm; overflow: hidden; }
+	.fa-tot-fila { display: flex; align-items: center; margin-bottom: 1.4mm; }
+	.fa-tot-fila .fa-lbl { flex: 1; text-align: right; font-size: 7.5pt; }
+	.fa-tot-fila .fa-box { width: 27mm; min-height: 4.6mm; justify-content: space-between; }
+	.fa-tot-final { margin: 1.5mm -2mm 0; padding: 1.8mm 2mm; background: #f26a21; }
+	.fa-tot-final .fa-lbl { color: #fff; font-size: 9pt; }
+	.fa-tot-final .fa-dp { color: #fff; }
+	.fa-tot-final .fa-box { background: #fff; border-color: #fff; font-weight: 700; }
+	.fa-det { margin-top: 2mm; }
+	.fa-det-tit { padding: 1.5mm 2.4mm; background: #1e3a6d; color: #fff; font-weight: 800; font-size: 8pt; letter-spacing: 0.02em; }
+	.fa-det-cuerpo { display: grid; grid-template-columns: 1fr 1fr; gap: 1.6mm 4mm; padding: 2.4mm; background: #eef2f8; border: 0.2mm solid #c3d0e4; }
+	.fa-det-fila { display: flex; align-items: center; }
+	.fa-det-fila .fa-lbl { width: 34mm; font-size: 7pt; white-space: normal; }
+	.fa-det-fila .fa-box { flex: 1; min-width: 0; font-size: 7pt; background: #fff; }
+	.fa-footer { padding-top: 2mm; }
+	.fa-nota { padding: 2.6mm 3mm; background: #dde5f1; border: 0.2mm solid #c3d0e4; border-radius: 1.5mm; text-align: center; font-size: 6.5pt; line-height: 1.5; color: #334155; }
+	.fa-pie { display: flex; align-items: center; justify-content: space-between; margin-top: 4mm; }
+	.fa-pie-txt { padding-left: 2.2mm; border-left: 1.2mm solid #f26a21; font-size: 7pt; line-height: 1.6; color: #1e3a6d; }
+	.fa-pie-web { width: 46mm; padding: 2.4mm 0; background: #f26a21; border-radius: 0.8mm; text-align: center; font-weight: 800; font-size: 8.5pt; color: #fff; }
 
 	/* Plantilla "simple" v2 — Boleta / Nota de Crédito / Nota de Débito (formato de referencia entregado
 	   por el usuario: caja con título+SERIE/N°, grilla de cliente a 2 columnas con divisor, tabla de 5
 	   columnas con "Importe", panel de letras a la izquierda y totales simples a la derecha, pie con
 	   barra naranja de cierre). Misma paleta que Factura (#1e3a6d navy, #f26a21 naranja) pero con su
 	   propia cabecera/pie (fs-*), independiente de Factura. */
-	.fs { position: relative; display: flex; flex-direction: column; min-height: 1160px; font-family: Arial, Helvetica, sans-serif; color: #1e293b; background: #fff; padding: 22px 26px 0; box-sizing: border-box; border: 1.5px solid #1e3a6d; overflow: hidden; }
+	.fs { position: relative; display: flex; flex-direction: column; min-height: 276mm; font-family: Arial, Helvetica, sans-serif; color: #1e293b; background: #fff; padding: 22px 26px 0; box-sizing: border-box; border: 1.5px solid #1e3a6d; overflow: hidden; }
 	.fs * { box-sizing: border-box; }
 	.fs-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid #1e3a6d; padding-bottom: 10px; margin-bottom: 12px; }
 	.fs-logo-section { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
@@ -178,105 +197,106 @@ const ESTILOS = `
 	.fs-bottom-line { height: 5px; background: #f26a21; margin: 6px -26px 0; }
 `;
 
-function filaTotalV(etiqueta: string, valor: string, sim: string): string {
-	return `<div class="fv-total-row"><span>${escapeHtml(etiqueta)}</span><span>${escapeHtml(sim)} ${escapeHtml(valor)}</span></div>`;
+function filaTot(etiqueta: string, valor: string, sim: string): string {
+	return `<div class="fa-tot-fila"><span class="fa-lbl">${escapeHtml(etiqueta)}</span><span class="fa-dp">:</span><span class="fa-box"><span>${escapeHtml(sim)}</span><span>${escapeHtml(valor)}</span></span></div>`;
+}
+
+function filaDato(etiqueta: string, valor: string, estiloBox = ''): string {
+	return `<div class="fa-fila"><div class="fa-grupo"><span class="fa-lbl" style="width:30mm">${escapeHtml(etiqueta)}</span><span class="fa-dp">:</span><span class="fa-box" style="width:82mm;${estiloBox}">${escapeHtml(valor)}</span></div></div>`;
 }
 
 function construirHtml(d: DatosFacturaPdf): string {
 	const sim = simbolo(d.moneda);
 	const filas = d.lineas.map(
 		(l) => `<tr>
-			<td class="fx-c">${fmtCantidad(l.cantidad)}</td>
-			<td class="fx-c">${escapeHtml(l.unidad)}</td>
+			<td class="fa-c">${fmtCantidad(l.cantidad)}</td>
+			<td class="fa-c">${escapeHtml(l.unidad)}</td>
 			<td>${escapeHtml(l.descripcion)}</td>
-			<td class="fx-r">${sim} ${fmt(l.valorUnitario)}</td>
+			<td class="fa-r">${sim} ${fmt(l.valorUnitario)}</td>
 		</tr>`
 	);
 	while (filas.length < FILAS_MINIMAS) filas.push('<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>');
 
-	// Esta función solo se usa para Factura (Boleta/Notas usan construirHtmlSimple, con su propio
-	// formato) — folio y título quedan fijos a ese único caso.
-	const numero = d.folio ?? 'E001-________';
-	const tituloCaja = TITULO_CAJA.factura;
+	// Esta función solo se usa para Factura (Boleta/Notas usan construirHtmlSimple, con su propio formato).
+	const { serie, correlativo } = serieYCorrelativo(d);
 	const nombreMoneda = d.moneda === 'USD' ? 'DÓLARES' : 'SOLES';
 	const son = montoEnLetras(d.importeTotal, nombreMoneda);
 
 	const bloqueDetraccion = d.sujetaDetraccion
-		? `<div class="fv-detraction-box">INFORMACIÓN DE LA DETRACCIÓN</div>
-			<div class="fv-detraction-content">
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Leyenda</span><span class="fv-detraction-val">Operación sujeta al Sistema de Pago de Obligaciones Tributarias con el Gobierno Central.</span></div>
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Bien o Servicio</span><span class="fv-detraction-val">${escapeHtml(d.detraccionBienServicio)}</span></div>
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Medio de pago</span><span class="fv-detraction-val">${escapeHtml(d.detraccionMedioPago)}</span></div>
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Nro. Cta. Banco de la Nación</span><span class="fv-detraction-val">${escapeHtml(d.detraccionCuentaBn)}</span></div>
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Porcentaje de detracción</span><span class="fv-detraction-val">${escapeHtml(String(d.porcentajeDetraccion))} %</span></div>
-				<div class="fv-detraction-row"><span class="fv-detraction-label">Monto de detracción</span><span class="fv-detraction-val">${sim} ${fmt(d.montoDetraccion)}</span></div>
+		? `<div class="fa-det">
+				<div class="fa-det-tit">INFORMACIÓN DE LA DETRACCIÓN</div>
+				<div class="fa-det-cuerpo">
+					<div class="fa-det-fila"><span class="fa-lbl">Leyenda</span><span class="fa-box">Operación sujeta al Sistema de Pago de Obligaciones Tributarias con el Gobierno Central.</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Tipo de operación</span><span class="fa-box">${escapeHtml(d.detraccionTipoOperacion)}</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Bien o Servicio</span><span class="fa-box">${escapeHtml(d.detraccionBienServicio)}</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Código de Bien/Servicio</span><span class="fa-box">${escapeHtml(d.detraccionCodigoBien)}</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Medio de pago</span><span class="fa-box">${escapeHtml(d.detraccionMedioPago)}</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Nro. Cta. Banco de la Nación</span><span class="fa-box">${escapeHtml(d.detraccionCuentaBn)}</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Porcentaje de detracción</span><span class="fa-box">${escapeHtml(String(d.porcentajeDetraccion))} %</span></div>
+					<div class="fa-det-fila"><span class="fa-lbl">Monto de detracción</span><span class="fa-box">${sim} ${fmt(d.montoDetraccion)}</span></div>
+				</div>
 			</div>`
 		: '';
 
 	return `
-		<div class="fv">
+		<div class="fa">
 			${d.marcaAgua ? `<div class="fx-agua"><span>${escapeHtml(d.marcaAgua)}</span></div>` : ''}
-			<div class="fv-head">
-				<div class="fv-logo-section">
-					<img class="fv-logo-img" src="${LOGO_ICONO_DATA_URI}" alt="" />
-					<div class="fv-company-info">
-						<h1>${escapeHtml(EMPRESA_NOMBRE)}</h1>
-						<p>${escapeHtml(EMPRESA_DIRECCION)}</p>
-					</div>
+			<div class="fa-head">
+				<div class="fa-logo"><img src="${LOGO_ICONO_DATA_URI}" alt="" /><span class="fa-logo-txt">construni</span></div>
+				<div class="fa-emisor">
+					<div class="fa-emisor-nombre">${escapeHtml(EMPRESA_NOMBRE)}</div>
+					<div class="fa-emisor-dir">${escapeHtml(EMPRESA_DIRECCION)}</div>
 				</div>
-				<div class="fv-ruc-box">
-					<div class="fv-ruc-header">${escapeHtml(tituloCaja)}</div>
-					<div class="fv-ruc-number">RUC: ${escapeHtml(EMPRESA_RUC)}</div>
-					<div class="fv-doc-number">N° ${escapeHtml(numero)}</div>
+				<div class="fa-ruc">
+					<div class="fa-ruc-tit">${escapeHtml(TITULO_CAJA.factura)}</div>
+					<div class="fa-ruc-num">RUC: ${escapeHtml(EMPRESA_RUC)}</div>
+					<div class="fa-ruc-nro"><span>N° ${escapeHtml(serie)} -</span><span class="fa-box">${d.folio ? escapeHtml(correlativo) : ''}</span></div>
 				</div>
 			</div>
 
-			<div class="fv-info-grid">
-				<div>
-					<div class="fv-input-row"><span class="fv-input-label">Fecha de Emisión</span><span class="fv-input-field">: ${formatearFechaCorta(d.fechaEmision)}</span></div>
-					<div class="fv-input-row"><span class="fv-input-label">Señor(es)</span><span class="fv-input-field">: ${escapeHtml(d.clienteNombre)}</span></div>
-					<div class="fv-input-row"><span class="fv-input-label">${escapeHtml(d.clienteDocumentoLabel || 'RUC')}</span><span class="fv-input-field">: ${escapeHtml(d.clienteDocumento)}</span></div>
-					<div class="fv-input-row"><span class="fv-input-label">Dirección-Cliente</span><span class="fv-input-field">: ${escapeHtml(d.clienteDireccion)}</span></div>
-					<div class="fv-input-row"><span class="fv-input-label">Tipo de Moneda</span><span class="fv-input-field">: ${nombreMoneda}</span></div>
-					<div class="fv-input-row"><span class="fv-input-label">Observación</span><span class="fv-input-field">: ${escapeHtml(d.observacion)}</span></div>
+			<div class="fa-datos">
+				<div class="fa-fila">
+					<div class="fa-grupo"><span class="fa-lbl" style="width:30mm">Fecha de Emisión</span><span class="fa-dp">:</span><span class="fa-box" style="width:82mm">${formatearFechaCorta(d.fechaEmision)}</span></div>
+					<div class="fa-grupo"><span class="fa-lbl">Forma de pago</span><span class="fa-dp">:</span><span class="fa-box" style="width:27mm">${d.formaPago === 'credito' ? 'Crédito' : 'Contado'}</span></div>
 				</div>
-				<div>
-					<div class="fv-input-row"><span class="fv-input-label">Forma de pago</span><span class="fv-input-field">: ${d.formaPago === 'credito' ? 'Crédito' : 'Contado'}</span></div>
-				</div>
+				${filaDato('Señor(es)', d.clienteNombre)}
+				${filaDato(d.clienteDocumentoLabel || 'RUC', d.clienteDocumento)}
+				${filaDato('Dirección del Cliente', d.clienteDireccion, 'min-height:14.5mm;align-items:flex-start;padding-top:1mm;')}
+				${filaDato('Tipo de Moneda', nombreMoneda)}
+				${filaDato('Observación', d.observacion)}
 			</div>
 
-			<div class="fv-table-container">
-				<table class="fv-items-table">
-					<thead><tr><th style="width:12%">Cantidad</th><th style="width:16%">Unidad Medida</th><th>Descripción</th><th style="width:20%">Valor Unitario</th></tr></thead>
-					<tbody>${filas.join('')}</tbody>
-				</table>
-			</div>
+			<table class="fa-tabla">
+				<colgroup><col style="width:28mm" /><col style="width:35mm" /><col style="width:73mm" /><col style="width:44mm" /></colgroup>
+				<thead><tr><th>Cantidad</th><th>Unidad Medida</th><th>Descripción</th><th>Valor Unitario</th></tr></thead>
+				<tbody>${filas.join('')}</tbody>
+			</table>
 
-			<div class="fv-bottom-section">
-				<div class="fv-left-panel">
-					<div class="fv-input-row"><span class="fv-input-label" style="width:190px">Valor de Venta de Operaciones Gratuitas</span><span class="fv-input-field" style="flex:0 0 60px">${sim} 0.00</span></div>
-					<div class="fv-gray-box"><b>SON:</b>${escapeHtml(son)}</div>
+			<div class="fa-bajo">
+				<div class="fa-bajo-izq">
+					<div class="fa-grat"><span class="fa-lbl">Valor de Venta de Operaciones Gratuitas</span><span class="fa-dp">:</span><span class="fa-box"><span>${sim}</span><span>0.00</span></span></div>
+					<div class="fa-son"><b>SON:</b>${escapeHtml(son)}</div>
 				</div>
-				<div class="fv-right-panel">
-					${filaTotalV('Sub Total Ventas', fmt(d.subTotalVentas), sim)}
-					${filaTotalV('Anticipos', fmt(d.anticipos), sim)}
-					${filaTotalV('Descuentos', fmt(d.descuentos), sim)}
-					${filaTotalV('Valor Venta', fmt(d.valorVenta), sim)}
-					${filaTotalV('ISC', fmt(d.isc), sim)}
-					${filaTotalV('IGV', fmt(d.igv), sim)}
-					${filaTotalV('Otros Cargos', fmt(d.otrosCargos), sim)}
-					${filaTotalV('Otros Tributos', fmt(d.otrosTributos), sim)}
-					${filaTotalV('Monto de redondeo', fmt(d.redondeo), sim)}
-					<div class="fv-grand-total"><span>Importe Total</span><span>${sim} ${fmt(d.importeTotal)}</span></div>
+				<div class="fa-tot">
+					${filaTot('Sub Total Ventas', fmt(d.subTotalVentas), sim)}
+					${filaTot('Anticipos', fmt(d.anticipos), sim)}
+					${filaTot('Descuentos', fmt(d.descuentos), sim)}
+					${filaTot('Valor Venta', fmt(d.valorVenta), sim)}
+					${filaTot('ISC', fmt(d.isc), sim)}
+					${filaTot('IGV', fmt(d.igv), sim)}
+					${filaTot('Otros Cargos', fmt(d.otrosCargos), sim)}
+					${filaTot('Otros Tributos', fmt(d.otrosTributos), sim)}
+					${filaTot('Monto de redondeo', fmt(d.redondeo), sim)}
+					<div class="fa-tot-fila fa-tot-final"><span class="fa-lbl">Importe Total</span><span class="fa-dp">:</span><span class="fa-box"><span>${sim}</span><span>${fmt(d.importeTotal)}</span></span></div>
 				</div>
 			</div>
 
 			${bloqueDetraccion}
 
-			<div class="fx-nota">Esta es una representación impresa de la factura electrónica, generada en el Sistema de SUNAT.<br />Puede verificarla utilizando su clave SOL</div>
-			<div class="fx-pie"><span>Más de 12 años construyendo tu futuro</span><b>www.construni.pe</b></div>
-			<div class="fv-bottom-bar"></div>
-			<div class="fv-validity">Validez de 30 días comprendidos hasta la fecha</div>
+			<div class="fa-footer">
+				<div class="fa-nota">Esta es una representación impresa de la factura electrónica, generada en el Sistema de SUNAT.<br />Puede verificarla utilizando su clave SOL.</div>
+				<div class="fa-pie"><span class="fa-pie-txt">Más de 12 años construyendo tu futuro</span><span class="fa-pie-web">www.construni.pe</span></div>
+			</div>
 		</div>
 	`;
 }
@@ -352,6 +372,7 @@ function construirHtmlSimple(d: DatosFacturaPdf): string {
 				<div class="fs-info-col">
 					<div class="fs-info-row"><span class="fs-info-label">Tipo de Documento</span><span class="fs-info-value">: ${escapeHtml(d.clienteDocumentoLabel || 'RUC')}</span></div>
 					<div class="fs-info-row"><span class="fs-info-label">Forma de Pago</span><span class="fs-info-value">: ${d.formaPago === 'credito' ? 'CRÉDITO' : 'CONTADO'}</span></div>
+					${d.tipoDocumento === 'nota_credito' && d.tipoNota ? `<div class="fs-info-row"><span class="fs-info-label">Tipo de Nota</span><span class="fs-info-value">: ${escapeHtml(d.tipoNota)}</span></div>` : ''}
 					${esNota ? `<div class="fs-info-row"><span class="fs-info-label">Motivo de la Nota</span><span class="fs-info-value">: ${escapeHtml(d.observacion || '—')}</span></div>` : ''}
 				</div>
 			</div>
@@ -400,6 +421,11 @@ export async function generarFacturaPdf(datos: DatosFacturaPdf) {
 async function generarFacturaPdfInterno(datos: DatosFacturaPdf): Promise<{ pngDataUrl: string; pdfBase64: string }> {
 	const html = `<style>${ESTILOS}</style>${datos.tipoDocumento === 'factura' ? construirHtml(datos) : construirHtmlSimple(datos)}`;
 	const render = await renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
-	const pdfBase64 = ensamblarPdfUnaCopiaMultipagina(render);
+	const pdfBase64 = ensamblarPdfUnaCopiaMultipagina(render, {
+		anchoMm: ANCHO_CONTENIDO_MM,
+		margenIzquierdoMm: MARGEN_IZQUIERDO_MM,
+		margenSuperiorMm: MARGEN_SUPERIOR_INFERIOR_MM,
+		margenInferiorMm: MARGEN_SUPERIOR_INFERIOR_MM
+	});
 	return { pngDataUrl: render.dataUrl, pdfBase64 };
 }

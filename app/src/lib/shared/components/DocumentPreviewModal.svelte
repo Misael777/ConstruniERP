@@ -9,6 +9,7 @@
 	import { isRunningInTauri, downloadFromDriveClient } from '$lib/driveUploadClient';
 	import { resolveApiUrl } from '$lib/apiClient';
 	import { toast } from '$lib/stores/toast';
+	import { abrirEnlaceExterno } from '$lib/shared/enlaceExterno';
 
 	let {
 		open = false,
@@ -61,7 +62,7 @@
 
 	function requestDownload() {
 		if (!effectiveUrl) {
-			alert('URL no disponible para descargar');
+			toast.error('URL no disponible para descargar');
 			return;
 		}
 		showDownloadConfirm = true;
@@ -119,8 +120,8 @@
 			}
 		} catch (err) {
 			console.warn('[DocumentPreviewModal] Descarga vía API de Drive falló, abriendo en nueva pestaña', err);
-			toast.info('No se pudo descargar directamente — se abrió en una nueva pestaña.');
-			window.open(previewUrl, '_blank', 'noopener');
+			toast.info('No se pudo descargar directamente — se abrió el archivo en el navegador.');
+			void abrirEnlaceExterno(previewUrl).catch((e) => console.error('[DocumentPreviewModal] Tampoco se pudo abrir la URL:', e));
 		} finally {
 			isDownloading = false;
 		}

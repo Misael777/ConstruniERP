@@ -13,6 +13,7 @@
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { getOptionLabel, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
@@ -641,7 +642,7 @@
 	}
 
 	async function handleDeleteDetalle(idTransDetalle: number) {
-		if (!confirm('¿Eliminar esta línea de detalle?')) return;
+		if (!(await confirmar({ title: 'Eliminar línea', message: '¿Eliminar esta línea de detalle?', confirmLabel: 'Eliminar' }))) return;
 		try {
 			const result = await deleteTransDetalle(supabase, idTransDetalle);
 			if (result.success) toast.success(result.message);

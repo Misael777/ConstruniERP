@@ -8,6 +8,7 @@
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
@@ -632,7 +633,7 @@
 	}
 
 	async function handleDeleteCobro(idCobro: number) {
-		if (!confirm('¿Eliminar este cobro? El saldo de la cuenta se recalculará.')) return;
+		if (!(await confirmar({ title: 'Eliminar cobro', message: '¿Eliminar este cobro? El saldo de la cuenta se recalculará.', confirmLabel: 'Eliminar' }))) return;
 		try {
 			const result = await deleteCobro(supabase, idCobro, isAdmin());
 			if (result.success) toast.success(result.message);

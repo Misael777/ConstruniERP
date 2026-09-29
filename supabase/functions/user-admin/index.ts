@@ -370,6 +370,104 @@ async function restaurarEmpleado(body: any) {
   return buildJsonResponse({ success: true, auth_user_id: authUserId });
 }
 
+// --- PRIMER ADMINISTRADOR (arranque de una base vacía) ---
+// Vive acá (y no en un comando Rust de Tauri ni en un +server.ts de SvelteKit, como antes) porque
+// necesita service_role, que solo existe en el entorno de la Edge Function: la app instalada
+// (Windows/Android) no tiene esa clave ni servidor SvelteKit, así que los caminos viejos solo
+// funcionaban en desarrollo. Por HTTP funciona igual desde el navegador, Tauri Windows y Tauri Android.
+// Ambas acciones son públicas (se usan antes de iniciar sesión), por eso solo actúan mientras
+// `empleados` está VACÍA — en cuanto existe un empleado, no hacen nada.
+
+async function contarEmpleados(): Promise<{ count: number } | { error: string }> {
+  const { count, error } = await supabase.from('empleados').select('id', { head: true, count: 'exact' });
+  if (error) return { error: error.message };
+  return { count: count ?? 0 };
+}
+
+async function firstAdminStatus() {
+  const resultado = await contarEmpleados();
+  if ('error' in resultado) return buildJsonResponse({ success: false, canCreate: false, error: resultado.error }, 500);
+  return buildJsonResponse({ success: true, canCreate: resultado.count === 0 });
+}
+
+async function createFirstAdmin(body: any) {
+  const nombre = String(body?.nombre ?? '').trim();
+  const email = String(body?.email ?? '').trim().toLowerCase();
+  const password = String(body?.password ?? '');
+
+  if (!nombre || !email || !password) {
+    return buildJsonResponse({ success: false, error: 'Nombre, correo y contraseña son obligatorios.' }, 400);
+  }
+  if (password.length < 6) {
+    return buildJsonResponse({ success: false, error: 'La contraseña debe tener al menos 6 caracteres.' }, 400);
+  }
+
+  const antes = await contarEmpleados();
+  if ('error' in antes) return buildJsonResponse({ success: false, error: antes.error }, 500);
+  if (antes.count > 0) {
+    return buildJsonResponse({ success: false, error: 'Ya existe al menos un empleado registrado. El primer administrador no se puede crear ahora.' }, 403);
+  }
+
+  // Rol 'administrador' (debe coincidir con ADMIN_ROLE en app/src/lib/config/modules.ts) — se crea si
+  // la base todavía no lo tiene.
+  let rolId: number;
+  const { data: rolExistente, error: rolError } = await supabase.from('roles').select('id').eq('nombre', ADMIN_ROLE).maybeSingle();
+  if (rolError) return buildJsonResponse({ success: false, error: rolError.message }, 500);
+  if (rolExistente) {
+    rolId = rolExistente.id;
+  } else {
+    const { data: rolCreado, error: rolCreateError } = await supabase.from('roles').insert({ nombre: ADMIN_ROLE }).select('id').single();
+    if (rolCreateError || !rolCreado) {
+      return buildJsonResponse({ success: false, error: `No se pudo crear el rol administrador: ${rolCreateError?.message ?? ''}` }, 500);
+    }
+    rolId = rolCreado.id;
+  }
+
+  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { nombre }
+  });
+  if (authError) return buildJsonResponse({ success: false, error: `Error al crear la cuenta de acceso: ${authError.message}` }, 400);
+
+  const authUserId = authData.user?.id;
+  if (!authUserId) return buildJsonResponse({ success: false, error: 'No se generó ID de usuario Auth.' }, 500);
+
+  const { data: empleado, error: empleadoError } = await supabase
+    .from('empleados')
+    .insert({
+      nombre,
+      correo: email,
+      rol_id: rolId,
+      auth_user_id: authUserId,
+      fecha_ingreso: new Date().toISOString().slice(0, 10),
+      // El propio administrador eligió su contraseña recién — no queda "Pendiente de activación".
+      password_configurado: true
+    })
+    .select('id')
+    .single();
+
+  if (empleadoError || !empleado) {
+    await supabase.auth.admin.deleteUser(authUserId);
+    return buildJsonResponse({ success: false, error: `Error al guardar el empleado administrador: ${empleadoError?.message ?? ''}` }, 500);
+  }
+
+  // Carrera: dos personas creando el primer administrador al mismo tiempo sobre una base vacía. Si
+  // ahora hay más de un empleado, gana el de id menor y esta llamada se deshace.
+  const { data: primero } = await supabase.from('empleados').select('id').order('id', { ascending: true }).limit(1).maybeSingle();
+  if (primero && primero.id !== empleado.id) {
+    await supabase.from('empleados').delete().eq('id', empleado.id);
+    await supabase.auth.admin.deleteUser(authUserId);
+    return buildJsonResponse({ success: false, error: 'Otro usuario acaba de crear el primer administrador. Inicia sesión con esa cuenta.' }, 409);
+  }
+
+  // Centro de costo del empleado, igual que cualquier otro empleado creado (ver createUser) — secundario.
+  await getOrCrearCentroCostoEmpleado(empleado.id, nombre);
+
+  return buildJsonResponse({ success: true, message: 'Primer administrador creado con éxito.' });
+}
+
 async function resetPassword(body: any) {
   const authUserId = String(body.auth_user_id ?? '').trim();
   const password = String(body.password ?? '').trim();
@@ -402,11 +500,13 @@ Deno.serve(async (req) => {
 
   try {
     if (req.method === 'GET') {
+      if (action === 'first-admin-status') return await firstAdminStatus();
       if (idFromQuery) return await getUser(idFromQuery);
       return await listUsers();
     }
 
     if (req.method === 'POST') {
+      if (action === 'first-admin') return await createFirstAdmin(body);
       if (action === 'reset-password') return await resetPassword(body);
       if (action === 'confirm-activation') return await confirmActivation(body);
       if (action === 'verify-admin-password') return await verifyAdminPassword(body);

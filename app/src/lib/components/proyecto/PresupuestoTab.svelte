@@ -3,6 +3,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { buildTree, type WithChildren } from '$lib/utils/tree';
 	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import InstanciarPlantillaModal from '$lib/components/partidas/InstanciarPlantillaModal.svelte';
 	import { ensurePresupuestoParaProyecto } from '$lib/stores/partidas';
 
@@ -238,7 +239,7 @@
 	}
 
 	async function deleteDetalle(id: number) {
-		if (!confirm('¿Quitar esta partida del presupuesto?')) return;
+		if (!(await confirmar({ title: 'Quitar partida', message: '¿Quitar esta partida del presupuesto?', confirmLabel: 'Quitar' }))) return;
 		await supabase.from('presupuesto_detalle').delete().eq('id_presupuesto_detalle', id);
 		detalles = detalles.filter(d => d.id_presupuesto_detalle !== id);
 	}

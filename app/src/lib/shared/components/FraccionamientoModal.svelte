@@ -203,10 +203,12 @@
 		const fecha = avanzarPeriodo(baseFecha, 1, periodicidad);
 		const restante = Number(((montoTotal || 0) - sumaFilas).toFixed(2));
 		filas = [...filas, { fecha: toISODate(fecha), monto: restante > 0 ? restante : 0 }];
+		if (metodo === 'por_porcentaje') repartirMontosIgualesEnFilas();
 	}
 
 	function eliminarFraccion(index: number) {
 		filas = filas.filter((_, i) => i !== index);
+		if (metodo === 'por_porcentaje') repartirMontosIgualesEnFilas();
 	}
 
 	function actualizarFecha(index: number, fecha: string) {
@@ -246,13 +248,57 @@
 		return ((monto / montoTotal) * 100).toFixed(2);
 	}
 
-	function actualizarPorcentaje(index: number, raw: string) {
-		const masked = raw.replace(/[^\d.]/g, '');
-		const ingresado = masked === '' ? 0 : Number(masked);
-		const limitado = Math.min(Math.max(ingresado, 0), 100);
-		const monto = Number((((montoTotal || 0) * limitado) / 100).toFixed(2));
-		filas = filas.map((f, i) => (i === index ? { ...f, monto } : f));
+	/** Reparte `monto` en `n` partes iguales con céntimos exactos (la última absorbe el redondeo). */
+	function repartirMonto(monto: number, n: number): number[] {
+		if (n <= 0) return [];
+		const base = Math.floor((monto / n) * 100) / 100;
+		const partes = Array(n).fill(base);
+		partes[n - 1] = Number((monto - base * (n - 1)).toFixed(2));
+		return partes;
 	}
+
+	/** Reparte montoTotal (100%) en partes iguales entre las filas actuales, sin tocar sus fechas. */
+	function repartirMontosIgualesEnFilas() {
+		const partes = repartirMonto(Number((montoTotal || 0).toFixed(2)), filas.length);
+		filas = filas.map((f, i) => ({ ...f, monto: partes[i] }));
+	}
+
+	/** A pedido del usuario: en "Por porcentaje" la suma SIEMPRE es 100%. Al fijar el % de una fracción, las
+	 * anteriores se respetan (se llenan de arriba hacia abajo) y lo que falta se reparte en partes iguales
+	 * entre las SIGUIENTES; si es la última, el ajuste se reparte entre las anteriores. El % ingresado se
+	 * limita a lo que queda disponible para que nunca pase del 100%. Se calcula en soles (céntimos exactos),
+	 * el % visible sale de cada monto (ver porcentajeDeFila). Se aplica al terminar de escribir (onchange). */
+	function actualizarPorcentaje(index: number, raw: string) {
+		const total = Number((montoTotal || 0).toFixed(2));
+		const masked = raw.replace(/[^\d.]/g, '');
+		const ingresado = Math.max(masked === '' ? 0 : Number(masked), 0);
+		const esUltima = index === filas.length - 1;
+		const fijas = esUltima ? [] : filas.slice(0, index);
+		const montoFijo = fijas.reduce((sum, f) => sum + f.monto, 0);
+		const disponible = Math.max(Number((total - montoFijo).toFixed(2)), 0);
+		const monto = Math.min(Number(((total * Math.min(ingresado, 100)) / 100).toFixed(2)), disponible);
+		if (filas.length === 1) {
+			filas = [{ ...filas[0], monto: total }];
+			return;
+		}
+		const indicesAjuste = esUltima ? filas.map((_, i) => i).filter((i) => i !== index) : filas.map((_, i) => i).filter((i) => i > index);
+		const partes = repartirMonto(Number((disponible - monto).toFixed(2)), indicesAjuste.length);
+		filas = filas.map((f, i) => {
+			if (i === index) return { ...f, monto };
+			const pos = indicesAjuste.indexOf(i);
+			return pos === -1 ? f : { ...f, monto: partes[pos] };
+		});
+	}
+
+	// Al pasar a "Por porcentaje" con fracciones que no suman el 100% (ej. venían de "Montos desiguales"),
+	// se reparten en partes iguales para arrancar ya cuadrado.
+	$effect(() => {
+		if (metodo !== 'por_porcentaje') return;
+		const actuales = untrack(() => filas);
+		if (actuales.length === 0) return;
+		const suma = actuales.reduce((sum, f) => sum + f.monto, 0);
+		if (Math.abs(Number(suma.toFixed(2)) - Number((montoTotal || 0).toFixed(2))) >= 0.01) untrack(() => repartirMontosIgualesEnFilas());
+	});
 
 	const sumaPorcentajes = $derived(filas.reduce((sum, f) => sum + (montoTotal ? (f.monto / montoTotal) * 100 : 0), 0));
 
@@ -378,7 +424,7 @@
 						{#if metodo === 'montos_iguales'}
 							<p class="mt-1 text-xs text-slate-400">El monto de cada fracción se calcula solo y no se puede editar.</p>
 						{:else if metodo === 'por_porcentaje'}
-							<p class="mt-1 text-xs text-slate-400">El porcentaje de cada fracción determina el monto correspondiente.</p>
+							<p class="mt-1 text-xs text-slate-400">La suma siempre es 100%: al cambiar el % de una fracción, las siguientes se recalculan solas.</p>
 						{/if}
 					</div>
 
@@ -397,7 +443,8 @@
 										type="text"
 										inputmode="decimal"
 										value={porcentajeDeFila(fila.monto)}
-										oninput={(e) => actualizarPorcentaje(i, (e.target as HTMLInputElement).value)}
+										onchange={(e) => { const input = e.target as HTMLInputElement; actualizarPorcentaje(i, input.value); input.value = porcentajeDeFila(filas[i].monto); }}
+										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
 										aria-label={`Porcentaje de la fracción ${i + 1}`}
 										class="w-16 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-200"
 									/>

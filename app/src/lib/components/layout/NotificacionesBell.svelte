@@ -8,6 +8,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import {
 		getSolicitudesPendientes,
@@ -479,7 +480,7 @@
 	}
 
 	async function handleRechazar(s: SolicitudAprobacion) {
-		if (!confirm('¿Rechazar esta solicitud? El registro original no se modifica.')) return;
+		if (!(await confirmar({ title: 'Rechazar solicitud', message: '¿Rechazar esta solicitud? El registro original no se modifica.', confirmLabel: 'Rechazar' }))) return;
 		processingId = s.id_solicitud;
 		errorMsg = '';
 		try {

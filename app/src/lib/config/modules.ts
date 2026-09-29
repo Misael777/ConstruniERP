@@ -56,7 +56,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
       { path: '/finanzas/centros-de-costos', label: 'Centro de Costos y Cuentas Internas', permiso: 'ver_finanzas_centros_costos' },
       { path: '/finanzas/cuentas-cobrar', label: 'Cuentas por Cobrar', permiso: 'ver_finanzas_cuentas_pendientes' },
       { path: '/finanzas/cuentas-pagar', label: 'Cuentas por Pagar', permiso: 'ver_finanzas_cuentas_pendientes' },
-      { path: '/finanzas/facturacion', label: 'Facturación', permiso: 'ver_finanzas_facturacion' },
+      { path: '/finanzas/facturacion', label: 'Emisión de Comprobante', permiso: 'ver_finanzas_facturacion' },
       { path: '/finanzas/tranzacciones', label: 'Transacciones', permiso: 'ver_finanzas_transacciones' },
       { path: '/finanzas/cuentas-bancarias', label: 'Cuentas Bancarias', permiso: 'ver_finanzas_cuentas_bancarias' },
       { path: '/finanzas/proveedores', label: 'Proveedores', permiso: 'ver_comercial_proveedores' }

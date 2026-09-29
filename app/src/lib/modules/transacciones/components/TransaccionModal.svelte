@@ -4,6 +4,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
@@ -815,7 +816,7 @@
 
 	async function handleDesaprobar() {
 		if (!transaccion) return;
-		if (!confirm('¿Quitar la aprobación de este comprobante? Volverá a poder editarse/eliminarse normalmente.')) return;
+		if (!(await confirmar({ title: 'Quitar aprobación', message: '¿Quitar la aprobación de este comprobante? Volverá a poder editarse/eliminarse normalmente.', confirmLabel: 'Quitar aprobación', danger: false }))) return;
 		aprobando = true;
 		try {
 			const result = await desaprobarTransaccion(supabase, transaccion.id_transaccion, isAdmin());
@@ -835,12 +836,13 @@
 
 	async function handleAnular() {
 		if (!transaccion) return;
-		if (
-			!confirm(
-				'¿Anular esta transacción? Si respalda un pago o cobro ya confirmado, ese pago/cobro volverá a quedar programado (sin transacción de respaldo) y la cuenta se recalculará.'
-			)
-		)
-			return;
+		const confirmado = await confirmar({
+			title: 'Anular transacción',
+			message:
+				'¿Anular esta transacción? Si respalda un pago o cobro ya confirmado, ese pago/cobro volverá a quedar programado (sin transacción de respaldo) y la cuenta se recalculará.',
+			confirmLabel: 'Anular'
+		});
+		if (!confirmado) return;
 		anulando = true;
 		try {
 			const result = await anularTransaccion(supabase, transaccion.id_transaccion, isAdmin());
@@ -1207,7 +1209,10 @@
 			firmaReceptorDataUrl,
 			esEfectivo: esReciboPagoEfectivo,
 			medioPagoLabel: getOptionLabel(medioPagoField, formValues.medio_pago),
-			numeroOperacion: formValues.num_operacion
+			numeroOperacion: formValues.num_operacion,
+			// A pedido del usuario: en un Ingreso de Categoría "Préstamo" la sección 1 del recibo se titula
+			// "BENEFICIARIO" (quien recibe el préstamo) en vez de "POR CONCEPTO DE".
+			tituloSeccionConcepto: categoriaEsPrestamo ? 'BENEFICIARIO' : undefined
 		};
 	}
 
@@ -1295,7 +1300,10 @@
 		// Proyecto (Destino) — el usuario está usando el selector "todos los centros de costo por tipo"
 		// que justamente habilita esa Categoría (ver categoriaEsPrestamo/optionsFor) — NO se limpia: todo
 		// el sentido de ese selector es poder cambiar de Proyecto sin perder la Categoría ya elegida.
-		const mantenerPrestamo = key === 'id_centro_costo_destino' && formValues.tipo === 'ingreso' && formValues.categoria === 'Préstamo';
+		// Lo mismo si Persona/Empresa es de tipo Préstamo (ver origenEsTipoPrestamo): su Categoría sale del
+		// catálogo de Corporativo sin importar el Proyecto, así que cambiar de Proyecto no la invalida.
+		const mantenerPrestamo =
+			key === 'id_centro_costo_destino' && formValues.tipo === 'ingreso' && (formValues.categoria === 'Préstamo' || origenEsTipoPrestamo);
 		// Espejo de mantenerPrestamo, para Egreso: si Categoría ya es "Préstamo Otorgado" y lo que
 		// cambió fue el Centro de Costo Origen O el Destino (ver categoriaEsPrestamoOtorgado/optionsFor —
 		// esta Categoría se alcanza tanto con Origen=Corporativo como con Clase=Otro en Destino), NO se
@@ -1480,6 +1488,12 @@
 	// mantenerPrestamo en handleInput) — el gatillo real es la Categoría en sí, no en qué Proyecto haya
 	// terminado.
 	const esPrestamoCorporativoIngreso = $derived(mode === 'create' && categoriaEsPrestamo);
+	// "Tipo de Comprobante" y "Generar Comprobante" solo aplican a Ingreso — a pedido del usuario, NO a un
+	// Ingreso de Categoría "Préstamo" (un préstamo recibido no se factura), ni en Nueva ni en Editar.
+	const mostrarComprobanteErp = $derived(formValues.tipo === 'ingreso' && !categoriaEsPrestamo);
+	$effect(() => {
+		if (!mostrarComprobanteErp && generarComprobanteErp === 'si') generarComprobanteErp = 'no';
+	});
 
 	// Espejo de categoriaEsPrestamo/esPrestamoCorporativoIngreso, para Egreso — dos formas de llegar acá:
 	// 1) Origen=Corporativo (esCorporativo), donde la Categoría "Préstamo Otorgado" es un valor DISTINTO
@@ -1506,6 +1520,27 @@
 	// guardado), no hay forma confiable de encontrar la cuenta — se avisa y se guarda solo la
 	// transacción, sin redirigir a ningún lado.
 	const editandoPrestamo = $derived(mode === 'edit' && (categoriaEsPrestamo || categoriaEsPrestamoOtorgado));
+
+	/** Datos de la Cuenta por Pagar que salen de esta transacción Ingreso "Préstamo" (al crear y al
+	 * editar) — cuentas-pagar/+page.svelte los deja BLOQUEADOS en el formulario. El monto de la cuenta es
+	 * siempre en soles: con la transacción en dólares, la cuenta queda en USD (monto_dolares × tipo_cambio,
+	 * mismo modelo que CuentaPagarModal). `prestamista_nombre` es la Persona/Empresa (Centro de Costo
+	 * Origen), que se muestra en "Proveedor" renombrado a "Prestamista". */
+	function datosPrestamoDesdeTransaccion(): Record<string, string> {
+		const prestamistaNombre = soloNombreCentro(centroCostoOptionsPersonaEmpresa).find((o) => o.value === formValues.id_centro_costo_origen)?.label ?? '';
+		const enDolares = formValues.tipo_moneda === 'dolares';
+		const monto = Number(formValues.monto_total) || 0;
+		const tipoCambio = Number(formValues.tipo_cambio) || 0;
+		return {
+			prestamista_nombre: prestamistaNombre,
+			id_centro_costo: formValues.id_centro_costo_destino,
+			moneda: enDolares ? 'USD' : 'PEN',
+			monto_dolares: enDolares ? String(monto) : '',
+			tipo_cambio: enDolares ? String(tipoCambio) : '',
+			monto_comprometido: String(enDolares ? Math.round(monto * tipoCambio * 100) / 100 : monto),
+			observacion: prestamistaNombre ? `Préstamo recibido de ${prestamistaNombre}` : 'Préstamo recibido'
+		};
+	}
 	async function redirigirAEditarCuentaPrestamo(): Promise<void> {
 		if (!transaccion) return;
 		try {
@@ -1515,11 +1550,12 @@
 					toast.info('No se encontró la Cuenta por Pagar vinculada (es de antes de este cambio) — actualízala a mano si hace falta.');
 					return;
 				}
+				const prestamo = datosPrestamoDesdeTransaccion();
 				sessionStorage.setItem(
 					'cuentaPagarEditarPrefill',
 					JSON.stringify({
+						...prestamo,
 						id_cuenta_pagar: cuenta.id_cuenta_pagar,
-						monto_comprometido: formValues.monto_total,
 						fecha_emision: formValues.fecha,
 						observacion: formValues.descripcion || cuenta.observacion
 					})
@@ -1585,6 +1621,32 @@
 		empleado: 'Empleado',
 		subcontratista: 'Subcontratista'
 	};
+
+	// Proyectos que pueden recibir el ingreso de un Préstamo (Persona/Empresa de tipo 'prestamo', ver
+	// origenEsTipoPrestamo): Corporativo, Obra (centros de venta 'proyecto' y manuales 'obra') y
+	// Consultoría — agrupados y ordenados en ese orden (SelectConSaldo necesita cada grupo consecutivo).
+	// Si el Proyecto ya guardado (al editar) no es de esos tipos, se agrega igual para no dejarlo fuera.
+	const ORDEN_GRUPO_RECEPTOR = ['Corporativo', 'Obra', 'Consultoría'];
+	function grupoProyectoReceptor(idCentro: string): string {
+		const tipo = centroCostoTipoMap[idCentro];
+		if (tipo === 'bolsa general') return 'Corporativo';
+		if (tipo === 'proyecto' || tipo === 'obra') return 'Obra';
+		if (tipo === 'consultoria') return 'Consultoría';
+		return TIPO_CENTRO_COSTO_LABEL_CORTO[tipo] ?? 'Otros';
+	}
+	const opcionesProyectoReceptorPrestamo = $derived.by(() => {
+		const opciones = centroCostoOptionsSoloCentros.filter((o) => ORDEN_GRUPO_RECEPTOR.includes(grupoProyectoReceptor(o.value)));
+		const actual = formValues.id_centro_costo_destino;
+		if (actual && !opciones.some((o) => o.value === actual)) {
+			const guardado = centroCostoOptionsTodos.find((o) => o.value === actual);
+			if (guardado) opciones.push(guardado);
+		}
+		const orden = (id: string) => {
+			const i = ORDEN_GRUPO_RECEPTOR.indexOf(grupoProyectoReceptor(id));
+			return i === -1 ? ORDEN_GRUPO_RECEPTOR.length : i;
+		};
+		return opciones.sort((a, b) => orden(a.value) - orden(b.value));
+	});
 
 	// A pedido explícito del usuario: en Ingreso+Externa, si "Persona/Empresa" (Origen) es de tipo
 	// Corporativo (bolsa general) u Otro, "Proyecto" (Destino) no tiene una lista real de proyectos que
@@ -2262,6 +2324,10 @@
 			//   mientras no se haya elegido una Clase todavía.
 			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsPersonaEmpresa);
+				// A pedido del usuario: si Persona/Empresa es de tipo Préstamo, "Proyecto" muestra solo los
+				// proyectos que pueden recibir ese ingreso (Corporativo, Obra, Consultoría — ver
+				// opcionesProyectoReceptorPrestamo), no las Cuentas Internas ni otros centros de Préstamo/Otro.
+				if (origenEsTipoPrestamo) return soloNombreCentro(opcionesProyectoReceptorPrestamo);
 				if (destinoMuestraTodosLosCentros) {
 					// Ordenado por grupo (tipo) — SelectConSaldo (ver grupoParaOpcion/fieldBlock) necesita
 					// las opciones de un mismo grupo CONSECUTIVAS para dibujar un solo encabezado por
@@ -2362,6 +2428,9 @@
 		// "Impuestos" (ya quitada de esos catálogos) para TODOS los tipos de Centro de Costo.
 		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseDestino === 'tributo') return CATEGORIA_TRIBUTO_EGRESO;
 		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseEsOtroPrestamoOTributo) return CATEGORIA_OTRO_EGRESO;
+		// A pedido del usuario: Ingreso con Persona/Empresa de tipo Préstamo usa las categorías de
+		// Corporativo (Inyecciones/Préstamo), sin importar a qué Proyecto vaya el ingreso.
+		if (field.key === 'categoria' && origenEsTipoPrestamo) return CATEGORIA_CORPORATIVO_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'ingreso') return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esProyectoDeObra && formValues.tipo === 'egreso') return CATEGORIA_OBRA_EGRESO;
 		if (field.key === 'categoria' && esCorporativo && formValues.tipo === 'ingreso') return CATEGORIA_CORPORATIVO_INGRESO;
@@ -2422,6 +2491,7 @@
 	 * (comportamiento normal, sin agrupar). */
 	function grupoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): string | undefined {
 		if (field.key !== 'id_centro_costo_destino' || !destinoMuestraTodosLosCentros) return undefined;
+		if (origenEsTipoPrestamo) return grupoProyectoReceptor(opt.value);
 		return TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[opt.value]] ?? 'Otros';
 	}
 
@@ -2508,14 +2578,30 @@
 			// ACTUAL (día en que de verdad se está registrando), no en la Fecha (reconocida) de esta
 			// transacción — esos dos pueden no coincidir (ej. un boucher escaneado con fecha vieja). El
 			// usuario sigue pudiendo cambiarla a mano en el formulario de la Cuenta por Pagar.
+			// A pedido del usuario, la Cuenta por Pagar muestra al PRESTAMISTA (Persona/Empresa = Centro de
+			// Costo Origen) en el campo "Proveedor" (renombrado "Prestamista") y deja bloqueados los datos
+			// que vienen de esta transacción (ver datosPrestamoDesdeTransaccion). `transaccion` lleva los
+			// datos reales de este formulario para grabar la transacción tal cual al guardar la cuenta (ver
+			// guardarCuentaPagarConTransaccionPrestamo en cuentas-pagar/+page.svelte).
+			const prestamo = datosPrestamoDesdeTransaccion();
 			sessionStorage.setItem(
 				'cuentaPagarPrefill',
 				JSON.stringify({
-					id_centro_costo: formValues.id_centro_costo_destino,
+					...prestamo,
 					id_centro_costo_origen: formValues.id_centro_costo_origen,
-					monto_comprometido: formValues.monto_total,
 					fecha_emision: getFechaLocalHoy(),
-					observacion: 'Préstamo recibido'
+					transaccion: {
+						fecha: formValues.fecha,
+						tipo_moneda: formValues.tipo_moneda,
+						tipo_cambio: formValues.tipo_cambio,
+						monto_convertido: formValues.monto_convertido,
+						monto_total: formValues.monto_total,
+						medio_pago: formValues.medio_pago,
+						cuente_origen: formValues.cuente_origen,
+						cuente_destino: formValues.cuente_destino,
+						num_operacion: formValues.num_operacion,
+						descripcion: formValues.descripcion
+					}
 				})
 			);
 			onClose();
@@ -2789,7 +2875,7 @@
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
 					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
-					if (generarComprobanteErp === 'si' && formValues.tipo === 'ingreso') {
+					if (generarComprobanteErp === 'si' && mostrarComprobanteErp) {
 						if (transaccion?.id_factura) {
 							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
 						} else {
@@ -3416,7 +3502,7 @@
 													<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_vencimiento_documento}</p>
 												{/if}
 											</div>
-										{:else if formValues.tipo === 'ingreso'}
+										{:else if mostrarComprobanteErp}
 											<div>
 												<label for="tr-tipo-comprobante-erp" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>
 												<div class="relative">
@@ -3444,7 +3530,7 @@
 											</div>
 										{/if}
 									</div>
-									{#if formValues.documento_pendiente === 'si' && formValues.tipo === 'ingreso'}
+									{#if formValues.documento_pendiente === 'si' && mostrarComprobanteErp}
 										<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 											<div>
 												<label for="tr-tipo-comprobante-erp-2" class="text-sm font-bold text-[#0f3b5e] mb-1 block whitespace-nowrap">Tipo de Comprobante</label>

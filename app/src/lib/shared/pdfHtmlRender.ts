@@ -128,20 +128,39 @@ export async function ensamblarPdfDosCopiasA4(original: HtmlRenderResult, copia:
  * offset Y negativo (que sube la imagen una página completa por cada `addPage()`) hace que cada
  * página solo muestre la porción que le toca — sin tener que cortar el PNG a mano en varios canvases.
  */
-export function ensamblarPdfUnaCopiaMultipagina(pagina: HtmlRenderResult): string {
-	const doc = new jsPDF();
+export interface OpcionesPaginaMm {
+	/** Ancho al que se coloca la imagen en la hoja (mm). Default 190 (A4 con 10 mm por lado). */
+	anchoMm?: number;
+	/** Margen en blanco izquierdo (mm). Default 10. Ej. 20 para dejar espacio de perforación. */
+	margenIzquierdoMm?: number;
+	margenSuperiorMm?: number;
+	margenInferiorMm?: number;
+}
+
+export function ensamblarPdfUnaCopiaMultipagina(pagina: HtmlRenderResult, opciones: OpcionesPaginaMm = {}): string {
+	const doc = new jsPDF(); // A4 vertical, mm
 	const altoPaginaMm = doc.internal.pageSize.getHeight();
-	const altoDisponibleMm = altoPaginaMm - MARGEN_PAGINA_MM * 2;
+	const anchoPaginaMm = doc.internal.pageSize.getWidth();
+	const margenSup = opciones.margenSuperiorMm ?? MARGEN_PAGINA_MM;
+	const margenInf = opciones.margenInferiorMm ?? MARGEN_PAGINA_MM;
+	const altoDisponibleMm = altoPaginaMm - margenSup - margenInf;
 
-	const anchoMm = ANCHO_PAGINA_MM;
+	const anchoMm = opciones.anchoMm ?? ANCHO_PAGINA_MM;
 	const altoTotalMm = (pagina.heightPx / pagina.widthPx) * anchoMm;
-	const xMm = MARGEN_PAGINA_MM;
+	const xMm = opciones.margenIzquierdoMm ?? MARGEN_PAGINA_MM;
 
-	const totalPaginas = Math.max(1, Math.ceil(altoTotalMm / altoDisponibleMm));
+	// 0.5 mm de tolerancia: un contenido de exactamente 1 hoja no debe generar una 2.ª página en blanco
+	// por redondeos del render.
+	const totalPaginas = Math.max(1, Math.ceil((altoTotalMm - 0.5) / altoDisponibleMm));
 	for (let i = 0; i < totalPaginas; i++) {
 		if (i > 0) doc.addPage();
-		const yMm = MARGEN_PAGINA_MM - i * altoDisponibleMm;
+		const yMm = margenSup - i * altoDisponibleMm;
 		doc.addImage(pagina.dataUrl, 'PNG', xMm, yMm, anchoMm, altoTotalMm);
+		// En páginas 2+ la imagen completa se dibuja desplazada: lo que cae en los márgenes de arriba/abajo
+		// (o a la izquierda) sería contenido de otra página — se tapa con blanco para respetar los márgenes.
+		doc.setFillColor(255, 255, 255);
+		doc.rect(0, 0, anchoPaginaMm, margenSup, 'F');
+		doc.rect(0, altoPaginaMm - margenInf, anchoPaginaMm, margenInf, 'F');
 	}
 
 	return arrayBufferToBase64(doc.output('arraybuffer'));
