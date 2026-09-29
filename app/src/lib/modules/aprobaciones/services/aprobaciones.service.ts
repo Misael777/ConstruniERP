@@ -586,7 +586,13 @@ export async function cerrarVentaAprobada(
 				...(params.datosProyecto ?? {}),
 				estado_proyecto: 'venta_cerrada',
 				precio_venta: Number(params.montoFinalVenta),
-				costo_estima: Number(params.montoFinalVenta)
+				costo_estima: Number(params.montoFinalVenta),
+				// Vínculo explícito con la transacción que cierra la venta (ver proyecto_reversion_venta_
+				// migration.sql) — a pedido explícito del usuario: si esta transacción se anula, el proyecto
+				// debe volver a 'activo'. Solo se conoce cuando el adelanto se crea recién acá; si ya estaba
+				// registrado de antes (adelantoYaRegistrado) no hay forma de saber cuál transacción vieja
+				// era, así que se deja tal cual estaba (no se pisa con null un vínculo ya guardado antes).
+				...(transaccionAdelanto ? { id_transaccion_cierre: transaccionAdelanto.id_transaccion } : {})
 			})
 			.eq('id_proyecto', params.idProyecto);
 		if (closeError) return { success: false, message: closeError.message };

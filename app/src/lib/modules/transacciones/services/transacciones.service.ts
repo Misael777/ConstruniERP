@@ -657,7 +657,7 @@ export async function updateTransaccion(
  * pendiente, ya que ahora le falta esa transacción (ver recalcularCuentaCobrar/recalcularCuentaPagar).
  */
 export async function deleteTransaccion(client: SupabaseClient, id: number, esAdmin: boolean = false): Promise<ServiceResult> {
-	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, cuente_origen, cuente_destino, categoria, tipo, id_centro_costo_destino').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
 	}
@@ -701,6 +701,18 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 	}
 
 	await Promise.all([recalcularSaldoCuentaBanco(client, actual?.cuente_origen), recalcularSaldoCuentaBanco(client, actual?.cuente_destino)]);
+
+	// Si esta transacción era (o hacía de) el adelanto que cerró la venta de un proyecto, esa venta
+	// vuelve a 'activo' — a pedido explícito del usuario, mismo criterio que anularTransaccion (ver
+	// fn_revertir_venta_por_transaccion en proyecto_reversion_venta_fallback_migration.sql). Best-effort:
+	// si falla, no debe tumbar un borrado que ya se aplicó correctamente (se loguea, nunca lanza).
+	const { error: revertirError } = await client.rpc('fn_revertir_venta_por_transaccion', {
+		p_id_transaccion: id,
+		p_categoria: actual?.categoria ?? null,
+		p_tipo: actual?.tipo ?? null,
+		p_id_centro_costo_destino: actual?.id_centro_costo_destino ?? null
+	});
+	if (revertirError) console.error('[transacciones.service] No se pudo revertir el estado del proyecto tras eliminar la transacción:', revertirError);
 
 	return { success: true, message: 'Transacción eliminada correctamente' };
 }
