@@ -1,6 +1,7 @@
 import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 import { generateUniqueFileName } from '$lib/shared/fileNaming';
+import { conCarga } from '$lib/stores/loading.svelte';
 
 // 'ticket': adjuntos de imagen del módulo de Tickets (ver ticket_imagenes_migration.sql) — a
 // diferencia de los otros 4 tipos, no pertenece a ningún proyecto, por eso projectId es opcional acá.
@@ -41,26 +42,30 @@ export async function uploadProjectDocument(
 		return { url, fileName };
 	}
 
-	const formData = new FormData();
-	formData.append('file', file);
-	formData.append('type', type);
-	if (projectId !== undefined) formData.append('projectId', String(projectId));
-	if (documentType) formData.append('documentType', documentType);
-	if (documentName) formData.append('documentName', documentName);
-	if (projectName) formData.append('projectName', projectName);
+	// Ticket #9: rama sin Tauri (navegador) — pasa por el servidor en vez de driveUploadClient.ts, así que
+	// necesita su propio enganche a la animación de carga.
+	return conCarga('Subiendo documento a Google Drive…', async () => {
+		const formData = new FormData();
+		formData.append('file', file);
+		formData.append('type', type);
+		if (projectId !== undefined) formData.append('projectId', String(projectId));
+		if (documentType) formData.append('documentType', documentType);
+		if (documentName) formData.append('documentName', documentName);
+		if (projectName) formData.append('projectName', projectName);
 
-	const response = await fetch(resolveApiUrl('/api/upload-document'), {
-		method: 'POST',
-		body: formData
+		const response = await fetch(resolveApiUrl('/api/upload-document'), {
+			method: 'POST',
+			body: formData
+		});
+
+		const result = await parseJsonResponse(response);
+		if (!response.ok || !result.success) {
+			throw new Error(result.details || result.error || 'Error al subir documento.');
+		}
+
+		console.log(`[uploadProjectDocument] ✓ Server upload OK. URL: ${result.url}`);
+		return { url: result.url as string, fileName: result.fileName as string };
 	});
-
-	const result = await parseJsonResponse(response);
-	if (!response.ok || !result.success) {
-		throw new Error(result.details || result.error || 'Error al subir documento.');
-	}
-
-	console.log(`[uploadProjectDocument] ✓ Server upload OK. URL: ${result.url}`);
-	return { url: result.url as string, fileName: result.fileName as string };
 }
 
 /** Extrae el fileId de Drive de una URL de descarga (`uc?export=download&id=X`) o de visor (`/file/d/X/...`). */

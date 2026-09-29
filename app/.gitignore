@@ -21,3 +21,10 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Python 
+.venv
+
+# Frames de origen de la animación de carga (Snoopy) — sin optimizar, solo el WebP final va a static/
+assets/Animacion_loading_frames/
+assets/Animacion_loading_frames_rmbkg/

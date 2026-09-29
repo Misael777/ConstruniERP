@@ -5,6 +5,7 @@
 	import { fetchApi, parseJsonResponse } from '$lib/apiClient';
 	import { isRunningInTauri } from '$lib/driveUploadClient';
 	import { confirmActivation } from '$lib/edgeFunctionClient';
+	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
 	
 	let mode = $state<'login' | 'setup_password' | 'forgot_password' | 'first_admin'>('login');
 	let email = $state('');
@@ -21,6 +22,10 @@
 	let otpSent = $state(false);
 	let otpToken = $state('');
 	let infoMessage = $state('');
+	// Ticket #9: pantalla completa (no solo el botón) desde que se envía el formulario hasta llegar al
+	// dashboard, o hasta que un error obliga a volver a mostrar el formulario.
+	let pantallaCompletaCarga = $state(false);
+	let mensajeCargaPantallaCompleta = $state('Iniciando sesión…');
 
 	let allowFirstAdmin = $state(false);
 	let firstAdminName = $state('');
@@ -164,6 +169,8 @@
 	async function handleLogin(e: Event) {
 		e.preventDefault();
 		isLoading = true;
+		pantallaCompletaCarga = true;
+		mensajeCargaPantallaCompleta = 'Iniciando sesión…';
 		errorMessage = '';
 		console.log('[Login] Attempting sign in with email:', email);
 		
@@ -211,15 +218,20 @@
 				removeSavedEmailFromStorage();
 			}
 			
-			// Redirigir al sistema
+			// Redirigir al sistema — se espera a que la navegación termine para no apagar la pantalla de
+			// carga (ver `finally`) antes de que el layout de (app) tome el relevo con la suya propia.
 			console.log('[Login] Redirecting to /dashboard...');
-			goto('/dashboard');
-			
+			mensajeCargaPantallaCompleta = 'Cargando tu cuenta…';
+			isLoading = false;
+			await goto('/dashboard');
+			// Éxito: NO se apaga pantallaCompletaCarga acá — se queda visible hasta que (app)/+layout.svelte
+			// termine su propio arranque (loadPermisos), para que no haya un hueco entre el login y el ERP.
+			return;
 		} catch (err: any) {
 			console.error('[Login] Login process exception:', err);
 			errorMessage = friendlyAuthError(err);
-		} finally {
 			isLoading = false;
+			pantallaCompletaCarga = false;
 		}
 	}
 
@@ -236,6 +248,8 @@
 			return;
 		}
 
+		pantallaCompletaCarga = true;
+		mensajeCargaPantallaCompleta = 'Enviando código…';
 		try {
 			const { data, error } = await supabase.auth.resetPasswordForEmail(setupEmail);
 			if (error) {
@@ -251,6 +265,7 @@
 			errorMessage = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
+			pantallaCompletaCarga = false;
 		}
 	}
 
@@ -260,6 +275,8 @@ async function verifyOtpAndSetPassword(e: Event) {
 		errorMessage = '';
 		infoMessage = '';
 		console.log('[SetupPassword] Verificando OTP para:', setupEmail);
+		pantallaCompletaCarga = true;
+		mensajeCargaPantallaCompleta = 'Configurando tu acceso…';
 
 		if (setupPassword !== setupConfirmPassword) {
 			errorMessage = 'Las contraseñas no coinciden';
@@ -313,12 +330,16 @@ async function verifyOtpAndSetPassword(e: Event) {
 				}
 			}
 
-			goto('/dashboard');
+			mensajeCargaPantallaCompleta = 'Cargando tu cuenta…';
+			isLoading = false;
+			await goto('/dashboard');
+			// Mismo criterio que handleLogin: no se apaga pantallaCompletaCarga en el camino de éxito.
+			return;
 		} catch (err: any) {
 			console.error('[SetupPassword] Exception caught while verifying OTP:', err);
 			errorMessage = friendlyAuthError(err);
-		} finally {
 			isLoading = false;
+			pantallaCompletaCarga = false;
 		}
 	}
 
@@ -351,6 +372,8 @@ async function handleSetupPassword(e: Event) {
 		}
 
 		isLoading = true;
+		pantallaCompletaCarga = true;
+		mensajeCargaPantallaCompleta = 'Creando el primer administrador…';
 		try {
 			if (isTauriApp()) {
 				// @ts-ignore: module may only exist in desktop runtime
@@ -408,6 +431,7 @@ async function handleSetupPassword(e: Event) {
 			firstAdminError = friendlyAuthError(err);
 		} finally {
 			isLoading = false;
+			pantallaCompletaCarga = false;
 		}
 	}
 
@@ -420,6 +444,11 @@ async function handleSetupPassword(e: Event) {
 	<title>Iniciar Sesión | Construni ERP</title>
 </svelte:head>
 
+{#if pantallaCompletaCarga}
+	<div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+		<SnoopyLoader mensaje={mensajeCargaPantallaCompleta} />
+	</div>
+{:else}
 <div class="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4">
 	<div class="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
 		<!-- Branding Header -->
@@ -872,3 +901,4 @@ async function handleSetupPassword(e: Event) {
 		{/if}
 	</div>
 </div>
+{/if}

@@ -7,9 +7,11 @@
 	import { describeError } from '$lib/shared/describeError';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+	import { createCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
+	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import { DEPARTAMENTOS, PROVINCIAS_POR_DEPARTAMENTO, DISTRITOS_POR_PROVINCIA } from '$lib/data/peruUbigeo';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
@@ -127,6 +129,40 @@
 	// completa acá, no hace falta volver a pedirlo al cerrar la venta (ver checkAdelantoExistente).
 	let adelantoFile = $state<File | null>(null);
 	let adelantoMonto = $state('');
+
+	// Ticket #40: "Forma de cobranza" — solo para ventas de Consultoría (Obra sigue con valorización,
+	// a pedido explícito del usuario). Opcional: si se deja vacío, no se crea ninguna Cuenta por Cobrar
+	// acá (se puede seguir creando a mano desde Finanzas > Cuentas por Cobrar, como hasta ahora). Cada
+	// hito se guarda como una cuota 'programado' de UNA sola Cuenta por Cobrar (reusa el mismo mecanismo
+	// de fraccionamiento ya validado en cuentasCobrar.service.ts — ver createCuentaCobrar más abajo).
+	interface HitoCobranza {
+		id: number;
+		descripcion: string;
+		tipo: 'porcentaje' | 'monto';
+		valor: string;
+		fechaEstimada: string;
+	}
+	let hitosCobranza = $state<HitoCobranza[]>([]);
+	let siguienteHitoCobranzaId = 1;
+	function agregarHitoCobranza() {
+		hitosCobranza = [
+			...hitosCobranza,
+			{ id: siguienteHitoCobranzaId++, descripcion: '', tipo: 'porcentaje', valor: '', fechaEstimada: fechaVenta || getFechaLocalHoy() }
+		];
+	}
+	function eliminarHitoCobranza(id: number) {
+		hitosCobranza = hitosCobranza.filter((h) => h.id !== id);
+	}
+	function importeHitoCobranza(hito: HitoCobranza): number {
+		const valor = Number(hito.valor) || 0;
+		if (hito.tipo === 'monto') return valor;
+		return Math.round(((Number(valorVenta) || 0) * valor) / 100 * 100) / 100;
+	}
+	const totalImporteCobranza = $derived(hitosCobranza.reduce((s, h) => s + importeHitoCobranza(h), 0));
+	const totalPorcentajeCobranza = $derived(
+		Number(valorVenta) > 0 ? (totalImporteCobranza / Number(valorVenta)) * 100 : 0
+	);
+	const saldoCobranza = $derived((Number(valorVenta) || 0) - totalImporteCobranza);
 
 	// Generation fields
 	// "Tipo de proyecto"/"Estado del predio"/"Tipo de edificación" (Consultoría) — dropdowns de
@@ -276,6 +312,7 @@
 				// A pedido explícito del usuario: arranca sin elegir, obliga a elegir en el nuevo dropdown
 				// "Tipo de Proyecto" (ver su declaración más arriba).
 				caracteristicasTab = null;
+				hitosCobranza = [];
 				proformas = [];
 				selectedFinalId = null;
 				localContratoUrl = null;
@@ -1034,6 +1071,32 @@ async function copiarCodigoGenerado() {
 		}
 
 		const precioVenta = Number(valorVenta) || 0;
+
+		// Ticket #40: si se cargó "Forma de cobranza", debe cuadrar exactamente con el Valor venta antes
+		// de guardar — mismo criterio que validarSumaFracciones en cuentasCobrar.service.ts (createCuentaCobrar
+		// más abajo la vuelve a validar igual, pero se corta acá para dar un mensaje claro sin llegar a
+		// insertar el proyecto y tener que deshacerlo).
+		if (caracteristicasTab === 'consultoria' && hitosCobranza.length > 0) {
+			for (const hito of hitosCobranza) {
+				if (!hito.descripcion.trim()) {
+					saveError = 'Cada hito de la Forma de cobranza debe tener una descripción.';
+					return null;
+				}
+				if (!(Number(hito.valor) > 0)) {
+					saveError = 'Cada hito de la Forma de cobranza debe tener un valor mayor a 0.';
+					return null;
+				}
+				if (!hito.fechaEstimada) {
+					saveError = 'Cada hito de la Forma de cobranza debe tener una fecha estimada.';
+					return null;
+				}
+			}
+			if (Math.abs(saldoCobranza) >= 0.01) {
+				saveError = `Los hitos de la Forma de cobranza suman ${formatCurrency(totalImporteCobranza)} pero el Valor venta es ${formatCurrency(precioVenta)}. Ajústalos para que cuadren.`;
+				return null;
+			}
+		}
+
 		const comision = Number(comisionPorcentaje) || 0;
 		const numeroPisosValue = Number(numeroPisos) || null;
 		const fechaInicio = fechaVenta;
@@ -1169,6 +1232,36 @@ async function copiarCodigoGenerado() {
 					.single();
 				if (docError) throw docError;
 				proformaDocIds.push(docData?.id_documento ?? null);
+			}
+
+			// Ticket #40: "Forma de cobranza" (solo Consultoría, ver hitosCobranza más arriba) — crea UNA
+			// Cuenta por Cobrar del proyecto con cada hito como cuota 'programado' (mismo mecanismo de
+			// fraccionamiento ya usado en Finanzas > Cuentas por Cobrar, ver createCuentaCobrar). El centro
+			// de costo compartido de Consultoría se asegura acá si el adelanto (más abajo) todavía no lo
+			// creó — getOrCrearCentroCostoCompartido es idempotente, no duplica nada si ya existe.
+			if (caracteristicasTab === 'consultoria' && hitosCobranza.length > 0) {
+				idCentroCosto = await getOrCrearCentroCostoCompartido(supabase, 'consultoria', nuevoProyectoId, proyectoNombre);
+				if (!idCentroCosto) throw new Error('No se pudo obtener el centro de costo de Consultoría para crear la Forma de cobranza.');
+
+				const fracciones = hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: importeHitoCobranza(h) }));
+				const cuentaResult = await createCuentaCobrar(
+					supabase,
+					{
+						id_cliente: clienteId,
+						id_centro_costo: idCentroCosto,
+						id_proyecto: nuevoProyectoId,
+						monto: precioVenta,
+						forma_pago: '3', // 'Por Porcentaje' — ver cuentaCobrar.config.ts
+						'condición_pago': hitosCobranza.length,
+						responsable: asesorFinal,
+						fecha_emision: fechaInicio,
+						moneda: 'PEN',
+						observaciones: 'Forma de cobranza definida al crear la venta.'
+					},
+					asesorFinal,
+					fracciones
+				);
+				if (!cuentaResult.success) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
 			}
 
 			// Adelanto inicial — mismo mecanismo que "Cerrar venta": asegura el centro de costo del
@@ -1692,6 +1785,98 @@ async function copiarCodigoGenerado() {
 						</div>
 						{/if}
 					</section>
+
+					{#if mode === 'create' && caracteristicasTab === 'consultoria'}
+					<!-- Ticket #40: solo aplica a Consultoría — Obra sigue con valorización (fuera del
+					     alcance de este popup, ver comentario junto a hitosCobranza más arriba). -->
+					<section class="border-t border-slate-100 pt-6">
+						<h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
+							<div class="w-1.5 h-4 bg-blue-600 rounded-full"></div>
+							Forma de cobranza
+						</h3>
+						<p class="text-xs text-slate-400 mb-3">
+							Define los hitos de cobro de esta venta — se registran como Cuenta por Cobrar del proyecto al guardar.
+							Opcional: si lo dejas vacío, puedes crear la Cuenta por Cobrar más adelante desde Finanzas &gt; Cuentas por Cobrar.
+						</p>
+
+						{#if hitosCobranza.length > 0}
+						<div class="overflow-x-auto">
+							<table class="w-full text-sm border-collapse">
+								<thead>
+									<tr class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide border-b border-slate-200">
+										<th class="text-left py-2 pr-2 w-8">N.°</th>
+										<th class="text-left py-2 pr-2">Hito de cobro</th>
+										<th class="text-left py-2 pr-2">Tipo</th>
+										<th class="text-left py-2 pr-2">Valor</th>
+										<th class="text-left py-2 pr-2">Importe (S/)</th>
+										<th class="text-left py-2 pr-2">Fecha estimada</th>
+										<th class="w-8"></th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each hitosCobranza as hito, i (hito.id)}
+										<tr class="border-b border-slate-100">
+											<td class="py-2 pr-2 text-slate-400">{i + 1}</td>
+											<td class="py-2 pr-2">
+												<input type="text" bind:value={hito.descripcion} placeholder="Ej. Adelanto al contratar" class="w-full min-w-[160px] px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+											</td>
+											<td class="py-2 pr-2">
+												<div class="min-w-[130px]">
+													<SelectConSaldo
+														value={hito.tipo}
+														options={[{ value: 'porcentaje', label: 'Porcentaje' }, { value: 'monto', label: 'Monto fijo' }]}
+														onchange={(v) => (hito.tipo = v === 'monto' ? 'monto' : 'porcentaje')}
+													/>
+												</div>
+											</td>
+											<td class="py-2 pr-2">
+												<div class="flex items-center gap-1">
+													{#if hito.tipo === 'monto'}<span class="text-xs text-slate-400 shrink-0">S/</span>{/if}
+													<input type="number" min="0" step="0.01" bind:value={hito.valor} class="w-24 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+													{#if hito.tipo === 'porcentaje'}<span class="text-xs text-slate-400 shrink-0">%</span>{/if}
+												</div>
+											</td>
+											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(importeHitoCobranza(hito))}</td>
+											<td class="py-2 pr-2">
+												<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+											</td>
+											<td class="py-2 text-right">
+												<button type="button" onclick={() => eliminarHitoCobranza(hito.id)} class="text-slate-400 hover:text-rose-600 p-1.5 rounded transition-colors" title="Quitar hito" aria-label="Quitar hito">
+													<i class="fas fa-trash-alt"></i>
+												</button>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						{/if}
+
+						<button type="button" onclick={agregarHitoCobranza} class="mt-3 px-3 py-2 border border-blue-200 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-50 flex items-center gap-1.5 transition-colors">
+							<i class="fas fa-plus"></i> Agregar cuota
+						</button>
+
+						{#if hitosCobranza.length > 0}
+							<div class="mt-4 grid grid-cols-3 gap-3 max-w-lg">
+								<div class="text-center p-2 bg-slate-50 rounded-lg">
+									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total porcentaje</p>
+									<p class="text-sm font-bold text-slate-700">{totalPorcentajeCobranza.toFixed(0)} %</p>
+								</div>
+								<div class="text-center p-2 bg-slate-50 rounded-lg">
+									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total (S/)</p>
+									<p class="text-sm font-bold text-slate-700">{formatCurrency(totalImporteCobranza)}</p>
+								</div>
+								<div class="text-center p-2 bg-slate-50 rounded-lg">
+									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Saldo (S/)</p>
+									<p class={`text-sm font-bold ${Math.abs(saldoCobranza) < 0.01 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrency(saldoCobranza)}</p>
+								</div>
+							</div>
+							{#if Math.abs(saldoCobranza) >= 0.01}
+								<p class="text-xs text-rose-500 mt-2">La suma de los hitos debe cuadrar exactamente con el Valor venta (S/) para poder guardar.</p>
+							{/if}
+						{/if}
+					</section>
+					{/if}
 
 					{#if mode === 'edit'}
 					<!-- Gestión de proformas, contrato y cierre de venta -->

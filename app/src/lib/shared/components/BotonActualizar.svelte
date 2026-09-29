@@ -26,6 +26,7 @@
 	import { isRunningInTauri } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
 	import { describeError } from '$lib/shared/describeError';
+	import { iniciarCarga, type CargaEnCurso } from '$lib/stores/loading.svelte';
 	import type { AppRelease } from '$lib/modules/tickets/services/releases.service';
 
 	let { release }: { release: AppRelease } = $props();
@@ -57,11 +58,14 @@
 		return lineas.join('\n');
 	}
 
-	async function actualizarWindows() {
+	// Ticket #9: la animación de carga acompaña cada paso — se actualiza el mismo mensaje en vez de abrir
+	// una espera nueva por paso, para que no destelle entre "Buscando..." y "Descargando...".
+	async function actualizarWindows(carga: CargaEnCurso) {
 		paso = 'importar plugin-updater/plugin-process';
 		const { check } = await import('@tauri-apps/plugin-updater');
 		const { relaunch } = await import('@tauri-apps/plugin-process');
 		estadoTexto = 'Buscando actualización...';
+		carga.actualizar('Buscando actualización…');
 		paso = 'check() — consultar latest.json en GitHub';
 		const update = await check();
 		if (!update) {
@@ -69,6 +73,7 @@
 			return;
 		}
 		estadoTexto = `Descargando v${update.version}...`;
+		carga.actualizar(`Descargando la versión ${update.version}…`);
 		paso = `downloadAndInstall() v${update.version}`;
 		await update.downloadAndInstall();
 		toast.success('Actualización instalada — la app se va a reiniciar.');
@@ -76,7 +81,7 @@
 		await relaunch();
 	}
 
-	async function actualizarAndroid() {
+	async function actualizarAndroid(carga: CargaEnCurso) {
 		if (!release.url_apk_drive) {
 			toast.error('Esta versión todavía no tiene el APK adjunto — avísale al developer.');
 			return;
@@ -84,6 +89,7 @@
 		paso = 'armar URL de descarga';
 		const fileId = extractDriveFileId(release.url_apk_drive) ?? release.url_apk_drive;
 		estadoTexto = 'Abriendo descarga...';
+		carga.actualizar('Abriendo la descarga…');
 		// El archivo de Drive es público (lo sube release.mjs con permiso "anyone reader") y es grande:
 		// `confirm=t` en drive.usercontent.google.com salta el aviso "no se puede analizar en busca de
 		// virus" que Drive muestra en archivos pesados, así el navegador baja el APK directo.
@@ -105,13 +111,14 @@
 		paso = 'detectar plataforma (plugin-os)';
 		urlIntentada = '';
 		let plataforma = 'desconocida';
+		const carga = iniciarCarga('Buscando actualización…');
 		try {
 			const { platform } = await import('@tauri-apps/plugin-os');
 			plataforma = platform();
 			if (plataforma === 'android') {
-				await actualizarAndroid();
+				await actualizarAndroid(carga);
 			} else {
-				await actualizarWindows();
+				await actualizarWindows(carga);
 			}
 		} catch (err: any) {
 			console.error('[BotonActualizar] Error al actualizar:', err);
@@ -120,6 +127,7 @@
 			// que falló + stack) va en un bloque copiable dentro del toast rojo.
 			toast.error(`No se pudo completar la actualización: ${describeError(err)}`, diagnostico(err, plataforma, urlIntentada));
 		} finally {
+			carga.cerrar();
 			procesando = false;
 			estadoTexto = '';
 		}

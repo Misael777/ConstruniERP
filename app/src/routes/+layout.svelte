@@ -3,6 +3,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { setupConsoleLogger } from '$lib/loggerHook';
 	import { onMount } from 'svelte';
+	import LoadingOverlay from '$lib/shared/components/LoadingOverlay.svelte';
 
 	let { children } = $props();
 
@@ -17,3 +18,4 @@
 </svelte:head>
 
 {@render children()}
+<LoadingOverlay />

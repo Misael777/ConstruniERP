@@ -429,6 +429,22 @@ excepción es el selector de "filas por página" de `VentasTable.svelte`, que ho
 panel del combo usa `z-[200]`, por encima de los modales (máx. `z-[120]`). Limitación conocida: no muestra colores
 por opción (por ejemplo, el de Prioridad en Cuentas por Pagar/Cobrar).
 
+## 7c. Animación de carga (Snoopy, ticket #9)
+
+Espera larga (subir a Drive, generar un PDF/comprobante, OCR, la Edge Function de Empleados, login/arranque,
+buscar-descargar una actualización) muestra un overlay de pantalla completa con Snoopy — NUNCA los guardados
+rápidos de formularios, que conservan su spinner en el botón. Un solo store (`$lib/stores/loading.svelte.ts`,
+`iniciarCarga`/`conCarga`/`actualizar`/`cerrar`) enganchado en los puntos centrales, no en cada modal:
+`driveUploadClient.ts` (`uploadToDriveClient`), la rama web de `uploadProjectDocument.ts`,
+`pdfHtmlRender.ts`-derivados (`facturaPdf.ts`, `reciboPagoEfectivo.ts`, `reciboPagoProveedor.ts`,
+`comprobanteTransferenciaInterna.ts`), `ocrComprobante.ts`, `edgeFunctionClient.ts` (las mutaciones, no
+`listUsers`/`getUser`) y `BotonActualizar.svelte`. El login (`(auth)/login/+page.svelte`) y el arranque
+(`(app)/+layout.svelte`) usan `SnoopyLoader.svelte` a pantalla completa directo, sin pasar por el store — el
+login mantiene la pantalla completa **incluso en el `finally`** solo en el camino de error; el camino de éxito
+la deja abierta a propósito para que no haya hueco hasta que el layout del ERP termine su propio arranque.
+Asset: `static/snoopy-loading.webp` (WebP animado transparente, ~660 KB) — los 86 MB de fotogramas en bruto de
+`app/assets/Animacion_loading_frames*/` están en `.gitignore`, nunca se commitean.
+
 ## 8. Glosario rápido
 
 - **Centro de Costo:** cuenta interna de origen/destino de todo dinero; los de cliente/proveedor/empleado/proyecto se

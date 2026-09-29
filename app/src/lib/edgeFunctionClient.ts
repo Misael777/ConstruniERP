@@ -4,6 +4,7 @@
  */
 
 import { env } from '$env/dynamic/public';
+import { conCarga } from '$lib/stores/loading.svelte';
 
 const SUPABASE_URL = env.PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = env.PUBLIC_SUPABASE_ANON_KEY || '';
@@ -88,6 +89,26 @@ export async function createUser(payload: {
 	nivel?: string | null;
 	dni?: string | null;
 }) {
+	return conCarga('Creando empleado…', () => createUserInterno(payload));
+}
+
+async function createUserInterno(payload: {
+	email: string;
+	// El empleado activa su propio acceso después vía "Configura tu acceso" (OTP + su contraseña, ver
+	// badge "Estado Cuenta" en iam/empleados/+page.svelte) — el único llamador real (esa misma página)
+	// nunca manda password; se deja opcional en vez de requerido para que el tipo refleje el uso real.
+	password?: string;
+	nombre?: string;
+	telefono?: string | null;
+	rol_id?: number | null;
+	area_id?: number | null;
+	fecha_ingreso?: string;
+	salario?: number;
+	horas?: number;
+	periodo?: string;
+	nivel?: string | null;
+	dni?: string | null;
+}) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'POST',
 		body: JSON.stringify(payload)
@@ -113,6 +134,24 @@ export async function updateUser(payload: {
 	nivel?: string | null;
 	dni?: string | null;
 }) {
+	return conCarga('Guardando empleado…', () => updateUserInterno(payload));
+}
+
+async function updateUserInterno(payload: {
+	auth_user_id: string;
+	email?: string;
+	password?: string;
+	nombre?: string;
+	telefono?: string | null;
+	rol_id?: number | null;
+	area_id?: number | null;
+	fecha_ingreso?: string;
+	salario?: number;
+	horas?: number;
+	periodo?: string;
+	nivel?: string | null;
+	dni?: string | null;
+}) {
 	const response = await fetchWithApiKey(getUserAdminUrl(), {
 		method: 'PUT',
 		body: JSON.stringify(payload)
@@ -124,6 +163,10 @@ export async function updateUser(payload: {
  * Elimina un usuario de Supabase Auth y su registro en public.empleados
  */
 export async function deleteUser(authUserId: string) {
+	return conCarga('Eliminando empleado…', () => deleteUserInterno(authUserId));
+}
+
+async function deleteUserInterno(authUserId: string) {
 	// The Edge Function expects the identifier via the `id` query param or as `body.id`.
 	// Send it as a query parameter to ensure the function receives it for both UUIDs and numeric IDs.
 	const url = new URL(getUserAdminUrl());
@@ -140,6 +183,10 @@ export async function deleteUser(authUserId: string) {
  * baja el centro de costo que se generó para él. Ver darDeBajaEmpleado en la Edge Function.
  */
 export async function darDeBajaEmpleado(authUserId: string) {
+	return conCarga('Dando de baja al empleado…', () => darDeBajaEmpleadoInterno(authUserId));
+}
+
+async function darDeBajaEmpleadoInterno(authUserId: string) {
 	const url = new URL(getUserAdminUrl());
 	url.searchParams.set('action', 'dar-de-baja');
 	const response = await fetchWithApiKey(url.toString(), {
@@ -152,6 +199,10 @@ export async function darDeBajaEmpleado(authUserId: string) {
 /** Restaura a un empleado dado de baja (contraparte de darDeBajaEmpleado) — se usa desde la sección
  * "Eliminados" de Empleados (solo-admin), sin contraseña. Ver restaurarEmpleado en la Edge Function. */
 export async function restaurarEmpleado(authUserId: string) {
+	return conCarga('Restaurando empleado…', () => restaurarEmpleadoInterno(authUserId));
+}
+
+async function restaurarEmpleadoInterno(authUserId: string) {
 	const url = new URL(getUserAdminUrl());
 	url.searchParams.set('action', 'restaurar');
 	const response = await fetchWithApiKey(url.toString(), {
@@ -165,6 +216,10 @@ export async function restaurarEmpleado(authUserId: string) {
  * Resetea la contraseña de un usuario
  */
 export async function resetPassword(authUserId: string, newPassword: string) {
+	return conCarga('Actualizando contraseña…', () => resetPasswordInterno(authUserId, newPassword));
+}
+
+async function resetPasswordInterno(authUserId: string, newPassword: string) {
 	const url = new URL(getUserAdminUrl());
 	url.searchParams.set('action', 'reset-password');
 	const response = await fetchWithApiKey(url.toString(), {
@@ -181,6 +236,10 @@ export async function resetPassword(authUserId: string, newPassword: string) {
  * `empleados` desde esa sesión de bajo privilegio falla en silencio por RLS.
  */
 export async function confirmActivation(authUserId: string) {
+	return conCarga('Activando tu cuenta…', () => confirmActivationInterno(authUserId));
+}
+
+async function confirmActivationInterno(authUserId: string) {
 	const url = new URL(getUserAdminUrl());
 	url.searchParams.set('action', 'confirm-activation');
 	const response = await fetchWithApiKey(url.toString(), {

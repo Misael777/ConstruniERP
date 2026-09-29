@@ -15,6 +15,7 @@ import { EMPRESA_NOMBRE, EMPRESA_RUC } from './empresaConstantes';
 import { formatearFechaLarga, formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl, ensamblarPdfDosCopiasA4 } from './pdfHtmlRender';
 import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
+import { conCarga } from '$lib/stores/loading.svelte';
 
 const ANCHO_PLANTILLA_PX = 750;
 
@@ -143,7 +144,13 @@ export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
  * copia se renderiza por separado (mismo layout, solo cambia la etiqueta "COPIA -"); el ensamblado en
  * la hoja A4 (incluida la escala si el contenido es más alto de lo normal, ver ensamblarPdfDosCopiasA4)
  * vive centralizado en pdfHtmlRender.ts — antes esta lógica estaba triplicada por archivo. */
-export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno, sinMarcaAgua = false): Promise<string> {
+export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno, sinMarcaAgua = false) {
+	// Ticket #9: un solo punto por generador — cubre "Original + Copia" (dos renders de renderHtmlToPngDataUrl)
+	// como UNA sola espera, en vez de parpadear entre cada mitad.
+	return conCarga('Generando el comprobante de transferencia…', () => generarComprobanteTransferenciaInternaBase64Interno(datos, sinMarcaAgua));
+}
+
+async function generarComprobanteTransferenciaInternaBase64Interno(datos: DatosComprobanteInterno, sinMarcaAgua = false): Promise<string> {
 	const [original, copia] = await Promise.all([
 		renderVoucherComoImagen(false, datos, sinMarcaAgua),
 		renderVoucherComoImagen(true, datos, sinMarcaAgua)

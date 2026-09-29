@@ -12,6 +12,7 @@
 
 import { recognize } from 'tesseract.js';
 import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
+import { conCarga } from '$lib/stores/loading.svelte';
 
 /**
  * "Filtros de realce" — a pedido explícito del usuario, mejora la imagen ANTES de pasarla a Tesseract
@@ -432,6 +433,10 @@ export interface ReconocerComprobantePagoResult {
  * renderPdfFirstPageToDataUrl, a mayor resolución que la miniatura de vista previa, para que el OCR
  * tenga texto más nítido) antes de pasarla a Tesseract. Nunca lanza. */
 export async function reconocerComprobantePago(file: File): Promise<ReconocerComprobantePagoResult> {
+	return conCarga('Leyendo el comprobante…', () => reconocerComprobantePagoInterno(file));
+}
+
+async function reconocerComprobantePagoInterno(file: File): Promise<ReconocerComprobantePagoResult> {
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
@@ -466,6 +471,10 @@ export async function reconocerComprobantePago(file: File): Promise<ReconocerCom
  * Operación sin ningún valor reconocido y sin ningún aviso al usuario. Nunca lanza — un fallo de
  * reconocimiento no debe bloquear el registro manual de la transacción. */
 export async function reconocerComprobante(file: File): Promise<ReconocerComprobanteResult> {
+	return conCarga('Leyendo el comprobante…', () => reconocerComprobanteInterno(file));
+}
+
+async function reconocerComprobanteInterno(file: File): Promise<ReconocerComprobanteResult> {
 	try {
 		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;

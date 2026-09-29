@@ -4,8 +4,8 @@ from PIL import Image
 from rembg import remove, new_session
 
 # ===== CONFIGURACIÓN =====
-CARPETA_ENTRADA = "frames"          # carpeta con los frames originales
-CARPETA_SALIDA  = "frames_sin_fondo" # carpeta de salida
+CARPETA_ENTRADA = "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\assets\\Animacion_loading_frames"          # carpeta con los frames originales
+CARPETA_SALIDA  = "C:\\Users\\linar\\Desktop\\PROYECTOS_2026\\ERPConstruni\\ConstruniERP\\app\\assets\\Animacion_loading_frames_rmbkg" # carpeta de salida
 MODELO          = "u2net"           # opciones: u2net, u2netp, isnet-general-use, silueta
 EXTENSIONES     = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 # =========================

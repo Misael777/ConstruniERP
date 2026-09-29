@@ -17,6 +17,7 @@
 	import { mobileFabState } from '$lib/stores/mobileFab.svelte';
 	import MobileFab from '$lib/shared/components/MobileFab.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
+	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
 
 	let { children } = $props();
 
@@ -168,9 +169,8 @@
 </script>
 
 {#if isLoading}
-	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50">
-		<i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
-		<h2 class="text-brand-marine font-bold">Cargando Construni ERP...</h2>
+	<div class="h-screen w-screen flex items-center justify-center bg-slate-50">
+		<SnoopyLoader mensaje="Cargando Construni ERP…" />
 	</div>
 {:else if noAccess}
 	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 px-6 text-center">

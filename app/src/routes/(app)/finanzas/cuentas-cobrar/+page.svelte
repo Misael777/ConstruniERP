@@ -909,7 +909,7 @@
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
 			<div class="min-w-[980px]">
-				<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+				<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
 					<span>Proyecto</span>
 					<span>N° Documento</span>
 					<span class="text-center">Montos</span>
@@ -917,6 +917,7 @@
 						<span class="flex-1">Prioridad</span>
 						<span class="flex-1">Estado</span>
 					</div>
+					<span class="text-center">Saldo Pendiente</span>
 					<span class="text-right">Días de Retraso</span>
 					<span class="text-right">Acciones</span>
 				</div>
@@ -924,7 +925,7 @@
 				{#each items as item (item.id_cuenta_cobrar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
 					<div
-						class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_0.9fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -962,6 +963,9 @@
 									{getOptionLabel(estadoField, item.estado)}
 								</span>
 							</div>
+						</div>
+						<div class="text-center text-sm font-semibold text-slate-700">
+							{formatCurrency(item.saldo_pendiente)}
 						</div>
 						<div class="text-right text-sm">
 							{#if retraso !== null}
@@ -1035,6 +1039,7 @@
 								{getOptionLabel(estadoField, item.estado)}
 							</span>
 						</div>
+						<span class="text-xs font-semibold text-slate-600">Saldo: {formatCurrency(item.saldo_pendiente)}</span>
 					</div>
 					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
 						<span>Vencimiento: {formatDate(item.fecha_vencimiento)}</span>

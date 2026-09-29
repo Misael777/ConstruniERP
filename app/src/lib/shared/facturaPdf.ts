@@ -13,6 +13,7 @@ import { LOGO_ICONO_DATA_URI } from './logoIconoDataUri';
 import { formatearFechaCorta } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl, ensamblarPdfUnaCopiaMultipagina } from './pdfHtmlRender';
 import { escapeHtml } from './pdfVoucherEstilos';
+import { conCarga } from '$lib/stores/loading.svelte';
 
 const ANCHO_PLANTILLA_PX = 820;
 const FILAS_MINIMAS = 5;
@@ -390,7 +391,13 @@ function construirHtmlSimple(d: DatosFacturaPdf): string {
  * previa dentro del modal y archivo que se guarda en Drive) como el PDF ya listo en base64. Factura usa
  * su propia plantilla (sin cambios); Boleta/Nota de Crédito/Nota de Débito usan el formato "simple"
  * entregado por el usuario (ver construirHtmlSimple). */
-export async function generarFacturaPdf(datos: DatosFacturaPdf): Promise<{ pngDataUrl: string; pdfBase64: string }> {
+export async function generarFacturaPdf(datos: DatosFacturaPdf) {
+	// Ticket #9: un solo punto por generador — cubre "Original + Copia" (dos renders de renderHtmlToPngDataUrl)
+	// como UNA sola espera, en vez de parpadear entre cada mitad.
+	return conCarga('Generando el PDF de la factura…', () => generarFacturaPdfInterno(datos));
+}
+
+async function generarFacturaPdfInterno(datos: DatosFacturaPdf): Promise<{ pngDataUrl: string; pdfBase64: string }> {
 	const html = `<style>${ESTILOS}</style>${datos.tipoDocumento === 'factura' ? construirHtml(datos) : construirHtmlSimple(datos)}`;
 	const render = await renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 	const pdfBase64 = ensamblarPdfUnaCopiaMultipagina(render);
