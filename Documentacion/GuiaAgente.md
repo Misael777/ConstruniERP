@@ -273,6 +273,7 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
 | `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
 | `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | **pendiente** (SQL a mano + `migration repair`) |
+| `20260929155944_centro_costo_corporativo_unico` | Crea el centro Corporativo (`bolsa general`) si falta e índice único `uq_centro_costo_corporativo_activo` (un solo Corporativo activo). "Nuevo Centro de Costo" ya solo crea Otro/Préstamo | **pendiente** | **pendiente** |
 
 Todas las migraciones hasta `20260925130000` están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
 

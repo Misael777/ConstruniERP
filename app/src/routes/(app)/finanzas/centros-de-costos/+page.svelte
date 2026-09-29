@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Search, ChevronUp, ChevronDown, ChevronLeft, X, Building2, Trash2, RotateCcw, Trash } from '@lucide/svelte';
+	import { Plus, Search, ChevronUp, ChevronDown, ChevronLeft, X, Building2, Trash2, RotateCcw, Trash, Lock } from '@lucide/svelte';
 	import {
 		FIELDS_CONFIG,
 		DEFAULT_SORT_FIELD,
@@ -20,7 +20,9 @@
 		esCentroDeVenta,
 		deleteCentroCosto,
 		restaurarCentroCosto,
-		eliminarCentroCostoPermanente
+		eliminarCentroCostoPermanente,
+		getOrCrearCentroCostoCorporativo,
+		TIPO_CORPORATIVO
 	} from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	import { toast } from '$lib/stores/toast';
@@ -53,6 +55,38 @@
 	// "centros" = creadas a mano desde este submódulo (sin vínculo), "cuentas" = generadas solas al
 	// crear esa entidad. Cambiar de tab reconsulta con un `vinculado` distinto, no filtra en memoria.
 	let activeTab = $state<'centros' | 'cuentas'>('centros');
+
+	// Pestañas por tipo dentro de cada pestaña principal (a pedido del usuario) — cada una lista solo los
+	// centros de su tipo. En "Centros de Costos", Obra agrupa los centros de venta de Obra (tipo
+	// 'proyecto') y los manuales antiguos de tipo 'obra', y el Corporativo es único (ver
+	// TIPO_CORPORATIVO). En "Cuentas Internas" son los 4 tipos que se generan solos por entidad.
+	type TabTipo = { key: string; label: string; tipos: string[] };
+	const TABS_TIPO: Record<'centros' | 'cuentas', TabTipo[]> = {
+		centros: [
+			{ key: 'todos', label: 'Todos', tipos: [] },
+			{ key: 'corporativo', label: 'Corporativo', tipos: [TIPO_CORPORATIVO] },
+			{ key: 'obra', label: 'Obra', tipos: ['proyecto', 'obra'] },
+			{ key: 'consultoria', label: 'Consultoría', tipos: ['consultoria'] },
+			{ key: 'prestamo', label: 'Préstamo', tipos: ['prestamo'] },
+			{ key: 'otro', label: 'Otro', tipos: ['otro'] }
+		],
+		cuentas: [
+			{ key: 'todos', label: 'Todos', tipos: [] },
+			{ key: 'cliente', label: 'Clientes', tipos: ['cliente'] },
+			{ key: 'proveedor', label: 'Proveedores', tipos: ['proveedor'] },
+			{ key: 'subcontratista', label: 'Subcontratistas', tipos: ['subcontratista'] },
+			{ key: 'empleado', label: 'Empleados', tipos: ['empleado'] }
+		]
+	};
+	let tabTipo = $state('todos');
+	const tabsTipoActuales = $derived(TABS_TIPO[activeTab]);
+
+	function switchTabTipo(key: string) {
+		if (tabTipo === key) return;
+		tabTipo = key;
+		pageNum = 1;
+		fetchList();
+	}
 
 	let items = $state<CentroCosto[]>([]);
 	// Saldo real (ingresos - egresos, ver getSaldosPorCentroCosto) de cada centro de costo de la
@@ -117,7 +151,8 @@
 				sortBy,
 				sortDir,
 				vinculado: activeTab === 'cuentas',
-				soloEliminados: activeTab === 'centros' && verEliminados
+				soloEliminados: activeTab === 'centros' && verEliminados,
+				tipos: TABS_TIPO[activeTab].find((t) => t.key === tabTipo)?.tipos
 			});
 			items = result.items;
 			total = result.total;
@@ -141,6 +176,7 @@
 		activeTab = tab;
 		pageNum = 1;
 		verEliminados = false; // "Eliminados" solo tiene sentido en "Centros de Costos"
+		tabTipo = 'todos';
 		// 'producto' solo tiene sentido en Cuentas Internas — al salir de esa pestaña se vuelve al
 		// orden por defecto para no dejar un ordenamiento que ya no aplica.
 		if (sortBy === 'producto') {
@@ -251,6 +287,38 @@
 		}
 	}
 
+	// ── Editar el Corporativo (con candado) — a pedido del usuario, es el único centro que se puede
+	// editar desde acá y solo con autorización de administrador (correo + contraseña, mismo mecanismo
+	// que el borrado permanente), aunque quien lo pida ya sea admin. No se puede dar de baja ni cambiar
+	// de tipo (ver TIPO_CORPORATIVO en centroCostos.service.ts). ──
+	function esCorporativo(item: CentroCosto): boolean {
+		return item.tipo === TIPO_CORPORATIVO;
+	}
+
+	let autorizarEdicionOpen = $state(false);
+	let centroParaEditar = $state<CentroCosto | null>(null);
+	let editModalOpen = $state(false);
+
+	function handleEditarCorporativo(item: CentroCosto, event: MouseEvent) {
+		event.stopPropagation();
+		centroParaEditar = item;
+		autorizarEdicionOpen = true;
+	}
+	function closeAutorizarEdicion() {
+		autorizarEdicionOpen = false;
+		if (!editModalOpen) centroParaEditar = null;
+	}
+	async function confirmarAutorizarEdicion(email: string, password: string) {
+		const verificacion = await verifyAdminCredentials(email, password);
+		if (!verificacion.success) throw new Error(verificacion.message);
+		editModalOpen = true;
+		autorizarEdicionOpen = false;
+	}
+	function closeEditModal() {
+		editModalOpen = false;
+		centroParaEditar = null;
+	}
+
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
 	onDestroy(setMobileFab(openCreate, 'Nuevo Centro de Costo'));
 
@@ -259,7 +327,9 @@
 			goto('/dashboard');
 			return;
 		}
-		fetchList();
+		// El Corporativo es único y se genera solo (a pedido del usuario): si todavía no existe, se crea
+		// antes de listar. Idempotente — ver getOrCrearCentroCostoCorporativo.
+		getOrCrearCentroCostoCorporativo(supabase).finally(fetchList);
 	});
 
 	function onSearchInput(value: string) {
@@ -400,6 +470,7 @@
 	async function handleCentroCostoCreado() {
 		activeTab = 'centros';
 		verEliminados = false;
+		tabTipo = 'todos';
 		if (sortBy === 'producto') {
 			sortBy = DEFAULT_SORT_FIELD;
 			sortDir = DEFAULT_SORT_DIR;
@@ -530,6 +601,27 @@
 		{/if}
 	</div>
 
+	{#if tabsTipoActuales.length > 0}
+		<!-- Pestañas por tipo — mismo estilo que las pestañas principales de arriba; con scroll horizontal
+		     en pantallas angostas (celular) para no desbordar. -->
+		<div class="mb-4 flex gap-1 border-b border-slate-200 overflow-x-auto">
+			{#each tabsTipoActuales as tab (tab.key)}
+				<button
+					type="button"
+					onclick={() => switchTabTipo(tab.key)}
+					class={`flex items-center gap-1.5 whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+						tabTipo === tab.key
+							? 'border-[#0f3b5e] text-[#0f3b5e]'
+							: 'border-transparent text-slate-500 hover:text-slate-700'
+					}`}
+				>
+					{#if tab.key === 'corporativo'}<Lock size={13} class="text-amber-600" />{/if}
+					{tab.label}
+				</button>
+			{/each}
+		</div>
+	{/if}
+
 	<!-- Table / Cards -->
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
@@ -572,7 +664,15 @@
 				{/snippet}
 				{#snippet row(item)}
 					{#each tableFields as field}
-						<td class="px-4 py-3 text-slate-700">{cellValue(field, item)}</td>
+						<td class="px-4 py-3 text-slate-700">
+							{#if field.key === 'nombre' && esCorporativo(item)}
+								<span class="inline-flex items-center gap-1.5" title="Centro de costo único — solo se edita con autorización de administrador">
+									<Lock size={13} class="text-amber-600 shrink-0" />{cellValue(field, item)}
+								</span>
+							{:else}
+								{cellValue(field, item)}
+							{/if}
+						</td>
 						{#if field.key === 'nombre' && activeTab === 'centros'}
 							<td class="px-4 py-3 text-slate-700">{codigoProyectoDisplay(item)}</td>
 						{/if}
@@ -588,7 +688,11 @@
 					{/if}
 					{#if activeTab === 'centros'}
 						<td class="px-4 py-3 text-center">
-							{#if esManualSinVincular(item)}
+							{#if esCorporativo(item) && !verEliminados}
+								<button onclick={(e) => handleEditarCorporativo(item, e)} class="inline-flex items-center gap-1.5 h-8 px-2.5 rounded bg-amber-50 text-amber-700 hover:bg-amber-100 text-xs font-medium transition-colors" title="Editar (requiere autorización de administrador)">
+									<Lock size={14} /> Editar
+								</button>
+							{:else if esManualSinVincular(item)}
 								<div class="flex items-center justify-center gap-2">
 									{#if verEliminados}
 										<button onclick={(e) => handleRestaurar(item, e)} class="w-8 h-8 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center transition-colors" title="Restaurar">
@@ -612,7 +716,9 @@
 				{#snippet card(item)}
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="min-w-0">
-							<div class="font-semibold text-slate-800 truncate">{nombreDisplay(item)}</div>
+							<div class="font-semibold text-slate-800 truncate flex items-center gap-1.5">
+								{#if esCorporativo(item)}<Lock size={13} class="text-amber-600 shrink-0" />{/if}{nombreDisplay(item)}
+							</div>
 							<div class="text-xs text-slate-500 mt-0.5">{item.codigo}</div>
 						</div>
 						<div class="text-right shrink-0">
@@ -632,7 +738,13 @@
 							<span class="text-right text-slate-700">{item.producto}</span>
 						{/if}
 					</div>
-					{#if activeTab === 'centros' && esManualSinVincular(item)}
+					{#if activeTab === 'centros' && esCorporativo(item) && !verEliminados}
+						<div class="flex items-center gap-2 pt-2 mt-2 border-t border-slate-100">
+							<button onclick={(e) => handleEditarCorporativo(item, e)} class="flex-1 h-9 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center gap-2 text-xs font-medium active:bg-amber-100" aria-label="Editar con autorización de administrador">
+								<Lock size={14} /> Editar (requiere autorización)
+							</button>
+						</div>
+					{:else if activeTab === 'centros' && esManualSinVincular(item)}
 						<div class="flex items-center gap-2 pt-2 mt-2 border-t border-slate-100">
 							{#if verEliminados}
 								<button onclick={(e) => handleRestaurar(item, e)} class="flex-1 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-emerald-100" aria-label="Restaurar">
@@ -680,6 +792,16 @@
 </div>
 
 <CentroCostoModal open={modalOpen} mode="create" centro={null} onClose={closeModal} onSaved={handleCentroCostoCreado} />
+<CentroCostoModal open={editModalOpen} mode="edit" centro={centroParaEditar} onClose={closeEditModal} onSaved={fetchList} />
+
+<AdminConfirmModal
+	open={autorizarEdicionOpen}
+	title="Editar centro de costo Corporativo"
+	message="El centro de costo Corporativo es único y está protegido. Ingresa el correo y la contraseña de un administrador para editarlo."
+	confirmLabel="Autorizar"
+	onConfirm={confirmarAutorizarEdicion}
+	onClose={closeAutorizarEdicion}
+/>
 <CentroCostoDetalleModal open={detalleOpen} centro={detalleCentro} onClose={closeDetalle} />
 
 <ConfirmModal

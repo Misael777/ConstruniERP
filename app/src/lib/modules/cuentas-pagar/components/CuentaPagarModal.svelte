@@ -24,6 +24,8 @@
 		dynamicOptions = {},
 		centroCostoTipoMap = {},
 		proveedorBloqueado = false,
+		prestamistaNombre = null,
+		camposBloqueados = [],
 		onSubmitOverride = null,
 		onClose,
 		onSaved
@@ -41,6 +43,13 @@
 		 * "PRÉSTAMOS / FINANCIERA" (ver getOrCrearProveedorPrestamos), ya viene elegido en `cuenta` y no
 		 * debe poder cambiarse. false en cualquier otro flujo (crear/editar normal). */
 		proveedorBloqueado?: boolean;
+		/** Flujo "Préstamo Recibido" (Ingreso con Categoría Préstamo, ver cuentas-pagar/+page.svelte): el
+		 * campo "Proveedor" se rotula "Prestamista" y muestra este nombre (la Persona/Empresa de la
+		 * transacción). En la BD sigue guardándose el proveedor genérico de préstamos (id_proveedor es FK a
+		 * la tabla proveedor); el nombre del prestamista queda además en Observación. null = flujo normal. */
+		prestamistaNombre?: string | null;
+		/** Campos que vienen de la transacción y no se pueden editar acá (ej. monto, centro de costo). */
+		camposBloqueados?: string[];
 		/** Cuando se pasa, REEMPLAZA el alta normal (createCuentaPagar/createCuentasPagarRecurrentes) en
 		 * handleSubmit — a pedido explícito del usuario, para el flujo "Préstamo Recibido": la transacción
 		 * que originó esta cuenta debe grabarse PRIMERO, y la Cuenta por Pagar recién después; si la
@@ -254,6 +263,7 @@
 		if (field.key === 'id_partida' && idPartidaBloqueado) return true;
 		if (field.key === 'id_presupuesto' && idPresupuestoBloqueado) return true;
 		if (field.key === 'id_proveedor' && proveedorBloqueado) return true;
+		if (camposBloqueados.includes(field.key)) return true;
 		return !!field.computeValue || (field.disabledWhen?.(formValues) ?? false);
 	}
 
@@ -286,6 +296,8 @@
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// Préstamo Recibido: la única opción es el proveedor ya elegido, mostrado con el nombre del prestamista.
+		if (field.key === 'id_proveedor' && prestamistaNombre) return [{ value: formValues.id_proveedor, label: prestamistaNombre }];
 		// A pedido explícito del usuario: "Responsable" se veía vacío (el <select> nativo no muestra
 		// ningún texto cuando su value no calza con NINGUNA <option> de la lista) — mismo bug/fix que
 		// CuentaCobrarModal.svelte: si el valor ya elegido no aparece en la lista, se agrega igual (con
@@ -359,7 +371,7 @@
 					{#each formFields as field (field.key)}
 						<div>
 							<label for={`ccp-${field.key}`} class="block text-sm font-medium text-[#0f3b5e] mb-1">
-								{field.label}
+								{field.key === 'id_proveedor' && prestamistaNombre ? 'Prestamista' : field.label}
 								{#if field.required}<span class="text-red-500">*</span>{/if}
 							</label>
 

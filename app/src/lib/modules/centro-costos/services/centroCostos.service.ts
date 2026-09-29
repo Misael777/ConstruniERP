@@ -181,6 +181,58 @@ async function generarCodigoCentroCostoManual(client: SupabaseClient, tipo: stri
 	return `${prefijo}-${String(siguiente).padStart(3, '0')}`;
 }
 
+/** `tipo` del centro de costo Corporativo (la etiqueta visible es "Corporativo"/"Corporativa", el valor
+ * en BD sigue siendo 'bolsa general', ver ticket #24). A pedido del usuario es ÚNICO: se genera solo
+ * (getOrCrearCentroCostoCorporativo), no se crea a mano, no se da de baja, no cambia de tipo y solo se
+ * edita tras autorización de administrador (candado en centros-de-costos/+page.svelte). El índice
+ * único uq_centro_costo_corporativo_activo (migración 20260929155944) lo garantiza en la BD. */
+export const TIPO_CORPORATIVO = 'bolsa general';
+const NOMBRE_CORPORATIVO = 'CORPORATIVO';
+const MENSAJE_CORPORATIVO_UNICO =
+	'El centro de costo Corporativo es único y se genera automáticamente: no se puede crear otro, darlo de baja ni cambiarle el tipo.';
+
+async function getTipoCentroCosto(client: SupabaseClient, id: number): Promise<string | null> {
+	const { data } = await client.from(TABLE_NAME).select('tipo').eq(PK_COLUMN, id).maybeSingle();
+	return (data?.tipo as string | undefined) ?? null;
+}
+
+/** Devuelve el id del centro de costo Corporativo activo, creándolo si todavía no existe. Idempotente;
+ * ante una carrera (índice único) reusa el que ganó. Nunca lanza: devuelve null y lo loguea. */
+export async function getOrCrearCentroCostoCorporativo(client: SupabaseClient): Promise<number | null> {
+	const buscar = () =>
+		client
+			.from(TABLE_NAME)
+			.select('id_centro_costo')
+			.eq('tipo', TIPO_CORPORATIVO)
+			.eq('estado', 'activo')
+			.order('id_centro_costo', { ascending: true })
+			.limit(1)
+			.maybeSingle();
+
+	const { data: existente, error: buscarError } = await buscar();
+	if (buscarError) {
+		console.error('[centroCostos.service] No se pudo buscar el centro de costo Corporativo:', buscarError);
+		return null;
+	}
+	if (existente) return existente.id_centro_costo;
+
+	const codigo = await generarCodigoCentroCostoManual(client, TIPO_CORPORATIVO);
+	const { data: creado, error } = await client
+		.from(TABLE_NAME)
+		.insert({ codigo, nombre: NOMBRE_CORPORATIVO, tipo: TIPO_CORPORATIVO, monto_actual: 0, estado: 'activo' })
+		.select('id_centro_costo')
+		.single();
+	if (error) {
+		if (error.code === '23505') {
+			const { data: reintento } = await buscar();
+			if (reintento) return reintento.id_centro_costo;
+		}
+		console.error('[centroCostos.service] No se pudo crear el centro de costo Corporativo:', error);
+		return null;
+	}
+	return creado?.id_centro_costo ?? null;
+}
+
 export interface ListParams {
 	page?: number;
 	pageSize?: number;
@@ -201,6 +253,10 @@ export interface ListParams {
 	 * centros manuales dados de baja dejan de listarse por defecto; true los trae a ellos en vez de
 	 * los activos, para la sección "Eliminados" (solo-admin). Sin efecto en vinculado:true/undefined. */
 	soloEliminados?: boolean;
+	/** Limita la pestaña ("Centros de Costos" o "Cuentas Internas", según `vinculado`) a estos `tipo`
+	 * (pestañas por tipo en centros-de-costos/+page.svelte). Solo se aceptan tipos de esa misma
+	 * pestaña; vacío/undefined = todos. */
+	tipos?: string[];
 }
 
 export interface ListResult {
@@ -255,7 +311,9 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		// resultado hoy (esos 4 tipos son justo los únicos que las usan), pero filtrar por `tipo`
 		// directo mantiene esta pestaña como el complemento EXACTO de "Centros de Costos" sin depender
 		// de que las columnas de vínculo estén siempre completas.
-		query = query.in('tipo', ['cliente', 'proveedor', 'empleado', 'subcontratista']);
+		// `tipos` (pestañas por tipo) acota a un subconjunto de esta misma lista.
+		const tiposCuentas = ['cliente', 'proveedor', 'empleado', 'subcontratista'];
+		query = query.in('tipo', params.tipos?.length ? params.tipos.filter((t) => tiposCuentas.includes(t)) : tiposCuentas);
 	} else if (params.vinculado === false) {
 		// "Centros de Costos" — a pedido explícito del usuario, TODOS los tipos: proyecto/obra/
 		// consultoria/otro/prestamo/bolsa general (obra/consultoria y bolsa general son los creados a
@@ -265,7 +323,11 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 		// todavía en negociación SÍ cuenta como centro de costo). Cualquier otro selector que filtre
 		// "Centros de Costos" (ver getCentroCostoOptionsSoloCentros en transacciones.service.ts) debe
 		// usar esta misma lista de tipos.
-		query = query.or('tipo.eq.proyecto,tipo.eq.obra,tipo.eq.consultoria,tipo.eq.bolsa general,tipo.eq.otro,tipo.eq.prestamo');
+		// `tipos` (pestañas por tipo: Corporativo, Obra, Consultoría...) acota a un subconjunto de esa
+		// misma lista — nunca la amplía a tipos de "Cuentas Internas".
+		const tiposCentros = ['proyecto', 'obra', 'consultoria', 'bolsa general', 'otro', 'prestamo'];
+		const tiposFiltrados = params.tipos?.length ? params.tipos.filter((t) => tiposCentros.includes(t)) : tiposCentros;
+		query = query.in('tipo', tiposFiltrados);
 		query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	}
 
@@ -306,6 +368,9 @@ export async function createCentroCosto(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+	if (payload.tipo === TIPO_CORPORATIVO) {
+		return { success: false, message: MENSAJE_CORPORATIVO_UNICO, errors: { tipo: 'El Corporativo se genera automáticamente' } };
+	}
 
 	const codigo = await generarCodigoCentroCostoManual(client, String(payload.tipo ?? ''));
 	const { data, error } = await client
@@ -330,6 +395,11 @@ export async function updateCentroCosto(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
+	// El Corporativo no cambia de tipo, y ningún otro centro puede convertirse en Corporativo.
+	const tipoActual = await getTipoCentroCosto(client, id);
+	if ((tipoActual === TIPO_CORPORATIVO) !== (payload.tipo === TIPO_CORPORATIVO)) {
+		return { success: false, message: MENSAJE_CORPORATIVO_UNICO, errors: { tipo: 'No se puede cambiar' } };
+	}
 
 	const { data, error } = await client
 		.from(TABLE_NAME)
@@ -353,13 +423,14 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 	// transacción/pago dispararía un getOrCrear que le crea uno NUEVO, duplicando el concepto.
 	const { data: existente, error: fetchError } = await client
 		.from(TABLE_NAME)
-		.select('id_proyecto, id_cliente, id_proveedor, id_empleado')
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, tipo')
 		.eq(PK_COLUMN, id)
 		.maybeSingle();
 
 	if (fetchError) {
 		return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
 	}
+	if (existente?.tipo === TIPO_CORPORATIVO) return { success: false, message: MENSAJE_CORPORATIVO_UNICO };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
@@ -413,10 +484,11 @@ export async function restaurarCentroCosto(client: SupabaseClient, id: number): 
 export async function eliminarCentroCostoPermanente(client: SupabaseClient, id: number): Promise<ServiceResult> {
 	const { data: existente, error: fetchError } = await client
 		.from(TABLE_NAME)
-		.select('id_proyecto, id_cliente, id_proveedor, id_empleado')
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, tipo')
 		.eq(PK_COLUMN, id)
 		.maybeSingle();
 	if (fetchError) return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
+	if (existente?.tipo === TIPO_CORPORATIVO) return { success: false, message: MENSAJE_CORPORATIVO_UNICO };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
@@ -805,5 +877,8 @@ function buildWritablePayload(payload: Record<string, unknown>): Record<string, 
 		}
 		result[field.key] = value === '' ? null : value;
 	}
+	// Monto Actual es opcional: vacío se guarda como 0 (igual que los centros autogenerados, ver
+	// getOrCrearCentroCostoParaEntidad), no como null — la lista mostraría "—" en vez de S/ 0.00.
+	if (result.monto_actual === null || result.monto_actual === undefined) result.monto_actual = 0;
 	return result;
 }

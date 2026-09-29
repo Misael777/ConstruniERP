@@ -6,7 +6,7 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
@@ -134,6 +134,16 @@
 	 * (el prestamista real, no viaja en `editingCuenta` porque cuentas_pagar no tiene esa columna). null =
 	 * este alta/edición NO viene de ese flujo. */
 	let prestamoPrefillDatos = $state<Record<string, unknown> | null>(null);
+	/** Flujo "Préstamo Recibido" (crear o editar desde una transacción Ingreso con Categoría Préstamo): nombre
+	 * del prestamista que CuentaPagarModal muestra en "Proveedor" (rotulado "Prestamista"), y los campos que
+	 * vienen de la transacción y quedan bloqueados. null / [] fuera de ese flujo. */
+	let prestamistaNombre = $state<string | null>(null);
+	let camposBloqueadosPrestamo = $state<string[]>([]);
+	const CAMPOS_BLOQUEADOS_PRESTAMO = ['id_proveedor', 'id_centro_costo', 'moneda', 'monto_dolares', 'tipo_cambio', 'monto_comprometido'];
+	function limpiarPrestamo() {
+		prestamistaNombre = null;
+		camposBloqueadosPrestamo = [];
+	}
 	let pagoModalOpen = $state(false);
 	let editingPago = $state<Pago | null>(null);
 	/** Prellenar Monto/Fecha de Pago al abrir "Registrar Pago" desde la cuota sintética de una cuenta
@@ -163,7 +173,8 @@
 	// reportado con captura: antes era un catch-all "cualquier tipo que no sea uno de los 3 conocidos",
 	// que de paso arrastraba Préstamo y Cuentas Internas (cliente/proveedor/empleado/subcontratista),
 	// que NUNCA deberían aparecer bajo ninguno de estos 4 botones — son una categoría aparte.
-	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otro';
+	// A pedido del usuario se quitó el botón "Corporativo" de este filtro (quedan Consultoría, Obra y Otros).
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'otro';
 	let tipoFilter = $state<TipoFiltroCC | null>(null);
 
 	function idsParaTipoFiltro(tipo: TipoFiltroCC): { ids: number[]; incluirSinCentroCosto: boolean } {
@@ -337,6 +348,7 @@
 		editingCuenta = null;
 		proveedorBloqueado = false;
 		prestamoPrefillDatos = null;
+		limpiarPrestamo();
 		modalOpen = true;
 	}
 	// A pedido explícito del usuario: si se llega acá recién después de crear una transacción Ingreso de
@@ -364,6 +376,8 @@
 			editingCuenta = datos as any;
 			prestamoPrefillDatos = datos;
 			proveedorBloqueado = true;
+			prestamistaNombre = datos.prestamista_nombre || null;
+			camposBloqueadosPrestamo = CAMPOS_BLOQUEADOS_PRESTAMO;
 			modalOpen = true;
 		} catch (err) {
 			console.error('[CuentasPagar] No se pudo leer la precarga de la transacción:', err);
@@ -375,6 +389,7 @@
 		editingCuenta = item;
 		proveedorBloqueado = false;
 		prestamoPrefillDatos = null;
+		limpiarPrestamo();
 		modalOpen = true;
 	}
 
@@ -400,9 +415,22 @@
 				return;
 			}
 			modalMode = 'edit';
-			editingCuenta = { ...(cuenta as CuentaPagar), monto_comprometido: datos.monto_comprometido, fecha_emision: datos.fecha_emision, observacion: datos.observacion ?? cuenta.observacion };
-			proveedorBloqueado = false;
+			// Los datos que vienen de la transacción (centro de costo, moneda y monto) se aplican y quedan
+			// bloqueados, igual que al crear (ver datosPrestamoDesdeTransaccion en TransaccionModal.svelte).
+			editingCuenta = {
+				...(cuenta as CuentaPagar),
+				id_centro_costo: datos.id_centro_costo ?? cuenta.id_centro_costo,
+				moneda: datos.moneda ?? cuenta.moneda,
+				monto_dolares: datos.monto_dolares ?? cuenta.monto_dolares,
+				tipo_cambio: datos.tipo_cambio ?? cuenta.tipo_cambio,
+				monto_comprometido: datos.monto_comprometido,
+				fecha_emision: datos.fecha_emision,
+				observacion: datos.observacion ?? cuenta.observacion
+			};
+			proveedorBloqueado = true;
 			prestamoPrefillDatos = null;
+			prestamistaNombre = datos.prestamista_nombre || null;
+			camposBloqueadosPrestamo = CAMPOS_BLOQUEADOS_PRESTAMO;
 			modalOpen = true;
 			toast.info('Revisa y confirma "Actualizar" para reflejar acá los cambios de la transacción.');
 		} catch (err) {
@@ -415,6 +443,7 @@
 		editingCuenta = null;
 		proveedorBloqueado = false;
 		prestamoPrefillDatos = null;
+		limpiarPrestamo();
 	}
 
 	async function selectRow(item: CuentaPagar) {
@@ -661,20 +690,31 @@
 			return { success: false, message: 'Un préstamo recibido no puede tener Frecuencia de Pago periódica — usa "Sin periodicidad".' };
 		}
 		const { data: userData } = await supabase.auth.getUser();
+		// Datos reales del formulario de la transacción (fecha, moneda, medio de pago, cuenta bancaria, N° de
+		// operación) — sin esto la transacción se grababa con la fecha de hoy, siempre en soles y sin cuenta
+		// bancaria, así que el ingreso no se reflejaba en el saldo de esa cuenta. Si falta (precarga vieja),
+		// se usa lo de la cuenta como antes.
+		const t = (prestamoPrefillDatos.transaccion ?? {}) as Record<string, unknown>;
 		const payloadTransaccion = {
 			tipo_alcance: 'externa',
 			id_centro_costo_origen: prestamoPrefillDatos.id_centro_costo_origen,
 			id_centro_costo_destino: formValues.id_centro_costo,
-			fecha: formValues.fecha_emision,
+			fecha: t.fecha || formValues.fecha_emision,
 			tipo: 'ingreso',
-			monto_total: formValues.monto_comprometido,
+			monto_total: t.monto_total || formValues.monto_comprometido,
+			tipo_cambio: t.tipo_cambio || null,
+			monto_convertido: t.monto_convertido || null,
+			medio_pago: t.medio_pago || null,
+			cuente_origen: t.cuente_origen || null,
+			cuente_destino: t.cuente_destino || null,
+			num_operacion: t.num_operacion || null,
 			// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — mismo motivo que
 			// en el flujo espejo de Cuentas por Cobrar (ver guardarCuentaCobrarConTransaccionPrestamo):
 			// sin esto, crearTransaccionSistema fallaba con "Revisa los campos marcados" y no se guardaba
 			// ni la transacción ni la Cuenta por Pagar.
-			tipo_moneda: 'soles',
+			tipo_moneda: t.tipo_moneda || 'soles',
 			categoria: 'Préstamo',
-			descripcion: formValues.observacion || 'Préstamo recibido'
+			descripcion: t.descripcion || formValues.observacion || 'Préstamo recibido'
 		};
 		let resultTransaccion;
 		try {
@@ -774,16 +814,6 @@
 					<HardHat size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Obra</span>
-			</button>
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('bolsa general')}
-				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-					<Building2 size={14} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
 			</button>
 			<button
 				type="button"
@@ -1201,6 +1231,8 @@
 	dynamicOptions={dynamicOptions}
 	{centroCostoTipoMap}
 	{proveedorBloqueado}
+	{prestamistaNombre}
+	camposBloqueados={camposBloqueadosPrestamo}
 	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaPagarConTransaccionPrestamo : null}
 	onClose={closeModal}
 	onSaved={handleSaved}
