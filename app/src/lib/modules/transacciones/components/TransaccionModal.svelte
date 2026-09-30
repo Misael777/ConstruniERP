@@ -1526,6 +1526,26 @@
 	 * siempre en soles: con la transacción en dólares, la cuenta queda en USD (monto_dolares × tipo_cambio,
 	 * mismo modelo que CuentaPagarModal). `prestamista_nombre` es la Persona/Empresa (Centro de Costo
 	 * Origen), que se muestra en "Proveedor" renombrado a "Prestamista". */
+	/** Espejo de datosPrestamoDesdeTransaccion para Egreso "Préstamo Otorgado" -> Cuenta por Cobrar: el
+	 * centro de costo que financia (Origen) y el monto/moneda salen de esta transacción y quedan BLOQUEADOS
+	 * en cuentas-cobrar/+page.svelte; `prestatario_nombre` (Centro de Costo Destino, a quién se le presta)
+	 * se muestra en "Cliente" rotulado "Prestatario". */
+	function datosPrestamoOtorgadoDesdeTransaccion(): Record<string, string> {
+		const prestatarioNombre = soloNombreCentro(centroCostoOptionsTodos).find((o) => o.value === formValues.id_centro_costo_destino)?.label ?? '';
+		const enDolares = formValues.tipo_moneda === 'dolares';
+		const monto = Number(formValues.monto_total) || 0;
+		const tipoCambio = Number(formValues.tipo_cambio) || 0;
+		return {
+			prestatario_nombre: prestatarioNombre,
+			id_centro_costo: formValues.id_centro_costo_origen,
+			moneda: enDolares ? 'USD' : 'PEN',
+			monto_dolares: enDolares ? String(monto) : '',
+			tipo_cambio: enDolares ? String(tipoCambio) : '',
+			monto: String(enDolares ? Math.round(monto * tipoCambio * 100) / 100 : monto),
+			observaciones: prestatarioNombre ? `Préstamo otorgado a ${prestatarioNombre}` : 'Préstamo otorgado'
+		};
+	}
+
 	function datosPrestamoDesdeTransaccion(): Record<string, string> {
 		const prestamistaNombre = soloNombreCentro(centroCostoOptionsPersonaEmpresa).find((o) => o.value === formValues.id_centro_costo_origen)?.label ?? '';
 		const enDolares = formValues.tipo_moneda === 'dolares';
@@ -1567,11 +1587,12 @@
 					toast.info('No se encontró la Cuenta por Cobrar vinculada (es de antes de este cambio) — actualízala a mano si hace falta.');
 					return;
 				}
+				const prestamo = datosPrestamoOtorgadoDesdeTransaccion();
 				sessionStorage.setItem(
 					'cuentaCobrarEditarPrefill',
 					JSON.stringify({
+						...prestamo,
 						id_cuenta_cobrar: cuenta.id_cuenta_cobrar,
-						monto: formValues.monto_total,
 						fecha_emision: formValues.fecha,
 						observaciones: formValues.descripcion || cuenta.observaciones
 					})
@@ -2635,23 +2656,30 @@
 				return;
 			}
 
-			// "Proyecto" en Cuenta por Cobrar es una FK real a la tabla `proyecto` (no a `centro_costo`) —
-			// no se puede meter ahí el id del prestatario (ver el pedido del usuario en
-			// finanzas/cuentas-cobrar/+page.svelte). En su lugar, el nombre del prestatario real
-			// (Centro de Costo Destino de ESTA transacción) va dentro de "Observaciones", para que quede
-			// visible/guardado en la Cuenta por Cobrar sin violar esa relación.
-			const nombreDestino = soloNombreCentro(centroCostoOptionsTodos).find((o) => o.value === formValues.id_centro_costo_destino)?.label;
-			// A pedido explícito del usuario: "Fecha Emisión" de la Cuenta por Cobrar arranca en la fecha
-			// ACTUAL (mismo criterio que crearTransaccionPorPrestamoRecibido más arriba), no en la Fecha
-			// (reconocida) de esta transacción.
+			// El nombre del prestatario (Centro de Costo Destino) va en "Observaciones" y se muestra en "Cliente"
+			// rotulado "Prestatario" — "Proyecto" es una FK real a la tabla `proyecto` y no puede guardarlo. Los
+			// datos que vienen de esta transacción quedan bloqueados en la Cuenta por Cobrar (ver
+			// datosPrestamoOtorgadoDesdeTransaccion) y `transaccion` lleva los datos reales de este formulario para
+			// grabarla tal cual al guardar la cuenta (ver guardarCuentaCobrarConTransaccionPrestamo). "Fecha
+			// Emisión" de la cuenta arranca en la fecha actual (pedido anterior del usuario).
 			sessionStorage.setItem(
 				'cuentaCobrarPrefill',
 				JSON.stringify({
-					id_centro_costo: formValues.id_centro_costo_origen,
+					...datosPrestamoOtorgadoDesdeTransaccion(),
 					id_centro_costo_destino: formValues.id_centro_costo_destino,
-					monto: formValues.monto_total,
 					fecha_emision: getFechaLocalHoy(),
-					observaciones: nombreDestino ? `Préstamo otorgado a ${nombreDestino}` : 'Préstamo otorgado'
+					transaccion: {
+						fecha: formValues.fecha,
+						tipo_moneda: formValues.tipo_moneda,
+						tipo_cambio: formValues.tipo_cambio,
+						monto_convertido: formValues.monto_convertido,
+						monto_total: formValues.monto_total,
+						medio_pago: formValues.medio_pago,
+						cuente_origen: formValues.cuente_origen,
+						cuente_destino: formValues.cuente_destino,
+						num_operacion: formValues.num_operacion,
+						descripcion: formValues.descripcion
+					}
 				})
 			);
 			onClose();

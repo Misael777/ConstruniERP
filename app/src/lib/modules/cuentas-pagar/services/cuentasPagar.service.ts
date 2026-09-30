@@ -23,7 +23,8 @@ import {
 	PARENT_FK_COLUMN,
 	FIELDS_CONFIG as PAGO_FIELDS
 } from '../config/pago.config';
-import { construirPayloadTransaccionPorPago, construirInsertDataTransaccion, labelPorCodigoMedioPago } from '../../transacciones/services/transacciones.service';
+import { construirPayloadTransaccionPorPago, construirInsertDataTransaccion, labelPorCodigoMedioPago, CENTRO_COSTO_EMBEDS_NOMBRE, centroCostoNombreVisible } from '../../transacciones/services/transacciones.service';
+import { NOMBRE_PROVEEDOR_PRESTAMOS } from '../../proveedores/services/proveedores.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import type { ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
 
@@ -526,6 +527,59 @@ export async function getCuentaPagarPorTransaccion(client: SupabaseClient, idTra
 	const { data, error } = await client.from(TABLE_NAME).select('*, proveedor(razon_social)').eq('id_transaccion', idTransaccion).maybeSingle();
 	if (error) throw error;
 	return (data as CuentaPagar) ?? null;
+}
+
+type CuentaParaPrestamista = Pick<CuentaPagar, 'id_cuenta_pagar' | 'id_transaccion' | 'observacion'> & {
+	proveedor?: { razon_social?: string | null } | null;
+};
+
+/** Nombre del PRESTAMISTA de cada Cuenta por Pagar de "Préstamo Recibido" (id_cuenta_pagar -> nombre); las
+ * cuentas que no son préstamos no aparecen en el mapa. En la BD esas cuentas guardan el proveedor genérico
+ * NOMBRE_PROVEEDOR_PRESTAMOS (id_proveedor es FK a `proveedor`), así que el nombre real se resuelve así:
+ *   1. Por la transacción vinculada (id_transaccion): su Centro de Costo Origen es el prestamista (y una
+ *      transacción de categoría "Préstamo" también marca la cuenta como préstamo).
+ *   2. Cuentas sin ese vínculo: de la Observación "Préstamo recibido de <nombre>" que se escribe al crearla
+ *      (ver datosPrestamoDesdeTransaccion en TransaccionModal.svelte).
+ * Si es un préstamo pero no hay forma de saber el nombre, el valor es '' (préstamo sin nombre). Trabaja por
+ * lotes (una página de la lista = 2 consultas como máximo). `transaccion.id_centro_costo_origen` no tiene FK
+ * declarada en la BD, por eso el centro de costo se busca aparte en vez de embeberlo. */
+export async function getPrestamistasDeCuentasPagar(client: SupabaseClient, cuentas: CuentaParaPrestamista[]): Promise<Map<number, string>> {
+	const resultado = new Map<number, string>();
+	const idsTx = [...new Set(cuentas.map((c) => c.id_transaccion).filter((id): id is number => !!id))];
+
+	const txPorId = new Map<number, { categoria: string | null; id_centro_costo_origen: number | null }>();
+	if (idsTx.length > 0) {
+		const { data } = await client.from('transaccion').select('id_transaccion, categoria, id_centro_costo_origen').in('id_transaccion', idsTx);
+		for (const t of (data ?? []) as any[]) txPorId.set(t.id_transaccion, t);
+	}
+
+	const esPrestamo = (c: CuentaParaPrestamista) =>
+		c.proveedor?.razon_social === NOMBRE_PROVEEDOR_PRESTAMOS || (!!c.id_transaccion && txPorId.get(c.id_transaccion)?.categoria === 'Préstamo');
+	const prestamos = cuentas.filter(esPrestamo);
+
+	const idsOrigen = [
+		...new Set(prestamos.map((c) => (c.id_transaccion ? txPorId.get(c.id_transaccion)?.id_centro_costo_origen : null)).filter((id): id is number => !!id))
+	];
+	const nombrePorCentro = new Map<number, string>();
+	if (idsOrigen.length > 0) {
+		const { data } = await client.from('centro_costo').select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_EMBEDS_NOMBRE}`).in('id_centro_costo', idsOrigen);
+		for (const cc of (data ?? []) as any[]) nombrePorCentro.set(cc.id_centro_costo, centroCostoNombreVisible(cc));
+	}
+
+	for (const c of prestamos) {
+		const idOrigen = c.id_transaccion ? txPorId.get(c.id_transaccion)?.id_centro_costo_origen : null;
+		const porTransaccion = idOrigen ? nombrePorCentro.get(idOrigen) : undefined;
+		const porObservacion = /^Préstamo recibido de (.+)$/i.exec((c.observacion ?? '').trim())?.[1]?.trim();
+		resultado.set(c.id_cuenta_pagar, porTransaccion || porObservacion || '');
+	}
+	return resultado;
+}
+
+/** Versión de una sola cuenta de getPrestamistasDeCuentasPagar: el nombre del prestamista, '' si es un
+ * préstamo sin nombre conocido, o null si la cuenta no es un préstamo. */
+export async function getPrestamistaDeCuentaPagar(client: SupabaseClient, cuenta: CuentaParaPrestamista): Promise<string | null> {
+	const mapa = await getPrestamistasDeCuentasPagar(client, [cuenta]);
+	return mapa.has(cuenta.id_cuenta_pagar) ? mapa.get(cuenta.id_cuenta_pagar)! : null;
 }
 
 /** Tope de seguridad ante un rango mal puesto (ej. Fin de Periodo de Pago varios años después de Fecha

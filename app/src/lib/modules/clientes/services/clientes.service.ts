@@ -8,7 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 
-const NOMBRE_CLIENTE_PRESTAMOS = 'PRÉSTAMOS / FINANCIERA';
+export const NOMBRE_CLIENTE_PRESTAMOS = 'PRÉSTAMOS / FINANCIERA';
 const DOCUMENTO_CLIENTE_PRESTAMOS = '00000000000';
 
 /** Cliente genérico fijo para las Cuentas por Cobrar que se autogeneran al registrar una transacción

@@ -8,7 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getOrCrearCentroCostoParaEntidad } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { describeError } from '$lib/shared/describeError';
 
-const NOMBRE_PROVEEDOR_PRESTAMOS = 'PRÉSTAMOS / FINANCIERA';
+export const NOMBRE_PROVEEDOR_PRESTAMOS = 'PRÉSTAMOS / FINANCIERA';
 const RUC_PROVEEDOR_PRESTAMOS = '00000000000';
 
 /** Proveedor genérico fijo para las Cuentas por Pagar que se autogeneran al registrar una transacción

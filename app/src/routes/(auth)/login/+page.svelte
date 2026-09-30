@@ -2,9 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { fetchApi, parseJsonResponse } from '$lib/apiClient';
-	import { isRunningInTauri } from '$lib/driveUploadClient';
-	import { confirmActivation } from '$lib/edgeFunctionClient';
+	import { confirmActivation, getFirstAdminStatus, createFirstAdmin as crearPrimerAdministrador } from '$lib/edgeFunctionClient';
 	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
 	
 	let mode = $state<'login' | 'setup_password' | 'forgot_password' | 'first_admin'>('login');

@@ -6,7 +6,9 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Building2, Ellipsis } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
+	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
+	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
@@ -127,7 +129,9 @@
 	// catch-all "cualquier tipo que no sea uno de los 3 conocidos", que de paso arrastraba Préstamo y
 	// Cuentas Internas (cliente/proveedor/empleado/subcontratista), que NUNCA deberían aparecer bajo
 	// ninguno de estos 4 botones — son una categoría aparte.
-	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'bolsa general' | 'otro';
+	// A pedido del usuario se quitó el botón "Corporativo" de este filtro (quedan Consultoría, Obra y Otros),
+	// igual que en Cuentas por Pagar.
+	type TipoFiltroCC = 'proyecto' | 'consultoria' | 'otro';
 	let tipoFilter = $state<TipoFiltroCC | null>(null);
 
 	function idsParaTipoFiltro(tipo: TipoFiltroCC): { ids: number[]; incluirSinCentroCosto: boolean } {
@@ -173,6 +177,16 @@
 	 * quede fijo en el cliente genérico "PRÉSTAMOS / FINANCIERA", ver getOrCrearClientePrestamos. Mismo
 	 * patrón que proveedorBloqueado en finanzas/cuentas-pagar/+page.svelte. */
 	let clienteBloqueado = $state(false);
+	/** Flujo "Préstamo Otorgado" (crear o editar desde una transacción Egreso de préstamo): nombre del
+	 * prestatario que CuentaCobrarModal muestra en "Cliente" (rotulado "Prestatario") y los campos que vienen
+	 * de la transacción y quedan bloqueados — espejo de prestamistaNombre en cuentas-pagar/+page.svelte. */
+	let prestatarioNombre = $state<string | null>(null);
+	let camposBloqueadosPrestamo = $state<string[]>([]);
+	const CAMPOS_BLOQUEADOS_PRESTAMO = ['id_cliente', 'id_centro_costo', 'id_proyecto', 'moneda', 'monto_dolares', 'tipo_cambio', 'monto'];
+	function limpiarPrestamo() {
+		prestatarioNombre = null;
+		camposBloqueadosPrestamo = [];
+	}
 	/** Datos crudos leídos del sessionStorage de la precarga (ver abrirCreacionPrecargadaDesdeTransaccion)
 	 * — se conservan hasta que la cuenta se guarda para poder grabar recién ahí la transacción real del
 	 * préstamo (ver crearTransaccionPorPrestamoOtorgado/handleSaved), que necesita
@@ -230,6 +244,10 @@
 				incluirSinCentroCosto: filtroTipo?.incluirSinCentroCosto
 			});
 			items = result.items;
+			prestatariosPorCuenta = await getPrestatariosDeCuentasCobrar(supabase, result.items).catch((err) => {
+				console.warn('[CuentasCobrar] No se pudo resolver el nombre de los prestatarios:', err);
+				return new Map<number, string>();
+			});
 			total = result.total;
 			totalPages = result.totalPages;
 			loadError = '';
@@ -393,6 +411,8 @@
 			editingCuenta = datos as any;
 			prestamoPrefillDatos = datos;
 			clienteBloqueado = true;
+			prestatarioNombre = datos.prestatario_nombre || prestamoDestinoNombre || '';
+			camposBloqueadosPrestamo = CAMPOS_BLOQUEADOS_PRESTAMO;
 			modalOpen = true;
 		} catch (err) {
 			console.error('[CuentasCobrar] No se pudo leer la precarga de la transacción:', err);
@@ -404,6 +424,7 @@
 		editingCuenta = item;
 		clienteBloqueado = false;
 		prestamoPrefillDatos = null;
+		limpiarPrestamo();
 		modalOpen = true;
 	}
 
@@ -430,9 +451,22 @@
 				return;
 			}
 			modalMode = 'edit';
-			editingCuenta = { ...(cuenta as CuentaCobrar), monto: datos.monto, fecha_emision: datos.fecha_emision, observaciones: datos.observaciones ?? cuenta.observaciones };
+			// Los datos que vienen de la transacción (centro de costo, moneda y monto) se aplican y quedan
+			// bloqueados, igual que al crear (ver datosPrestamoOtorgadoDesdeTransaccion en TransaccionModal.svelte).
+			editingCuenta = {
+				...(cuenta as CuentaCobrar),
+				id_centro_costo: datos.id_centro_costo ?? cuenta.id_centro_costo,
+				moneda: datos.moneda ?? cuenta.moneda,
+				monto_dolares: datos.monto_dolares ?? cuenta.monto_dolares,
+				tipo_cambio: datos.tipo_cambio ?? cuenta.tipo_cambio,
+				monto: datos.monto,
+				fecha_emision: datos.fecha_emision,
+				observaciones: datos.observaciones ?? cuenta.observaciones
+			};
 			clienteBloqueado = false;
 			prestamoPrefillDatos = null;
+			prestatarioNombre = datos.prestatario_nombre || '';
+			camposBloqueadosPrestamo = CAMPOS_BLOQUEADOS_PRESTAMO;
 			modalOpen = true;
 			toast.info('Revisa y confirma "Actualizar" para reflejar acá los cambios de la transacción.');
 		} catch (err) {
@@ -445,6 +479,7 @@
 		editingCuenta = null;
 		clienteBloqueado = false;
 		prestamoPrefillDatos = null;
+		limpiarPrestamo();
 	}
 
 	async function selectRow(item: CuentaCobrar) {
@@ -526,6 +561,101 @@
 			handleDobleClicCuota();
 		} else {
 			openCreateCobro();
+		}
+	}
+
+	// ── "Resumen de cobro" (ojito de cada fila) — a pedido del usuario, con imagen de referencia: datos de la
+	// cuenta en solo lectura + cronograma de cuotas. Reusa la cuenta/cuotas seleccionadas (selectedCuenta/
+	// cobrosAMostrar), así que se refresca solo cuando CobroModal guarda (ver handleCobroSaved). Tocar una
+	// cuota pendiente abre "Editar Cuota Programada" (CobroModal) sobre el resumen. ──
+	let resumenOpen = $state(false);
+	/** Nombre del prestatario si la cuenta abierta en el resumen es un Préstamo Otorgado — ahí el resumen
+	 * muestra "Prestatario" en vez de "Cliente". null = no es un préstamo. */
+	let prestatarioResumen = $state<string | null>(null);
+
+	// A pedido del usuario (espejo de Cuentas por Pagar): en la lista y en el título del panel de cuotas se
+	// muestra el nombre real de la contraparte — el prestatario en un Préstamo Otorgado, en vez del cliente
+	// genérico "PRÉSTAMOS / FINANCIERA" (ver getPrestatariosDeCuentasCobrar). Se resuelve por página.
+	let prestatariosPorCuenta = $state<Map<number, string>>(new Map());
+	/** Tramos del nombre del proyecto separados DESPUÉS de cada "_" (ej. "LNU3_", "0726_", "Miraflores_") —
+	 * a pedido del usuario, un nombre largo se parte en varias líneas solo en los guiones bajos (vía <wbr>),
+	 * nunca a mitad de una palabra. */
+	function tramosNombre(texto: string): string[] {
+		return texto.split(/(?<=_)/);
+	}
+
+	function nombreContraparte(item: CuentaCobrar): string {
+		const prestatario = prestatariosPorCuenta.get(item.id_cuenta_cobrar);
+		return prestatario || item.cliente?.nombre || 'Sin cliente';
+	}
+	function esPrestamoCuenta(item: CuentaCobrar): boolean {
+		return prestatariosPorCuenta.has(item.id_cuenta_cobrar);
+	}
+
+	async function openResumen(item: CuentaCobrar) {
+		selectedId = item.id_cuenta_cobrar;
+		const [, prestatario] = await Promise.all([fetchSelectedCobros(), getPrestatarioDeCuentaCobrar(supabase, item).catch(() => null)]);
+		prestatarioResumen = prestatario;
+		resumenOpen = true;
+	}
+
+	function etiquetaCampo(key: string, value: unknown): string {
+		if (value === null || value === undefined || value === '') return '';
+		const field = FIELDS_CONFIG.find((f) => f.key === key);
+		if (!field) return String(value);
+		const label = getOptionLabel(field, value, dynamicOptions);
+		// Un id sin etiqueta conocida (ej. un centro de costo fuera de la lista del formulario) no dice nada.
+		return label === String(value) && key.startsWith('id_') ? '' : label;
+	}
+
+	const resumenCampos = $derived.by((): CampoResumen[] => {
+		const c = selectedCuenta;
+		if (!c) return [];
+		const proximo = cobrosAMostrar
+			.filter((q) => q.estado_cobro === 'programado')
+			.sort((a, b) => (a.fecha_cobro < b.fecha_cobro ? -1 : 1))[0];
+		return [
+			prestatarioResumen !== null
+				? { label: 'Prestatario', valor: prestatarioResumen }
+				: { label: 'Cliente', valor: c.cliente?.nombre ?? '' },
+			{ label: 'Centro de costo', valor: etiquetaCampo('id_centro_costo', c.id_centro_costo) },
+			{ label: 'Proyecto', valor: c.proyecto?.nombre_proyecto ?? '' },
+			{ label: 'N° documento', valor: c.num_documento ?? '' },
+			{ label: 'Tipo de documento', valor: etiquetaCampo('tipo_documento', c.tipo_documento) },
+			{ label: 'Valor de venta', valor: formatCurrency(c.monto) },
+			{ label: 'Saldo pendiente', valor: formatCurrency(c.saldo_pendiente) },
+			{ label: 'Próximo a cobrar', valor: proximo ? formatCurrency(proximo.monto) : '' },
+			{ label: 'Forma de pago', valor: etiquetaCampo('forma_pago', c.forma_pago) },
+			{ label: 'Responsable', valor: c.responsable ?? '' },
+			{ label: 'Fecha de emisión', valor: formatDate(c.fecha_emision) },
+			{ label: 'Fecha de vencimiento', valor: formatDate(c.fecha_vencimiento) },
+			{ label: 'Moneda', valor: etiquetaCampo('moneda', c.moneda) },
+			{ label: 'Prioridad', valor: etiquetaCampo('prioridad', c.prioridad) },
+			{ label: 'Estado', valor: etiquetaCampo('estado', c.estado) },
+			{ label: 'Observaciones', valor: c.observaciones ?? '', completo: true }
+		];
+	});
+
+	const resumenCuotas = $derived(
+		cobrosAMostrar.map((q): CuotaResumen => {
+			const bloqueado = q.id_cobro !== -1 && !!q.transaccion?.aprobado && !isAdmin();
+			const estado: CuotaResumen['estado'] =
+				q.estado_cobro === 'cobrado' ? 'pagado' : q.estado_cobro === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
+			return { id: q.id_cobro, monto: q.monto, fecha: q.fecha_cobro, estado, editable: q.estado_cobro === 'programado' && !bloqueado };
+		})
+	);
+
+	/** Estado de una cuota tocado en el resumen: la sintética (Contado sin cobros) abre "Registrar Cobro"
+	 * prellenado, una real abre "Editar Cuota Programada" — mismo criterio que handleDobleClicCuota. */
+	function editarCuotaDesdeResumen(idCobro: number) {
+		const cobro = cobrosAMostrar.find((q) => q.id_cobro === idCobro);
+		if (!cobro) return;
+		if (idCobro === -1) {
+			editingCobro = null;
+			cobroInitialValues = { monto: String(cobro.monto), fecha_cobro: cobro.fecha_cobro };
+			cobroModalOpen = true;
+		} else {
+			openEditCobro(cobro);
 		}
 	}
 
@@ -677,21 +807,31 @@
 			return createCuentaCobrar(supabase, formValues, userData?.user?.email ?? null, fracciones);
 		}
 		const { data: userData } = await supabase.auth.getUser();
+		// Datos reales del formulario de la transacción (fecha, moneda, medio de pago, cuenta bancaria, N° de
+		// operación) — sin esto se grababa con la fecha de hoy, siempre en soles y sin cuenta bancaria, así que
+		// el egreso no se reflejaba en el saldo de esa cuenta. Si falta (precarga vieja), se usa lo de la cuenta.
+		const t = (prestamoPrefillDatos.transaccion ?? {}) as Record<string, unknown>;
 		const payloadTransaccion = {
 			tipo_alcance: 'externa',
 			id_centro_costo_origen: formValues.id_centro_costo,
 			id_centro_costo_destino: prestamoPrefillDatos.id_centro_costo_destino,
-			fecha: formValues.fecha_emision,
+			fecha: t.fecha || formValues.fecha_emision,
 			tipo: 'egreso',
-			monto_total: formValues.monto,
+			monto_total: t.monto_total || formValues.monto,
+			tipo_cambio: t.tipo_cambio || null,
+			monto_convertido: t.monto_convertido || null,
+			medio_pago: t.medio_pago || null,
+			cuente_origen: t.cuente_origen || null,
+			cuente_destino: t.cuente_destino || null,
+			num_operacion: t.num_operacion || null,
 			// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles' porque
 			// formValues.monto SIEMPRE es el equivalente en Soles, aun con la Cuenta por Cobrar en
 			// Dólares (ahí se autocalcula desde monto_dolares × tipo_cambio, ver disabledValue de 'monto'
 			// en cuentaCobrar.config.ts). Sin esto, crearTransaccionSistema fallaba con "Revisa los campos
 			// marcados" y ni la transacción ni la Cuenta por Cobrar se guardaban.
-			tipo_moneda: 'soles',
+			tipo_moneda: t.tipo_moneda || 'soles',
 			categoria: 'Préstamo Otorgado',
-			descripcion: formValues.observaciones || 'Préstamo otorgado'
+			descripcion: t.descripcion || formValues.observaciones || 'Préstamo otorgado'
 		};
 		let resultTransaccion;
 		try {
@@ -780,16 +920,6 @@
 					<HardHat size={18} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Obra</span>
-			</button>
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('bolsa general')}
-				class={`flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-					<Building2 size={18} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
 			</button>
 			<button
 				type="button"
@@ -909,16 +1039,17 @@
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
-			<div class="min-w-[980px]">
-				<div class="grid grid-cols-[2fr_1.1fr_1fr_1.1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-					<span>Proyecto</span>
+			<div class="min-w-[1240px]">
+				<div class="grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_1fr_0.9fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+					<span>Proyecto / Cliente / Prestatario</span>
 					<span>N° Documento</span>
-					<span class="text-center">Montos</span>
+					<span>Vencimiento</span>
+					<span class="text-right">Saldo actual</span>
+					<span class="text-right">Valor Venta</span>
 					<div class="flex gap-2 pl-4">
 						<span class="flex-1">Prioridad</span>
 						<span class="flex-1">Estado</span>
 					</div>
-					<span class="text-center">Saldo Pendiente</span>
 					<span class="text-right">Días de Retraso</span>
 					<span class="text-right">Acciones</span>
 				</div>
@@ -926,7 +1057,7 @@
 				{#each items as item (item.id_cuenta_cobrar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
 					<div
-						class={`grid grid-cols-[2fr_1.1fr_1fr_1.1fr_1fr_0.9fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_1fr_0.9fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -936,16 +1067,16 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
+								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')}>{#each tramosNombre(esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')) as tramo}{tramo}<wbr />{/each}</p>
 								<div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 flex-wrap">
-									<span class="truncate">{item.cliente?.nombre ?? 'Sin cliente'}</span>
-									<span class="text-slate-300">·</span>
-									<span class="shrink-0">{formatDate(item.fecha_vencimiento)}</span>
+									<span class="[overflow-wrap:break-word]">{esPrestamoCuenta(item) ? 'Prestatario' : nombreContraparte(item)}</span>
 								</div>
 							</div>
 						</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
-						<div class="text-center leading-tight">
+						<div class="text-sm text-slate-600 whitespace-nowrap">{formatDate(item.fecha_vencimiento)}</div>
+						<div class="text-right font-semibold text-slate-700 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
+						<div class="text-right leading-tight">
 							<p class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto)}</p>
 							{#if item.moneda === 'USD'}
 								<p class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</p>
@@ -965,9 +1096,6 @@
 								</span>
 							</div>
 						</div>
-						<div class="text-center text-sm font-semibold text-slate-700">
-							{formatCurrency(item.saldo_pendiente)}
-						</div>
 						<div class="text-right text-sm">
 							{#if retraso !== null}
 								<span class="font-bold text-red-600">{retraso}</span> <span class="text-slate-400 text-xs">día{retraso === 1 ? '' : 's'}</span>
@@ -984,6 +1112,9 @@
 									<Trash size={16} />
 								</button>
 							{:else}
+								<button type="button" onclick={(e) => { e.stopPropagation(); openResumen(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-[#0f3b5e]" title="Ver resumen" aria-label="Ver resumen">
+									<Eye size={16} />
+								</button>
 								<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 									<Pencil size={16} />
 								</button>
@@ -1018,8 +1149,8 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{item.proyecto?.nombre_proyecto ?? 'Sin proyecto'}</p>
-								<p class="text-[11px] text-slate-500 truncate mt-0.5">{item.cliente?.nombre ?? 'Sin cliente'} · {item.num_documento || '—'}</p>
+								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')}>{#each tramosNombre(esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')) as tramo}{tramo}<wbr />{/each}</p>
+								<p class="text-[11px] text-slate-500 truncate mt-0.5">{esPrestamoCuenta(item) ? 'Prestatario' : nombreContraparte(item)} · {item.num_documento || '—'}</p>
 							</div>
 						</div>
 						<div class="text-right shrink-0">
@@ -1057,6 +1188,9 @@
 								<Trash size={14} /> Eliminar
 							</button>
 						{:else}
+							<button type="button" onclick={(e) => { e.stopPropagation(); openResumen(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Ver resumen">
+								<Eye size={14} /> Resumen
+							</button>
 							<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
 								<Pencil size={14} /> Editar
 							</button>
@@ -1086,7 +1220,7 @@
 				<div class="flex items-center gap-2">
 					<Receipt class="text-amber-500" size={20} />
 					<h2 class="text-lg font-semibold text-[#0f3b5e]">
-						Cobros de {selectedCuenta.cliente?.nombre ?? 'la cuenta'} — {formatCurrency(selectedCuenta.monto)}
+						Cobros de {nombreContraparte(selectedCuenta)} — {formatCurrency(selectedCuenta.monto)}
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
@@ -1220,9 +1354,23 @@
 	clienteBloqueado={clienteBloqueado}
 	centroCostoOpcionesPrestamo={centroCostoOpcionesPrestamo}
 	prestamoDestinoNombre={prestamoDestinoNombre}
+	{prestatarioNombre}
+	camposBloqueados={camposBloqueadosPrestamo}
 	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaCobrarConTransaccionPrestamo : null}
 	onClose={closeModal}
 	onSaved={handleSaved}
+/>
+<ResumenCuentaModal
+	open={resumenOpen && !!selectedCuenta}
+	titulo="Resumen de cobro"
+	tituloCronograma="Cronograma de cobranza"
+	etiquetaTotal="Valor venta"
+	textoPagado="Cobrado"
+	campos={resumenCampos}
+	cuotas={resumenCuotas}
+	montoTotal={Number(selectedCuenta?.monto ?? 0)}
+	onClose={() => (resumenOpen = false)}
+	onEditarCuota={editarCuotaDesdeResumen}
 />
 <CobroModal
 	open={cobroModalOpen}

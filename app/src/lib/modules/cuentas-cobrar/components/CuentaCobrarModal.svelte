@@ -21,6 +21,8 @@
 		clienteBloqueado = false,
 		centroCostoOpcionesPrestamo = [],
 		prestamoDestinoNombre = '',
+		prestatarioNombre = null,
+		camposBloqueados = [],
 		onSubmitOverride = null,
 		onClose,
 		onSaved
@@ -59,6 +61,14 @@
 		 * "Proyecto" (que no puede guardar ese valor, ver nota en el template): '' en cualquier otro
 		 * flujo. */
 		prestamoDestinoNombre?: string;
+		/** Flujo "Préstamo Otorgado" (crear o editar desde la transacción, ver cuentas-cobrar/+page.svelte):
+		 * nombre del prestatario (a quién se le prestó). "Cliente" se rotula "Prestatario" y muestra este
+		 * nombre — en la BD sigue guardándose el cliente genérico de préstamos (id_cliente es FK a la tabla
+		 * cliente); el nombre queda además en Observaciones. Mismo patrón que prestamistaNombre en
+		 * CuentaPagarModal.svelte. null = flujo normal. */
+		prestatarioNombre?: string | null;
+		/** Campos que vienen de la transacción y no se pueden editar acá (ej. monto, centro de costo). */
+		camposBloqueados?: string[];
 		/** Cuando se pasa, REEMPLAZA el alta normal (createCuentaCobrar) en handleSubmit — a pedido
 		 * explícito del usuario, para el flujo "Préstamo Otorgado": la transacción que originó esta
 		 * cuenta debe grabarse PRIMERO, y la Cuenta por Cobrar recién después; si la transacción falla,
@@ -198,6 +208,7 @@
 		// centro de costo (ver handleInput/centroCostoClienteMap).
 		if (field.key === 'id_cliente' && centroCostoClienteMap[formValues.id_centro_costo] !== undefined) return true;
 		if (field.key === 'id_cliente' && clienteBloqueado) return true;
+		if (camposBloqueados.includes(field.key)) return true;
 		return field.disabledWhen?.(formValues) ?? false;
 	}
 
@@ -268,9 +279,11 @@
 	 * nuestro propio fondo), "Proyecto" a "Prestatario" (a quién se le presta) y "Valor de venta" a
 	 * "Valor de Préstamo" — mismo criterio que labelFor en TransaccionModal.svelte. */
 	function labelFor(field: (typeof formFields)[number]): string {
+		// Con el nombre del prestatario en "Cliente" (prestatarioNombre), "Proyecto" vuelve a ser Proyecto.
+		if (prestatarioNombre !== null && field.key === 'id_cliente') return 'Prestatario';
 		if (esPrestamo) {
 			if (field.key === 'id_centro_costo') return 'Prestamista';
-			if (field.key === 'id_proyecto') return 'Prestatario';
+			if (field.key === 'id_proyecto') return prestatarioNombre !== null ? field.label : 'Prestatario';
 			if (field.key === 'monto') return 'Valor de Préstamo';
 		}
 		return field.label;
@@ -278,6 +291,8 @@
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// Préstamo Otorgado: la única opción de "Cliente" es el cliente ya elegido, mostrado con el nombre del prestatario.
+		if (field.key === 'id_cliente' && prestatarioNombre !== null) return [{ value: formValues.id_cliente, label: prestatarioNombre || 'Prestatario' }];
 		// Flujo "Préstamo Otorgado" (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): "Centro
 		// de Costo" es NUESTRO centro que financia el préstamo (Obra/Consultoría/Corporativo), no una
 		// venta cerrada — va ANTES del filtro por Cliente de abajo, porque ese cliente es el genérico
@@ -371,7 +386,8 @@
 								<input
 									id={`ccb-${field.key}`}
 									type="text"
-									value={prestamoDestinoNombre}
+									value={prestatarioNombre !== null ? '' : prestamoDestinoNombre}
+									placeholder={prestatarioNombre !== null ? 'No aplica a un préstamo' : undefined}
 									disabled
 									class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-slate-100 text-slate-600 disabled:cursor-not-allowed"
 								/>
@@ -427,7 +443,7 @@
 
 							{#if fieldErrors[field.key]}
 								<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
-							{:else if field.key === 'id_proyecto' && clienteBloqueado && prestamoDestinoNombre}
+							{:else if field.key === 'id_proyecto' && clienteBloqueado && prestamoDestinoNombre && prestatarioNombre === null}
 								<!-- El input de arriba ya MUESTRA el nombre (a pedido explícito del usuario) — acá
 								     solo se aclara que ese valor no viaja como id_proyecto (sigue siendo una FK
 								     real a la tabla `proyecto`, no a `centro_costo`), sino en Observaciones. -->

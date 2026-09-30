@@ -6,7 +6,8 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
+	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
@@ -23,7 +24,9 @@
 		deletePago,
 		getProveedorOptions,
 		confirmarPagoPagado,
-		getMontoFiltrado
+		getMontoFiltrado,
+		getPrestamistaDeCuentaPagar,
+		getPrestamistasDeCuentasPagar
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
@@ -207,6 +210,10 @@
 				incluirSinCentroCosto: filtroTipo?.incluirSinCentroCosto
 			});
 			items = result.items;
+			prestamistasPorCuenta = await getPrestamistasDeCuentasPagar(supabase, result.items).catch((err) => {
+				console.warn('[CuentasPagar] No se pudo resolver el nombre de los prestamistas:', err);
+				return new Map<number, string>();
+			});
 			total = result.total;
 			totalPages = result.totalPages;
 			loadError = '';
@@ -658,6 +665,95 @@
 			openCreatePago();
 		}
 	}
+
+	// ── "Resumen de pago" (ojito de cada fila) — espejo del "Resumen de cobro" de Cuentas por Cobrar (a
+	// pedido del usuario, con imagen de referencia): datos de la cuenta en solo lectura + cronograma de
+	// cuotas. Reusa la cuenta/cuotas seleccionadas (selectedCuenta/cuotasAMostrar), así que se refresca
+	// solo cuando PagoModal guarda (ver handlePagoSaved). Tocar una cuota pendiente abre "Editar Cuota
+	// Programada" (PagoModal) sobre el resumen. ──
+	let resumenOpen = $state(false);
+
+	// A pedido del usuario: en la lista (y en el título del panel de cuotas) se muestra el nombre real de la
+	// contraparte — el prestamista en una Cuenta por Pagar de Préstamo Recibido, en vez del proveedor
+	// genérico "PRÉSTAMOS / FINANCIERA" (ver getPrestamistasDeCuentasPagar). Se resuelve por página.
+	let prestamistasPorCuenta = $state<Map<number, string>>(new Map());
+	function nombreContraparte(item: CuentaPagar): string {
+		const prestamista = prestamistasPorCuenta.get(item.id_cuenta_pagar);
+		return prestamista || item.proveedor?.razon_social || 'Sin proveedor';
+	}
+	function esPrestamoCuenta(item: CuentaPagar): boolean {
+		return prestamistasPorCuenta.has(item.id_cuenta_pagar);
+	}
+	/** Nombre del prestamista si la cuenta es un Préstamo Recibido (ver getPrestamistaDeCuentaPagar) — ahí
+	 * el resumen muestra "Prestamista" en vez de "Proveedor" (que es el genérico de préstamos). null = no es
+	 * un préstamo. */
+	let prestamistaResumen = $state<string | null>(null);
+
+	async function openResumen(item: CuentaPagar) {
+		selectedId = item.id_cuenta_pagar;
+		const [, prestamista] = await Promise.all([fetchSelectedPagos(), getPrestamistaDeCuentaPagar(supabase, item).catch(() => null)]);
+		prestamistaResumen = prestamista;
+		resumenOpen = true;
+	}
+
+	function etiquetaCampo(key: string, value: unknown): string {
+		if (value === null || value === undefined || value === '') return '';
+		const field = FIELDS_CONFIG.find((f) => f.key === key);
+		if (!field) return String(value);
+		const label = getOptionLabel(field, value, dynamicOptions);
+		// Un id sin etiqueta conocida (ej. un centro de costo fuera de la lista del formulario) no dice nada.
+		return label === String(value) && key.startsWith('id_') ? '' : label;
+	}
+
+	const resumenCampos = $derived.by((): CampoResumen[] => {
+		const c = selectedCuenta;
+		if (!c) return [];
+		const proximo = cuotasAMostrar
+			.filter((q) => q.estado_pago === 'programado')
+			.sort((a, b) => (a.fecha_pago < b.fecha_pago ? -1 : 1))[0];
+		return [
+			prestamistaResumen !== null
+				? { label: 'Prestamista', valor: prestamistaResumen }
+				: { label: 'Proveedor', valor: c.proveedor?.razon_social ?? '' },
+			{ label: 'Centro de costo', valor: etiquetaCampo('id_centro_costo', c.id_centro_costo) },
+			{ label: 'N° documento', valor: c.num_documento ?? '' },
+			{ label: 'Tipo de documento', valor: etiquetaCampo('tipo_documento', c.tipo_documento) },
+			{ label: 'Monto comprometido', valor: formatCurrency(c.monto_comprometido) },
+			{ label: 'Saldo pendiente', valor: formatCurrency(c.saldo_pendiente) },
+			{ label: 'Próximo a pagar', valor: proximo ? formatCurrency(proximo.monto) : '' },
+			{ label: 'Forma de pago', valor: etiquetaCampo('fotma_pago', c.fotma_pago) },
+			{ label: 'Responsable', valor: c.responsable ?? '' },
+			{ label: 'Fecha de emisión', valor: formatDate(c.fecha_emision) },
+			{ label: 'Fecha de vencimiento', valor: formatDate(c.fecha_vencimiento) },
+			{ label: 'Moneda', valor: etiquetaCampo('moneda', c.moneda) },
+			{ label: 'Prioridad', valor: etiquetaCampo('prioridad', c.prioridad) },
+			{ label: 'Estado', valor: etiquetaCampo('estado', c.estado) },
+			{ label: 'Observación', valor: c.observacion ?? '', completo: true }
+		];
+	});
+
+	const resumenCuotas = $derived(
+		cuotasAMostrar.map((q): CuotaResumen => {
+			const bloqueado = q.id_pago !== -1 && !!q.transaccion?.aprobado && !isAdmin();
+			const estado: CuotaResumen['estado'] =
+				q.estado_pago === 'pagado' ? 'pagado' : q.estado_pago === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
+			return { id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado, editable: q.estado_pago === 'programado' && !bloqueado };
+		})
+	);
+
+	/** Estado de una cuota tocado en el resumen: la sintética (Contado sin pagos) abre "Registrar Pago"
+	 * prellenado, una real abre "Editar Cuota Programada" — mismo criterio que handleDobleClicCuota. */
+	function editarCuotaDesdeResumen(idPago: number) {
+		const pago = cuotasAMostrar.find((q) => q.id_pago === idPago);
+		if (!pago) return;
+		if (idPago === -1) {
+			editingPago = null;
+			pagoInitialValues = { monto: String(pago.monto), fecha_pago: pago.fecha_pago };
+			pagoModalOpen = true;
+		} else {
+			openEditPago(pago);
+		}
+	}
 	function openEditPago(pago: Pago) {
 		editingPago = pago;
 		pagoModalOpen = true;
@@ -933,12 +1029,14 @@
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
-			<div class="min-w-[1080px]">
-				<div class="grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_1.1fr_0.8fr_auto] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-					<span>Proveedor</span>
+			<div class="min-w-[1280px]">
+				<div class="grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+					<span>Proveedor / Cliente / Prestamista</span>
 					<span>Centro de Costo</span>
 					<span>N° Documento</span>
-					<span class="text-right">Monto</span>
+					<span>Vencimiento</span>
+					<span class="text-right">Saldo actual</span>
+					<span class="text-right">Valor Venta</span>
 					<div class="flex gap-2 pl-4">
 						<span class="flex-1">Prioridad</span>
 						<span class="flex-1">Estado</span>
@@ -950,7 +1048,7 @@
 				{#each items as item (item.id_cuenta_pagar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 					<div
-						class={`grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_1.1fr_0.8fr_auto] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_pagar ? 'bg-blue-100 hover:bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -960,16 +1058,17 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
+								<p class="font-semibold text-slate-800 truncate">{nombreContraparte(item)}</p>
 								<p class="text-[11px] text-slate-400 mt-0.5 truncate">
-									Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}
-									{#if item.proveedor?.vendedor}· {item.proveedor.vendedor}{/if}
+									{#if esPrestamoCuenta(item)}Prestamista{:else}{item.proveedor?.vendedor ?? ''}{/if}
 								</p>
 							</div>
 						</div>
 						<div class="text-sm text-slate-600 truncate">{centroCostoLabel(item)}</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
-						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
+						<div class="text-sm text-slate-600 whitespace-nowrap">{formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</div>
+						<div class="text-right font-semibold text-slate-700 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
+						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
 						<div class="flex items-center gap-2 pl-4">
 							<div class="flex-1">
 								{#if item.prioridad}
@@ -1000,6 +1099,9 @@
 									<Trash size={16} />
 								</button>
 							{:else}
+								<button type="button" onclick={(e) => { e.stopPropagation(); openResumen(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-[#0f3b5e]" title="Ver resumen" aria-label="Ver resumen">
+									<Eye size={16} />
+								</button>
 								<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar" aria-label="Editar">
 									<Pencil size={16} />
 								</button>
@@ -1034,12 +1136,13 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{item.proveedor?.razon_social ?? 'Sin proveedor'}</p>
-								<p class="text-[11px] text-slate-400 mt-0.5 truncate">{centroCostoLabel(item)} · {item.num_documento || '—'}</p>
+								<p class="font-semibold text-slate-800 truncate">{nombreContraparte(item)}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5 truncate">{#if esPrestamoCuenta(item)}Prestamista · {/if}{centroCostoLabel(item)} · {item.num_documento || '—'}</p>
 							</div>
 						</div>
 						<div class="text-right shrink-0">
-							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
+							<div class="font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
+							<div class="text-[11px] text-slate-400">Saldo: {formatCurrency(item.saldo_pendiente)}</div>
 						</div>
 					</div>
 					<div class="flex items-center justify-between gap-2 mb-2">
@@ -1072,6 +1175,9 @@
 								<Trash size={14} /> Eliminar
 							</button>
 						{:else}
+						<button type="button" onclick={(e) => { e.stopPropagation(); openResumen(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Ver resumen">
+							<Eye size={14} /> Resumen
+						</button>
 						<button type="button" onclick={(e) => { e.stopPropagation(); openEdit(item); }} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar">
 							<Pencil size={14} /> Editar
 						</button>
@@ -1101,7 +1207,7 @@
 				<div class="flex items-center gap-2">
 					<Receipt class="text-amber-500" size={20} />
 					<h2 class="text-lg font-semibold text-[#0f3b5e]">
-						Pagos a {selectedCuenta.proveedor?.razon_social ?? 'la cuenta'} — {formatCurrency(selectedCuenta.monto_comprometido)}
+						Pagos a {nombreContraparte(selectedCuenta)} — {formatCurrency(selectedCuenta.monto_comprometido)}
 						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
 					</h2>
 				</div>
@@ -1236,6 +1342,18 @@
 	onSubmitOverride={prestamoPrefillDatos ? guardarCuentaPagarConTransaccionPrestamo : null}
 	onClose={closeModal}
 	onSaved={handleSaved}
+/>
+<ResumenCuentaModal
+	open={resumenOpen && !!selectedCuenta}
+	titulo="Resumen de pago"
+	tituloCronograma="Cronograma de pagos"
+	etiquetaTotal="Monto total"
+	textoPagado="Pagado"
+	campos={resumenCampos}
+	cuotas={resumenCuotas}
+	montoTotal={Number(selectedCuenta?.monto_comprometido ?? 0)}
+	onClose={() => (resumenOpen = false)}
+	onEditarCuota={editarCuotaDesdeResumen}
 />
 <PagoModal
 	open={pagoModalOpen}

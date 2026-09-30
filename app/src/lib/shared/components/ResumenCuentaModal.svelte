@@ -1,0 +1,175 @@
+<script lang="ts" module>
+	export interface CampoResumen {
+		label: string;
+		valor: string;
+		/** true = ocupa todo el ancho (ej. Observaciones). */
+		completo?: boolean;
+	}
+
+	export interface CuotaResumen {
+		id: number;
+		monto: number;
+		fecha: string; // yyyy-mm-dd
+		estado: 'pagado' | 'pendiente' | 'vencido' | 'anulado';
+		/** true = el estado se puede tocar para abrir "Editar Cuota Programada" (ver onEditarCuota). */
+		editable: boolean;
+	}
+</script>
+
+<script lang="ts">
+	/**
+	 * "Resumen de cobro" / "Resumen de pago" — a pedido del usuario (con imagen de referencia), se abre con
+	 * el ojito de cada fila en Cuentas por Cobrar y Cuentas por Pagar. Solo lectura: arriba los datos de la
+	 * cuenta, abajo el cronograma de cuotas (Acuerdo de pago, Monto, Porcentaje, Fecha, Estado) con la fila
+	 * de total al 100%. Tocar el estado de una cuota pendiente/vencida llama a `onEditarCuota`, que en cada
+	 * página abre la ventana "Editar Cuota Programada" ya existente (CobroModal/PagoModal) — ahí se cambia
+	 * el Estado a Cobrado/Pagado con su transacción. Va en z-40 para que esa ventana (z-50) quede encima.
+	 * Solo HTML/CSS estándar: igual en navegador, Tauri Windows y Tauri Android.
+	 */
+	import { X } from '@lucide/svelte';
+	import { formatCurrency } from '$lib/shared/fieldConfig';
+
+	let {
+		open = false,
+		titulo,
+		tituloCronograma,
+		etiquetaTotal,
+		textoPagado = 'Pagado',
+		campos,
+		cuotas,
+		montoTotal,
+		onClose,
+		onEditarCuota
+	}: {
+		open: boolean;
+		titulo: string;
+		tituloCronograma: string;
+		/** Etiqueta de la fila de total (ej. "Valor venta"). */
+		etiquetaTotal: string;
+		/** Texto del estado ya pagado/cobrado de una cuota. */
+		textoPagado?: string;
+		campos: CampoResumen[];
+		cuotas: CuotaResumen[];
+		montoTotal: number;
+		onClose: () => void;
+		onEditarCuota: (id: number) => void;
+	} = $props();
+
+	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
+
+	const ORDINALES = ['1er', '2do', '3er', '4to', '5to', '6to', '7mo', '8vo', '9no', '10mo', '11vo', '12vo'];
+	/** Mismo esquema que la imagen de referencia: la primera cuota es el "Adelanto" y las siguientes
+	 * "1er abono", "2do abono"... Con una sola cuota es un "Pago único". */
+	function acuerdoDePago(indice: number, total: number): string {
+		if (total === 1) return 'Pago único';
+		if (indice === 0) return 'Adelanto';
+		return `${ORDINALES[indice - 1] ?? `${indice}°`} abono`;
+	}
+
+	function porcentaje(monto: number): string {
+		if (!montoTotal) return '—';
+		return `${Number(((monto / montoTotal) * 100).toFixed(2))}%`;
+	}
+
+	function formatDate(value: string | null | undefined): string {
+		if (!value) return '—';
+		const [y, m, d] = value.slice(0, 10).split('-');
+		return y && m && d ? `${d}/${m}/${y}` : '—';
+	}
+
+	const ESTADO_CLASE: Record<CuotaResumen['estado'], string> = {
+		pagado: 'bg-emerald-100 text-emerald-700',
+		pendiente: 'bg-amber-100 text-amber-700',
+		vencido: 'bg-red-100 text-red-700',
+		anulado: 'bg-slate-200 text-slate-600'
+	};
+	function textoEstado(estado: CuotaResumen['estado']): string {
+		if (estado === 'pagado') return textoPagado;
+		if (estado === 'pendiente') return 'Pendiente';
+		if (estado === 'vencido') return 'Vencido';
+		return 'Anulado';
+	}
+</script>
+
+{#if open}
+	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
+				<h2 class="text-lg font-semibold text-[#0f3b5e]">{titulo}</h2>
+				<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
+					<X size={20} />
+				</button>
+			</div>
+
+			<div class="p-6 space-y-6">
+				<div class="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3">
+					{#each campos as campo (campo.label)}
+						<div class={campo.completo ? 'sm:col-span-3' : ''}>
+							<span class="block text-xs font-semibold text-[#0f3b5e] mb-1">{campo.label}</span>
+							<div class="w-full min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 break-words">{campo.valor || '—'}</div>
+						</div>
+					{/each}
+				</div>
+
+				<div>
+					<h3 class="text-base font-semibold text-[#0f3b5e] mb-3">{tituloCronograma}</h3>
+					{#if cuotasOrdenadas.length === 0}
+						<p class="text-sm text-slate-400 text-center py-6 rounded-lg border border-slate-200">Sin cuotas registradas todavía.</p>
+					{:else}
+						<div class="overflow-x-auto rounded-lg border border-slate-200">
+							<table class="w-full min-w-[520px] text-sm">
+								<thead>
+									<tr class="bg-slate-50 text-xs font-semibold text-slate-500 border-b border-slate-200">
+										<th class="text-left px-3 py-2">Acuerdo de pago</th>
+										<th class="text-right px-3 py-2">Monto</th>
+										<th class="text-right px-3 py-2">Porcentaje</th>
+										<th class="text-center px-3 py-2">Fecha</th>
+										<th class="text-center px-3 py-2">Estado</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-slate-100">
+									{#each cuotasOrdenadas as cuota, i (cuota.id)}
+										<tr>
+											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length)}</td>
+											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
+											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>
+											<td class="px-3 py-2 text-center text-slate-500">{formatDate(cuota.fecha)}</td>
+											<td class="px-3 py-2 text-center">
+												{#if cuota.editable}
+													<button
+														type="button"
+														onclick={() => onEditarCuota(cuota.id)}
+														class={`px-2.5 py-0.5 rounded-full text-[11px] font-medium underline decoration-dotted underline-offset-2 hover:opacity-80 ${ESTADO_CLASE[cuota.estado]}`}
+														title="Editar esta cuota"
+													>
+														{textoEstado(cuota.estado)}
+													</button>
+												{:else}
+													<span class={`px-2.5 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_CLASE[cuota.estado]}`}>{textoEstado(cuota.estado)}</span>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+								<tfoot>
+									<tr class="bg-emerald-50 font-semibold text-emerald-800 border-t border-emerald-100">
+										<td class="px-3 py-2">{etiquetaTotal}</td>
+										<td class="px-3 py-2 text-right">{formatCurrency(montoTotal)}</td>
+										<td class="px-3 py-2 text-right">100%</td>
+										<td class="px-3 py-2 text-center">—</td>
+										<td class="px-3 py-2 text-center">—</td>
+									</tr>
+								</tfoot>
+							</table>
+						</div>
+						<p class="mt-2 text-xs text-slate-400">Toca el estado de una cuota pendiente para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}.</p>
+					{/if}
+				</div>
+			</div>
+
+			<div class="sticky bottom-0 flex justify-end bg-white px-6 py-4 border-t border-slate-200">
+				<button type="button" onclick={onClose} class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">Cerrar</button>
+			</div>
+		</div>
+	</div>
+{/if}
