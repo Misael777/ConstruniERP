@@ -677,6 +677,12 @@
 	// contraparte — el prestamista en una Cuenta por Pagar de Préstamo Recibido, en vez del proveedor
 	// genérico "PRÉSTAMOS / FINANCIERA" (ver getPrestamistasDeCuentasPagar). Se resuelve por página.
 	let prestamistasPorCuenta = $state<Map<number, string>>(new Map());
+	/** Tramos de un nombre separados DESPUÉS de cada "_" (ej. "OBRA_", "LAC_", "Cercado_") — para partirlo en
+	 * varias líneas solo en los guiones bajos (vía <wbr>), nunca a mitad de una palabra. */
+	function tramosNombre(texto: string): string[] {
+		return texto.split(/(?<=_)/);
+	}
+
 	function nombreContraparte(item: CuentaPagar): string {
 		const prestamista = prestamistasPorCuenta.get(item.id_cuenta_pagar);
 		return prestamista || item.proveedor?.razon_social || 'Sin proveedor';
@@ -1029,8 +1035,8 @@
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
-			<div class="min-w-[1280px]">
-				<div class="grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+			<div class="min-w-[1360px]">
+				<div class="grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
 					<span>Proveedor / Cliente / Prestamista</span>
 					<span>Centro de Costo</span>
 					<span>N° Documento</span>
@@ -1048,7 +1054,7 @@
 				{#each items as item (item.id_cuenta_pagar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 					<div
-						class={`grid grid-cols-[1.8fr_1.2fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_pagar ? 'bg-blue-100 hover:bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -1058,13 +1064,13 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{nombreContraparte(item)}</p>
-								<p class="text-[11px] text-slate-400 mt-0.5 truncate">
+								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={nombreContraparte(item)}>{#each tramosNombre(nombreContraparte(item)) as tramo}{tramo}<wbr />{/each}</p>
+								<p class="text-[11px] text-slate-400 mt-0.5 [overflow-wrap:break-word]">
 									{#if esPrestamoCuenta(item)}Prestamista{:else}{item.proveedor?.vendedor ?? ''}{/if}
 								</p>
 							</div>
 						</div>
-						<div class="text-sm text-slate-600 truncate">{centroCostoLabel(item)}</div>
+						<div class="text-[13px] text-slate-600 leading-snug [overflow-wrap:break-word]" title={centroCostoLabel(item)}>{#each tramosNombre(centroCostoLabel(item)) as tramo}{tramo}<wbr />{/each}</div>
 						<div class="text-sm text-slate-600 truncate">{item.num_documento || '—'}</div>
 						<div class="text-sm text-slate-600 whitespace-nowrap">{formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</div>
 						<div class="text-right font-semibold text-slate-700 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
@@ -1136,7 +1142,7 @@
 								<FileText size={18} />
 							</div>
 							<div class="min-w-0">
-								<p class="font-semibold text-slate-800 truncate">{nombreContraparte(item)}</p>
+								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={nombreContraparte(item)}>{#each tramosNombre(nombreContraparte(item)) as tramo}{tramo}<wbr />{/each}</p>
 								<p class="text-[11px] text-slate-400 mt-0.5 truncate">{#if esPrestamoCuenta(item)}Prestamista · {/if}{centroCostoLabel(item)} · {item.num_documento || '—'}</p>
 							</div>
 						</div>
