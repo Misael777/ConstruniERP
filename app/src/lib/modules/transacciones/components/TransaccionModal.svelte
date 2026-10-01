@@ -2050,11 +2050,13 @@
 	let categoriaConsultoriaGrupo = $state('');
 	const categoriaConsultoriaGrupoEfectivo = $derived.by(() => {
 		if (categoriaConsultoriaGrupo) return categoriaConsultoriaGrupo;
-		return TIPOS_GASTO_CONSULTORIA.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+		return TIPOS_GASTO_CONSULTORIA.find((g) => g.label === formValues.categoria || g.opciones.includes(formValues.categoria))?.key ?? '';
 	});
 	function handleCategoriaConsultoriaGrupoChange(value: string) {
 		categoriaConsultoriaGrupo = value;
-		handleInput('categoria', '');
+		// A pedido del usuario: ya no hay selector de Subcategoría — la Categoría que se guarda es el grupo
+		// elegido (ej. "Material"); el detalle fino (ej. "Acero 5/8\"") va en la sección Detalle.
+		handleInput('categoria', TIPOS_GASTO_CONSULTORIA.find((g) => g.key === value)?.label ?? '');
 	}
 
 	// Mismo patrón que TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — son mutuamente
@@ -2146,11 +2148,13 @@
 	const categoriaObraGrupoEfectivo = $derived.by(() => {
 		if (categoriaObraGrupo) return categoriaObraGrupo;
 		const valor = rolPadreDeSubOpcion(formValues.categoria) ?? formValues.categoria;
-		return TIPOS_GASTO_OBRA.find((g) => g.opciones.includes(valor))?.key ?? '';
+		return TIPOS_GASTO_OBRA.find((g) => g.label === formValues.categoria || g.opciones.includes(valor))?.key ?? '';
 	});
 	function handleCategoriaObraGrupoChange(value: string) {
 		categoriaObraGrupo = value;
-		handleInput('categoria', '');
+		// A pedido del usuario: ya no hay selector de Subcategoría — la Categoría que se guarda es el grupo
+		// elegido (ej. "Material"); el detalle fino (ej. "Acero 5/8\"") va en la sección Detalle.
+		handleInput('categoria', TIPOS_GASTO_OBRA.find((g) => g.key === value)?.label ?? '');
 	}
 
 	// Mismo patrón que TIPOS_GASTO_OBRA/TIPOS_GASTO_CONSULTORIA (comparten formValues.tipo_gasto — un
@@ -2172,11 +2176,13 @@
 	let categoriaCorpGrupo = $state('');
 	const categoriaCorpGrupoEfectivo = $derived.by(() => {
 		if (categoriaCorpGrupo) return categoriaCorpGrupo;
-		return TIPOS_GASTO_CORPORATIVO.find((g) => g.opciones.includes(formValues.categoria))?.key ?? '';
+		return TIPOS_GASTO_CORPORATIVO.find((g) => g.label === formValues.categoria || g.opciones.includes(formValues.categoria))?.key ?? '';
 	});
 	function handleCategoriaCorpGrupoChange(value: string) {
 		categoriaCorpGrupo = value;
-		handleInput('categoria', '');
+		// A pedido del usuario: ya no hay selector de Subcategoría — la Categoría que se guarda es el grupo
+		// elegido (ej. "Material"); el detalle fino (ej. "Acero 5/8\"") va en la sección Detalle.
+		handleInput('categoria', TIPOS_GASTO_CORPORATIVO.find((g) => g.key === value)?.label ?? '');
 	}
 
 	// "Catálogo" de la sección Detalle, a pedido explícito del usuario: reusa el mismo cuadro de
@@ -2233,9 +2239,8 @@
 	}
 	function agregarFilaDesdeCatalogo(subcategoria: string) {
 		if (!subcategoria) return;
-		// Además de agregar la fila al Detalle, esta selección ES la Categoría de la transacción — a
-		// pedido explícito del usuario, ya no hay un selector aparte en "Otros campos" para elegirla.
-		handleInput('categoria', subcategoria);
+		// La Categoría es el grupo (ver handleDetalleCatalogoGrupoChange) — la subcategoría solo queda en la
+		// fila del Detalle, ya no reemplaza la Categoría (a pedido del usuario se quitó el selector de Subcategoría).
 		detalleCategoriaKeySeq += 1;
 		detalleCategoria = [
 			...detalleCategoria,
@@ -2285,7 +2290,9 @@
 	// ya fijado por la cuenta por pagar): un egreso siempre sale hacia una cuenta externa, así que el
 	// Alcance se fuerza a Externa y se bloquea junto con el resto de campos prellenados — ver el
 	// $effect más abajo que aplica el valor forzado.
-	const alcanceForzadoExterna = $derived(lockedFields.includes('tipo') && formValues.tipo === 'egreso');
+	// Lo mismo para "Confirmar Cobro" (Ingreso del cliente hacia el proyecto, ver esConfirmarCobro): antes
+	// llegaba sin Alcance y mostraba "Alcance de la Transacción es obligatorio", bloqueando el botón.
+	const alcanceForzadoExterna = $derived((lockedFields.includes('tipo') && formValues.tipo === 'egreso') || esConfirmarCobro);
 
 	$effect(() => {
 		if (alcanceForzadoExterna && formValues.tipo_alcance !== 'externa') {
@@ -3163,21 +3170,6 @@
 													placeholder="Categoría"
 													disabled={bloqueadaPorAprobacion}
 													onchange={(v) => (handleDetalleCatalogoGrupoChange(v))}
-												/>
-											</div>
-											<div class="relative">
-												<!-- Especialidad de Operario/Oficial/Ayudante (ver SUBOPCIONES_SUBCONTRATA) —
-												     a pedido explícito del usuario, presentada en el MISMO dropdown vía
-												     <optgroup> nativo (más simple que un 3er selector aparte): el rol se ve
-												     como encabezado de grupo y sus especialidades debajo, un solo clic para
-												     elegir. -->
-												<SelectConSaldo
-													id="tr-categoria-otros-subcategoria"
-													value={formValues.categoria}
-													options={[{ value: '', label: 'Subcategoría' }, ...(catalogoDetalleActual.find((g) => g.key === detalleCatalogoGrupoEfectivo)?.opciones ?? []).flatMap((opt) => (SUBOPCIONES_SUBCONTRATA[opt] ? SUBOPCIONES_SUBCONTRATA[opt].map((sub) => ({ value: sub, label: sub, grupo: opt })) : [{ value: opt, label: opt }]))]}
-													placeholder="Subcategoría"
-													disabled={bloqueadaPorAprobacion || !detalleCatalogoGrupoEfectivo}
-													onchange={(v) => handleInput('categoria', v)}
 												/>
 											</div>
 										</div>

@@ -17,11 +17,13 @@
 		getCentroCostos,
 		getSaldosPorCentroCosto,
 		getMontoRecibidoPorCentroCosto,
+		getMontoTotalProyectosConsultoria,
 		esCentroDeVenta,
 		deleteCentroCosto,
 		restaurarCentroCosto,
 		eliminarCentroCostoPermanente,
-		getOrCrearCentroCostoCorporativo,
+		getOrCrearCentrosCostoUnicos,
+		esCentroCostoUnico,
 		TIPO_CORPORATIVO
 	} from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
@@ -64,18 +66,18 @@
 	const TABS_TIPO: Record<'centros' | 'cuentas', TabTipo[]> = {
 		centros: [
 			{ key: 'todos', label: 'Todos', tipos: [] },
+			{ key: 'obra', label: 'Proyectos de Obra', tipos: ['proyecto', 'obra'] },
+			{ key: 'consultoria', label: 'Proyectos de Consultoría', tipos: ['consultoria'] },
 			{ key: 'corporativo', label: 'Corporativo', tipos: [TIPO_CORPORATIVO] },
-			{ key: 'obra', label: 'Obra', tipos: ['proyecto', 'obra'] },
-			{ key: 'consultoria', label: 'Consultoría', tipos: ['consultoria'] },
-			{ key: 'prestamo', label: 'Préstamo', tipos: ['prestamo'] },
-			{ key: 'otro', label: 'Otro', tipos: ['otro'] }
+			{ key: 'prestamo', label: 'Préstamos', tipos: ['prestamo'] },
+			{ key: 'otro', label: 'Otros', tipos: ['otro'] }
 		],
 		cuentas: [
 			{ key: 'todos', label: 'Todos', tipos: [] },
 			{ key: 'cliente', label: 'Clientes', tipos: ['cliente'] },
 			{ key: 'proveedor', label: 'Proveedores', tipos: ['proveedor'] },
-			{ key: 'subcontratista', label: 'Subcontratistas', tipos: ['subcontratista'] },
-			{ key: 'empleado', label: 'Empleados', tipos: ['empleado'] }
+			{ key: 'empleado', label: 'Empleados', tipos: ['empleado'] },
+			{ key: 'subcontratista', label: 'Subcontratistas', tipos: ['subcontratista'] }
 		]
 	};
 	let tabTipo = $state('todos');
@@ -100,6 +102,12 @@
 	// Actual" para los centros vinculados a un proyecto (Obra) o el compartido de Consultoría, en vez
 	// de la ficha de caja genérica (saldos).
 	let saldosVenta = $state<Record<number, number>>({});
+	/** "Monto Actual" del centro general CONSULTORÍA = total recibido por TODOS los proyectos de consultoría
+	 * (a pedido del usuario, ver getMontoTotalProyectosConsultoria). null = no se calculó en esta carga. */
+	let montoTotalConsultoria = $state<number | null>(null);
+	function esConsultoriaGeneral(item: CentroCosto): boolean {
+		return item.tipo === 'consultoria' && !item.id_proyecto;
+	}
 	let total = $state(0);
 	let pageNum = $state(1);
 	let totalPages = $state(1);
@@ -152,7 +160,8 @@
 				sortDir,
 				vinculado: activeTab === 'cuentas',
 				soloEliminados: activeTab === 'centros' && verEliminados,
-				tipos: TABS_TIPO[activeTab].find((t) => t.key === tabTipo)?.tipos
+				tipos: TABS_TIPO[activeTab].find((t) => t.key === tabTipo)?.tipos,
+				primeroSinProyecto: activeTab === 'centros' && tabTipo === 'consultoria'
 			});
 			items = result.items;
 			total = result.total;
@@ -164,6 +173,7 @@
 			saldosVenta = activeTab === 'centros'
 				? await getMontoRecibidoPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
 				: {};
+			montoTotalConsultoria = items.some(esConsultoriaGeneral) ? await getMontoTotalProyectosConsultoria(supabase) : null;
 		} catch (err: any) {
 			loadError = err.message || 'No se pudo cargar el listado de centros de costo';
 		} finally {
@@ -291,8 +301,10 @@
 	// editar desde acá y solo con autorización de administrador (correo + contraseña, mismo mecanismo
 	// que el borrado permanente), aunque quien lo pida ya sea admin. No se puede dar de baja ni cambiar
 	// de tipo (ver TIPO_CORPORATIVO en centroCostos.service.ts). ──
+	/** Centros únicos del sistema (a pedido del usuario): Corporativo y Consultoría general (sin proyecto) —
+	 * ver esCentroCostoUnico en centroCostos.service.ts. */
 	function esCorporativo(item: CentroCosto): boolean {
-		return item.tipo === TIPO_CORPORATIVO;
+		return esCentroCostoUnico(item);
 	}
 
 	let autorizarEdicionOpen = $state(false);
@@ -329,7 +341,7 @@
 		}
 		// El Corporativo es único y se genera solo (a pedido del usuario): si todavía no existe, se crea
 		// antes de listar. Idempotente — ver getOrCrearCentroCostoCorporativo.
-		getOrCrearCentroCostoCorporativo(supabase).finally(fetchList);
+		getOrCrearCentrosCostoUnicos(supabase).finally(fetchList);
 	});
 
 	function onSearchInput(value: string) {
@@ -429,6 +441,7 @@
 			// disparaba en la práctica: por eso lo escrito acá parecía no guardarse. Los vinculados a una
 			// venta real (proyecto/consultoría) siguen mostrando su ficha de caja como hasta ahora — esos
 			// no tienen un campo "Monto Actual" editable en su propio flujo (se crean solos en 0).
+			if (esConsultoriaGeneral(item) && montoTotalConsultoria !== null) return formatCurrency(montoTotalConsultoria);
 			if (esManualSinVincular(item)) return formatCurrency(item.monto_actual);
 			const saldo = esCentroDeVenta(item) ? saldosVenta[item.id_centro_costo] : saldos[item.id_centro_costo];
 			return formatCurrency(saldo ?? item.monto_actual);
@@ -611,7 +624,7 @@
 					onclick={() => switchTabTipo(tab.key)}
 					class={`flex items-center gap-1.5 whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
 						tabTipo === tab.key
-							? 'border-[#0f3b5e] text-[#0f3b5e]'
+							? 'border-blue-600 text-blue-600 font-semibold'
 							: 'border-transparent text-slate-500 hover:text-slate-700'
 					}`}
 				>
@@ -796,8 +809,8 @@
 
 <AdminConfirmModal
 	open={autorizarEdicionOpen}
-	title="Editar centro de costo Corporativo"
-	message="El centro de costo Corporativo es único y está protegido. Ingresa el correo y la contraseña de un administrador para editarlo."
+	title={`Editar centro de costo ${centroParaEditar?.tipo === TIPO_CORPORATIVO ? 'Corporativo' : 'Consultoría'}`}
+	message="Este centro de costo es único y está protegido. Ingresa el correo y la contraseña de un administrador para editarlo."
 	confirmLabel="Autorizar"
 	onConfirm={confirmarAutorizarEdicion}
 	onClose={closeAutorizarEdicion}

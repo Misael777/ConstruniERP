@@ -461,6 +461,22 @@ async function reconocerComprobantePagoInterno(file: File): Promise<ReconocerCom
 	}
 }
 
+/** Texto completo de una Factura/Boleta/Nota de Crédito/Débito (foto o PDF) leído con OCR — para el
+ * repositorio de comprobantes de "Emisión de Comprobante" (ver extraerDatosDeTexto en
+ * facturacion/services/lectorComprobante.ts, que lo interpreta con regex). Mismo pipeline que
+ * reconocerComprobantePago (PDF -> imagen, realce, Tesseract en español) pero a mayor resolución: un
+ * comprobante trae más texto chico (tabla de productos, bloque de totales) que un boucher. Lanza si
+ * Tesseract falla; quien llama decide cómo avisar. */
+export async function leerTextoComprobante(file: File): Promise<string> {
+	return conCarga('Leyendo el comprobante…', async () => {
+		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 2000) : file;
+		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
+		const { data } = await recognize(fuenteRealzada, 'spa');
+		return data.text || '';
+	});
+}
+
 /** Lee fecha, monto y N° de operación de una foto o PDF de comprobante de pago vía OCR (Tesseract.js) +
  * regex — ver "Fecha (reconocida)"/"Monto (reconocido)"/"N° de Operación (reconocido)" en
  * TransaccionModal.svelte. Si `file` es un PDF (ej. el boucher de un banco exportado como PDF, o el

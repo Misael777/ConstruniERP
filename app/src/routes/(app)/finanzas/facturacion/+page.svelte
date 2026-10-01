@@ -7,7 +7,8 @@
 	// "Nueva Factura/Boleta/Nota de Crédito/Nota de Débito" con esa transacción y su cliente ya
 	// precargados. Documento INTERNO (sin firma digital ni OSE). Una vez emitido, guarda su imagen/PDF en
 	// Drive; el ojito de "Documentos emitidos" abre esa imagen guardada.
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
+	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
@@ -36,6 +37,7 @@
 	} from '$lib/modules/facturacion/services/facturacion.service';
 	import FacturaModal from '$lib/modules/facturacion/components/FacturaModal.svelte';
 	import FacturaPreviewModal from '$lib/modules/facturacion/components/FacturaPreviewModal.svelte';
+	import RepositorioComprobantes from '$lib/modules/facturacion/components/RepositorioComprobantes.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
@@ -70,6 +72,10 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	];
 
 	let activeTab = $state<TabValue>('todos');
+	/** "Emitir comprobantes" = lo de siempre (comprobantes internos que genera el ERP). "Repositorio" = los
+	 * comprobantes reales (PDF/foto/XML de SUNAT) de las transacciones de ingreso, leídos con OCR (ver
+	 * RepositorioComprobantes.svelte). */
+	let seccion = $state<'emision' | 'repositorio'>('emision');
 	const tabActual = $derived(TABS.find((t) => t.value === activeTab)!);
 	const nombreTab = $derived(tabActual.label);
 	const pluralTab = $derived(tabActual.plural);
@@ -461,6 +467,15 @@ function irAPaginaTransacciones(nueva: number) {
 	function fmtTransaccion(t: TransaccionFacturable): string {
 		return `${t.tipo_moneda === 'dolares' ? 'US$' : 'S/'} ${t.monto_total.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 	}
+
+	// A pedido del usuario: la lista de clientes es la misma del Directorio de Clientes (solo activos) y se
+	// actualiza sola al cambiar — ver $lib/stores/clientes.svelte.ts.
+	onDestroy(suscribirClientes());
+	$effect(() => {
+		if (!clientesState.cargado) return;
+		const opciones = opcionesClientes();
+		untrack(() => (dynamicOptions = { ...dynamicOptions, id_cliente: opciones }));
+	});
 </script>
 
 {#snippet tablaTx(lista: TransaccionFacturable[], cargando: boolean, vacio: string)}
@@ -550,6 +565,21 @@ function irAPaginaTransacciones(nueva: number) {
 		</div>
 	</div>
 
+	<div class="mb-4 flex gap-1 border-b border-slate-200 overflow-x-auto">
+		{#each [{ k: 'emision', l: 'Emitir comprobantes' }, { k: 'repositorio', l: 'Repositorio de comprobantes' }] as t (t.k)}
+			<button
+				type="button"
+				onclick={() => (seccion = t.k as typeof seccion)}
+				class={`whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${seccion === t.k ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+			>
+				{t.l}
+			</button>
+		{/each}
+	</div>
+
+	{#if seccion === 'repositorio'}
+		<RepositorioComprobantes />
+	{:else}
 	<div class="flex items-center justify-end mb-4 gap-2">
 		{#if isAdmin() && !verEliminados}
 			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
@@ -778,6 +808,7 @@ function irAPaginaTransacciones(nueva: number) {
 				<button type="button" disabled={pageNum >= totalPages} onclick={() => { pageNum += 1; fetchList(); }} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Siguiente</button>
 			</div>
 		</div>
+	{/if}
 	{/if}
 	{/if}
 </div>

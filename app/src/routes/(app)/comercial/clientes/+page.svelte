@@ -5,7 +5,7 @@
 	import { isAdmin } from '$lib/stores/permisos.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Download } from '@lucide/svelte';
-	import { crearSolicitud, darDeBajaCliente, restaurarCliente, deleteClienteCascade } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+	import { crearSolicitud, darDeBajaCliente, restaurarCliente, deleteClienteCascade, mensajeClienteConProyectosActivos } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { exportarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
@@ -138,9 +138,22 @@
 	let confirmDarDeBajaOpen = $state(false);
 	let clienteParaDarDeBaja = $state<{ id: number; nombre: string } | null>(null);
 
-	function handleDarDeBaja(id: number) {
+	async function handleDarDeBaja(id: number) {
 		const cliente = clientes.find((c) => c.id_cliente === id);
-		clienteParaDarDeBaja = { id, nombre: cliente?.nombre || `Cliente #${id}` };
+		const nombre = cliente?.nombre || `Cliente #${id}`;
+		// A pedido del usuario: un cliente enlazado a un proyecto activo no se puede eliminar — se avisa de
+		// inmediato, sin abrir la confirmación (darDeBajaCliente también lo valida).
+		try {
+			const bloqueo = await mensajeClienteConProyectosActivos(supabase, id, nombre);
+			if (bloqueo) {
+				toast.error(bloqueo);
+				return;
+			}
+		} catch (err) {
+			toast.error(`No se pudo verificar los proyectos del cliente. ${describeError(err)}`);
+			return;
+		}
+		clienteParaDarDeBaja = { id, nombre };
 		confirmDarDeBajaOpen = true;
 	}
 

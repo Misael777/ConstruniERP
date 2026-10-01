@@ -17,7 +17,7 @@ import { getCentroCostoOptions, getCentroCostoOptionsSoloCentros } from '$lib/mo
 import { getCuentaBancoOptions } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { describeError } from '$lib/shared/describeError';
-import { crearSolicitud, eliminarVentaCascade, darDeBajaVenta, restaurarVenta } from '$lib/modules/aprobaciones/services/aprobaciones.service';
+import { crearSolicitud, eliminarVentaCascade, darDeBajaVenta, restaurarVenta, mensajeProyectoConCuentasPendientes } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 import { exportarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { toast } from '$lib/stores/toast';
 import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -665,10 +665,26 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let confirmDarDeBajaOpen = $state(false);
 	let ventaParaDarDeBaja = $state<{ id: number; nombre: string } | null>(null);
 
-	function handleDarDeBajaEvent(e: CustomEvent) {
+	/** A pedido del usuario: el centro de costo de un proyecto no se puede eliminar con abonos pendientes en
+	 * Cuentas por Cobrar o por Pagar — se avisa ANTES de abrir la confirmación (el servicio también lo valida).
+	 * Devuelve true si hay que detenerse. */
+	async function avisarSiTieneCuentasPendientes(idProyecto: number, nombre: string): Promise<boolean> {
+		try {
+			const bloqueo = await mensajeProyectoConCuentasPendientes(supabase, idProyecto, nombre);
+			if (bloqueo) toast.error(bloqueo);
+			return !!bloqueo;
+		} catch (err) {
+			toast.error(`No se pudieron verificar las cuentas pendientes del proyecto. ${describeError(err)}`);
+			return true;
+		}
+	}
+
+	async function handleDarDeBajaEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
-		ventaParaDarDeBaja = { id: row.id, nombre: etiquetaVenta(row) };
+		const nombre = etiquetaVenta(row);
+		if (await avisarSiTieneCuentasPendientes(row.id, nombre)) return;
+		ventaParaDarDeBaja = { id: row.id, nombre };
 		confirmDarDeBajaOpen = true;
 	}
 
@@ -732,10 +748,12 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	let ventaParaEliminarPermanente = $state<{ id: number; nombre: string } | null>(null);
 	let eliminandoPermanente = $state(false);
 
-	function handleEliminarPermanenteEvent(e: CustomEvent) {
+	async function handleEliminarPermanenteEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
-		ventaParaEliminarPermanente = { id: row.id, nombre: etiquetaVenta(row) };
+		const nombre = etiquetaVenta(row);
+		if (await avisarSiTieneCuentasPendientes(row.id, nombre)) return;
+		ventaParaEliminarPermanente = { id: row.id, nombre };
 		confirmEliminarPermanenteOpen = true;
 	}
 	function closeConfirmEliminarPermanente() {

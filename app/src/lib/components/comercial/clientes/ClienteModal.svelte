@@ -64,6 +64,8 @@
 	let esPersonaNatural = $derived(tipoDoc === 'DNI' || tipoDoc === 'CE');
 
 	async function handleGuardar() {
+		// Los nombres de clientes se guardan y muestran siempre en MAYÚSCULAS (a pedido del usuario).
+		nombre = nombre.trim().toUpperCase();
 		if (!nombre || !numDocumento) {
 			errorMsg = 'El nombre y documento son obligatorios.';
 			return;
@@ -204,7 +206,7 @@
 
 						<div class="flex flex-col gap-1 md:col-span-2">
 							<label class="text-xs font-semibold text-[#0f3b5e]">{esPersonaNatural ? 'Nombre Completo' : 'Razón Social'} *</label>
-							<input type="text" bind:value={nombre} disabled={isSaving} placeholder={esPersonaNatural ? "Ej. Juan Pérez" : "Ej. Constructora ABC S.A.C."} class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+							<input type="text" bind:value={nombre} autocapitalize="characters" disabled={isSaving} placeholder={esPersonaNatural ? "Ej. JUAN PÉREZ" : "Ej. CONSTRUCTORA ABC S.A.C."} class="uppercase px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">

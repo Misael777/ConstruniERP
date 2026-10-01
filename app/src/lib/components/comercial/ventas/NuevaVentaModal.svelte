@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy, untrack, tick } from 'svelte';
+	import { clientesState, cargarClientes, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { uploadProjectDocument, deleteProjectDocumentFile } from '$lib/shared/uploadProjectDocument';
 	import { sanitizeFileSegment } from '$lib/shared/fileNaming';
@@ -9,7 +10,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
-	import { createCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { createCuentaCobrar, confirmarCobroCobrado, deleteCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
@@ -112,8 +113,12 @@
 	// Perú (UTC-5) eso muestra "mañana" desde ~7pm hora local en adelante.
 	let fechaVenta = $state(getFechaLocalHoy());
 	let asesor = $state('');
-	let clientes = $state<any[]>([]);
 	let selectedClienteId = $state<string>('');
+	// A pedido del usuario: misma lista que el Directorio de Clientes (solo activos) y se actualiza sola al
+	// cambiar — ver $lib/stores/clientes.svelte.ts. El cliente ya guardado de una venta que se está editando
+	// se conserva aunque esté dado de baja, para que el campo no quede vacío.
+	const clientes = $derived(clientesState.todos.filter((c) => c.estado !== 'baja' || String(c.id_cliente) === String(selectedClienteId)));
+	onDestroy(suscribirClientes());
 	let nuevoClienteNombre = $state('');
 	let valorVenta = $state('15000.00');
 	let comisionPorcentaje = $state('10');
@@ -132,39 +137,165 @@
 	let adelantoFile = $state<File | null>(null);
 	let adelantoMonto = $state('');
 
-	// Ticket #40: "Forma de cobranza" — solo para ventas de Consultoría (Obra sigue con valorización,
-	// a pedido explícito del usuario). Opcional: si se deja vacío, no se crea ninguna Cuenta por Cobrar
-	// acá (se puede seguir creando a mano desde Finanzas > Cuentas por Cobrar, como hasta ahora). Cada
-	// hito se guarda como una cuota 'programado' de UNA sola Cuenta por Cobrar (reusa el mismo mecanismo
-	// de fraccionamiento ya validado en cuentasCobrar.service.ts — ver createCuentaCobrar más abajo).
+	// "Forma de cobranza" (Ticket #40, ampliado a pedido del usuario): se abre sola al ingresar el Monto del
+	// adelanto, para ventas de Consultoría Y de Obra. La primera fila es siempre el ADELANTO (su importe es el
+	// Monto del adelanto: editar uno actualiza el otro); si el adelanto no cubre el Valor venta se agrega sola
+	// una cuota "1ER ABONO" con el saldo. Los nombres (ADELANTO, 1ER ABONO, 2DO ABONO, ...) son automáticos y no
+	// se editan; la fila ADELANTO tampoco (solo cambia desde el campo Monto del adelanto); en las cuotas, tipo,
+	// valor y fecha sí. La suma SIEMPRE es exactamente el 100% del Valor venta (ver actualizarValorAbono). Al guardar se crea UNA Cuenta por Cobrar del proyecto con cada fila
+	// como cuota, y el adelanto queda como cuota ya cobrada vinculada a su transacción (ver
+	// crearVentaYSubirDocumentos).
 	interface HitoCobranza {
 		id: number;
-		descripcion: string;
+		esAdelanto: boolean;
 		tipo: 'porcentaje' | 'monto';
+		/** Lo que se ve en el campo "Valor" (porcentaje o monto según `tipo`). */
 		valor: string;
+		/** Importe en S/ — fuente de verdad para las sumas (un % redondeado no siempre da el monto exacto). */
+		importe: number;
 		fechaEstimada: string;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;
+	const ORDINALES_ABONO = ['1ER', '2DO', '3ER', '4TO', '5TO', '6TO', '7MO', '8VO', '9NO', '10MO'];
+	function nombreHitoCobranza(hito: HitoCobranza, indice: number): string {
+		if (hito.esAdelanto) return 'ADELANTO';
+		const n = hitosCobranza[0]?.esAdelanto ? indice : indice + 1;
+		return `${ORDINALES_ABONO[n - 1] ?? `${n}°`} ABONO`;
+	}
+	const redondear2 = (n: number) => Math.round(n * 100) / 100;
+	const formatearValor = (n: number) => String(Number(n.toFixed(2)));
+	function valorDesdeImporte(hito: HitoCobranza): string {
+		const total = Number(valorVenta) || 0;
+		if (hito.tipo === 'monto') return formatearValor(hito.importe);
+		return total > 0 ? formatearValor((hito.importe / total) * 100) : '';
+	}
+	function importeDesdeValor(hito: HitoCobranza): number {
+		const n = Number(hito.valor) || 0;
+		return hito.tipo === 'monto' ? redondear2(n) : redondear2(((Number(valorVenta) || 0) * n) / 100);
+	}
+	function nuevoAbono(importe: number): HitoCobranza {
+		const hito: HitoCobranza = { id: siguienteHitoCobranzaId++, esAdelanto: false, tipo: 'porcentaje', valor: '', importe: redondear2(Math.max(importe, 0)), fechaEstimada: fechaVenta || getFechaLocalHoy() };
+		hito.valor = hito.importe > 0 ? valorDesdeImporte(hito) : '';
+		return hito;
+	}
+	/** Deja la última cuota (abono) cubriendo lo que falta para llegar al Valor venta; si ya no queda saldo
+	 * la quita (si el adelanto cubre todo, no hay cuotas). Sin abonos y con saldo, agrega el "1ER ABONO". */
+	function ajustarAbonosAlSaldo() {
+		const total = Number(valorVenta) || 0;
+		const adelanto = hitosCobranza.find((h) => h.esAdelanto)?.importe ?? 0;
+		let abonos = hitosCobranza.filter((h) => !h.esAdelanto);
+		while (abonos.length > 0) {
+			const ultimo = abonos[abonos.length - 1];
+			const restante = redondear2(total - adelanto - abonos.slice(0, -1).reduce((s, h) => s + h.importe, 0));
+			if (restante > 0.005) {
+				ultimo.importe = restante;
+				ultimo.valor = valorDesdeImporte(ultimo);
+				return;
+			}
+			abonos = abonos.slice(0, -1);
+			hitosCobranza = hitosCobranza.filter((h) => h.id !== ultimo.id);
+		}
+		const saldo = redondear2(total - adelanto);
+		if (saldo > 0.005) hitosCobranza = [...hitosCobranza, nuevoAbono(saldo)];
+	}
+	/** Al cambiar el Monto del adelanto (campo de arriba): crea/actualiza la fila ADELANTO y recalcula las cuotas. */
+	function sincronizarAdelantoCobranza() {
+		const monto = redondear2(Number(adelantoMonto) || 0);
+		if (!(monto > 0)) {
+			hitosCobranza = [];
+			return;
+		}
+		let fila = hitosCobranza.find((h) => h.esAdelanto);
+		if (!fila) {
+			hitosCobranza = [{ id: siguienteHitoCobranzaId++, esAdelanto: true, tipo: 'porcentaje', valor: '', importe: monto, fechaEstimada: fechaVenta || getFechaLocalHoy() }, ...hitosCobranza];
+			fila = hitosCobranza[0];
+		}
+		fila.importe = monto;
+		fila.fechaEstimada = fechaVenta || getFechaLocalHoy();
+		fila.valor = valorDesdeImporte(fila);
+		ajustarAbonosAlSaldo();
+	}
+	/** Reparte `monto` en `n` partes iguales con céntimos exactos (la última absorbe el redondeo) — igual que
+	 * FraccionamientoModal.svelte. */
+	function repartirMonto(monto: number, n: number): number[] {
+		if (n <= 0) return [];
+		const base = Math.floor((monto / n) * 100) / 100;
+		const partes = Array(n).fill(base);
+		partes[n - 1] = redondear2(monto - base * (n - 1));
+		return partes;
+	}
+	function asignarImporte(hito: HitoCobranza, importe: number) {
+		hito.importe = importe;
+		hito.valor = valorDesdeImporte(hito);
+	}
+	/** Saldo después del adelanto, repartido en partes iguales entre todas las cuotas (al agregar o quitar una). */
+	function repartirSaldoEnAbonos() {
+		const abonos = hitosCobranza.filter((h) => !h.esAdelanto);
+		const adelanto = hitosCobranza.find((h) => h.esAdelanto)?.importe ?? 0;
+		const partes = repartirMonto(Math.max(redondear2((Number(valorVenta) || 0) - adelanto), 0), abonos.length);
+		abonos.forEach((h, i) => asignarImporte(h, partes[i]));
+	}
+	/** A pedido del usuario: la suma SIEMPRE es 100% — mismo criterio que "Por porcentaje" en
+	 * FraccionamientoModal.svelte, sobre lo que queda después del adelanto (que es fijo): las cuotas anteriores
+	 * se respetan, el valor ingresado se limita a lo disponible (nunca pasa del 100%) y lo que falta se reparte
+	 * en partes iguales entre las SIGUIENTES; si es la última, el ajuste se reparte entre las anteriores. Se
+	 * aplica al terminar de escribir (onchange). */
+	function actualizarValorAbono(hito: HitoCobranza, texto: string) {
+		const abonos = hitosCobranza.filter((h) => !h.esAdelanto);
+		const index = abonos.findIndex((h) => h.id === hito.id);
+		if (index < 0) return;
+		const adelanto = hitosCobranza.find((h) => h.esAdelanto)?.importe ?? 0;
+		const total = Math.max(redondear2((Number(valorVenta) || 0) - adelanto), 0);
+		hito.valor = texto; // así el campo siempre vuelve a mostrar el valor final aunque se haya limitado
+		if (abonos.length === 1) {
+			asignarImporte(hito, total);
+			return;
+		}
+		const esUltima = index === abonos.length - 1;
+		const montoFijo = esUltima ? 0 : abonos.slice(0, index).reduce((s, h) => s + h.importe, 0);
+		const disponible = Math.max(redondear2(total - montoFijo), 0);
+		const monto = Math.min(Math.max(importeDesdeValor(hito), 0), disponible);
+		asignarImporte(hito, monto);
+		const ajuste = esUltima ? abonos.filter((h) => h.id !== hito.id) : abonos.slice(index + 1);
+		const partes = repartirMonto(redondear2(disponible - monto), ajuste.length);
+		ajuste.forEach((h, i) => asignarImporte(h, partes[i]));
+	}
+	function onTipoHitoChange(hito: HitoCobranza, tipo: string) {
+		hito.tipo = tipo === 'monto' ? 'monto' : 'porcentaje';
+		hito.valor = valorDesdeImporte(hito); // el importe no cambia, solo cómo se expresa
+	}
 	function agregarHitoCobranza() {
-		hitosCobranza = [
-			...hitosCobranza,
-			{ id: siguienteHitoCobranzaId++, descripcion: '', tipo: 'porcentaje', valor: '', fechaEstimada: fechaVenta || getFechaLocalHoy() }
-		];
+		hitosCobranza = [...hitosCobranza, nuevoAbono(0)];
+		repartirSaldoEnAbonos();
 	}
 	function eliminarHitoCobranza(id: number) {
+		if (hitosCobranza.find((h) => h.id === id)?.esAdelanto) return; // el adelanto se quita borrando su monto
 		hitosCobranza = hitosCobranza.filter((h) => h.id !== id);
+		if (hitosCobranza.some((h) => !h.esAdelanto)) repartirSaldoEnAbonos();
+		else ajustarAbonosAlSaldo(); // si quedaba saldo, vuelve el 1ER ABONO (la suma tiene que dar 100%)
 	}
-	function importeHitoCobranza(hito: HitoCobranza): number {
-		const valor = Number(hito.valor) || 0;
-		if (hito.tipo === 'monto') return valor;
-		return Math.round(((Number(valorVenta) || 0) * valor) / 100 * 100) / 100;
-	}
-	const totalImporteCobranza = $derived(hitosCobranza.reduce((s, h) => s + importeHitoCobranza(h), 0));
+	// Si cambia el Valor venta, los porcentajes se recalculan sobre el nuevo total (el adelanto es plata fija:
+	// cambia su %) y la última cuota se ajusta al nuevo saldo.
+	$effect(() => {
+		void valorVenta;
+		untrack(() => {
+			if (hitosCobranza.length === 0) return;
+			for (const h of hitosCobranza) {
+				if (h.esAdelanto || h.tipo === 'monto') h.valor = valorDesdeImporte(h);
+				else h.importe = importeDesdeValor(h);
+			}
+			ajustarAbonosAlSaldo();
+		});
+	});
+	const totalImporteCobranza = $derived(redondear2(hitosCobranza.reduce((s, h) => s + h.importe, 0)));
 	const totalPorcentajeCobranza = $derived(
 		Number(valorVenta) > 0 ? (totalImporteCobranza / Number(valorVenta)) * 100 : 0
 	);
-	const saldoCobranza = $derived((Number(valorVenta) || 0) - totalImporteCobranza);
+	const saldoCobranza = $derived(redondear2((Number(valorVenta) || 0) - totalImporteCobranza));
+	/** "Saldo" que se muestra en Forma de cobranza (a pedido del usuario): Valor venta − Adelanto, lo que queda por
+	 * cobrar en las cuotas. saldoCobranza (arriba) sigue siendo el control de que todo sume el 100%. */
+	const saldoPorCobrar = $derived(redondear2((Number(valorVenta) || 0) - (hitosCobranza.find((h) => h.esAdelanto)?.importe ?? 0)));
 
 	// Generation fields
 	// "Tipo de proyecto"/"Estado del predio"/"Tipo de edificación" (Consultoría) — dropdowns de
@@ -273,6 +404,7 @@
 	$effect(() => {
 		if (isOpen) {
 			saveError = '';
+			marcarFaltantes = false;
 			// A pedido del usuario: en el pop up de NUEVA venta, "Información general" arranca
 			// desplegada y "Características del proyecto nuevo" arranca colapsada (al revés que en
 			// edición, donde "Información general" arranca colapsada — ya establecido antes).
@@ -346,14 +478,9 @@
 			// <input type="date"> por la diferencia de huso horario.
 			fechaVenta = ((data.fecha_inicio_plan || data.created_at) as string | null)?.slice(0, 10) || getFechaLocalHoy();
 			selectedClienteId = data.id_cliente ? String(data.id_cliente) : '';
-			// Blindaje: el cliente de ESTA venta puede no estar (todavía, o nunca) en `clientes` — la
-			// carga general (loadClientes) es asíncrona y puede no haber terminado, además de haber
-			// tenido antes un tope de 200 registros (ver loadClientes). Sin su propia opción en la
-			// lista, el <select> de "Clientes" se ve vacío aunque selectedClienteId sí tenga el id
-			// correcto. `data.cliente` ya viene con el nombre por el JOIN de este mismo select.
-			if (data.id_cliente && !clientes.some((c) => String(c.id_cliente) === String(data.id_cliente))) {
-				clientes = [...clientes, { id_cliente: data.id_cliente, nombre: (data as any).cliente?.nombre || `Cliente #${data.id_cliente}` }];
-			}
+			// El cliente de ESTA venta siempre aparece en la lista, aunque esté dado de baja (ver `clientes` y
+			// opcionesClientes): la lista compartida trae todos los clientes y se completa sola al cargar.
+			void cargarClientes();
 			nuevoClienteNombre = '';
 			valorVenta = data.precio_venta != null ? String(data.precio_venta) : '';
 			comisionPorcentaje = data.comision_asesor != null ? String(data.comision_asesor) : '';
@@ -592,7 +719,7 @@ async function copiarCodigoGenerado() {
 
 	async function ensureCliente(nombre: string) {
 		console.log('[NuevaVentaModal] ensureCliente() iniciado con nombre:', nombre);
-		const trimmed = String(nombre || '').trim();
+		const trimmed = String(nombre || '').trim().toUpperCase(); // nombres de clientes siempre en MAYÚSCULAS
 		if (!trimmed) {
 			console.log('[NuevaVentaModal] Nombre vacío, retornando null');
 			return null;
@@ -603,6 +730,7 @@ async function copiarCodigoGenerado() {
 			.from('cliente')
 			.select('id_cliente')
 			.ilike('nombre', trimmed)
+			.neq('estado', 'baja')
 			.limit(1)
 			.maybeSingle();
 
@@ -632,23 +760,10 @@ async function copiarCodigoGenerado() {
 		return inserted?.id_cliente ?? null;
 	}
 
+	/** La lista de clientes vive en la lista compartida ($lib/stores/clientes.svelte.ts): acá solo se asegura
+	 * que esté cargada (la mantiene al día el tiempo real). */
 	async function loadClientes() {
-		console.log('[NuevaVentaModal] loadClientes() iniciado');
-		try {
-			console.log('[NuevaVentaModal] Consultando supabase.from("cliente")...');
-			// Sin .limit(): con un tope fijo, un cliente que quedara fuera de los primeros N (orden
-			// alfabético) hacía que el <select> de "Clientes" no tuviera ninguna opción que calzara con
-			// el id_cliente ya guardado de la venta — se veía vacío en Editar Venta aunque el dato sí
-			// estuviera ahí.
-			const { data, error } = await supabase.from('cliente').select('id_cliente,nombre').order('nombre', { ascending: true });
-			if (error) throw error;
-			clientes = data || [];
-			console.log(`[NuevaVentaModal] ✓ ${clientes.length} clientes cargados`);
-			console.log('[NuevaVentaModal] Lista de clientes:', clientes.map(c => ({ id: c.id_cliente, nombre: c.nombre })));
-		} catch (err) {
-			console.error('[NuevaVentaModal] ❌ Error cargando clientes:', err);
-			clientes = [];
-		}
+		await cargarClientes();
 	}
 
 	async function loadCurrentAsesor() {
@@ -907,6 +1022,68 @@ async function copiarCodigoGenerado() {
 		!!adelantoFecha
 	);
 
+	/** A pedido del usuario: "Cerrar venta" ya no queda deshabilitado — al presionarlo con algo pendiente se
+	 * marcan en rojo los campos que faltan (mismo criterio que canClose/canCloseCreate, campo por campo) y se
+	 * lleva la vista al primero para poder completarlo. El orden es el de la pantalla. */
+	type CampoCierre = { clave: string; etiqueta: string };
+	const CAMPOS_INFO_GENERAL = new Set(['cliente', 'departamento', 'provincia', 'distrito', 'tipoVenta', 'codigo', 'fechaVenta', 'valorVenta', 'comision', 'proformas', 'adelantoComprobante', 'adelantoMonto']);
+	const CAMPOS_CARACTERISTICAS = new Set(['tipoProyecto', 'estadoPredio', 'tipoEdificacion', 'numeroPisos']);
+	function camposFaltantesCierre(): CampoCierre[] {
+		const f: CampoCierre[] = [];
+		const falta = (cond: boolean, clave: string, etiqueta: string) => { if (cond) f.push({ clave, etiqueta }); };
+		falta(!selectedClienteId || selectedClienteId === '__new__', 'cliente', 'Cliente (elige uno de la lista)');
+		falta(!departamento, 'departamento', 'Departamento');
+		falta(!provincia, 'provincia', 'Provincia');
+		falta(!distrito, 'distrito', 'Distrito');
+		falta(caracteristicasTab === null, 'tipoVenta', 'Tipo de Proyecto');
+		falta(!fechaVenta, 'fechaVenta', 'Fecha de venta');
+		falta(!(Number(valorVenta) > 0), 'valorVenta', 'Valor venta');
+		falta(comisionPorcentaje === '' || Number.isNaN(Number(comisionPorcentaje)), 'comision', 'Comisión (%)');
+		if (mode === 'create') {
+			falta(proformaFiles.length === 0, 'proformas', 'Proformas (agrega al menos una)');
+			falta(proformaFiles.length > 0 && selectedFinalFileIndex === null, 'proformas', 'Proforma final (marca una)');
+			falta(!adelantoFile, 'adelantoComprobante', 'Comprobante del adelanto');
+			falta(!(Number(adelantoMonto) > 0) || Number(adelantoMonto) > Number(valorVenta), 'adelantoMonto', 'Monto del adelanto (mayor a 0 y no mayor al Valor venta)');
+			falta(!adelantoFecha, 'adelantoMonto', 'Fecha del adelanto');
+		} else {
+			falta(selectedFinalId === null, 'proformasGestion', 'Proforma final (marca una)');
+			falta(!(Number(montoFinalVenta) > 0), 'montoFinal', 'Monto final de la venta');
+			if (!adelantoYaRegistrado) {
+				falta(!adelantoFile, 'adelantoGestion', 'Comprobante del adelanto');
+				falta(!(Number(adelantoMonto) > 0) || Number(adelantoMonto) > Number(montoFinalVenta), 'adelantoMontoGestion', 'Monto del adelanto (mayor a 0 y no mayor al monto final)');
+				falta(!adelantoFecha, 'adelantoFechaGestion', 'Fecha del adelanto');
+			}
+		}
+		if (caracteristicasTab === 'consultoria') {
+			falta(!tipoProyecto, 'tipoProyecto', 'Tipo de proyecto');
+			falta(!estadoPredio, 'estadoPredio', 'Estado del predio');
+			falta(!tipoEdificacion, 'tipoEdificacion', 'Tipo de edificación');
+			falta(!(Number(numeroPisos) > 0), 'numeroPisos', 'Número de pisos');
+		}
+		// El código se arma solo con los datos de arriba; solo se avisa si todo lo demás ya está.
+		falta(f.length === 0 && !proyectoNombre.trim(), 'codigo', 'Código de proyecto');
+		return f;
+	}
+	let marcarFaltantes = $state(false);
+	const faltantesCierre = $derived(marcarFaltantes ? camposFaltantesCierre() : []);
+	function faltaCampo(clave: string): boolean {
+		return faltantesCierre.some((c) => c.clave === clave);
+	}
+	/** Devuelve true si faltaba algo (y ya se avisó y se llevó la vista al primer campo). */
+	async function avisarCamposFaltantesCierre(): Promise<boolean> {
+		const lista = camposFaltantesCierre();
+		marcarFaltantes = lista.length > 0;
+		if (lista.length === 0) return false;
+		toast.error('Para cerrar la venta falta completar:', lista.map((c) => c.etiqueta).join(' · '));
+		if (lista.some((c) => CAMPOS_INFO_GENERAL.has(c.clave))) infoGeneralExpanded = true;
+		if (documentosCierreListos && lista.some((c) => CAMPOS_CARACTERISTICAS.has(c.clave))) caracteristicasExpanded = true;
+		await tick();
+		const el = document.querySelector<HTMLElement>(`[data-campo="${lista[0].clave}"]`);
+		el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		el?.querySelector<HTMLElement>('input:not([type=file]):not([readonly]):not([disabled]), select, button:not([disabled])')?.focus({ preventScroll: true });
+		return true;
+	}
+
 	function handleAdelantoFileGestion(event: Event) {
 		const file = (event.currentTarget as HTMLInputElement).files?.[0];
 		(event.currentTarget as HTMLInputElement).value = '';
@@ -1078,18 +1255,14 @@ async function copiarCodigoGenerado() {
 		// de guardar — mismo criterio que validarSumaFracciones en cuentasCobrar.service.ts (createCuentaCobrar
 		// más abajo la vuelve a validar igual, pero se corta acá para dar un mensaje claro sin llegar a
 		// insertar el proyecto y tener que deshacerlo).
-		if (caracteristicasTab === 'consultoria' && hitosCobranza.length > 0) {
-			for (const hito of hitosCobranza) {
-				if (!hito.descripcion.trim()) {
-					saveError = 'Cada hito de la Forma de cobranza debe tener una descripción.';
-					return null;
-				}
-				if (!(Number(hito.valor) > 0)) {
-					saveError = 'Cada hito de la Forma de cobranza debe tener un valor mayor a 0.';
+		if (mode === 'create' && hitosCobranza.length > 0) {
+			for (const [i, hito] of hitosCobranza.entries()) {
+				if (!(hito.importe > 0)) {
+					saveError = `La cuota ${nombreHitoCobranza(hito, i)} de la Forma de cobranza debe tener un valor mayor a 0.`;
 					return null;
 				}
 				if (!hito.fechaEstimada) {
-					saveError = 'Cada hito de la Forma de cobranza debe tener una fecha estimada.';
+					saveError = `La cuota ${nombreHitoCobranza(hito, i)} de la Forma de cobranza debe tener una fecha estimada.`;
 					return null;
 				}
 			}
@@ -1204,6 +1377,7 @@ async function copiarCodigoGenerado() {
 
 		const proformaDocIds: (number | null)[] = [];
 		let transaccionAdelanto: Transaccion | null = null;
+		let idCuentaCobrarCreada: number | null = null;
 		try {
 			if (contratoFile) {
 				const contratoUrl = await uploadDocument('contrato', contratoFile, nuevoProyectoId, proyectoNombre);
@@ -1236,42 +1410,11 @@ async function copiarCodigoGenerado() {
 				proformaDocIds.push(docData?.id_documento ?? null);
 			}
 
-			// Ticket #40: "Forma de cobranza" (solo Consultoría, ver hitosCobranza más arriba) — crea UNA
-			// Cuenta por Cobrar del proyecto con cada hito como cuota 'programado' (mismo mecanismo de
-			// fraccionamiento ya usado en Finanzas > Cuentas por Cobrar, ver createCuentaCobrar). El centro
-			// de costo compartido de Consultoría se asegura acá si el adelanto (más abajo) todavía no lo
-			// creó — getOrCrearCentroCostoCompartido es idempotente, no duplica nada si ya existe.
-			if (caracteristicasTab === 'consultoria' && hitosCobranza.length > 0) {
-				idCentroCosto = await getOrCrearCentroCostoCompartido(supabase, 'consultoria', nuevoProyectoId, proyectoNombre);
-				if (!idCentroCosto) throw new Error('No se pudo obtener el centro de costo de Consultoría para crear la Forma de cobranza.');
-
-				const fracciones = hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: importeHitoCobranza(h) }));
-				const cuentaResult = await createCuentaCobrar(
-					supabase,
-					{
-						id_cliente: clienteId,
-						id_centro_costo: idCentroCosto,
-						id_proyecto: nuevoProyectoId,
-						monto: precioVenta,
-						forma_pago: '3', // 'Por Porcentaje' — ver cuentaCobrar.config.ts
-						'condición_pago': hitosCobranza.length,
-						responsable: asesorFinal,
-						fecha_emision: fechaInicio,
-						moneda: 'PEN',
-						observaciones: 'Forma de cobranza definida al crear la venta.'
-					},
-					asesorFinal,
-					fracciones
-				);
-				if (!cuentaResult.success) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
-			}
-
-			// Adelanto inicial — mismo mecanismo que "Cerrar venta": asegura el centro de costo del
-			// proyecto y del cliente, sube el comprobante y crea la transacción (ingreso) de una vez.
-			// Requiere ambos (archivo Y monto) — el campo de monto ya viene deshabilitado en el formulario
-			// mientras no haya comprobante adjunto. Único caso en que el centro de costo del proyecto se
-			// crea ANTES de cerrar la venta (a pedido explícito del usuario, ver arriba): hace falta como
-			// destino de esta transacción.
+			// Adelanto inicial — asegura el centro de costo del proyecto y del cliente, sube el comprobante y
+			// crea la transacción (ingreso) de una vez. Requiere ambos (archivo Y monto) — el campo de monto ya
+			// viene deshabilitado en el formulario mientras no haya comprobante adjunto. Único caso en que el
+			// centro de costo del proyecto se crea ANTES de cerrar la venta (a pedido explícito del usuario, ver
+			// arriba): hace falta como destino de esta transacción.
 			if (adelantoFile && Number(adelantoMonto) > 0) {
 				// Obra: cada venta tiene su PROPIO centro de costo (comportamiento de siempre). Consultoría:
 				// TODAS las ventas de consultoría comparten UN ÚNICO centro de costo — a pedido explícito del
@@ -1290,33 +1433,84 @@ async function copiarCodigoGenerado() {
 					projectName: proyectoNombre
 				});
 
-				const transResult = await createTransaccion(
-					supabase,
-					{
-						tipo_alcance: 'externa',
-						id_centro_costo_origen: idCentroCliente,
-						id_centro_costo_destino: idCentroCosto,
-						fecha: fechaInicio,
-						monto_total: Number(adelantoMonto),
-						tipo: 'ingreso',
-						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
-						// porque adelantoMonto siempre se pide en Soles en este formulario. Sin esto,
-						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
-						// se creaba ni la transacción del adelanto ni la venta.
-						tipo_moneda: 'soles',
-						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
-						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento. Mismo bug que
-						// tipo_moneda arriba, esta vez por falta de categoria.
-						categoria: 'Adelanto',
-						estado: 'activo',
-						comprobante_url: comprobanteUrl,
-						descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
-					},
-					sessionEmail,
-					permisosState.userName || null
-				);
-				if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
-				transaccionAdelanto = transResult.data ?? null;
+				const filaAdelanto = hitosCobranza.find((h) => h.esAdelanto);
+				const payloadAdelanto = {
+					tipo_alcance: 'externa',
+					id_centro_costo_origen: idCentroCliente,
+					id_centro_costo_destino: idCentroCosto,
+					fecha: filaAdelanto?.fechaEstimada || fechaInicio,
+					monto_total: Number(adelantoMonto),
+					tipo: 'ingreso',
+					// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+					// porque adelantoMonto siempre se pide en Soles en este formulario. Sin esto,
+					// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
+					// se creaba ni la transacción del adelanto ni la venta.
+					tipo_moneda: 'soles',
+					// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+					// 'Adelanto' es la categoría de Ingreso correcta para este movimiento.
+					categoria: 'Adelanto',
+					// N° de cuota: con Forma de cobranza el adelanto es la cuota 1 ("Adelanto", ver acuerdoDePago.ts),
+					// así la lista de Transacciones lo nombra igual que el Resumen de cobro.
+					tipo_transaccion: hitosCobranza.some((h) => h.esAdelanto) ? '1' : null,
+					estado: 'activo',
+					comprobante_url: comprobanteUrl,
+					descripcion: `Adelanto inicial - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
+				};
+
+				if (filaAdelanto) {
+					// "Forma de cobranza": UNA Cuenta por Cobrar del proyecto por el Valor venta, con cada fila
+					// (ADELANTO, 1ER ABONO, ...) como cuota (mismo mecanismo de fraccionamiento de Finanzas >
+					// Cuentas por Cobrar, ver createCuentaCobrar). La cuota del ADELANTO se confirma en el acto
+					// como 'cobrado' con fn_confirmar_cobro, que crea la transacción del adelanto y la vincula a
+					// esa cuota en un solo paso — así la cuenta nace con el adelanto ya descontado del saldo.
+					const detalle = hitosCobranza
+						.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+						.join('; ');
+					const fechas = hitosCobranza.map((h) => h.fechaEstimada).sort();
+					const cuentaResult = await createCuentaCobrar(
+						supabase,
+						{
+							id_cliente: clienteId,
+							id_centro_costo: idCentroCosto,
+							id_proyecto: nuevoProyectoId,
+							monto: precioVenta,
+							forma_pago: '3', // 'Por Porcentaje' — ver cuentaCobrar.config.ts
+							'condición_pago': hitosCobranza.length,
+							responsable: asesorFinal,
+							fecha_emision: fechaInicio,
+							fecha_vencimiento: fechas[fechas.length - 1],
+							moneda: 'PEN',
+							observaciones: `Forma de cobranza definida al crear la venta — ${detalle}`
+						},
+						asesorFinal,
+						hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: h.importe }))
+					);
+					if (!cuentaResult.success || !cuentaResult.data) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
+					idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
+
+					// La cuota del adelanto: misma fecha y monto que la fila ADELANTO (la primera que calce).
+					const { data: cuotas, error: cuotasError } = await supabase
+						.from('cobros')
+						.select('id_cobro, monto, fecha_cobro')
+						.eq('id_cuenta_cobrar', idCuentaCobrarCreada)
+						.eq('estado_cobro', 'programado')
+						.order('fecha_cobro', { ascending: true })
+						.order('id_cobro', { ascending: true });
+					if (cuotasError) throw cuotasError;
+					const cuotaAdelanto = (cuotas ?? []).find(
+						(c: any) => Math.abs(Number(c.monto) - filaAdelanto.importe) < 0.01 && c.fecha_cobro === filaAdelanto.fechaEstimada
+					);
+					if (!cuotaAdelanto) throw new Error('No se encontró la cuota del adelanto en la Cuenta por Cobrar recién creada.');
+
+					const cobroResult = await confirmarCobroCobrado(supabase, cuotaAdelanto.id_cobro, payloadAdelanto, sessionEmail, permisosState.userName || null);
+					if (!cobroResult.success || !cobroResult.data?.id_transaccion) throw new Error(cobroResult.message || 'No se pudo registrar la transacción del adelanto.');
+					const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', cobroResult.data.id_transaccion).single();
+					transaccionAdelanto = (tx as Transaccion) ?? null;
+				} else {
+					const transResult = await createTransaccion(supabase, payloadAdelanto, sessionEmail, permisosState.userName || null);
+					if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+					transaccionAdelanto = transResult.data ?? null;
+				}
 			}
 		} catch (uploadError) {
 			console.error('[NuevaVentaModal] Error al subir documentos:', uploadError);
@@ -1326,6 +1520,12 @@ async function copiarCodigoGenerado() {
 			// extrae message/code/details/hint de un error de Supabase, mismo criterio que el resto de
 			// este archivo.
 			saveError = describeError(uploadError);
+			// La Cuenta por Cobrar de la Forma de cobranza (y la transacción del adelanto si llegó a crearse,
+			// ver deleteCuentaCobrar) no debe quedar colgando de una venta que se deshace.
+			if (idCuentaCobrarCreada != null) {
+				const borrada = await deleteCuentaCobrar(supabase, idCuentaCobrarCreada, isAdmin());
+				if (!borrada.success) saveError += `\nOJO: pudo quedar la Cuenta por Cobrar #${idCuentaCobrarCreada}; avisa a un administrador.`;
+			}
 			// Tickets #35/#36: el proyecto ya está insertado y, si esto falla, quedaba huérfano en "borrador" — y cada
 			// reintento creaba otro (3 clics = 3 ventas duplicadas). Se deshace lo creado para poder reintentar limpio.
 			const revertido = await revertirVentaHuerfana(nuevoProyectoId);
@@ -1563,7 +1763,7 @@ async function copiarCodigoGenerado() {
 						</button>
 						{#if infoGeneralExpanded}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-							<div class="flex flex-col gap-1 md:col-span-1">
+							<div data-campo="cliente" class:campo-faltante={faltaCampo('cliente')} class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Clientes *</label>
 								{#if mode === 'edit'}
 									<!-- A pedido del usuario: en Editar Venta el cliente ya quedó fijado al crear la
@@ -1574,16 +1774,16 @@ async function copiarCodigoGenerado() {
 									     buscador que el resto de Finanzas/Facturación (SelectConSaldo.svelte). -->
 									<SelectConSaldo
 										value={selectedClienteId}
-										options={[...clientes.map((c) => ({ value: String(c.id_cliente), label: c.nombre })), { value: '__new__', label: '+ Nuevo cliente' }]}
+										options={[...opcionesClientes([selectedClienteId]), { value: '__new__', label: '+ Nuevo cliente' }]}
 										placeholder="-- Selecciona cliente --"
 										onchange={(value) => (selectedClienteId = value)}
 									/>
 									{#if selectedClienteId === '__new__'}
-										<input type="text" bind:value={nuevoClienteNombre} placeholder="Nombre del nuevo cliente" class="mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+										<input type="text" bind:value={nuevoClienteNombre} autocapitalize="characters" placeholder="Nombre del nuevo cliente" class="uppercase mt-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
 									{/if}
 								{/if}
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="departamento" class:campo-faltante={faltaCampo('departamento')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Departamento *</label>
 								<SelectConSaldo
 									value={departamento}
@@ -1597,7 +1797,7 @@ async function copiarCodigoGenerado() {
 								}}
 								/>
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="provincia" class:campo-faltante={faltaCampo('provincia')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Provincia *</label>
 								<SelectConSaldo
 									value={provincia}
@@ -1606,7 +1806,7 @@ async function copiarCodigoGenerado() {
 									onchange={(v) => { provincia = v; distrito = ''; distritoNumero = null; }}
 								/>
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="distrito" class:campo-faltante={faltaCampo('distrito')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Distrito *</label>
 								<!-- A pedido del usuario: en Obra, elegir un distrito ya usado en otro proyecto le
 								     agrega un número consecutivo al guardar (ej. "Breña_1", "Breña_2" — ver
@@ -1626,7 +1826,7 @@ async function copiarCodigoGenerado() {
 									}}
 								/>
 							</div>
-							<div class="flex flex-col gap-1 md:col-span-1">
+							<div data-campo="tipoVenta" class:campo-faltante={faltaCampo('tipoVenta')} class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de Proyecto *</label>
 								<!-- A pedido explícito del usuario: define el prefijo del "Código de proyecto" de al
 								     lado (Consultoría -> sin prefijo, Obra -> el propio tipo_obra elegido, ver
@@ -1648,14 +1848,14 @@ async function copiarCodigoGenerado() {
 									/>
 								</div>
 							</div>
-							<div class="flex flex-col gap-1 md:col-span-1">
+							<div data-campo="codigo" class:campo-faltante={faltaCampo('codigo')} class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Código de proyecto</label>
 								<input type="text" readonly value={codigoGenerado} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
 								<span class="text-[10px] text-slate-400 mt-0.5">
 									{caracteristicasTab === null ? 'Elige el Tipo de Proyecto para generarlo' : 'Se generará automáticamente'}
 								</span>
 							</div>
-							<div class="flex flex-col gap-1 md:col-span-1">
+							<div data-campo="fechaVenta" class:campo-faltante={faltaCampo('fechaVenta')} class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Fecha de venta *</label>
 								<input type="date" bind:value={fechaVenta} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
@@ -1671,7 +1871,7 @@ async function copiarCodigoGenerado() {
 							     venta ya cerrada (la sección de cierre desaparece del todo, así que este vuelve
 							     a ser el único lugar donde se ve el precio final). -->
 							{#if !(mode === 'edit' && !ventaFinalizada)}
-							<div class="flex flex-col gap-1 md:col-span-1">
+							<div data-campo="valorVenta" class:campo-faltante={faltaCampo('valorVenta')} class="flex flex-col gap-1 md:col-span-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Valor venta (S/) *</label>
 								<input
 									type="text"
@@ -1685,7 +1885,7 @@ async function copiarCodigoGenerado() {
 								<input type="text" bind:value={direccionPredio} placeholder="Ej. Jr. Los Álamos 123" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 							</div>
 							<div class="grid grid-cols-2 gap-2 md:col-span-1">
-								<div class="flex flex-col gap-1">
+								<div data-campo="comision" class:campo-faltante={faltaCampo('comision')} class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Comisión (%) *</label>
 									<input type="number" bind:value={comisionPorcentaje} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 								</div>
@@ -1696,7 +1896,7 @@ async function copiarCodigoGenerado() {
 							</div>
 							{#if mode === 'create'}
 							<div class="grid grid-cols-2 gap-2 md:col-span-1">
-								<div class="flex flex-col gap-1">
+								<div data-campo="proformas" class:campo-faltante={faltaCampo('proformas')} class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Proformas</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
@@ -1754,7 +1954,7 @@ async function copiarCodigoGenerado() {
 										{/if}
 									</label>
 								</div>
-								<div class="flex flex-col gap-1">
+								<div data-campo="adelantoComprobante" class:campo-faltante={faltaCampo('adelantoComprobante')} class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Comprobante del adelanto</label>
 									<label class="cursor-pointer px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2 transition-colors">
 										<i class="fas fa-file-pdf text-rose-500"></i>
@@ -1766,13 +1966,14 @@ async function copiarCodigoGenerado() {
 										{/if}
 									</label>
 								</div>
-								<div class="flex flex-col gap-1">
+								<div data-campo="adelantoMonto" class:campo-faltante={faltaCampo('adelantoMonto')} class="flex flex-col gap-1">
 									<label class="text-xs font-semibold text-[#0f3b5e]">Monto del adelanto (S/)</label>
 									<input
 										type="number"
 										min="0.01"
 										step="0.01"
-										bind:value={adelantoMonto}
+										value={adelantoMonto}
+										oninput={(e) => { adelantoMonto = e.currentTarget.value; sincronizarAdelantoCobranza(); }}
 										disabled={!adelantoFile}
 										placeholder="0.00"
 										title={!adelantoFile ? 'Adjunta el comprobante para poder ingresar el monto del adelanto' : ''}
@@ -1788,20 +1989,22 @@ async function copiarCodigoGenerado() {
 						{/if}
 					</section>
 
-					{#if mode === 'create' && caracteristicasTab === 'consultoria'}
-					<!-- Ticket #40: solo aplica a Consultoría — Obra sigue con valorización (fuera del
-					     alcance de este popup, ver comentario junto a hitosCobranza más arriba). -->
+					{#if mode === 'create' && Number(adelantoMonto) > 0}
+					<!-- Forma de cobranza: se abre sola al ingresar el Monto del adelanto (Consultoría y Obra) — ver
+					     hitosCobranza más arriba. -->
 					<section class="border-t border-slate-100 pt-6">
 						<h3 class="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2">
 							<div class="w-1.5 h-4 bg-blue-600 rounded-full"></div>
 							Forma de cobranza
 						</h3>
 						<p class="text-xs text-slate-400 mb-3">
-							Define los hitos de cobro de esta venta — se registran como Cuenta por Cobrar del proyecto al guardar.
-							Opcional: si lo dejas vacío, puedes crear la Cuenta por Cobrar más adelante desde Finanzas &gt; Cuentas por Cobrar.
+							El adelanto y las cuotas se registran como una Cuenta por Cobrar del proyecto al guardar (el adelanto queda como cobrado).
+							La suma siempre es 100%: el adelanto cambia solo desde "Monto del adelanto"; al cambiar una cuota, las siguientes se recalculan solas.
 						</p>
+						{#if !(Number(valorVenta) > 0)}
+							<p class="text-xs text-amber-600 mb-2">Ingresa el Valor venta para calcular los porcentajes y el saldo.</p>
+						{/if}
 
-						{#if hitosCobranza.length > 0}
 						<div class="overflow-x-auto">
 							<table class="w-full text-sm border-collapse">
 								<thead>
@@ -1820,62 +2023,72 @@ async function copiarCodigoGenerado() {
 										<tr class="border-b border-slate-100">
 											<td class="py-2 pr-2 text-slate-400">{i + 1}</td>
 											<td class="py-2 pr-2">
-												<input type="text" bind:value={hito.descripcion} placeholder="Ej. Adelanto al contratar" class="w-full min-w-[160px] px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+												<input type="text" value={nombreHitoCobranza(hito, i)} readonly tabindex="-1" title="El nombre de la cuota es automático" class="w-full min-w-[140px] px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 font-semibold cursor-not-allowed outline-none">
 											</td>
 											<td class="py-2 pr-2">
 												<div class="min-w-[130px]">
 													<SelectConSaldo
 														value={hito.tipo}
 														options={[{ value: 'porcentaje', label: 'Porcentaje' }, { value: 'monto', label: 'Monto fijo' }]}
-														onchange={(v) => (hito.tipo = v === 'monto' ? 'monto' : 'porcentaje')}
+														onchange={(v) => onTipoHitoChange(hito, String(v))}
+														disabled={hito.esAdelanto}
 													/>
 												</div>
 											</td>
 											<td class="py-2 pr-2">
 												<div class="flex items-center gap-1">
 													{#if hito.tipo === 'monto'}<span class="text-xs text-slate-400 shrink-0">S/</span>{/if}
-													<input type="number" min="0" step="0.01" bind:value={hito.valor} class="w-24 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+													{#if hito.esAdelanto}
+														<input type="text" value={hito.valor} readonly tabindex="-1" title="Cambia desde el campo Monto del adelanto" class="w-24 px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed outline-none">
+													{:else}
+														<input type="number" min="0" step="0.01" inputmode="decimal" value={hito.valor} onchange={(e) => actualizarValorAbono(hito, e.currentTarget.value)} class="w-24 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+													{/if}
 													{#if hito.tipo === 'porcentaje'}<span class="text-xs text-slate-400 shrink-0">%</span>{/if}
 												</div>
 											</td>
-											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(importeHitoCobranza(hito))}</td>
+											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(hito.importe)}</td>
 											<td class="py-2 pr-2">
-												<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+												{#if hito.esAdelanto}
+													<input type="date" value={hito.fechaEstimada} readonly tabindex="-1" title="Fecha de la venta" class="px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed outline-none">
+												{:else}
+													<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+												{/if}
 											</td>
 											<td class="py-2 text-right">
-												<button type="button" onclick={() => eliminarHitoCobranza(hito.id)} class="text-slate-400 hover:text-rose-600 p-1.5 rounded transition-colors" title="Quitar hito" aria-label="Quitar hito">
-													<i class="fas fa-trash-alt"></i>
-												</button>
+												{#if hito.esAdelanto}
+													<span class="text-slate-300 p-1.5 inline-block cursor-not-allowed" title="El adelanto se quita borrando el Monto del adelanto"><i class="fas fa-trash-alt"></i></span>
+												{:else}
+													<button type="button" onclick={() => eliminarHitoCobranza(hito.id)} class="text-slate-400 hover:text-rose-600 p-1.5 rounded transition-colors" title="Quitar cuota" aria-label="Quitar cuota">
+														<i class="fas fa-trash-alt"></i>
+													</button>
+												{/if}
 											</td>
 										</tr>
 									{/each}
 								</tbody>
 							</table>
 						</div>
-						{/if}
 
 						<button type="button" onclick={agregarHitoCobranza} class="mt-3 px-3 py-2 border border-blue-200 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-50 flex items-center gap-1.5 transition-colors">
 							<i class="fas fa-plus"></i> Agregar cuota
 						</button>
 
-						{#if hitosCobranza.length > 0}
-							<div class="mt-4 grid grid-cols-3 gap-3 max-w-lg">
-								<div class="text-center p-2 bg-slate-50 rounded-lg">
-									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total porcentaje</p>
-									<p class="text-sm font-bold text-slate-700">{totalPorcentajeCobranza.toFixed(0)} %</p>
-								</div>
-								<div class="text-center p-2 bg-slate-50 rounded-lg">
-									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total (S/)</p>
-									<p class="text-sm font-bold text-slate-700">{formatCurrency(totalImporteCobranza)}</p>
-								</div>
-								<div class="text-center p-2 bg-slate-50 rounded-lg">
-									<p class="text-[10px] text-slate-400 uppercase tracking-wide">Saldo (S/)</p>
-									<p class={`text-sm font-bold ${Math.abs(saldoCobranza) < 0.01 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrency(saldoCobranza)}</p>
-								</div>
+						<div class="mt-4 grid grid-cols-3 gap-3 max-w-lg">
+							<div class="text-center p-2 bg-slate-50 rounded-lg">
+								<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total porcentaje</p>
+								<p class="text-sm font-bold text-slate-700">{formatearValor(totalPorcentajeCobranza)} %</p>
 							</div>
-							{#if Math.abs(saldoCobranza) >= 0.01}
-								<p class="text-xs text-rose-500 mt-2">La suma de los hitos debe cuadrar exactamente con el Valor venta (S/) para poder guardar.</p>
-							{/if}
+							<div class="text-center p-2 bg-slate-50 rounded-lg">
+								<p class="text-[10px] text-slate-400 uppercase tracking-wide">Total (S/)</p>
+								<p class="text-sm font-bold text-slate-700">{formatCurrency(totalImporteCobranza)}</p>
+							</div>
+							<div class="text-center p-2 bg-slate-50 rounded-lg">
+								<p class="text-[10px] text-slate-400 uppercase tracking-wide">Saldo (S/)</p>
+								<p class="text-sm font-bold text-rose-600">{formatCurrency(saldoPorCobrar)}</p>
+							</div>
+						</div>
+						{#if Math.abs(saldoCobranza) >= 0.01}
+							<p class="text-xs text-rose-500 mt-2">La suma del adelanto y las cuotas debe cuadrar exactamente con el Valor venta (S/) para poder guardar.</p>
 						{/if}
 					</section>
 					{/if}
@@ -1896,7 +2109,7 @@ async function copiarCodigoGenerado() {
 						{/if}
 
 						<!-- Proformas -->
-						<div class="mt-4">
+						<div data-campo="proformasGestion" class:campo-faltante={faltaCampo('proformasGestion')} class="mt-4">
 							<div class="flex items-center justify-between mb-3">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide">Proformas</h4>
 								{#if !ventaFinalizada}
@@ -1994,7 +2207,7 @@ async function copiarCodigoGenerado() {
 
 						<!-- Cierre financiero: monto final de la venta + adelanto inicial -->
 						{#if !ventaFinalizada}
-							<div class="mt-6 border-t border-slate-100 pt-5">
+							<div data-campo="montoFinal" class:campo-faltante={faltaCampo('montoFinal')} class="mt-6 border-t border-slate-100 pt-5">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Monto final de la venta</h4>
 								<p class="text-xs text-slate-400 mb-3">Confirma el valor definitivo de la venta — obligatorio para cerrarla.</p>
 								<div class="flex flex-col gap-1 mb-1 max-w-xs">
@@ -2003,7 +2216,7 @@ async function copiarCodigoGenerado() {
 								</div>
 							</div>
 
-							<div class="mt-6 border-t border-slate-100 pt-5">
+							<div data-campo="adelantoGestion" class:campo-faltante={faltaCampo('adelantoGestion')} class="mt-6 border-t border-slate-100 pt-5">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Adelanto inicial</h4>
 								{#if isCheckingAdelanto}
 									<p class="text-xs text-slate-400">Verificando si ya se registró un adelanto...</p>
@@ -2015,11 +2228,11 @@ async function copiarCodigoGenerado() {
 								{:else}
 									<p class="text-xs text-slate-400 mb-3">Comprobante del pago inicial que confirma la venta — obligatorio para cerrarla.</p>
 									<div class="grid grid-cols-2 gap-3 mb-1 max-w-md">
-										<div class="flex flex-col gap-1">
+										<div data-campo="adelantoMontoGestion" class:campo-faltante={faltaCampo('adelantoMontoGestion')} class="flex flex-col gap-1">
 											<label class="text-xs font-semibold text-[#0f3b5e]">Monto (S/)</label>
 											<input type="number" min="0.01" step="0.01" bind:value={adelantoMonto} placeholder="0.00" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 										</div>
-										<div class="flex flex-col gap-1">
+										<div data-campo="adelantoFechaGestion" class:campo-faltante={faltaCampo('adelantoFechaGestion')} class="flex flex-col gap-1">
 											<label class="text-xs font-semibold text-[#0f3b5e]">Fecha</label>
 											<input type="date" bind:value={adelantoFecha} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 										</div>
@@ -2119,7 +2332,7 @@ async function copiarCodigoGenerado() {
 							</p>
 						{:else if caracteristicasTab === 'consultoria'}
 						<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-							<div class="flex flex-col gap-1">
+							<div data-campo="tipoProyecto" class:campo-faltante={faltaCampo('tipoProyecto')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de proyecto *</label>
 								<SelectConSaldo
 	value={tipoProyecto}
@@ -2129,7 +2342,7 @@ async function copiarCodigoGenerado() {
 	onchange={(v) => (tipoProyecto = v)}
 />
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="estadoPredio" class:campo-faltante={faltaCampo('estadoPredio')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Estado del predio *</label>
 								<SelectConSaldo
 	value={estadoPredio}
@@ -2139,7 +2352,7 @@ async function copiarCodigoGenerado() {
 	onchange={(v) => (estadoPredio = v)}
 />
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="tipoEdificacion" class:campo-faltante={faltaCampo('tipoEdificacion')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Tipo de edificación *</label>
 								<SelectConSaldo
 	value={tipoEdificacion}
@@ -2149,7 +2362,7 @@ async function copiarCodigoGenerado() {
 	onchange={(v) => (tipoEdificacion = v)}
 />
 							</div>
-							<div class="flex flex-col gap-1">
+							<div data-campo="numeroPisos" class:campo-faltante={faltaCampo('numeroPisos')} class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
 								<input type="number" bind:value={numeroPisos} disabled={!documentosCierreListos} class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 							</div>
@@ -2358,8 +2571,8 @@ async function copiarCodigoGenerado() {
 				</button>
 				{#if mode === 'edit' && !ventaFinalizada}
 					<button
-						onclick={handleCerrarVenta}
-						disabled={!canClose || isClosing}
+						onclick={async () => { if (!canClose) { await avisarCamposFaltantesCierre(); return; } marcarFaltantes = false; handleCerrarVenta(); }}
+						disabled={isClosing}
 						title={!canClose ? 'Completa todos los campos obligatorios (*) de Información general y Características, marca una proforma como final, confirma el monto final de la venta y adjunta el comprobante del adelanto (monto ≤ monto final, con fecha) para poder cerrar la venta' : ''}
 						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
 					>
@@ -2372,8 +2585,8 @@ async function copiarCodigoGenerado() {
 				{/if}
 				{#if mode === 'create'}
 					<button
-						onclick={handleGuardarYCerrarVenta}
-						disabled={!canCloseCreate || isClosing || isSaving}
+						onclick={async () => { if (!canCloseCreate) { await avisarCamposFaltantesCierre(); return; } marcarFaltantes = false; handleGuardarYCerrarVenta(); }}
+						disabled={isClosing || isSaving}
 						title={!canCloseCreate ? 'Completa todos los campos obligatorios (*) de Información general y Características, agrega al menos una proforma y márcala como final, y adjunta el comprobante del adelanto (monto ≤ valor de venta, con fecha) para registrar y cerrar la venta de una vez' : ''}
 						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
 					>
@@ -2390,3 +2603,26 @@ async function copiarCodigoGenerado() {
 {/if}
 
 <DocumentPreviewModal open={previewOpen} url={previewUrl} title={previewTitle} onClose={() => (previewOpen = false)} />
+
+<style>
+	/* Campo que falta para "Cerrar venta" (ver avisarCamposFaltantesCierre): borde rojo + aviso debajo. */
+	.campo-faltante :global(input:not([type='file'])),
+	.campo-faltante :global(select),
+	.campo-faltante :global(button),
+	.campo-faltante :global(label.cursor-pointer) {
+		border-color: #f43f5e !important;
+		box-shadow: 0 0 0 2px rgb(244 63 94 / 0.2);
+	}
+	.campo-faltante > :global(label:first-child),
+	.campo-faltante :global(h4) {
+		color: #e11d48 !important;
+	}
+	.campo-faltante::after {
+		content: 'Completa este campo';
+		display: block;
+		margin-top: 2px;
+		font-size: 11px;
+		font-weight: 600;
+		color: #e11d48;
+	}
+</style>
