@@ -33,8 +33,12 @@
 		fields,
 		filters = $bindable(),
 		dynamicOptions = {},
-		onChange
+		onChange,
+		flotante = false
 	}: {
+		/** true = sin margen inferior propio y el panel se abre flotando debajo del botón (para ponerlo en la
+		 * misma línea que otros controles, ver Cuentas por Cobrar/Pagar). */
+		flotante?: boolean;
 		fields: FieldConfig[];
 		filters: ColumnFilters;
 		dynamicOptions?: Record<string, FieldOption[]>;
@@ -90,7 +94,7 @@
 	}
 </script>
 
-<div class="mb-4">
+<div class={flotante ? 'relative' : 'mb-4'}>
 	<button
 		type="button"
 		onclick={() => (expanded = !expanded)}
@@ -104,7 +108,7 @@
 	</button>
 
 	{#if expanded}
-		<div class="mt-2 p-4 bg-white rounded-xl border border-slate-200">
+		<div class={flotante ? 'absolute left-0 top-full z-30 mt-2 w-[min(28rem,calc(100vw-2rem))] p-4 bg-white rounded-xl border border-slate-200 shadow-lg' : 'mt-2 p-4 bg-white rounded-xl border border-slate-200'}>
 			<div class="flex flex-col gap-4 max-w-md">
 				{#each filterableFields as field (field.key)}
 					{@const kind = columnFilterKind(field)}

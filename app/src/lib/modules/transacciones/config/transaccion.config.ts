@@ -188,6 +188,9 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Material', label: 'Material' },
 			{ value: 'Equipos', label: 'Equipos' },
 			{ value: 'Gastos generales', label: 'Gastos generales' },
+			// Nombre del grupo de Obra tal cual (TIPOS_GASTO_OBRA en TransaccionModal.svelte): desde que se quitó
+			// el selector de Subcategoría, la Categoría guardada es el grupo elegido.
+			{ value: 'Gastos Generales', label: 'Gastos Generales' },
 			// Catálogo propio para Centro de Costo "Corporativo" (tipo 'bolsa general') — resuelto en
 			// TransaccionModal.svelte (ver esCorporativo/CATEGORIA_CORPORATIVO_INGRESO/
 			// CATEGORIA_CORPORATIVO_EGRESO). Solo 'Inyecciones'/'Inversión' son nuevos — el resto ya
@@ -340,6 +343,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'G. Operativos', label: 'G. Operativos' },
 			{ value: 'G. Administrativos', label: 'G. Administrativos' },
 			{ value: 'Materiales', label: 'Materiales' },
+			// 'Servicio' (singular, distinto de 'Servicios') — lo ofrece "Confirmar Cobro — Transacción de
+			// Respaldo" (CATEGORIA_CONFIRMAR_COBRO en TransaccionModal.svelte); sin esta entrada, elegirlo daba
+			// "Categoría tiene un valor no permitido" y no dejaba confirmar el cobro.
+			{ value: 'Servicio', label: 'Servicio' },
 			{ value: 'Préstamos', label: 'Préstamos' },
 			{ value: 'Inyección', label: 'Inyección' }
 		],

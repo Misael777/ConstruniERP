@@ -181,56 +181,82 @@ async function generarCodigoCentroCostoManual(client: SupabaseClient, tipo: stri
 	return `${prefijo}-${String(siguiente).padStart(3, '0')}`;
 }
 
-/** `tipo` del centro de costo Corporativo (la etiqueta visible es "Corporativo"/"Corporativa", el valor
- * en BD sigue siendo 'bolsa general', ver ticket #24). A pedido del usuario es ÚNICO: se genera solo
- * (getOrCrearCentroCostoCorporativo), no se crea a mano, no se da de baja, no cambia de tipo y solo se
- * edita tras autorización de administrador (candado en centros-de-costos/+page.svelte). El índice
- * único uq_centro_costo_corporativo_activo (migración 20260929155944) lo garantiza en la BD. */
+/** Tipos de los centros de costo ÚNICOS del sistema — a pedido del usuario, solo existe UNO de cada uno:
+ *   - Corporativo: `tipo` 'bolsa general' (la etiqueta visible es "Corporativo"; el valor en BD no cambió,
+ *     ver ticket #24).
+ *   - Consultoría general: `tipo` 'consultoria' SIN proyecto. Los centros de consultoría de cada venta
+ *     (con id_proyecto, ver getOrCrearCentroCostoCompartido) NO cuentan: son uno por venta.
+ * Se generan solos (getOrCrearCentrosCostoUnicos), no se crean a mano, no se dan de baja, no cambian de tipo
+ * y solo se editan tras autorización de administrador (candado en centros-de-costos/+page.svelte). En la BD
+ * los garantizan uq_centro_costo_corporativo_activo (migración 20260929155944) y
+ * uq_centro_costo_consultoria_compartido (baseline). */
 export const TIPO_CORPORATIVO = 'bolsa general';
-const NOMBRE_CORPORATIVO = 'CORPORATIVO';
-const MENSAJE_CORPORATIVO_UNICO =
-	'El centro de costo Corporativo es único y se genera automáticamente: no se puede crear otro, darlo de baja ni cambiarle el tipo.';
+export const TIPO_CONSULTORIA = 'consultoria';
+const NOMBRE_CENTRO_UNICO: Record<string, string> = { [TIPO_CORPORATIVO]: 'CORPORATIVO', [TIPO_CONSULTORIA]: 'CONSULTORÍA' };
+const MENSAJE_CENTRO_UNICO =
+	'Los centros de costo Corporativo y Consultoría son únicos y se generan automáticamente: no se puede crear otro, darlos de baja ni cambiarles el tipo.';
 
-async function getTipoCentroCosto(client: SupabaseClient, id: number): Promise<string | null> {
-	const { data } = await client.from(TABLE_NAME).select('tipo').eq(PK_COLUMN, id).maybeSingle();
-	return (data?.tipo as string | undefined) ?? null;
+/** true si el centro es uno de los únicos (Corporativo, o Consultoría general sin proyecto). */
+export function esCentroCostoUnico(centro: { tipo?: string | null; id_proyecto?: number | null } | null | undefined): boolean {
+	if (!centro) return false;
+	return centro.tipo === TIPO_CORPORATIVO || (centro.tipo === TIPO_CONSULTORIA && !centro.id_proyecto);
 }
 
-/** Devuelve el id del centro de costo Corporativo activo, creándolo si todavía no existe. Idempotente;
- * ante una carrera (índice único) reusa el que ganó. Nunca lanza: devuelve null y lo loguea. */
-export async function getOrCrearCentroCostoCorporativo(client: SupabaseClient): Promise<number | null> {
-	const buscar = () =>
-		client
-			.from(TABLE_NAME)
-			.select('id_centro_costo')
-			.eq('tipo', TIPO_CORPORATIVO)
-			.eq('estado', 'activo')
-			.order('id_centro_costo', { ascending: true })
-			.limit(1)
-			.maybeSingle();
+async function getCentroParaValidar(client: SupabaseClient, id: number): Promise<{ tipo: string | null; id_proyecto: number | null } | null> {
+	const { data } = await client.from(TABLE_NAME).select('tipo, id_proyecto').eq(PK_COLUMN, id).maybeSingle();
+	return (data as { tipo: string | null; id_proyecto: number | null } | null) ?? null;
+}
 
-	const { data: existente, error: buscarError } = await buscar();
+/** Devuelve el id del centro único de ese tipo, creándolo si no existe (o reactivándolo si estaba dado de
+ * baja). Idempotente; ante una carrera (índice único) reusa el que ganó. Nunca lanza: devuelve null y lo loguea. */
+async function getOrCrearCentroCostoUnico(client: SupabaseClient, tipo: string): Promise<number | null> {
+	const buscar = (soloActivos: boolean) => {
+		let q = client.from(TABLE_NAME).select('id_centro_costo, estado').eq('tipo', tipo).is('id_proyecto', null);
+		if (soloActivos) q = q.eq('estado', 'activo');
+		return q.order('id_centro_costo', { ascending: true }).limit(1).maybeSingle();
+	};
+
+	const { data: activo, error: buscarError } = await buscar(true);
 	if (buscarError) {
-		console.error('[centroCostos.service] No se pudo buscar el centro de costo Corporativo:', buscarError);
+		console.error(`[centroCostos.service] No se pudo buscar el centro de costo único '${tipo}':`, buscarError);
 		return null;
 	}
-	if (existente) return existente.id_centro_costo;
+	if (activo) return activo.id_centro_costo;
 
-	const codigo = await generarCodigoCentroCostoManual(client, TIPO_CORPORATIVO);
+	// Si existe pero dado de baja, se reactiva en vez de crear otro.
+	const { data: deBaja } = await buscar(false);
+	if (deBaja) {
+		const { error } = await client.from(TABLE_NAME).update({ estado: 'activo' }).eq(PK_COLUMN, deBaja.id_centro_costo);
+		if (!error) return deBaja.id_centro_costo;
+		console.error(`[centroCostos.service] No se pudo reactivar el centro de costo único '${tipo}':`, error);
+		return null;
+	}
+
+	const codigo = await generarCodigoCentroCostoManual(client, tipo);
 	const { data: creado, error } = await client
 		.from(TABLE_NAME)
-		.insert({ codigo, nombre: NOMBRE_CORPORATIVO, tipo: TIPO_CORPORATIVO, monto_actual: 0, estado: 'activo' })
+		.insert({ codigo, nombre: NOMBRE_CENTRO_UNICO[tipo] ?? tipo.toUpperCase(), tipo, monto_actual: 0, estado: 'activo' })
 		.select('id_centro_costo')
 		.single();
 	if (error) {
 		if (error.code === '23505') {
-			const { data: reintento } = await buscar();
+			const { data: reintento } = await buscar(true);
 			if (reintento) return reintento.id_centro_costo;
 		}
-		console.error('[centroCostos.service] No se pudo crear el centro de costo Corporativo:', error);
+		console.error(`[centroCostos.service] No se pudo crear el centro de costo único '${tipo}':`, error);
 		return null;
 	}
 	return creado?.id_centro_costo ?? null;
+}
+
+/** Asegura que existan los centros únicos (Corporativo y Consultoría general). */
+export async function getOrCrearCentrosCostoUnicos(client: SupabaseClient): Promise<void> {
+	await Promise.all([getOrCrearCentroCostoUnico(client, TIPO_CORPORATIVO), getOrCrearCentroCostoUnico(client, TIPO_CONSULTORIA)]);
+}
+
+/** Id del centro Corporativo activo (creándolo si falta). */
+export async function getOrCrearCentroCostoCorporativo(client: SupabaseClient): Promise<number | null> {
+	return getOrCrearCentroCostoUnico(client, TIPO_CORPORATIVO);
 }
 
 export interface ListParams {
@@ -257,6 +283,9 @@ export interface ListParams {
 	 * (pestañas por tipo en centros-de-costos/+page.svelte). Solo se aceptan tipos de esa misma
 	 * pestaña; vacío/undefined = todos. */
 	tipos?: string[];
+	/** true = los centros SIN proyecto van primero (antes que el orden elegido) — en la pestaña "Proyectos de
+	 * Consultoría" deja el centro general único "CONSULTORÍA" al principio de la lista (a pedido del usuario). */
+	primeroSinProyecto?: boolean;
 }
 
 export interface ListResult {
@@ -292,54 +321,59 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	// El embed de "proyecto" trae solo los campos que generarCodigoProyecto (codigoProyecto.ts) necesita
 	// para recalcular su código real, más tipo_venta/tipo_obra para la columna "Tipo" — null para filas
 	// sin id_proyecto (centros manuales, o vinculadas a cliente/proveedor/empleado).
-	let query = client
-		.from(TABLE_NAME)
-		.select(
-			'*, proveedor(vendedor, razon_social), clienteDirecto:id_cliente(nombre), empleadoDirecto:id_empleado(nombre), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))',
-			{ count: 'exact' }
-		)
-		.range(from, to);
+	const SELECT_LISTA =
+		'*, proveedor(vendedor, razon_social), clienteDirecto:id_cliente(nombre), empleadoDirecto:id_empleado(nombre), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))';
 
-	query = sortByProducto
-		? query.order('vendedor', { foreignTable: 'proveedor', ascending: sortDir === 'asc' })
-		: query.order(sortField, { ascending: sortDir === 'asc' });
+	/** Filtros de la pestaña y la búsqueda + orden — se aplican igual a la consulta principal y a la de los
+	 * centros sin proyecto de `primeroSinProyecto` (más abajo). */
+	const filtrar = (q: any): any => {
+		let query = sortByProducto
+			? q.order('vendedor', { foreignTable: 'proveedor', ascending: sortDir === 'asc' })
+			: q.order(sortField, { ascending: sortDir === 'asc' });
 
-	if (params.vinculado === true) {
-		// "Cuentas Internas" — a pedido explícito del usuario, TODOS los tipos que NO se muestran en
-		// "Centros de Costos" (ver el branch de abajo): cliente/proveedor/empleado/subcontratista. Antes
-		// se filtraba por las columnas de vínculo (id_cliente/id_proveedor/id_empleado not null) — mismo
-		// resultado hoy (esos 4 tipos son justo los únicos que las usan), pero filtrar por `tipo`
-		// directo mantiene esta pestaña como el complemento EXACTO de "Centros de Costos" sin depender
-		// de que las columnas de vínculo estén siempre completas.
-		// `tipos` (pestañas por tipo) acota a un subconjunto de esta misma lista.
-		const tiposCuentas = ['cliente', 'proveedor', 'empleado', 'subcontratista'];
-		query = query.in('tipo', params.tipos?.length ? params.tipos.filter((t) => tiposCuentas.includes(t)) : tiposCuentas);
-	} else if (params.vinculado === false) {
-		// "Centros de Costos" — a pedido explícito del usuario, TODOS los tipos: proyecto/obra/
-		// consultoria/otro/prestamo/bolsa general (obra/consultoria y bolsa general son los creados a
-		// mano desde "Nuevo Centro de Costo", ver formOptions en centroCostos.config.ts; proyecto son los
-		// vinculados a una venta real, cualquiera sea su estado — antes se exigía
-		// estado_proyecto='venta_cerrada', se quitó a pedido explícito del usuario: ahora un proyecto
-		// todavía en negociación SÍ cuenta como centro de costo). Cualquier otro selector que filtre
-		// "Centros de Costos" (ver getCentroCostoOptionsSoloCentros en transacciones.service.ts) debe
-		// usar esta misma lista de tipos.
-		// `tipos` (pestañas por tipo: Corporativo, Obra, Consultoría...) acota a un subconjunto de esa
-		// misma lista — nunca la amplía a tipos de "Cuentas Internas".
-		const tiposCentros = ['proyecto', 'obra', 'consultoria', 'bolsa general', 'otro', 'prestamo'];
-		const tiposFiltrados = params.tipos?.length ? params.tipos.filter((t) => tiposCentros.includes(t)) : tiposCentros;
-		query = query.in('tipo', tiposFiltrados);
-		query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
-	}
+		if (params.vinculado === true) {
+			// "Cuentas Internas" — a pedido explícito del usuario, TODOS los tipos que NO se muestran en
+			// "Centros de Costos": cliente/proveedor/empleado/subcontratista (filtrar por `tipo` mantiene esta
+			// pestaña como el complemento EXACTO de "Centros de Costos"). `tipos` (pestañas por tipo) acota a un
+			// subconjunto de esta misma lista.
+			const tiposCuentas = ['cliente', 'proveedor', 'empleado', 'subcontratista'];
+			query = query.in('tipo', params.tipos?.length ? params.tipos.filter((t) => tiposCuentas.includes(t)) : tiposCuentas);
+		} else if (params.vinculado === false) {
+			// "Centros de Costos" — a pedido explícito del usuario, TODOS los tipos: proyecto/obra/consultoria/
+			// otro/prestamo/bolsa general (los vinculados a una venta real cuentan cualquiera sea su estado).
+			// Cualquier otro selector que filtre "Centros de Costos" (ver getCentroCostoOptionsSoloCentros en
+			// transacciones.service.ts) debe usar esta misma lista. `tipos` (pestañas por tipo) acota a un
+			// subconjunto de esa misma lista — nunca la amplía a tipos de "Cuentas Internas".
+			const tiposCentros = ['proyecto', 'obra', 'consultoria', 'bolsa general', 'otro', 'prestamo'];
+			const tiposFiltrados = params.tipos?.length ? params.tipos.filter((t) => tiposCentros.includes(t)) : tiposCentros;
+			query = query.in('tipo', tiposFiltrados);
+			query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
+		}
 
-	const search = params.search?.trim();
-	if (search) {
-		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
-		const orFilter = [...SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`), `proveedor.vendedor.ilike.%${escaped}%`].join(',');
-		query = query.or(orFilter);
-	}
+		const search = params.search?.trim();
+		if (search) {
+			const escaped = search.replace(/[%_]/g, (m) => `\${m}`);
+			const orFilter = [...SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`), `proveedor.vendedor.ilike.%${escaped}%`].join(',');
+			query = query.or(orFilter);
+		}
+		return query;
+	};
 
-	const { data, error, count } = await query;
+	// Con `primeroSinProyecto`, los centros SIN proyecto (en "Proyectos de Consultoría": el centro general
+	// único "CONSULTORÍA") se traen aparte y van arriba en la primera página; la lista paginada trae solo los
+	// que tienen proyecto, con su orden de siempre.
+	let principal = filtrar(client.from(TABLE_NAME).select(SELECT_LISTA, { count: 'exact' }));
+	if (params.primeroSinProyecto) principal = principal.not('id_proyecto', 'is', null);
+	const [{ data: dataPrincipal, error, count: countPrincipal }, sinProyecto] = await Promise.all([
+		principal.range(from, to),
+		params.primeroSinProyecto
+			? filtrar(client.from(TABLE_NAME).select(SELECT_LISTA, { count: 'exact' })).is('id_proyecto', null)
+			: Promise.resolve({ data: [], error: null, count: 0 })
+	]);
 	if (error) throw error;
+	if (sinProyecto.error) throw sinProyecto.error;
+	const data = [...(page === 1 ? (sinProyecto.data ?? []) : []), ...(dataPrincipal ?? [])];
+	const count = (countPrincipal ?? 0) + (sinProyecto.count ?? 0);
 
 	const unwrap = <T,>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
 	const items = ((data ?? []) as any[]).map((row) => ({
@@ -368,8 +402,8 @@ export async function createCentroCosto(
 	if (Object.keys(errors).length > 0) {
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
-	if (payload.tipo === TIPO_CORPORATIVO) {
-		return { success: false, message: MENSAJE_CORPORATIVO_UNICO, errors: { tipo: 'El Corporativo se genera automáticamente' } };
+	if (payload.tipo === TIPO_CORPORATIVO || payload.tipo === TIPO_CONSULTORIA) {
+		return { success: false, message: MENSAJE_CENTRO_UNICO, errors: { tipo: 'Se genera automáticamente' } };
 	}
 
 	const codigo = await generarCodigoCentroCostoManual(client, String(payload.tipo ?? ''));
@@ -396,9 +430,11 @@ export async function updateCentroCosto(
 		return { success: false, message: 'Revisa los campos marcados', errors };
 	}
 	// El Corporativo no cambia de tipo, y ningún otro centro puede convertirse en Corporativo.
-	const tipoActual = await getTipoCentroCosto(client, id);
-	if ((tipoActual === TIPO_CORPORATIVO) !== (payload.tipo === TIPO_CORPORATIVO)) {
-		return { success: false, message: MENSAJE_CORPORATIVO_UNICO, errors: { tipo: 'No se puede cambiar' } };
+	// Un centro único no cambia de tipo, y ningún otro centro puede convertirse en Corporativo o Consultoría.
+	const actual = await getCentroParaValidar(client, id);
+	const cambiaTipo = String(payload.tipo ?? '') !== String(actual?.tipo ?? '');
+	if ((esCentroCostoUnico(actual) || payload.tipo === TIPO_CORPORATIVO || payload.tipo === TIPO_CONSULTORIA) && cambiaTipo) {
+		return { success: false, message: MENSAJE_CENTRO_UNICO, errors: { tipo: 'No se puede cambiar' } };
 	}
 
 	const { data, error } = await client
@@ -430,7 +466,7 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 	if (fetchError) {
 		return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
 	}
-	if (existente?.tipo === TIPO_CORPORATIVO) return { success: false, message: MENSAJE_CORPORATIVO_UNICO };
+	if (esCentroCostoUnico(existente)) return { success: false, message: MENSAJE_CENTRO_UNICO };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
@@ -488,7 +524,7 @@ export async function eliminarCentroCostoPermanente(client: SupabaseClient, id: 
 		.eq(PK_COLUMN, id)
 		.maybeSingle();
 	if (fetchError) return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
-	if (existente?.tipo === TIPO_CORPORATIVO) return { success: false, message: MENSAJE_CORPORATIVO_UNICO };
+	if (esCentroCostoUnico(existente)) return { success: false, message: MENSAJE_CENTRO_UNICO };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
@@ -786,6 +822,24 @@ export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: 
  * para Obra (un centro por proyecto) y el compartido de Consultoría (recibe de todas sus ventas).
  * Nunca lanza — mismo criterio que el resto de este archivo.
  */
+/** "Monto Actual" del centro general único CONSULTORÍA — a pedido del usuario, es el TOTAL de todos los
+ * proyectos de consultoría: la suma de lo recibido (ver getMontoRecibidoPorCentroCosto) por cada centro de
+ * consultoría de venta (con proyecto) que no esté dado de baja. Nunca lanza: ante un error devuelve 0. */
+export async function getMontoTotalProyectosConsultoria(client: SupabaseClient): Promise<number> {
+	const { data, error } = await client
+		.from(TABLE_NAME)
+		.select('id_centro_costo')
+		.eq('tipo', TIPO_CONSULTORIA)
+		.not('id_proyecto', 'is', null)
+		.neq('estado', 'baja');
+	if (error) {
+		console.error('[centroCostos.service] No se pudieron listar los proyectos de consultoría:', error);
+		return 0;
+	}
+	const montos = await getMontoRecibidoPorCentroCosto(client, ((data ?? []) as { id_centro_costo: number }[]).map((c) => c.id_centro_costo));
+	return Object.values(montos).reduce((s, m) => s + m, 0);
+}
+
 export async function getMontoRecibidoPorCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, number>> {
 	const montos: Record<number, number> = {};
 	for (const id of ids) montos[id] = 0;

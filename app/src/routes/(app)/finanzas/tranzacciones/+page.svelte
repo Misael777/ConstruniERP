@@ -1,4 +1,6 @@
 <script lang="ts">
+	// Nombre de la cuota (Adelanto, 1er abono, ...) igual que en el Resumen de cobro/pago.
+	import { nombreCuotaDeTransaccion } from '$lib/shared/acuerdoDePago';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
@@ -851,7 +853,7 @@
 						<p class="text-[11px] text-slate-400 mt-0.5">Fecha: {formatDate(item.fecha)}</p>
 						<p class="text-[11px] text-slate-400 mt-0.5 truncate">
 							Producto: {productoProveedorLabel(item)}
-							{#if item.tipo_transaccion}· N° Cuota: {item.tipo_transaccion}{/if}
+							{#if item.tipo_transaccion}· Cuota: {nombreCuotaDeTransaccion(item.tipo_transaccion)}{/if}
 						</p>
 					</div>
 				</div>

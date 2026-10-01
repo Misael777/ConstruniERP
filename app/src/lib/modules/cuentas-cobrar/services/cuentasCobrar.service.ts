@@ -1099,7 +1099,8 @@ export async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCob
 }
 
 export async function getClienteOptions(client: SupabaseClient): Promise<FieldOption[]> {
-	const { data, error } = await client.from('cliente').select('id_cliente, nombre').order('nombre');
+	// Solo activos — la misma lista que el Directorio de Clientes (los dados de baja no se ofrecen).
+	const { data, error } = await client.from('cliente').select('id_cliente, nombre').neq('estado', 'baja').order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_cliente), label: c.nombre }));
 }

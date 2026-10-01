@@ -222,12 +222,48 @@ export async function marcarNotificaciones(client: SupabaseClient, items: { idSo
 	return { success: true };
 }
 
+/** A pedido del usuario: el centro de costo de un proyecto no se puede eliminar (y se elimina/da de baja junto
+ * con su venta) mientras tenga abonos pendientes — Cuentas por Cobrar o por Pagar activas con saldo pendiente
+ * sobre ese centro de costo (o, en Cobrar, vinculadas al proyecto). Devuelve el mensaje para el usuario, o ''
+ * si no hay nada pendiente. */
+export async function mensajeProyectoConCuentasPendientes(client: SupabaseClient, idProyecto: number, nombreProyecto?: string): Promise<string> {
+	const { data: centros, error: errCentros } = await client.from('centro_costo').select('id_centro_costo').eq('id_proyecto', idProyecto);
+	if (errCentros) throw errCentros;
+	const ids = (centros ?? []).map((c: { id_centro_costo: number }) => c.id_centro_costo);
+
+	let cobrar = client.from('cuentas_cobrar').select('saldo_pendiente').eq('activo', true).gt('saldo_pendiente', 0);
+	cobrar = ids.length ? cobrar.or(`id_proyecto.eq.${idProyecto},id_centro_costo.in.(${ids.join(',')})`) : cobrar.eq('id_proyecto', idProyecto);
+	const pagar = ids.length
+		? client.from('cuentas_pagar').select('saldo_pendiente').eq('activo', true).gt('saldo_pendiente', 0).in('id_centro_costo', ids)
+		: null;
+
+	const [rCobrar, rPagar] = await Promise.all([cobrar, pagar ?? Promise.resolve({ data: [], error: null })]);
+	if (rCobrar.error) throw rCobrar.error;
+	if (rPagar.error) throw rPagar.error;
+
+	const suma = (filas: { saldo_pendiente: number }[] | null) => (filas ?? []).reduce((s, f) => s + Number(f.saldo_pendiente), 0);
+	const formato = (n: number) => `S/ ${n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+	const partes: string[] = [];
+	const nCobrar = rCobrar.data?.length ?? 0;
+	const nPagar = rPagar.data?.length ?? 0;
+	if (nCobrar) partes.push(`${nCobrar} cuenta${nCobrar === 1 ? '' : 's'} por cobrar con ${formato(suma(rCobrar.data as any))} pendiente${nCobrar === 1 ? '' : 's'}`);
+	if (nPagar) partes.push(`${nPagar} cuenta${nPagar === 1 ? '' : 's'} por pagar con ${formato(suma(rPagar.data as any))} pendiente${nPagar === 1 ? '' : 's'}`);
+	if (!partes.length) return '';
+
+	const quien = nombreProyecto ? `"${nombreProyecto}"` : 'este proyecto';
+	return `No se puede eliminar: el centro de costo del proyecto ${quien} tiene abonos pendientes — ${partes.join(' y ')}. Complétalos o da de baja esas cuentas primero en Finanzas.`;
+}
+
 /** Borra una venta (proyecto) y todo lo que cuelga de ella sin ON DELETE CASCADE — mismo cuerpo que
  * el viejo `performDelete` de comercial/ventas/+page.svelte, ahora reusable tanto por un admin que
  * elimina directo como por la aprobación de una solicitud de un no-admin. */
 export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: number): Promise<ServiceResult> {
 	let step = 'inicio';
 	try {
+		step = 'verificar abonos pendientes';
+		const bloqueo = await mensajeProyectoConCuentasPendientes(client, idProyecto);
+		if (bloqueo) return { success: false, message: bloqueo };
+
 		step = 'borrar presupuesto';
 		let { error } = await client.from('presupuesto').delete().eq('id_proyecto', idProyecto);
 		if (error) throw error;
@@ -296,6 +332,10 @@ export async function darDeBajaVenta(client: SupabaseClient, idProyecto: number)
 		.maybeSingle();
 	if (proyectoError) return { success: false, message: proyectoError.message };
 	if (!proyecto) return { success: false, message: 'No se encontró la venta.' };
+
+	// Dar de baja la venta da de baja su centro de costo: no se permite con abonos pendientes (pedido del usuario).
+	const bloqueo = await mensajeProyectoConCuentasPendientes(client, idProyecto, proyecto.nombre_proyecto ?? undefined);
+	if (bloqueo) return { success: false, message: bloqueo };
 
 	const { error } = await client
 		.from('proyecto')
@@ -422,6 +462,9 @@ export async function getClienteDependencias(client: SupabaseClient, idCliente: 
  * mensaje legible en vez de un error crudo de FK, o de dejar transacciones huérfanas. Si no hay
  * ninguna referencia, el DELETE se propaga solo a su centro de costo (ON DELETE CASCADE en la BD). */
 export async function deleteClienteCascade(client: SupabaseClient, idCliente: number): Promise<ServiceResult> {
+	// Primero el caso más común, con su propio mensaje: proyectos activos (a pedido del usuario).
+	const bloqueo = await mensajeClienteConProyectosActivos(client, idCliente);
+	if (bloqueo) return { success: false, message: bloqueo };
 	const dependencias = await getClienteDependencias(client, idCliente);
 	if (dependencias.tieneConflictos) return { success: false, message: dependencias.detalle };
 
@@ -435,7 +478,33 @@ export async function deleteClienteCascade(client: SupabaseClient, idCliente: nu
  * centro de costo que se generó para él (ver darDeBajaCentroCostoDeEntidad en centroCostos.service.ts).
  * Es secundario al cambio de estado del cliente: si falla, se loguea pero no tumba una baja que ya se
  * aplicó correctamente. */
+/** Proyectos (ventas) ACTIVOS de un cliente: todo proyecto que no esté dado de baja (en negociación o venta
+ * cerrada). A pedido del usuario, un cliente con proyectos activos no se puede dar de baja ni eliminar. */
+export async function getProyectosActivosDeCliente(client: SupabaseClient, idCliente: number): Promise<{ id_proyecto: number; nombre_proyecto: string | null }[]> {
+	const { data, error } = await client
+		.from('proyecto')
+		.select('id_proyecto, nombre_proyecto')
+		.eq('id_cliente', idCliente)
+		.or('estado_proyecto.is.null,estado_proyecto.neq.baja');
+	if (error) throw error;
+	return (data ?? []) as { id_proyecto: number; nombre_proyecto: string | null }[];
+}
+
+/** Mensaje para el usuario cuando el cliente tiene proyectos activos ('' si no tiene ninguno). */
+export async function mensajeClienteConProyectosActivos(client: SupabaseClient, idCliente: number, nombreCliente?: string): Promise<string> {
+	const proyectos = await getProyectosActivosDeCliente(client, idCliente);
+	if (proyectos.length === 0) return '';
+	const nombres = proyectos.slice(0, 3).map((p) => p.nombre_proyecto || `Proyecto #${p.id_proyecto}`);
+	const resto = proyectos.length > 3 ? ` y ${proyectos.length - 3} más` : '';
+	const quien = nombreCliente ? `"${nombreCliente}"` : 'Este cliente';
+	return `No se puede eliminar: ${quien} tiene ${proyectos.length === 1 ? 'un proyecto activo' : `${proyectos.length} proyectos activos`} (${nombres.join(', ')}${resto}). Da de baja primero ${proyectos.length === 1 ? 'ese proyecto' : 'esos proyectos'} en Comercial > Ventas.`;
+}
+
 export async function darDeBajaCliente(client: SupabaseClient, idCliente: number): Promise<ServiceResult> {
+	// A pedido del usuario: no se puede dar de baja un cliente enlazado a un proyecto activo.
+	const bloqueo = await mensajeClienteConProyectosActivos(client, idCliente);
+	if (bloqueo) return { success: false, message: bloqueo };
+
 	const { error } = await client.from('cliente').update({ estado: 'baja' }).eq('id_cliente', idCliente);
 	// describeError (no solo error.message) para que el toast.error del llamador muestre code/details/
 	// hint también — ej. "Could not find the 'estado' column..." trae code=PGRST204, útil para

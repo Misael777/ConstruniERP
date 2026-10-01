@@ -738,12 +738,15 @@
 		];
 	});
 
+	// A pedido del usuario: solo se desbloquea la cuota pendiente más próxima (la de fecha más temprana —
+	// cuotaMasProxima — que es la que toca pagar, incluida una ya vencida); las siguientes quedan con candado
+	// hasta registrar esa. Igual en el resumen (ojito) y en la lista de cuotas del panel.
 	const resumenCuotas = $derived(
 		cuotasAMostrar.map((q): CuotaResumen => {
 			const bloqueado = q.id_pago !== -1 && !!q.transaccion?.aprobado && !isAdmin();
 			const estado: CuotaResumen['estado'] =
 				q.estado_pago === 'pagado' ? 'pagado' : q.estado_pago === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
-			return { id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado, editable: q.estado_pago === 'programado' && !bloqueado };
+			return { id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado, editable: q.estado_pago === 'programado' && !bloqueado && q.id_pago === cuotaMasProxima?.id_pago };
 		})
 	);
 
@@ -891,7 +894,7 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto">
+<div class="w-full">
 	{#if !verEliminados}
 		<!-- A pedido explícito del usuario, con imagen de referencia: filtros compactos en forma de
 		     píldora (una sola fila, ícono circular chico) en vez de las tarjetas grandes cuadradas de
@@ -997,10 +1000,10 @@
 		</div>
 	</div>
 
-	<ColumnFilterBar fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
-
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="relative flex-1 min-w-[220px] max-w-sm">
+	<!-- A pedido del usuario: Filtros, búsqueda y orden en una sola línea (en pantallas angostas bajan solos). -->
+	<div class="mb-4 flex flex-wrap items-center gap-2">
+		<ColumnFilterBar flotante fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
+		<div class="relative w-full sm:w-72">
 			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
 				type="text"
@@ -1016,11 +1019,13 @@
 			{/if}
 		</div>
 
+		<div class="w-52">
 		<SelectConSaldo
 			value={sortBy}
 			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
 			onchange={(v) => (toggleSort(v, true))}
 		/>
+		</div>
 		<button
 			type="button"
 			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}
@@ -1207,133 +1212,8 @@
 		</div>
 	</div>
 
-	{#if selectedCuenta}
-		<div class="mt-6 bg-white rounded-xl border border-slate-200 p-6">
-			<div class="flex items-center justify-between mb-4">
-				<div class="flex items-center gap-2">
-					<Receipt class="text-amber-500" size={20} />
-					<h2 class="text-lg font-semibold text-[#0f3b5e]">
-						Pagos a {nombreContraparte(selectedCuenta)} — {formatCurrency(selectedCuenta.monto_comprometido)}
-						(saldo: {formatCurrency(selectedCuenta.saldo_pendiente)})
-					</h2>
-				</div>
-				<button type="button" onclick={handleRegistrarPagoClick} class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600">
-					<Plus size={14} /> Registrar Pago
-				</button>
-			</div>
-
-			{#if cuotasAMostrar.length === 0}
-				<p class="text-sm text-slate-400 text-center py-6">Sin pagos registrados todavía.</p>
-			{:else}
-				{#if esContadoSinPagos}
-					<p class="text-xs text-slate-400 mb-2">Sin cuotas registradas todavía: se muestra el saldo pendiente como una sola cuota. Doble clic para registrar el pago.</p>
-				{:else}
-					<p class="text-xs text-slate-400 mb-2">Doble clic en cualquier fila para registrar/editar la cuota más próxima.</p>
-				{/if}
-				<div class="overflow-x-auto">
-					<ResponsiveDataView items={cuotasAMostrar} keyField="id_pago" onRowDblClick={handleDobleClicCuota} columns={[
-						{ label: 'Fecha' },
-						{ label: 'Monto' },
-						{ label: 'Medio' },
-						{ label: 'N° Operación' },
-						{ label: 'Estado' },
-						{ label: 'Acciones', align: 'right' }
-					]}>
-						{#snippet row(pago)}
-							{@const sintetica = pago.id_pago === -1}
-							{@const bloqueado = !sintetica && !!pago.transaccion?.aprobado && !isAdmin()}
-							<td class="px-3 py-2">{formatDate(pago.fecha_pago)}</td>
-							<td class="px-3 py-2">{formatCurrency(pago.monto)}</td>
-							<td class="px-3 py-2">{pago.medio_pago ?? '—'}</td>
-							<td class="px-3 py-2">{pago.num_operacion ?? '—'}</td>
-							<td class="px-3 py-2">
-								<div class="flex items-center gap-1.5">
-									{#if pago.estado_pago === 'programado' && esCuotaVencida(pago)}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
-									{:else if pago.estado_pago === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
-									{:else if pago.estado_pago === 'cancelado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-									{:else}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
-									{/if}
-									{#if pago.transaccion?.aprobado}
-										<ShieldCheck size={13} class="text-emerald-600" title={`Transacción aprobada por ${pago.transaccion.aprobado_por ?? 'un administrador'}`} />
-									{/if}
-								</div>
-							</td>
-							<td class="px-3 py-2 text-right">
-								{#if sintetica}
-									<span class="text-[11px] text-slate-400">Doble clic para registrar</span>
-								{:else if bloqueado}
-									<span class="p-1.5 text-slate-300 inline-flex" title="Bloqueado: transacción aprobada, solo un administrador puede editar/eliminar">
-										<Lock size={16} />
-									</span>
-								{:else}
-									{#if pago.estado_pago === 'programado'}
-										<button type="button" onclick={() => openEditPago(pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-blue-50 hover:text-blue-600" title="Editar cuota" aria-label="Editar cuota">
-											<Pencil size={16} />
-										</button>
-									{/if}
-									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="p-1.5 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-600" title="Eliminar pago" aria-label="Eliminar pago">
-										<Trash2 size={16} />
-									</button>
-								{/if}
-							</td>
-						{/snippet}
-						{#snippet card(pago)}
-							{@const sintetica = pago.id_pago === -1}
-							{@const bloqueado = !sintetica && !!pago.transaccion?.aprobado && !isAdmin()}
-							<div class="flex items-start justify-between gap-3 mb-2">
-								<div class="min-w-0">
-									<div class="font-semibold text-slate-800">{formatCurrency(pago.monto)}</div>
-									<div class="text-xs text-slate-400 mt-0.5">{formatDate(pago.fecha_pago)}</div>
-								</div>
-								<div class="flex items-center gap-1.5 shrink-0">
-									{#if pago.estado_pago === 'programado' && esCuotaVencida(pago)}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">Vencido</span>
-									{:else if pago.estado_pago === 'programado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">{sintetica ? 'Por registrar' : 'Programado'}</span>
-									{:else if pago.estado_pago === 'cancelado'}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 text-slate-600">Anulado</span>
-									{:else}
-										<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">Pagado</span>
-									{/if}
-									{#if pago.transaccion?.aprobado}
-										<ShieldCheck size={13} class="text-emerald-600" />
-									{/if}
-								</div>
-							</div>
-							<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500 mb-3">
-								<span class="text-slate-400">Medio</span>
-								<span class="text-right text-slate-700">{pago.medio_pago ?? '—'}</span>
-								<span class="text-slate-400">N° Operación</span>
-								<span class="text-right text-slate-700">{pago.num_operacion ?? '—'}</span>
-							</div>
-							{#if sintetica}
-								<p class="text-center text-[11px] text-slate-400 pt-2 border-t border-slate-100">Doble clic para registrar el pago</p>
-							{:else if bloqueado}
-								<div class="flex items-center justify-center gap-2 text-slate-400 text-xs pt-2 border-t border-slate-100">
-									<Lock size={14} /> Bloqueado: transacción aprobada
-								</div>
-							{:else}
-								<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-									{#if pago.estado_pago === 'programado'}
-										<button type="button" onclick={() => openEditPago(pago)} class="flex-1 h-10 rounded-lg border border-slate-200 text-slate-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-slate-50" aria-label="Editar cuota">
-											<Pencil size={14} /> Editar
-										</button>
-									{/if}
-									<button type="button" onclick={() => handleDeletePago(pago.id_pago)} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-600 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Eliminar pago">
-										<Trash2 size={14} /> Eliminar
-									</button>
-								</div>
-							{/if}
-						{/snippet}
-					</ResponsiveDataView>
-				</div>
-			{/if}
-		</div>
-	{/if}
+	<!-- A pedido del usuario: el panel "Pagos de <cliente/proveedor>" que aparecía debajo de la lista ya no
+	     se muestra — las cuotas se ven y se registran desde el Resumen (ojito de cada fila, ver resumenCuotas). -->
 </div>
 
 <CuentaPagarModal

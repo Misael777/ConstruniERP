@@ -26,8 +26,10 @@
 	 * el Estado a Cobrado/Pagado con su transacción. Va en z-40 para que esa ventana (z-50) quede encima.
 	 * Solo HTML/CSS estándar: igual en navegador, Tauri Windows y Tauri Android.
 	 */
-	import { X } from '@lucide/svelte';
+	import { X, Lock } from '@lucide/svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
+	// Adelanto / 1er abono / ... — mismo nombre que la lista de Transacciones (ver acuerdoDePago.ts).
+	import { acuerdoDePago } from '$lib/shared/acuerdoDePago';
 
 	let {
 		open = false,
@@ -57,14 +59,6 @@
 
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
 
-	const ORDINALES = ['1er', '2do', '3er', '4to', '5to', '6to', '7mo', '8vo', '9no', '10mo', '11vo', '12vo'];
-	/** Mismo esquema que la imagen de referencia: la primera cuota es el "Adelanto" y las siguientes
-	 * "1er abono", "2do abono"... Con una sola cuota es un "Pago único". */
-	function acuerdoDePago(indice: number, total: number): string {
-		if (total === 1) return 'Pago único';
-		if (indice === 0) return 'Adelanto';
-		return `${ORDINALES[indice - 1] ?? `${indice}°`} abono`;
-	}
 
 	function porcentaje(monto: number): string {
 		if (!montoTotal) return '—';
@@ -145,7 +139,7 @@
 														{textoEstado(cuota.estado)}
 													</button>
 												{:else}
-													<span class={`px-2.5 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_CLASE[cuota.estado]}`}>{textoEstado(cuota.estado)}</span>
+													<span class={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_CLASE[cuota.estado]}`} title={cuota.estado === 'pendiente' || cuota.estado === 'vencido' ? 'Se habilita cuando se registre la cuota anterior' : undefined}>{#if cuota.estado === 'pendiente' || cuota.estado === 'vencido'}<Lock size={10} />{/if}{textoEstado(cuota.estado)}</span>
 												{/if}
 											</td>
 										</tr>
@@ -162,7 +156,7 @@
 								</tfoot>
 							</table>
 						</div>
-						<p class="mt-2 text-xs text-slate-400">Toca el estado de una cuota pendiente para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}.</p>
+						<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}. Las siguientes se habilitan en orden.</p>
 					{/if}
 				</div>
 			</div>

@@ -9,7 +9,7 @@
 		applyFieldMask,
 		formatCurrency
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
-	import { createCentroCosto, updateCentroCosto, resolveEntidadVinculada, TIPO_CORPORATIVO } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import { createCentroCosto, updateCentroCosto, resolveEntidadVinculada, esCentroCostoUnico, TIPO_CORPORATIVO } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import type { CentroCosto, EntidadVinculada } from '$lib/modules/centro-costos/services/centroCostos.service';
 
 	let {
@@ -51,7 +51,7 @@
 	let loadingLink = $state(false);
 	// El Corporativo es único y solo se edita tras autorización de administrador (ver el candado en
 	// centros-de-costos/+page.svelte) — acá solo se avisa; el tipo nunca cambia en edición (ver abajo).
-	const esCorporativo = $derived(mode === 'edit' && centro?.tipo === TIPO_CORPORATIVO);
+	const esCorporativo = $derived(mode === 'edit' && esCentroCostoUnico(centro));
 	const hasLink = $derived(
 		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado)
 	);
@@ -147,7 +147,7 @@
 			{#if esCorporativo}
 				<div class="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
 					<Lock size={16} class="shrink-0" />
-					<span>Centro de costo <strong>Corporativo</strong> — único del sistema, editable solo con autorización de administrador.</span>
+					<span>Centro de costo <strong>{centro?.tipo === TIPO_CORPORATIVO ? 'Corporativo' : 'Consultoría'}</strong> — único del sistema, editable solo con autorización de administrador.</span>
 				</div>
 			{:else if mode === 'edit'}
 				{#if loadingLink}

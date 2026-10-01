@@ -8,6 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency } from '$lib/shared/fieldConfig';
+import { nombreCuota } from '$lib/shared/acuerdoDePago';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -1572,7 +1573,7 @@ export async function construirPayloadTransaccionPorCobro(
 		monto_total: cobro.monto,
 		medio_pago: cobro.medio_cobro !== null ? String(cobro.medio_cobro) : null,
 		cuente_destino: cobro.cuenta_banco,
-		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${numeroCuota !== null ? ` - Cuota ${numeroCuota}` : ''}${cuentaCobrar.proyectoCodigo ? ` - ${cuentaCobrar.proyectoCodigo}` : ''}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
+		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${numeroCuota !== null ? ` - ${nombreCuota(numeroCuota)}` : ''}${cuentaCobrar.proyectoCodigo ? ` - ${cuentaCobrar.proyectoCodigo}` : ''}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
 		estado: 'activo'
 	};
 }

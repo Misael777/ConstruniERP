@@ -285,7 +285,7 @@
 				{#snippet row(cliente)}
 					{#if visibleColumns.nombre}
 						<td class="px-5 py-4 font-medium text-slate-800">
-							<div class="max-w-[250px] truncate">{cliente.nombre}</div>
+							<div class="max-w-[250px] truncate uppercase">{cliente.nombre}</div>
 						</td>
 					{/if}
 					{#if visibleColumns.tipo}
@@ -347,7 +347,7 @@
 				{#snippet card(cliente)}
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="min-w-0">
-							<div class="font-semibold text-slate-800 truncate">{cliente.nombre}</div>
+							<div class="font-semibold text-slate-800 truncate uppercase">{cliente.nombre}</div>
 							<span class={`inline-block mt-1 text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTipoBadgeColor(cliente.tip_persona)}`}>
 								{getTipoLabel(cliente.tip_persona)}
 							</span>

@@ -12,6 +12,8 @@
 	// campos simples de cabecera se dibujan desde FIELDS_CONFIG (mismo motor genérico que el resto de
 	// Finanzas).
 	import { supabase } from '$lib/supabaseClient';
+	import { onDestroy } from 'svelte';
+	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { X, Loader2, Eye, Check, Lock, Trash2, FileText } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, type FieldOption } from '$lib/shared/fieldConfig';
@@ -163,7 +165,12 @@
 	let formValues = $state<Record<string, string>>(buildInitialValues());
 	let fieldErrors = $state<Record<string, string>>({});
 	let idCliente = $state('');
-	let clientes = $state<ClienteParaFacturar[]>([]);
+	// A pedido del usuario: la lista de clientes es la misma del Directorio de Clientes (solo activos) y se
+	// actualiza sola al cambiar — ver $lib/stores/clientes.svelte.ts. El cliente ya elegido se conserva aunque esté dado de baja.
+	const clientes = $derived(
+		clientesState.todos.filter((c) => c.estado !== 'baja' || String(c.id_cliente) === idCliente) as ClienteParaFacturar[]
+	);
+	onDestroy(suscribirClientes());
 	let transacciones = $state<TransaccionFacturable[]>([]);
 	let cargandoTransacciones = $state(false);
 	let seleccion = $state<number[]>([]);
@@ -338,9 +345,6 @@
 		}
 		previewOpen = false;
 		previewDatos = null;
-		getClientesParaFacturar(supabase)
-			.then((data) => (clientes = data))
-			.catch((err) => console.error('[FacturaModal] No se pudieron cargar los clientes:', err));
 		getCuentasBancoNacionOptions(supabase)
 			.then((data) => {
 				cuentasBancoNacion = data;

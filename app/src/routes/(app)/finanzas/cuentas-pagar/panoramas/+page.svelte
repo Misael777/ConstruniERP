@@ -1,6 +1,7 @@
 <script lang="ts">
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { goto } from '$app/navigation';
 	import { dndzone } from 'svelte-dnd-action';
 	import { supabase } from '$lib/supabaseClient';
@@ -646,6 +647,13 @@
 		panorama0Version++;
 		toast.success(panoramaId === 0 ? 'Fechas actualizadas' : 'Panorama establecido como actual');
 	}
+
+	// A pedido del usuario: la lista de clientes es la misma del Directorio de Clientes (solo activos) y se
+	// actualiza sola al cambiar — ver $lib/stores/clientes.svelte.ts.
+	onDestroy(suscribirClientes());
+	$effect(() => {
+		if (clientesState.cargado) clienteOptions = opcionesClientes();
+	});
 </script>
 
 <div class="max-w-[1700px] mx-auto">

@@ -206,7 +206,8 @@ export interface ClienteParaFacturar {
 }
 
 export async function getClientesParaFacturar(client: SupabaseClient): Promise<ClienteParaFacturar[]> {
-	const { data, error } = await client.from('cliente').select('id_cliente, nombre, tipo_doc, num_documento, direccion').order('nombre');
+	// Solo activos — la misma lista que el Directorio de Clientes (los dados de baja no se ofrecen).
+	const { data, error } = await client.from('cliente').select('id_cliente, nombre, tipo_doc, num_documento, direccion').neq('estado', 'baja').order('nombre');
 	if (error) throw error;
 	return (data ?? []) as ClienteParaFacturar[];
 }
