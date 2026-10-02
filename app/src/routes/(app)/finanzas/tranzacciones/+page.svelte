@@ -77,7 +77,9 @@
 	// usuario), cada una su propia entrada del dropdown, mismo criterio que aprobado/desaprobado, no un
 	// sub-selector "Tipo" compartido; 'fecha'/'estado' sí revelan un control secundario (fecha exacta /
 	// <select> de estado) — ver onFiltroCriterioChange más abajo.
-	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'ingreso' | 'egreso' | 'fecha' | 'estado';
+	// 'documentoPendiente' agregado en ticket #33 (rechazo) — filtra directo al elegirlo, mismo criterio
+	// que 'aprobado'/'desaprobado'/'ingreso'/'egreso'.
+	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'ingreso' | 'egreso' | 'fecha' | 'estado' | 'documentoPendiente';
 	let filtroCriterio = $state<FiltroCriterio>('');
 	let filtroFecha = $state('');
 	let filtroEstado = $state('');
@@ -313,7 +315,8 @@
 				// siempre.
 				estado: filtroCriterio === 'estado' && filtroEstado !== 'consulta' ? filtroEstado || undefined : undefined,
 				tipoAlcance: filtroCriterio === 'estado' && filtroEstado === 'consulta' ? 'interna' : undefined,
-				tipo: filtroCriterio === 'ingreso' ? 'ingreso' : filtroCriterio === 'egreso' ? 'egreso' : undefined
+				tipo: filtroCriterio === 'ingreso' ? 'ingreso' : filtroCriterio === 'egreso' ? 'egreso' : undefined,
+				documentoPendiente: filtroCriterio === 'documentoPendiente' ? true : undefined
 			});
 			items = result.items;
 			total = result.total;
@@ -765,7 +768,7 @@
 		<div class="relative">
 			<SelectConSaldo
 				value={filtroCriterio}
-				options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'desaprobado', label: 'Desaprobado' }, { value: 'ingreso', label: 'Ingreso' }, { value: 'egreso', label: 'Egreso' }, { value: 'fecha', label: 'Fecha' }, { value: 'estado', label: 'Estado' }]}
+				options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'desaprobado', label: 'Desaprobado' }, { value: 'ingreso', label: 'Ingreso' }, { value: 'egreso', label: 'Egreso' }, { value: 'fecha', label: 'Fecha' }, { value: 'estado', label: 'Estado' }, { value: 'documentoPendiente', label: 'Documento pendiente' }]}
 				placeholder="Todos"
 				onchange={(v) => (onFiltroCriterioChange(v))}
 			/>
@@ -888,6 +891,14 @@
 						{#if item.aprobado}
 							<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-700">
 								<ShieldCheck size={11} /> Aprobado
+							</span>
+						{/if}
+						{#if item.documento_pendiente === 'si'}
+							<!-- Ticket #33 (rechazo): antes "Documento pendiente" solo se veía dentro del formulario
+							     de edición — a pedido del usuario, ahora también se marca afuera, en la lista, con
+							     el mismo estilo de badge que Tipo/Estado/Aprobado. -->
+							<span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-100 text-amber-700">
+								Documento pendiente
 							</span>
 						{/if}
 					</div>

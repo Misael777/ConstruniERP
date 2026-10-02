@@ -208,6 +208,10 @@ export interface ListParams {
 	 * como 'activo' igual que cualquier transacción, ver resolveEstadoTransaccion, se filtra por este
 	 * campo directamente en vez de por estado). */
 	tipoAlcance?: string;
+	/** Ticket #33 (rechazo): filtra por `documento_pendiente = 'si'` — "Documento pendiente" del dropdown
+	 * de la lista (ver +page.svelte). Solo soporta filtrar por "Sí" (no hace falta un "No" explícito, "Todos"
+	 * ya lo cubre al no mandar este parámetro). */
+	documentoPendiente?: boolean;
 	/** Ticket #38: ids de los centros de costo cuyo nombre/código coincide con `search`. El buscador solo miraba
 	 * columnas propias de la transacción (N° documento, descripción, usuario), pero lo que se lee en cada fila
 	 * es el nombre de sus centros de costo (cliente, proyecto, proveedor…), que vive en otra tabla — por eso solo
@@ -418,6 +422,7 @@ export async function getTransacciones(client: SupabaseClient, params: ListParam
 	if (params.estado) query = query.eq('estado', params.estado);
 	if (params.tipo) query = query.eq('tipo', params.tipo);
 	if (params.tipoAlcance) query = query.eq('tipo_alcance', params.tipoAlcance);
+	if (params.documentoPendiente) query = query.eq('documento_pendiente', 'si');
 
 	const { data, error, count } = await query;
 	if (error) throw error;

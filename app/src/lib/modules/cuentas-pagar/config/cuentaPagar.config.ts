@@ -484,7 +484,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		},
 		showInTable: false,
 		showInForm: true,
-		sortable: false
+		// Ticket #45: mismo criterio que cuentas_cobrar (ticket #39) — se puede ordenar por Prioridad (orden
+		// lógico alto > media > bajo vía la columna calculada prioridad_orden, ver migración
+		// cuentas_pagar_prioridad_orden). No aparece como columna de la tabla, pero sí en el selector "Ordenar".
+		sortable: true
 	},
 	{
 		key: 'created_at',

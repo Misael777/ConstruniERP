@@ -18,6 +18,7 @@ import { formatearFechaCorta, formatearMonto } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl, ensamblarPdfDosCopiasA4 } from './pdfHtmlRender';
 import { ESTILOS_VOUCHER_BASE, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 import { conCarga } from '$lib/stores/loading.svelte';
+import { registrarAccion } from '$lib/shared/auditoria';
 
 const ANCHO_PLANTILLA_PX = 750;
 
@@ -178,6 +179,7 @@ export function construirHtmlCompleto(datos: DatosReciboPagoProveedor): string {
 export async function generarReciboPagoProveedorBase64(datos: DatosReciboPagoProveedor, sinMarcaAgua = false) {
 	// Ticket #9: un solo punto por generador — cubre "Original + Copia" (dos renders de renderHtmlToPngDataUrl)
 	// como UNA sola espera, en vez de parpadear entre cada mitad.
+	registrarAccion('pdf', `Recibo de pago a proveedor N° ${datos.numero}`);
 	return conCarga('Generando el recibo de pago…', () => generarReciboPagoProveedorBase64Interno(datos, sinMarcaAgua));
 }
 

@@ -14,6 +14,7 @@ import { formatearFechaCorta } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl, ensamblarPdfUnaCopiaMultipagina } from './pdfHtmlRender';
 import { escapeHtml } from './pdfVoucherEstilos';
 import { conCarga } from '$lib/stores/loading.svelte';
+import { registrarAccion } from '$lib/shared/auditoria';
 
 // A4 (210 × 297 mm) con 20 mm en blanco a la IZQUIERDA (para perforar las hojas impresas) y 10 mm en los
 // otros 3 lados → contenido de 180 × 277 mm. La plantilla se renderiza a ese ancho EXACTO (180 mm a
@@ -415,6 +416,7 @@ function construirHtmlSimple(d: DatosFacturaPdf): string {
 export async function generarFacturaPdf(datos: DatosFacturaPdf) {
 	// Ticket #9: un solo punto por generador — cubre "Original + Copia" (dos renders de renderHtmlToPngDataUrl)
 	// como UNA sola espera, en vez de parpadear entre cada mitad.
+	registrarAccion('pdf', `${datos.tipoDocumento.replace('_', ' ')} ${datos.folio ?? '(sin folio)'} — ${datos.clienteNombre}`);
 	return conCarga('Generando el PDF de la factura…', () => generarFacturaPdfInterno(datos));
 }
 

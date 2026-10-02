@@ -376,7 +376,7 @@ async function handleSetupPassword(e: Event) {
 
 {#if pantallaCompletaCarga}
 	<div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-		<SnoopyLoader mensaje={mensajeCargaPantallaCompleta} />
+		<SnoopyLoader mensaje={mensajeCargaPantallaCompleta} size="lg" />
 	</div>
 {:else}
 <div class="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4">

@@ -1938,16 +1938,18 @@
 	// Consultoría/Corporativo/Otro), esta filtra específicamente a los centros de costo de tipo
 	// 'prestamo' (ej. "Persona Externa", ver centroCostos.config.ts) — las cuentas creadas a mano
 	// justo para representar a quien recibe un préstamo otorgado.
+	// Ticket #55: orden A-Z por label, con "Otro" siempre al final (a pedido explícito del usuario) — antes
+	// el orden era arbitrario (proveedores, subcontratista, empleados, cliente, otro, prestamo, tributo).
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
+		{ value: 'cliente', label: 'Cliente' },
+		{ value: 'empleados', label: 'Empleados' },
+		{ value: 'prestamo', label: 'Préstamo' },
 		{ value: 'proveedores', label: 'Proveedores' },
 		{ value: 'subcontratista', label: 'Subcontratista' },
-		{ value: 'empleados', label: 'Empleados' },
-		{ value: 'cliente', label: 'Cliente' },
-		{ value: 'otro', label: 'Otro' },
-		{ value: 'prestamo', label: 'Préstamo' },
 		// A pedido explícito del usuario: pago de tributos (IGV/Renta/Multa, ver CATEGORIA_TRIBUTO_EGRESO)
 		// — mismo criterio de Destino que "Otro" (no hay un tipo de Centro de Costo dedicado para esto).
-		{ value: 'tributo', label: 'Tributo' }
+		{ value: 'tributo', label: 'Tributo' },
+		{ value: 'otro', label: 'Otro' }
 	];
 	// Al editar una transacción de Egreso ya guardada, infiere la Clase a partir de a qué lista
 	// pertenece el Destino guardado — para no arrancar con el selector vacío y el campo Destino oculto.

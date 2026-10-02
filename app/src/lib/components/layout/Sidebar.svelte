@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { supabase } from '$lib/supabaseClient';
+	import { cerrarSesion } from '$lib/shared/auditoria';
 	import { MODULE_REGISTRY } from '$lib/config/modules';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { getInfoVersionApp } from '$lib/shared/appVersion';
@@ -61,8 +61,10 @@
 		}
 	}
 
+	// Mismo punto único de cierre de sesión que el layout: queda auditado como 'logout_manual' y no se
+	// confunde con una sesión expirada (antes este botón no marcaba el cierre como manual).
 	async function logout() {
-		await supabase.auth.signOut();
+		await cerrarSesion();
 		goto('/login');
 	}
 </script>

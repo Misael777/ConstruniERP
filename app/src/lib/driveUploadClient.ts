@@ -8,6 +8,7 @@
  */
 import { env } from '$env/dynamic/public';
 import { conCarga } from '$lib/stores/loading.svelte';
+import { registrarAccion } from '$lib/shared/auditoria';
 
 export function isRunningInTauri(): boolean {
 	if (typeof window === 'undefined') return false;
@@ -86,6 +87,7 @@ export async function uploadToDriveClient(
 ): Promise<{ url: string; fileId: string }> {
 	// Ticket #9: punto único de subida a Drive en Tauri — envolverlo acá (y no en cada modal que lo llama)
 	// hace que la animación de carga aparezca sola en Ventas, Documentos, Transacciones, Tickets y Anuncios.
+	registrarAccion('subida', `${type}: ${fileName}`);
 	return conCarga('Subiendo documento a Google Drive…', () => uploadToDriveClientInterno(file, fileName, type));
 }
 

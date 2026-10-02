@@ -31,6 +31,27 @@ function almacenamientoDeSesion(): Storage | undefined {
 	}
 }
 
+/** URL/clave pública del proyecto — los usa la auditoría para avisar el cierre de la app con un `fetch`
+ * keepalive (ver $lib/shared/auditoria.ts), fuera del cliente de supabase-js. */
+export const SUPABASE_URL = supabaseUrl;
+export const SUPABASE_ANON_KEY = supabaseAnonKey;
+
+/** Sesión de auditoría activa (Control de Accesos → Auditoría). Se manda como header en TODAS las peticiones
+ * para que el trigger auditoria_registrar_cambio() de la base sepa a qué sesión pertenece cada cambio de
+ * datos. null = sin sesión de auditoría (no se manda el header). */
+let auditoriaSesionId: string | null = null;
+export function setAuditoriaSesionHeader(sesionId: string | null) {
+	auditoriaSesionId = sesionId;
+}
+
+const fetchConAuditoria: typeof fetch = (input, init) => {
+	if (!auditoriaSesionId) return fetch(input, init);
+	const headers = new Headers(init?.headers);
+	headers.set('x-auditoria-sesion', auditoriaSesionId);
+	return fetch(input, { ...init, headers });
+};
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-	auth: { storage: almacenamientoDeSesion(), persistSession: true, autoRefreshToken: true }
+	auth: { storage: almacenamientoDeSesion(), persistSession: true, autoRefreshToken: true },
+	global: { fetch: fetchConAuditoria }
 });

@@ -106,6 +106,13 @@
 	// botón ya sea más ancho que eso (columnas anchas en desktop), y siempre acotado al viewport (con
 	// margen) para no salirse de la pantalla en un celular angosto.
 	const ANCHO_MIN_PANEL = 340;
+	/** Ticket #47: antes el panel SIEMPRE se abría hacia abajo con una altura mínima forzada de 160px,
+	 * sin importar cuánto espacio real quedaba debajo del campo — un campo como "Prioridad" cerca del
+	 * final de un formulario corto (o en celular) quedaba con el panel recortado contra el borde de la
+	 * pantalla, con opciones que no se alcanzaban a ver ni elegir. Ahora se mide el espacio real arriba y
+	 * abajo del botón: si abajo no entra ni un mínimo cómodo y arriba hay más espacio, el panel se abre
+	 * hacia ARRIBA en su lugar; en cualquier caso, la altura máxima nunca excede el espacio real
+	 * disponible del lado elegido (con un piso de 80px, scrolleable, para viewports muy chicos). */
 	function posicionarPanel() {
 		if (!buttonEl) return;
 		const rect = buttonEl.getBoundingClientRect();
@@ -113,8 +120,14 @@
 		const ancho = Math.min(Math.max(rect.width, ANCHO_MIN_PANEL), anchoDisponible);
 		let left = rect.left;
 		if (left + ancho > window.innerWidth - 8) left = Math.max(8, window.innerWidth - ancho - 8);
-		const alturaMax = Math.max(160, Math.min(360, window.innerHeight - rect.bottom - 16));
-		panelStyle = `position:fixed; top:${rect.bottom + 4}px; left:${left}px; width:${ancho}px; max-height:${alturaMax}px;`;
+
+		const espacioAbajo = window.innerHeight - rect.bottom - 16;
+		const espacioArriba = rect.top - 16;
+		const abrirHaciaArriba = espacioAbajo < 160 && espacioArriba > espacioAbajo;
+		const alturaMax = Math.max(80, Math.min(360, abrirHaciaArriba ? espacioArriba : espacioAbajo));
+		panelStyle = abrirHaciaArriba
+			? `position:fixed; bottom:${window.innerHeight - rect.top + 4}px; left:${left}px; width:${ancho}px; max-height:${alturaMax}px;`
+			: `position:fixed; top:${rect.bottom + 4}px; left:${left}px; width:${ancho}px; max-height:${alturaMax}px;`;
 	}
 
 	/** Bug real reportado por el usuario: en algunos WebView de Android (confirmado en un teléfono con
@@ -201,7 +214,7 @@
 	class={`w-full flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${hasError ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 >
 	{#if selected}
-		<span class="flex-1 min-w-0 truncate text-slate-700">{selected.label}</span>
+		<span class="flex-1 min-w-0 truncate text-slate-700" title={selected.label}>{selected.label}</span>
 	{:else}
 		<span class="flex-1 min-w-0 truncate text-slate-400">{placeholder}</span>
 	{/if}
@@ -234,7 +247,7 @@
 					onclick={() => choose(opt)}
 					class={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
 				>
-					<span class="flex-1 min-w-0 truncate">{opt.label}</span>
+					<span class="flex-1 min-w-0 truncate" title={opt.label}>{opt.label}</span>
 					{#if opt.saldo !== undefined}
 						<span class={`shrink-0 font-semibold ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSaldoOpcion(opt)}</span>
 					{/if}

@@ -19,6 +19,7 @@
 	import ConfirmDialogHost from '$lib/shared/components/ConfirmDialogHost.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
 	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
+	import { iniciarSesionAuditoria, registrarCierre, cerrarSesion, esCierreManual } from '$lib/shared/auditoria';
 
 	let { children } = $props();
 
@@ -59,9 +60,10 @@
 	// sesión y desde ahí las consultas salen como ANÓNIMAS — las tablas sin RLS siguen respondiendo (así "todo
 	// parece normal"), pero empleados/documento_proyecto/etc. devuelven vacío o "violates row-level security
 	// policy" (listas de Responsable vacías, Asesor "Usuario", ventas a medio guardar). Antes la app no se enteraba.
-	let cerrandoSesionManual = false;
+	// Auditoría: ese momento queda registrado como 'sesion_expirada' con la hora exacta (ver auditoria.ts).
 	const { data: authListener } = supabase.auth.onAuthStateChange((evento, sesion) => {
-		if (evento === 'SIGNED_OUT' && !cerrandoSesionManual && page.url.pathname !== '/login') {
+		if (evento === 'SIGNED_OUT' && !esCierreManual() && page.url.pathname !== '/login') {
+			void registrarCierre('sesion_expirada', 'Supabase descartó la sesión (falló el refresco del token)');
 			toast.error('Tu sesión expiró o se perdió. Vuelve a iniciar sesión para continuar.');
 			goto('/login');
 		}
@@ -104,6 +106,8 @@
 			// Deja registrada la versión de la app que este usuario tiene instalada (Panel Developer →
 			// "Versiones instaladas"). Sin await a propósito: es best-effort y no debe demorar el arranque.
 			void registrarVersionUsuario(supabase, session.user.id, permisosState.userName || null);
+			// Control de Accesos → Auditoría: sesión, latido, cierre y eventos pendientes. Best-effort, sin await.
+			void iniciarSesionAuditoria(session.user.id);
 
 			// 2. Obtener rol del empleado desde base de datos
 			console.log('[Layout] Fetching employee role locally for layout checks...');
@@ -171,7 +175,7 @@
 
 {#if isLoading}
 	<div class="h-screen w-screen flex items-center justify-center bg-slate-50">
-		<SnoopyLoader mensaje="Cargando Construni ERP…" />
+		<SnoopyLoader mensaje="Cargando Construni ERP…" size="lg" />
 	</div>
 {:else if noAccess}
 	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 px-6 text-center">
@@ -185,7 +189,7 @@
 		<button
 			type="button"
 			class="px-5 py-2 bg-[#1a233a] text-white rounded-xl hover:bg-[#0f1729] font-medium text-sm transition-colors"
-			onclick={async () => { cerrandoSesionManual = true; await supabase.auth.signOut(); goto('/login'); }}
+			onclick={async () => { await cerrarSesion(); goto('/login'); }}
 		>
 			Cerrar sesión
 		</button>
@@ -221,7 +225,7 @@
 					<button 
 						class="text-slate-400 hover:text-red-500 text-sm ml-2"
 						title="Cerrar sesión"
-						onclick={async () => { cerrandoSesionManual = true; await supabase.auth.signOut(); goto('/login'); }}
+						onclick={async () => { await cerrarSesion(); goto('/login'); }}
 					>
 						<i class="fas fa-sign-out-alt"></i>
 					</button>

@@ -9,6 +9,7 @@
  */
 import { isRunningInTauri } from '$lib/driveUploadClient';
 import { base64ToUint8Array } from '$lib/shared/base64';
+import { registrarAccion } from '$lib/shared/auditoria';
 
 /** Descarga/guarda un archivo de texto — reusable por cualquier exportación (Ventas hoy, otros
  * módulos después) sin duplicar la lógica de branching Tauri-vs-navegador. */
@@ -25,9 +26,11 @@ export async function guardarArchivoDeTexto(contenido: string, nombreSugerido: s
 		if (!path) return; // el usuario canceló el diálogo — no es un error
 
 		await writeTextFile(path, contenido);
+		registrarAccion('descarga', nombreSugerido);
 		return;
 	}
 
+	registrarAccion('descarga', nombreSugerido);
 	const blob = new Blob([contenido], { type: mime });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
@@ -59,9 +62,11 @@ export async function guardarArchivoBinario(contenidoBase64: string, nombreSuger
 		if (!path) return; // el usuario canceló el diálogo — no es un error
 
 		await writeFile(path, bytes);
+		registrarAccion('descarga', nombreSugerido);
 		return;
 	}
 
+	registrarAccion('descarga', nombreSugerido);
 	const blob = new Blob([bytes], { type: mime });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
