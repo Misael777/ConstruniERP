@@ -272,9 +272,24 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260925000100_backfill_cobros_desde_ingresos_al_centro` | Convierte los ingresos previos al centro en `cobros` para conservar saldos | sí | sí |
 | `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
 | `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
-| `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | **pendiente** (SQL a mano + `migration repair`) |
+| `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | sí (aplicada a mano; **falta** `migration repair`) |
 | `20260930032337_comprobante_ingreso_repositorio` | Tablas `comprobante_ingreso` + `comprobante_ingreso_transaccion` del "Repositorio de comprobantes" (Emisión de Comprobante): Factura/Boleta/NC/ND subidos como PDF/foto/XML, leídos con OCR+regex o XML, vinculados a transacciones de ingreso, estado pendiente/revisado/observado | **pendiente** | **pendiente** |
 | `20260929155944_centro_costo_corporativo_unico` | Crea el centro Corporativo (`bolsa general`) si falta e índice único `uq_centro_costo_corporativo_activo` (un solo Corporativo activo). "Nuevo Centro de Costo" ya solo crea Otro/Préstamo | **pendiente** | **pendiente** |
+| `20261001152541_cliente_nombre_mayusculas` | Solo datos: pasa a mayúsculas los nombres de clientes existentes | sí | sí (aplicada a mano; **falta** `migration repair`) |
+| `20261002000000_cuentas_pagar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, media 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Pagar por Prioridad (ticket #45) | sí | sí (aplicada a mano; **falta** `migration repair`) |
+| `20261002120000_auditoria` | Control de Accesos → Auditoría (ver §7c): tablas `auditoria_sesion`/`_accion`/`_error`, RPCs, trigger de cambios en 14 tablas de negocio, permiso `ver_iam_auditoria`, purga 14/7 días. Probada en un Postgres 16 local temporal (con stubs de `auth.uid()`), idempotente | sí | sí (aplicada a mano; **falta** `migration repair`) |
+| `20261002130000_sincronizar_reversion_venta_y_verificacion_admin` | Sincroniza a `migrations/` lo que estaba solo en Producción (corrido a mano desde 3 archivos sueltos de la raíz, 2026-09-28): columna `proyecto.id_transaccion_cierre`, `fn_revertir_venta_por_transaccion`, `fn_anular_transaccion` (versión con reversión de venta) y `fn_verificar_credenciales_admin`. Copiadas tal cual de Producción | sí | ya estaba (**falta** `migration repair`) |
+
+**Comparación de esquemas Dev ↔ Producción (2026-10-02):** se compararon columnas, restricciones, índices,
+funciones, triggers, políticas, RLS, extensiones y permisos de `public` con una consulta de solo lectura al
+catálogo. Quedaron idénticos. Las únicas diferencias son cosméticas:
+- La forma en que Postgres escribe los CHECK.
+- Las funciones creadas desde el SQL Editor quedan con saltos de línea `\r\n` en Producción; sin
+  espacios en blanco, el texto es el mismo.
+
+`20260929155944` y `20260930032337` no están en ninguna de las dos bases. Para registrar en Producción las
+que ya están aplicadas, hay que correr (con confirmación del usuario):
+`npx supabase migration repair --status applied 20260925140000 20261001152541 20261002000000 20261002120000 20261002130000 --db-url <URL_PROD>`.
 
 Todas las migraciones hasta `20260925130000` están aplicadas en Producción (2026-09-25, corridas a mano en el SQL Editor y registradas después con `supabase migration repair`). Lo que falta es **publicar la versión de la app** que trae el código acoplado a ellas (servicios y modales).
 
@@ -430,6 +445,37 @@ ids numéricos convierte con `String()`/`Number()`). Ya no queda ningún `<selec
 excepción es el selector de "filas por página" de `VentasTable.svelte`, que hoy no está conectado a nada. El
 panel del combo usa `z-[200]`, por encima de los modales (máx. `z-[120]`). Limitación conocida: no muestra colores
 por opción (por ejemplo, el de Prioridad en Cuentas por Pagar/Cobrar).
+
+## 7c. Auditoría (Control de Accesos → Auditoría)
+
+Pantalla `/iam/auditoria` (permiso `ver_iam_auditoria`; admin siempre). Registra sesiones, acciones y errores.
+Migración: `20261002120000_auditoria.sql`.
+
+- **Sesión** (`auditoria_sesion`): la abre `iniciarSesionAuditoria()` (`$lib/shared/auditoria.ts`) desde
+  `(app)/+layout.svelte`. Latido cada 60 s. Cómo termina (`motivo_fin`):
+  - `logout_manual`: botón "Cerrar sesión". Todo logout pasa por `cerrarSesion()`; no llames
+    `supabase.auth.signOut()` directo desde la app.
+  - `sesion_expirada`: Supabase descartó la sesión (`onAuthStateChange` → `SIGNED_OUT` no manual).
+  - `app_cerrada`: se cerró la ventana. Lo registra Rust (`src-tauri/src/auditoria.rs`, `CloseRequested`/`Exit`).
+  - `cierre_inesperado`: sin latido por más de 3 min (proceso terminado, corte de luz, Android) o panic de Rust.
+    Queda con la hora del último latido; si después llega el dato real desde el diario local, lo reemplaza.
+- **Token por sesión**: tabla `auditoria_sesion_token`, sin acceso desde la API. Permite registrar el cierre
+  aunque el cliente ya sea `anon`. Todas las escrituras van por RPCs `SECURITY DEFINER`; las tablas son de
+  solo lectura desde la API.
+- **Acciones** (`auditoria_accion`):
+  - Cambios de datos: trigger `auditoria_registrar_cambio()` en 14 tablas de negocio, con el diff de las
+    columnas que cambiaron. La sesión llega en el header `x-auditoria-sesion` (`supabaseClient.ts`) y solo
+    se acepta si es del mismo usuario del JWT.
+  - Descargas / PDFs / subidas: `registrarAccion()` en `saveFile.ts`, los 4 generadores de PDF y las
+    subidas a Drive.
+- **Errores** (`auditoria_error`): `window.onerror`/`unhandledrejection` y panics de Rust. Máximo 30 por minuto.
+- **Diario local**: lo que no llega al servidor queda en `app_data_dir/auditoria/pendientes.jsonl` (Tauri)
+  o `localStorage` (web) y se sube al iniciar la siguiente sesión.
+- **Retención**: `auditoria_purgar()` borra acciones y sesiones de más de 14 días y errores de más de 7. La
+  app la llama en cada login; si se habilita `pg_cron`, la migración agenda además una corrida diaria.
+- **MCP** (solo lectura): `listar_auditoria_sesiones`, `listar_auditoria_acciones`, `listar_auditoria_errores`.
+- **Para agregar una tabla al registro de cambios**, agrégala a la lista del bloque `DO $$` de la migración
+  en una migración nueva, con el nombre de su clave primaria.
 
 ## 8. Glosario rápido
 

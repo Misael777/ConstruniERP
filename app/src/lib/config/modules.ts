@@ -20,7 +20,8 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     permiso: 'ver_iam',
     subItems: [
       { path: '/iam/empleados', label: 'Empleados', permiso: 'ver_empleados' },
-      { path: '/iam/roles-permisos', label: 'Roles y Permisos', permiso: 'ver_roles_permisos' }
+      { path: '/iam/roles-permisos', label: 'Roles y Permisos', permiso: 'ver_roles_permisos' },
+      { path: '/iam/auditoria', label: 'Auditoría', permiso: 'ver_iam_auditoria' }
     ]
   },
   { 

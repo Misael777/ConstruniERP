@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::env;
+use tauri::Manager;
+
+mod auditoria;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PartidaNode {
@@ -237,14 +240,31 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            // Auditoría: diario local de eventos pendientes + hook de panic (ver auditoria.rs).
+            if let Ok(dir) = app.path().app_data_dir() {
+                auditoria::inicializar(dir);
+            }
             Ok(())
+        })
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                auditoria::registrar_cierre_app("Se cerró la ventana de la app");
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_partidas_tree,
             get_plantillas,
             get_plantilla_detalle,
-            instanciar_plantilla
+            instanciar_plantilla,
+            auditoria::auditoria_sesion_actual,
+            auditoria::auditoria_diario_agregar,
+            auditoria::auditoria_diario_tomar
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                auditoria::registrar_cierre_app("La app terminó");
+            }
+        });
 }

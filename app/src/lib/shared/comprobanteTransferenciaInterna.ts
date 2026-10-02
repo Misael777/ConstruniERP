@@ -16,6 +16,7 @@ import { formatearFechaLarga, formatearFechaCorta, formatearMonto } from './pdfF
 import { renderHtmlToPngDataUrl, ensamblarPdfDosCopiasA4 } from './pdfHtmlRender';
 import { ESTILOS_VOUCHER_BASE, ICONO_BRUJULA, marcaAguaBorrador, escapeHtml } from './pdfVoucherEstilos';
 import { conCarga } from '$lib/stores/loading.svelte';
+import { registrarAccion } from '$lib/shared/auditoria';
 
 const ANCHO_PLANTILLA_PX = 750;
 
@@ -147,6 +148,7 @@ export function construirHtmlCompleto(datos: DatosComprobanteInterno): string {
 export async function generarComprobanteTransferenciaInternaBase64(datos: DatosComprobanteInterno, sinMarcaAgua = false) {
 	// Ticket #9: un solo punto por generador — cubre "Original + Copia" (dos renders de renderHtmlToPngDataUrl)
 	// como UNA sola espera, en vez de parpadear entre cada mitad.
+	registrarAccion('pdf', `Comprobante de transferencia interna N° ${datos.numero}`);
 	return conCarga('Generando el comprobante de transferencia…', () => generarComprobanteTransferenciaInternaBase64Interno(datos, sinMarcaAgua));
 }
 
