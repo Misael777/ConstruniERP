@@ -1059,7 +1059,7 @@
 					<span>Proyecto / Cliente / Prestatario</span>
 					<span>N° Documento</span>
 					<span>Vencimiento</span>
-					<span class="text-right">Saldo actual</span>
+					<span class="text-right">Saldo pendiente</span>
 					<span class="text-right">Valor Venta</span>
 					<div class="flex gap-2 pl-4">
 						<span class="flex-1">Prioridad</span>

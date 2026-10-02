@@ -171,7 +171,7 @@
 
 {#if isLoading}
 	<div class="h-screen w-screen flex items-center justify-center bg-slate-50">
-		<SnoopyLoader mensaje="Cargando Construni ERP…" />
+		<SnoopyLoader mensaje="Cargando Construni ERP…" size="lg" />
 	</div>
 {:else if noAccess}
 	<div class="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 px-6 text-center">

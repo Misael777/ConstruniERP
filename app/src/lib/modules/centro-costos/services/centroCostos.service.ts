@@ -324,6 +324,20 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 	const SELECT_LISTA =
 		'*, proveedor(vendedor, razon_social), clienteDirecto:id_cliente(nombre), empleadoDirecto:id_empleado(nombre), proyecto:id_proyecto(tipo_venta, tip_proyecto, estado_predio, tipo_edifica, tipo_obra, tipo_tramite, tipo_intervencion, tipo_edificacion_obra, mes_obra, anio_obra, nro_pisos, distrito, ubicacion, fecha_inicio_plan, created_at, cliente:id_cliente(nombre))';
 
+	// Ticket #49: `proveedor.vendedor.ilike...` metido DENTRO del .or() de abajo (filtro sobre una tabla
+	// embebida, mezclado con columnas propias de centro_costo) no es una combinación real-mente soportada
+	// por PostgREST — en la práctica, PostgREST no aplicaba ese término como debía: la búsqueda traía
+	// centros que NO calzaban con lo buscado, y en algunos casos el request fallaba con un error visible.
+	// Mismo criterio que ticket #38 (transacciones.service.ts, idsCentroCostoBusqueda): se resuelven los
+	// ids por separado con una consulta propia a `proveedor`, y se agregan al .or() como una columna
+	// normal (`id_proveedor.in.(...)`), nunca como una ruta embebida.
+	const searchTrim = params.search?.trim();
+	let idsProveedorBusqueda: number[] = [];
+	if (searchTrim) {
+		const { data: proveedoresMatch } = await client.from('proveedor').select('id_proveedor').ilike('vendedor', `%${searchTrim.replace(/[%_]/g, (m) => `\\${m}`)}%`);
+		idsProveedorBusqueda = (proveedoresMatch ?? []).map((p: any) => p.id_proveedor);
+	}
+
 	/** Filtros de la pestaña y la búsqueda + orden — se aplican igual a la consulta principal y a la de los
 	 * centros sin proyecto de `primeroSinProyecto` (más abajo). */
 	const filtrar = (q: any): any => {
@@ -350,11 +364,11 @@ export async function getCentroCostos(client: SupabaseClient, params: ListParams
 			query = params.soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 		}
 
-		const search = params.search?.trim();
-		if (search) {
-			const escaped = search.replace(/[%_]/g, (m) => `\${m}`);
-			const orFilter = [...SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`), `proveedor.vendedor.ilike.%${escaped}%`].join(',');
-			query = query.or(orFilter);
+		if (searchTrim) {
+			const escaped = searchTrim.replace(/[%_]/g, (m) => `\\${m}`);
+			const filtros = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`);
+			if (idsProveedorBusqueda.length > 0) filtros.push(`id_proveedor.in.(${idsProveedorBusqueda.join(',')})`);
+			query = query.or(filtros.join(','));
 		}
 		return query;
 	};

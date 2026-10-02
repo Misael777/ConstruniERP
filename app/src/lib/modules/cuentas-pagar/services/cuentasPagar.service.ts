@@ -230,7 +230,9 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 	let query = client
 		.from(TABLE_NAME)
 		.select(`*, proveedor(razon_social, vendedor), ${CENTRO_COSTO_EMBED}`, { count: 'exact' })
-		.order(sortField, { ascending: sortDir === 'asc' })
+		// Ticket #45: ordenar por el texto de `prioridad` da un orden alfabético incorrecto (alto, bajo,
+		// media) — igual que cuentas_cobrar (ticket #39), se ordena por la columna calculada prioridad_orden.
+		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })
 		.range(from, to);
 
 	const search = params.search?.trim();

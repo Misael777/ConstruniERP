@@ -1022,7 +1022,7 @@
 		<div class="w-52">
 		<SelectConSaldo
 			value={sortBy}
-			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
+			options={[...FIELDS_CONFIG.filter((f) => f.sortable && (f.showInTable || f.key === 'prioridad')).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
 			onchange={(v) => (toggleSort(v, true))}
 		/>
 		</div>
@@ -1030,7 +1030,7 @@
 			type="button"
 			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}
 			class="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50"
-			title={sortDir === 'asc' ? 'Ascendente' : 'Descendente'}
+			title={sortBy === 'prioridad' ? (sortDir === 'asc' ? 'Prioridad alta primero' : 'Prioridad baja primero') : sortDir === 'asc' ? 'Ascendente' : 'Descendente'}
 			aria-label="Cambiar dirección de orden"
 		>
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
