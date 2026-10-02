@@ -75,17 +75,15 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		}
 	}
 
-	/** Orden de la tabla, a pedido del usuario: primero "En negociación", luego "Venta Cerrada", y
-	 * "Dado de baja" siempre al final — dentro de cada grupo, por fecha de creación (más reciente
-	 * primero, mismo criterio que el orden por defecto que ya tenía la tabla). */
-	function prioridadEstado(estado: string): number {
-		if (estado === 'baja') return 2;
-		if (estado === 'venta_cerrada') return 1;
-		return 0; // 'activo' u otro valor -> "En negociación"
-	}
+	/** Orden de la tabla, a pedido del usuario: por la columna "Fecha" (fecha de la venta), de la más
+	 * reciente a la más antigua, mezclando Borrador y Cerradas — así la venta más actual de cada estado se
+	 * ve a primera vista sin usar filtros. "Dado de baja" sigue al final (solo aparece con "Ver
+	 * eliminados"). Empate de fecha: la creada más recientemente primero. */
 	function compararVentasParaTabla(a: any, b: any): number {
-		const diffPrioridad = prioridadEstado(a.estado_proyecto) - prioridadEstado(b.estado_proyecto);
-		if (diffPrioridad !== 0) return diffPrioridad;
+		const diffBaja = Number(a.estado_proyecto === 'baja') - Number(b.estado_proyecto === 'baja');
+		if (diffBaja !== 0) return diffBaja;
+		const diffFecha = String(b.fechaOrden ?? '').localeCompare(String(a.fechaOrden ?? ''));
+		if (diffFecha !== 0) return diffFecha;
 		return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
 	}
 
@@ -457,7 +455,9 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					// valor (incluido null, ventas viejas) = Obra (ejecución) — ver filtro "Tipo de
 					// Proyecto" más abajo (filtroTipoProyecto/ventasFiltradas).
 					tipoObra: project.tipo_obra || null,
-					createdAt: project.created_at
+					createdAt: project.created_at,
+					// yyyy-mm-dd de la columna "Fecha" (fecha_inicio_plan, o la de creación si no tiene) — para ordenar.
+					fechaOrden: fechaRaw ? String(fechaRaw).slice(0, 10) : ''
 				};
 			}).sort(compararVentasParaTabla);
 

@@ -211,8 +211,18 @@
 		if (metodo === 'por_porcentaje') repartirMontosIgualesEnFilas();
 	}
 
+	/** A pedido del usuario: al cambiar la fecha de una cuota, las SIGUIENTES (todas sin pagar: este modal
+	 * solo maneja las cuotas pendientes) se re-fechan desde esa nueva fecha con la Periodicidad elegida
+	 * (Mensual/Quincenal/Semanal); las anteriores no se tocan. Mientras la fecha esté a medio escribir (año
+	 * incompleto) solo se actualiza esa fila. */
 	function actualizarFecha(index: number, fecha: string) {
-		filas = filas.map((f, i) => (i === index ? { ...f, fecha } : f));
+		const base = new Date(fecha);
+		const fechaCompleta = /^\d{4}-\d{2}-\d{2}$/.test(fecha) && !Number.isNaN(base.getTime()) && base.getUTCFullYear() >= 2000;
+		filas = filas.map((f, i) => {
+			if (i === index) return { ...f, fecha };
+			if (i > index && fechaCompleta) return { ...f, fecha: toISODate(avanzarPeriodo(base, i - index, periodicidad)) };
+			return f;
+		});
 	}
 
 	/** A pedido explícito del usuario: el campo de monto de cada fracción (modo "Montos desiguales")

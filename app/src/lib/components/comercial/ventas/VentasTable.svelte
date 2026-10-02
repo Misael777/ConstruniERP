@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
-	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 
 	const dispatch = createEventDispatcher();
 
@@ -116,11 +115,95 @@
 		return new Date(year, month - 1, day);
 	}
 
+	// A pedido del usuario: filtro (^) al costado de Proyecto, Cliente, Estado, Valor venta, Tipo proyecto,
+	// Fecha y Asesor. Comparten estado con la barra de filtros de arriba (Proyecto/Tipo/Asesor/Fechas), así
+	// que ambos lugares quedan siempre sincronizados.
+	let filtroCliente = $state('Todos');
+	let filtroEstado = $state('Todos');
+	let valorMin = $state('');
+	let valorMax = $state('');
+
+	type ClaveFiltro = 'proyecto' | 'cliente' | 'estado' | 'valor' | 'tipo' | 'fecha' | 'asesor';
+	const FILTROS_COLUMNA: { clave: ClaveFiltro; etiqueta: string }[] = [
+		{ clave: 'proyecto', etiqueta: 'Proyecto' },
+		{ clave: 'cliente', etiqueta: 'Cliente' },
+		{ clave: 'estado', etiqueta: 'Estado' },
+		{ clave: 'valor', etiqueta: 'Valor venta' },
+		{ clave: 'tipo', etiqueta: 'Tipo proyecto' },
+		{ clave: 'fecha', etiqueta: 'Fecha' },
+		{ clave: 'asesor', etiqueta: 'Asesor' }
+	];
+
+	function opcionesFiltro(clave: ClaveFiltro): string[] {
+		if (clave === 'proyecto') return getProyectosDisponibles() as string[];
+		if (clave === 'cliente') return Array.from(new Set(data.map((row: any) => getCliente(row)))).sort() as string[];
+		if (clave === 'asesor') return getAsesoresDisponibles() as string[];
+		if (clave === 'tipo') return TIPOS_PROYECTO_FILTRO;
+		if (clave === 'estado') return modoEliminados ? ['Dado de baja'] : ['En borrador', 'Venta Cerrada'];
+		return [];
+	}
+	function valorFiltro(clave: ClaveFiltro): string {
+		if (clave === 'proyecto') return filtroProyecto;
+		if (clave === 'cliente') return filtroCliente;
+		if (clave === 'asesor') return filtroAsesor;
+		if (clave === 'tipo') return filtroTipo;
+		if (clave === 'estado') return filtroEstado;
+		return 'Todos';
+	}
+	function elegirFiltro(clave: ClaveFiltro, valor: string) {
+		if (clave === 'proyecto') filtroProyecto = valor;
+		else if (clave === 'cliente') filtroCliente = valor;
+		else if (clave === 'asesor') filtroAsesor = valor;
+		else if (clave === 'tipo') filtroTipo = valor;
+		else if (clave === 'estado') filtroEstado = valor;
+		cerrarFiltro();
+	}
+	function filtroActivo(clave: ClaveFiltro): boolean {
+		if (clave === 'valor') return valorMin !== '' || valorMax !== '';
+		if (clave === 'fecha') return !!fechaDesde || !!fechaHasta;
+		return valorFiltro(clave) !== 'Todos';
+	}
+	function limpiarFiltro(clave: ClaveFiltro) {
+		if (clave === 'valor') { valorMin = ''; valorMax = ''; }
+		else if (clave === 'fecha') { fechaDesde = ''; fechaHasta = ''; }
+		else elegirFiltro(clave, 'Todos');
+	}
+
+	// Ventana del filtro abierta: se posiciona con `fixed` según el botón (^), así no la recorta el
+	// contenedor con scroll de la tabla. Se cierra con clic afuera (fondo transparente) o Escape.
+	let filtroAbierto = $state<ClaveFiltro | null>(null);
+	let posFiltro = $state({ top: 0, left: 0 });
+	let busquedaFiltro = $state('');
+	const ANCHO_FILTRO = 256;
+	function abrirFiltro(clave: ClaveFiltro, event: MouseEvent) {
+		if (filtroAbierto === clave) return cerrarFiltro();
+		const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+		posFiltro = {
+			top: Math.min(rect.bottom + 6, window.innerHeight - 120),
+			left: Math.max(8, Math.min(rect.left - 8, window.innerWidth - ANCHO_FILTRO - 8))
+		};
+		busquedaFiltro = '';
+		filtroAbierto = clave;
+	}
+	function cerrarFiltro() {
+		filtroAbierto = null;
+	}
+	function enfocar(node: HTMLElement) {
+		node.focus();
+	}
+	const etiquetaFiltroAbierto = $derived(FILTROS_COLUMNA.find((f) => f.clave === filtroAbierto)?.etiqueta ?? '');
+
 	function getFilteredData() {
+		const min = valorMin === '' ? null : Number(valorMin);
+		const max = valorMax === '' ? null : Number(valorMax);
 		return data.filter((row: any) => {
 			const proyectoMatch = filtroProyecto === 'Todos' || getCodigo(row) === filtroProyecto;
+			const clienteMatch = filtroCliente === 'Todos' || getCliente(row) === filtroCliente;
+			const estadoMatch = filtroEstado === 'Todos' || getEstadoLabel(row.estado_proyecto) === filtroEstado;
 			const tipoMatch = tipoProyectoMatch(row, filtroTipo);
 			const asesorMatch = filtroAsesor === 'Todos' || row.asesor === filtroAsesor;
+			const valor = Number(row.valor) || 0;
+			const valorMatch = (min === null || valor >= min) && (max === null || valor <= max);
 
 			const rowDate = parseFechaRow(row.fecha);
 			const desdeDate = parseFechaInput(fechaDesde);
@@ -129,69 +212,70 @@
 			const desdeMatch = !desdeDate || (rowDate && rowDate >= desdeDate);
 			const hastaMatch = !hastaDate || (rowDate && rowDate <= hastaDate);
 
-			return proyectoMatch && tipoMatch && asesorMatch && desdeMatch && hastaMatch;
+			return proyectoMatch && clienteMatch && estadoMatch && tipoMatch && asesorMatch && valorMatch && desdeMatch && hastaMatch;
 		});
 	}
 
 	function limpiarFiltros() {
 		filtroProyecto = 'Todos';
+		filtroCliente = 'Todos';
+		filtroEstado = 'Todos';
 		filtroTipo = 'Todos';
 		filtroAsesor = 'Todos';
+		valorMin = '';
+		valorMax = '';
 		fechaDesde = '';
 		fechaHasta = '';
 	}
 </script>
 
 <div class="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col md:h-full md:overflow-hidden">
-	<!-- Filters Bar -->
-	<div class="p-4 border-b border-slate-100 grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-center sm:gap-4">
-		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[140px] sm:flex-1 md:flex-none">
-			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Proyecto</label>
-			<SelectConSaldo
-				value={filtroProyecto}
-				options={[{ value: 'Todos', label: 'Todos los proyectos' }, ...getProyectosDisponibles().map((x) => ({ value: String(x), label: String(x) }))]}
-				placeholder="Todos los proyectos"
-				onchange={(v) => (filtroProyecto = v)}
-			/>
-		</div>
-		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[120px] sm:flex-1 md:flex-none">
-			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Tipo proyecto</label>
-			<SelectConSaldo
-				value={filtroTipo}
-				options={[{ value: 'Todos', label: 'Todos' }, ...TIPOS_PROYECTO_FILTRO.map((x) => ({ value: String(x), label: String(x) }))]}
-				placeholder="Todos"
-				onchange={(v) => (filtroTipo = v)}
-			/>
-		</div>
-		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[140px] sm:flex-1 md:flex-none">
-			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Asesor</label>
-			<SelectConSaldo
-				value={filtroAsesor}
-				options={[{ value: 'Todos', label: 'Todos' }, ...getAsesoresDisponibles().map((x) => ({ value: String(x), label: String(x) }))]}
-				placeholder="Todos"
-				onchange={(v) => (filtroAsesor = v)}
-			/>
-		</div>
-		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[130px] sm:flex-1 md:flex-none">
-			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Fecha desde</label>
-			<input type="date" bind:value={fechaDesde} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full" />
-		</div>
-		<div class="flex flex-col gap-1 min-w-0 sm:min-w-[130px] sm:flex-1 md:flex-none">
-			<label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Fecha hasta</label>
-			<input type="date" bind:value={fechaHasta} class="text-sm px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 w-full" />
-		</div>
-		<div class="col-span-2 sm:contents">
-			<div class="flex items-end sm:flex-1 md:flex-none sm:ml-auto">
-				<button onclick={limpiarFiltros} class="text-sm font-semibold text-blue-600 flex items-center gap-2 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors">
-					<i class="fas fa-undo"></i> Limpiar filtros
-				</button>
-			</div>
-		</div>
+	{#snippet botonFiltro(clave: ClaveFiltro, etiqueta: string)}
+		<button
+			type="button"
+			onclick={(e) => abrirFiltro(clave, e)}
+			class={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${filtroActivo(clave) || filtroAbierto === clave ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-200 hover:text-blue-600'}`}
+			title={`Filtrar por ${etiqueta}`}
+			aria-label={`Filtrar por ${etiqueta}`}
+			aria-expanded={filtroAbierto === clave}
+		>
+			<i class={`fas ${filtroAbierto === clave ? 'fa-chevron-up' : 'fa-chevron-down'} text-[9px]`}></i>
+		</button>
+	{/snippet}
+
+	<!-- A pedido del usuario se quitó la barra de filtros (Proyecto/Tipo/Asesor/Fechas): se filtra solo con
+	     los (^) de cada columna. En celular la lista se ve como tarjetas (sin encabezados), así que esos
+	     mismos (^) se ofrecen acá como botones. -->
+	<div class="px-4 py-2 border-b border-slate-100 flex flex-wrap items-center gap-2">
+		{#each FILTROS_COLUMNA as f (f.clave)}
+			<span class={`md:hidden inline-flex items-center gap-1.5 pl-2.5 pr-1 py-1 rounded-full border text-xs font-medium ${filtroActivo(f.clave) ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600'}`}>
+				{f.etiqueta}
+				{@render botonFiltro(f.clave, f.etiqueta)}
+			</span>
+		{/each}
+		<button onclick={limpiarFiltros} class="ml-auto text-sm font-semibold text-blue-600 flex items-center gap-2 hover:bg-blue-50 px-3 py-1.5 rounded-lg transition-colors">
+			<i class="fas fa-undo"></i> Limpiar filtros
+		</button>
 	</div>
 
 	<!-- Table / Cards -->
 	<div class="overflow-x-auto md:overflow-y-auto md:flex-1">
 		<ResponsiveDataView items={getFilteredData()} keyField="id" {columns} emptyMessage="No se encontraron ventas con esos filtros.">
+			{#snippet header()}
+				{#each columns as col}
+					{@const filtro = FILTROS_COLUMNA.find((f) => f.etiqueta.toLowerCase() === col.label.toLowerCase())}
+					<th class={`sticky top-0 z-10 bg-slate-50 px-5 py-4 whitespace-nowrap ${col.align === 'center' ? 'text-center' : 'text-left'}`}>
+						{#if filtro}
+							<span class="inline-flex items-center gap-1.5">
+								{col.label}
+								{@render botonFiltro(filtro.clave, filtro.etiqueta)}
+							</span>
+						{:else}
+							{col.label}
+						{/if}
+					</th>
+				{/each}
+			{/snippet}
 			{#snippet row(row)}
 				<td class="px-5 py-4 font-medium text-slate-800">
 					<div class="max-w-[220px] truncate" title={getCodigo(row)}>{getCodigo(row)}</div>
@@ -315,6 +399,61 @@
 			{/snippet}
 		</ResponsiveDataView>
 	</div>
+
+	{#if filtroAbierto}
+		<!-- Fondo transparente: clic afuera cierra la ventana del filtro. -->
+		<div class="fixed inset-0 z-40" onclick={cerrarFiltro} aria-hidden="true"></div>
+		<div
+			class="fixed z-50 rounded-xl border border-slate-200 bg-white p-3 shadow-xl text-left"
+			style={`top:${posFiltro.top}px;left:${posFiltro.left}px;width:${ANCHO_FILTRO}px`}
+			role="dialog"
+			aria-label={`Filtrar por ${etiquetaFiltroAbierto}`}
+			tabindex="-1"
+			onkeydown={(e) => { if (e.key === 'Escape') cerrarFiltro(); }}
+		>
+			<div class="flex items-center justify-between mb-2">
+				<p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtrar por {etiquetaFiltroAbierto.toLowerCase()}</p>
+				<button type="button" onclick={() => { if (filtroAbierto) limpiarFiltro(filtroAbierto); }} class="text-[11px] text-blue-600 hover:underline">Limpiar</button>
+			</div>
+			{#if filtroAbierto === 'valor'}
+				<div class="grid grid-cols-2 gap-2">
+					<label class="flex flex-col gap-1 text-[11px] text-slate-500">
+						Mínimo (S/)
+						<input type="number" min="0" step="0.01" inputmode="decimal" bind:value={valorMin} use:enfocar placeholder="0.00" class="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" />
+					</label>
+					<label class="flex flex-col gap-1 text-[11px] text-slate-500">
+						Máximo (S/)
+						<input type="number" min="0" step="0.01" inputmode="decimal" bind:value={valorMax} placeholder="Sin tope" class="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" />
+					</label>
+				</div>
+			{:else if filtroAbierto === 'fecha'}
+				<div class="grid grid-cols-1 gap-2">
+					<label class="flex flex-col gap-1 text-[11px] text-slate-500">
+						Desde
+						<input type="date" bind:value={fechaDesde} class="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" />
+					</label>
+					<label class="flex flex-col gap-1 text-[11px] text-slate-500">
+						Hasta
+						<input type="date" bind:value={fechaHasta} class="w-full px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" />
+					</label>
+				</div>
+			{:else}
+				{@const clave = filtroAbierto}
+				{@const opciones = opcionesFiltro(clave).filter((o) => o.toLowerCase().includes(busquedaFiltro.trim().toLowerCase()))}
+				{#if opcionesFiltro(clave).length > 5}
+					<input type="text" bind:value={busquedaFiltro} use:enfocar placeholder="Buscar..." class="w-full mb-2 px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" />
+				{/if}
+				<div class="max-h-56 overflow-y-auto space-y-0.5">
+					<button type="button" onclick={() => elegirFiltro(clave, 'Todos')} class={`block w-full rounded-lg px-2 py-1.5 text-left text-sm ${valorFiltro(clave) === 'Todos' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700 hover:bg-slate-50'}`}>Todos</button>
+					{#each opciones as opcion (opcion)}
+						<button type="button" onclick={() => elegirFiltro(clave, opcion)} class={`block w-full truncate rounded-lg px-2 py-1.5 text-left text-sm ${valorFiltro(clave) === opcion ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700 hover:bg-slate-50'}`} title={opcion}>{opcion}</button>
+					{:else}
+						<p class="px-2 py-1.5 text-xs text-slate-400">Sin coincidencias</p>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Pagination Footer -->
 	<div class="p-4 border-t border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-auto bg-slate-50/30">
