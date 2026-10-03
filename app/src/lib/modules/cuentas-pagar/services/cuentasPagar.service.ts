@@ -893,7 +893,7 @@ export async function createPago(
 
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, monto_comprometido, proveedor:id_proveedor(razon_social)')
+.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, monto_comprometido, id_transaccion, proveedor:id_proveedor(razon_social)')
 		.eq(PK_COLUMN, idCuentaPagar)
 		.single();
 	if (!cuenta?.id_centro_costo) {
@@ -1067,7 +1067,7 @@ export async function updatePago(
 	// si cancela ese paso, este pago se queda tal como estaba (todavía NO 'pagado', ver arriba).
 	const { data: cuenta } = await client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, proveedor:id_proveedor(razon_social)')
+.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, id_transaccion, proveedor:id_proveedor(razon_social)')
 		.eq(PK_COLUMN, data.id_cuenta_pagar)
 		.single();
 

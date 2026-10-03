@@ -462,7 +462,7 @@ async function reconocerComprobantePagoInterno(file: File): Promise<ReconocerCom
 }
 
 /** Texto completo de una Factura/Boleta/Nota de Crédito/Débito (foto o PDF) leído con OCR — para el
- * repositorio de comprobantes de "Emisión de Comprobante" (ver extraerDatosDeTexto en
+ * modo "PDF de SUNAT" de "Emisión de Comprobante" cuando el archivo es una foto o un PDF escaneado (ver extraerDatosDeTexto en
  * facturacion/services/lectorComprobante.ts, que lo interpreta con regex). Mismo pipeline que
  * reconocerComprobantePago (PDF -> imagen, realce, Tesseract en español) pero a mayor resolución: un
  * comprobante trae más texto chico (tabla de productos, bloque de totales) que un boucher. Lanza si

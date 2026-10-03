@@ -469,7 +469,9 @@ async function reemplazarDetalle(client: SupabaseClient, idFactura: number, line
 }
 
 /** Crea o actualiza una factura en 'borrador'. `moneda`/`tipo_cambio` se derivan de las transacciones
- * elegidas (no se editan a mano). Una factura ya emitida no se puede modificar. */
+ * elegidas (no se editan a mano). Una factura ya emitida no se puede modificar. `folioExterno`: número
+ * del comprobante emitido por SUNAT (modo "PDF de SUNAT", ej. "E001-00000245") — se usa como folio en
+ * vez del correlativo interno (fn_asignar_folio_factura solo numera cuando el folio llega vacío). */
 export async function guardarBorradorFactura(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
@@ -479,7 +481,8 @@ export async function guardarBorradorFactura(
 	lineas: LineaFactura[],
 	usuarioRegistro: string | null,
 	tipoComprobante: TipoComprobante,
-	idFactura?: number
+	idFactura?: number,
+	folioExterno?: string | null
 ): Promise<ServiceResult<Factura>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (tipoComprobante === 'nota_credito' && !String(payload.tipo_nota ?? '').trim()) errors.tipo_nota = 'Tipo de nota de crédito es obligatorio';
@@ -516,6 +519,7 @@ export async function guardarBorradorFactura(
 		monto_total: t.importeTotal,
 		monto_detraccion: sujeta ? t.montoDetraccion : null
 	};
+	if (folioExterno) datos.folio = folioExterno;
 
 	try {
 		if (idFactura) {
@@ -526,7 +530,10 @@ export async function guardarBorradorFactura(
 		}
 
 		const { data, error } = await client.from(TABLE_NAME).insert({ ...datos, usuario_registro: usuarioRegistro }).select(FACTURA_SELECT).single();
-		if (error) return { success: false, message: `No se pudo crear la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+		if (error) {
+			if (folioExterno && error.code === '23505') return { success: false, message: `Ya existe un comprobante registrado con el número ${folioExterno}.` };
+			return { success: false, message: `No se pudo crear la factura: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
+		}
 		try {
 			await reemplazarDetalle(client, data.id_factura, lineas);
 		} catch (err: any) {
@@ -593,6 +600,25 @@ export async function autorizarYEmitirFactura(
 	if (archivoError) console.error('[facturacion.service] El documento se emitió pero no se registró en factura_archivo:', archivoError);
 
 	return { success: true, message: 'Documento emitido y guardado correctamente', data: data as unknown as Factura };
+}
+
+/** Modo "PDF de SUNAT": guarda el archivo original leído (PDF/foto/XML de SUNAT) junto al documento ya
+ * emitido, como factura_archivo tipo 'sunat' (ver migración factura_archivo_sunat). Mejor esfuerzo: el
+ * documento ya quedó emitido aunque esto falle; devuelve el mensaje de error para avisar. */
+export async function adjuntarComprobanteSunat(client: SupabaseClient, factura: Pick<Factura, 'id_factura' | 'folio'>, archivo: File, usuario: string | null): Promise<string | null> {
+	try {
+		const extension = archivo.name.match(/\.[a-z0-9]+$/i)?.[0] ?? '';
+		const nombre = `SUNAT_${factura.folio}${extension}`;
+		const { url } = await uploadProjectDocument(archivo, { type: 'comprobante', documentName: nombre });
+		const { error } = await client.from('factura_archivo').insert({ id_factura: factura.id_factura, tipo: 'sunat', url, nombre_archivo: nombre, usuario_registro: usuario });
+		if (error) {
+			await deleteProjectDocumentFile(url).catch(() => undefined);
+			return error.code === '23514' ? 'Falta aplicar la migración factura_archivo_sunat en la base.' : error.message;
+		}
+		return null;
+	} catch (err: any) {
+		return err?.message ?? 'error inesperado';
+	}
 }
 
 // ─────────────────────────────────────────────────────────────

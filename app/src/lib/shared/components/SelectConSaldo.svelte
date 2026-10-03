@@ -57,6 +57,7 @@
 		disabled = false,
 		placeholder = 'Selecciona una opción',
 		hasError = false,
+		encabezadoNombre = 'Nombre',
 		onchange
 	}: {
 		id?: string;
@@ -65,6 +66,8 @@
 		disabled?: boolean;
 		placeholder?: string;
 		hasError?: boolean;
+		/** Título de la 1.ª columna cuando la lista muestra saldos (ej. "Centro de costo", "Cuenta"). */
+		encabezadoNombre?: string;
 		onchange: (value: string) => void;
 	} = $props();
 
@@ -76,6 +79,13 @@
 	let busqueda = $state('');
 
 	const selected = $derived(options.find((o) => o.value === value) ?? null);
+	/** A pedido del usuario: si alguna opción trae saldo, la lista se muestra en dos columnas ordenadas
+	 * (nombre | saldo actual) con encabezado, letra más chica y el nombre completo (sin cortar). */
+	const conSaldo = $derived(options.some((o) => o.saldo !== undefined));
+	/** Permite cortar la línea después de cada "_" (códigos de proyecto largos sin espacios). */
+	function conCortes(texto: string): string {
+		return texto.replace(/_/g, '_\u200B');
+	}
 
 	/** A pedido explícito del usuario: si la opción trae un `simbolo` propio (moneda real de una cuenta
 	 * bancaria, ej. '$' Dólares/'S/.' Soles), se usa ESE en vez de formatCurrency (que siempre formatea
@@ -106,6 +116,39 @@
 	// botón ya sea más ancho que eso (columnas anchas en desktop), y siempre acotado al viewport (con
 	// margen) para no salirse de la pantalla en un celular angosto.
 	const ANCHO_MIN_PANEL = 340;
+	/** Lista con saldos (a pedido del usuario, sin espacio perdido entre columnas): el panel toma el ancho de
+	 * su CONTENIDO — el nombre más largo (hasta ANCHO_MAX_NOMBRE; si es más largo pasa a una 2.ª línea) más
+	 * el saldo más ancho — en vez de un mínimo fijo que empujaba el saldo lejos del nombre. Se mide con un
+	 * canvas (estándar: igual en navegador, Tauri Windows y Tauri Android). */
+	const ANCHO_MIN_PANEL_CON_SALDO = 240;
+	const ANCHO_MAX_NOMBRE = 230;
+	let lienzoMedida: CanvasRenderingContext2D | null = null;
+	/** Ancho para listas sin saldo: el nombre más largo (con tope) — nunca menos que el propio botón. */
+	function anchoContenidoSinSaldo(): number {
+		lienzoMedida ??= document.createElement('canvas').getContext('2d');
+		if (!lienzoMedida || !buttonEl) return ANCHO_MIN_PANEL;
+		lienzoMedida.font = `500 11px ${getComputedStyle(buttonEl).fontFamily}`;
+		let nombre = 0;
+		for (const o of options) nombre = Math.max(nombre, lienzoMedida.measureText(o.label).width);
+		// padding 24 + barra de scroll 14 + margen 6; mínimo 220 para que el buscador sea cómodo
+		return Math.max(220, Math.ceil(Math.min(nombre, ANCHO_MAX_NOMBRE + 80) + 44));
+	}
+	/** Columnas de la lista con saldos, compartidas por encabezado y filas: nombre (resto) | saldo (fijo). */
+	let columnasConSaldo = $state('grid-template-columns: minmax(0,1fr) 7rem;');
+	function anchoContenidoConSaldo(): number {
+		lienzoMedida ??= document.createElement('canvas').getContext('2d');
+		if (!lienzoMedida || !buttonEl) return ANCHO_MIN_PANEL;
+		const fuente = getComputedStyle(buttonEl).fontFamily;
+		lienzoMedida.font = `500 11px ${fuente}`;
+		let nombre = 0;
+		for (const o of options) nombre = Math.max(nombre, lienzoMedida.measureText(o.label).width);
+		lienzoMedida.font = `600 11px ${fuente}`;
+		let saldo = lienzoMedida.measureText('SALDO ACTUAL').width;
+		for (const o of options) if (o.saldo !== undefined) saldo = Math.max(saldo, lienzoMedida.measureText(formatSaldoOpcion(o)).width);
+		columnasConSaldo = `grid-template-columns: minmax(0,1fr) ${Math.ceil(saldo) + 18}px;`;
+		// padding horizontal 24 + separación 8 + relleno de la columna de saldo 18 + barra de scroll 14 + margen 4
+		return Math.ceil(Math.min(nombre, ANCHO_MAX_NOMBRE) + saldo + 68);
+	}
 	/** Ticket #47: antes el panel SIEMPRE se abría hacia abajo con una altura mínima forzada de 160px,
 	 * sin importar cuánto espacio real quedaba debajo del campo — un campo como "Prioridad" cerca del
 	 * final de un formulario corto (o en celular) quedaba con el panel recortado contra el borde de la
@@ -117,7 +160,7 @@
 		if (!buttonEl) return;
 		const rect = buttonEl.getBoundingClientRect();
 		const anchoDisponible = window.innerWidth - 16;
-		const ancho = Math.min(Math.max(rect.width, ANCHO_MIN_PANEL), anchoDisponible);
+		const ancho = Math.min(conSaldo ? Math.max(anchoContenidoConSaldo(), ANCHO_MIN_PANEL_CON_SALDO) : Math.max(rect.width, anchoContenidoSinSaldo()), anchoDisponible);
 		let left = rect.left;
 		if (left + ancho > window.innerWidth - 8) left = Math.max(8, window.innerWidth - ancho - 8);
 
@@ -234,24 +277,45 @@
 				class="w-full rounded-md border border-slate-200 pl-7 pr-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-blue-200"
 			/>
 		</div>
-		<div role="listbox" class="flex-1 min-h-0 overflow-y-auto py-1">
+		{#if conSaldo}
+			<div style={columnasConSaldo} class="grid gap-2 px-3 py-1.5 border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500 shrink-0">
+				<span>{encabezadoNombre}</span>
+				<span class="text-right border-l border-slate-200 pl-2">Saldo actual</span>
+			</div>
+		{/if}
+		<div role="listbox" class={`flex-1 min-h-0 overflow-y-auto ${conSaldo ? '' : 'py-1'}`}>
 			<!-- La clave incluye el índice: dos opciones con el MISMO value (ej. dos cajas de efectivo con numero_cuenta 'EFECTIVO', ticket #32) rompían el each con clave duplicada y la lista dejaba de poder elegirse. -->
 			{#each opcionesFiltradas as opt, i (`${opt.value}::${i}`)}
 				{#if opt.grupo && (i === 0 || opcionesFiltradas[i - 1].grupo !== opt.grupo)}
-					<p class="px-3 pt-2.5 pb-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">{opt.grupo}</p>
+					<p class={`px-3 pt-2 pb-1 text-[10px] uppercase tracking-widerbg-slate-100 text-slate-900 font-extrabold border-y border-slate-200`}>{opt.grupo}</p>
 				{/if}
-				<button
-					type="button"
-					role="option"
-					aria-selected={opt.value === value}
-					onclick={() => choose(opt)}
-					class={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
-				>
-					<span class="flex-1 min-w-0 truncate" title={opt.label}>{opt.label}</span>
-					{#if opt.saldo !== undefined}
-						<span class={`shrink-0 font-semibold ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSaldoOpcion(opt)}</span>
-					{/if}
-				</button>
+				{#if conSaldo}
+					<button
+						type="button"
+						role="option"
+						aria-selected={opt.value === value}
+						onclick={() => choose(opt)}
+						style={columnasConSaldo}
+						class={`w-full grid items-stretch gap-2 px-3 py-1 text-[11px] text-left border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
+					>
+						<span class="min-w-0 self-center break-words leading-snug" title={opt.label}>{conCortes(opt.label)}</span>
+						{#if opt.saldo !== undefined}
+							<span class={`flex items-center justify-end border-l border-slate-100 pl-2 font-semibold tabular-nums whitespace-nowrap ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSaldoOpcion(opt)}</span>
+						{:else}
+							<span class="flex items-center justify-end border-l border-slate-100 pl-2 text-slate-300">—</span>
+						{/if}
+					</button>
+				{:else}
+					<button
+						type="button"
+						role="option"
+						aria-selected={opt.value === value}
+						onclick={() => choose(opt)}
+						class={`w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-left border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
+					>
+						<span class="flex-1 min-w-0 break-words leading-snug" title={opt.label}>{conCortes(opt.label)}</span>
+					</button>
+				{/if}
 			{:else}
 				<p class="px-3 py-2 text-sm text-slate-400">{busqueda.trim() ? 'Sin resultados para tu búsqueda.' : 'Sin opciones disponibles.'}</p>
 			{/each}

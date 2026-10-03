@@ -33,3 +33,36 @@ export async function renderPdfFirstPageToDataUrl(file: File | Blob, maxWidth = 
 		await loadingTask.destroy();
 	}
 }
+
+/** Texto DIGITAL de un PDF (la capa de texto que traen los PDF generados por un sistema, ej. una Factura
+ * o Boleta emitida por SUNAT) — exacto y mucho más rápido que OCR. Reconstruye las líneas agrupando los
+ * fragmentos por su altura en la página (y ordenándolos de izquierda a derecha), para que los regex que
+ * buscan "RUC: ..." o "Importe Total: ..." vean el texto como se lee. Un PDF escaneado (solo imagen)
+ * devuelve '' — quien llama decide si recurrir a OCR. `maxPaginas` evita leer documentos enormes. */
+export async function extraerTextoPdf(file: File | Blob, maxPaginas = 5): Promise<string> {
+	const buffer = await file.arrayBuffer();
+	const loadingTask = getDocument({ data: buffer });
+	try {
+		const pdf = await loadingTask.promise;
+		const paginas: string[] = [];
+		for (let n = 1; n <= Math.min(pdf.numPages, maxPaginas); n++) {
+			const page = await pdf.getPage(n);
+			const contenido = await page.getTextContent();
+			const lineas = new Map<number, { x: number; texto: string }[]>();
+			for (const item of contenido.items) {
+				if (!('str' in item) || !item.str.trim()) continue;
+				const y = Math.round(item.transform[5] / 3) * 3; // tolerancia de ~3pt para la misma línea
+				const fila = lineas.get(y) ?? [];
+				fila.push({ x: item.transform[4], texto: item.str });
+				lineas.set(y, fila);
+			}
+			const ordenadas = [...lineas.entries()]
+				.sort((a, b) => b[0] - a[0]) // en PDF la y crece hacia arriba
+				.map(([, fila]) => fila.sort((a, b) => a.x - b.x).map((f) => f.texto).join(' ').replace(/\s+/g, ' ').trim());
+			paginas.push(ordenadas.join('\n'));
+		}
+		return paginas.join('\n').trim();
+	} finally {
+		await loadingTask.destroy();
+	}
+}

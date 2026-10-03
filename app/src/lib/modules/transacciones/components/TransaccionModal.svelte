@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { supabase } from '$lib/supabaseClient';
@@ -501,6 +502,7 @@
 		if (open) {
 			idempotencyKey = crypto.randomUUID();
 			formValues = buildInitialValues();
+			medioPagoAuto = false;
 			fieldErrors = {};
 			comprobanteFile = null;
 			comprobanteUrl = transaccion?.comprobante_url ?? null;
@@ -643,6 +645,7 @@
 			colaOcrCache = {};
 			colaIndex = 0;
 			formValues = buildInitialValues();
+			medioPagoAuto = false;
 			comprobanteUrl = null;
 			comprobanteError = '';
 			comprobanteFile = files[0];
@@ -666,7 +669,7 @@
 
 	function onComprobanteDrop(e: DragEvent) {
 		e.preventDefault();
-		if (bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna') return;
+		if (bloqueadaPorAprobacion) return;
 		processComprobanteFiles(e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []);
 	}
 
@@ -1291,6 +1294,7 @@
 		const field = formFields.find((f) => f.key === key)!;
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
+		if (key === 'medio_pago') medioPagoAuto = false;
 		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) y, si el proyecto es de
 		// Obra, también del Centro de Costo elegido (ver esProyectoDeObra) — si cualquiera de los tres
 		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
@@ -1509,7 +1513,9 @@
 		formValues.tipo === 'egreso' &&
 			((claseEsOtroPrestamoOTributo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
 	);
-	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && categoriaEsPrestamoOtorgado);
+	// Confirmar el pago de una cuota (onConfirm) con Categoría "Préstamo" es devolver un préstamo RECIBIDO,
+	// no otorgar uno: no se desvía a Cuentas por Cobrar.
+	const esPrestamoOtorgadoEgreso = $derived(mode === 'create' && !onConfirm && categoriaEsPrestamoOtorgado);
 
 	// A pedido explícito del usuario: al EDITAR (no crear) una transacción de Préstamo y darle
 	// "Actualizar", además de guardar la transacción en sí, debe abrirse la Cuenta por Pagar/Cobrar que
@@ -1957,9 +1963,20 @@
 	// transacciones viejas hacia un centro de costo de proyecto/Corporativo/tipo 'otro') — antes de
 	// agregar esta opción, ese caso dejaba Clase vacía y Centro de Costo Destino sin ninguna opción que
 	// mostrar (ver optionsFor), ocultando de hecho el valor ya guardado.
+	// También al CONFIRMAR un pago (onConfirm, ej. la cuota de un préstamo recibido, cuyo Destino precargado es
+	// el prestamista): sin Clase el Centro de Costo Destino no tenía opciones y se veía en blanco. Espera a que
+	// cargue el tipo de cada centro (centroCostoTipoMap) para no caer en "Otro" por llegar antes.
 	$effect(() => {
-		if (open && mode === 'edit' && transaccion && formValues.tipo === 'egreso' && !claseDestino && centroCostoClientesCargado) {
-			const destinoId = String(transaccion.id_centro_costo_destino);
+		const destinoPrecargado = String(formValues.id_centro_costo_destino ?? '');
+		if (
+			open &&
+			(mode === 'edit' ? !!transaccion : !!onConfirm && !!destinoPrecargado) &&
+			formValues.tipo === 'egreso' &&
+			!claseDestino &&
+			centroCostoClientesCargado &&
+			Object.keys(centroCostoTipoMap).length > 0
+		) {
+			const destinoId = mode === 'edit' && transaccion ? String(transaccion.id_centro_costo_destino) : destinoPrecargado;
 			if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
 			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
@@ -1967,7 +1984,7 @@
 			else if (centroCostoTipoMap[destinoId] === 'prestamo') claseDestino = 'prestamo';
 			// "Tributo" no tiene un tipo de Centro de Costo dedicado (mismo Destino que "Otro", ver
 			// optionsFor) — se distingue por la Categoría ya guardada, único indicio disponible al editar.
-			else if (['IGV', 'Renta', 'Multa'].includes((transaccion as any).categoria ?? '')) claseDestino = 'tributo';
+			else if (['IGV', 'Renta', 'Multa'].includes((transaccion as any)?.categoria ?? formValues.categoria ?? '')) claseDestino = 'tributo';
 			else claseDestino = 'otro';
 		}
 	});
@@ -2262,7 +2279,30 @@
 	// filtrarCuentasEfectivo más abajo), no cualquier cuenta bancaria. La cuenta de la CONTRAPARTE
 	// (Origen en Ingreso, Destino en Egreso) sigue sin sentido en efectivo — no hay cuenta bancaria de
 	// la otra parte que registrar — así que esa sí se sigue bloqueando (ver isBloqueadoPorMedioPago).
-	const medioPagoEsEfectivo = $derived(String(formValues.medio_pago ?? '') === '1');
+	/** A pedido del usuario: si Cuenta Origen y Cuenta Destino están en blanco, el Medio de Pago se pone
+	 * SOLO en Efectivo (en vivo, ver el $effect de abajo). `medioPagoAuto` recuerda que lo puso el sistema:
+	 * así NO filtra las listas a cajas de efectivo ni bloquea cuentas (si lo hiciera, elegir una cuenta
+	 * bancaria normal sería imposible), y apenas se elige una cuenta se quita solo. Efectivo elegido A MANO
+	 * mantiene sus reglas de siempre (solo cajas de efectivo, contraparte bloqueada). */
+	let medioPagoAuto = $state(false);
+	const medioPagoEsEfectivo = $derived(String(formValues.medio_pago ?? '') === '1' && !medioPagoAuto);
+	const sinCuentasSeraEfectivo = $derived(
+		!String(formValues.cuente_origen ?? '').trim() && !String(formValues.cuente_destino ?? '').trim() && String(formValues.medio_pago ?? '') !== '4'
+	);
+	$effect(() => {
+		const sinCuentas = sinCuentasSeraEfectivo;
+		const medio = String(formValues.medio_pago ?? '');
+		if (!open || bloqueadaPorAprobacion) return;
+		untrack(() => {
+			if (sinCuentas && medio === '') {
+				formValues = { ...formValues, medio_pago: '1' };
+				medioPagoAuto = true;
+			} else if (!sinCuentas && medioPagoAuto && medio === '1') {
+				formValues = { ...formValues, medio_pago: '' };
+				medioPagoAuto = false;
+			}
+		});
+	});
 	/** Cuentas bancarias registradas cuyo nombre/titular contiene "efectivo" (ej. "EFECTIVO_GUILLERMO")
 	 * — así se modela una caja chica/fondo de efectivo en Finanzas → Cuentas Bancarias, no hay una
 	 * columna/tipo separado para distinguirlas de una cuenta bancaria real. */
@@ -2519,10 +2559,44 @@
 	 * destinoMuestraTodosLosCentros (ver optionsFor, que en ese caso ya ordena la lista por grupo) —
 	 * undefined en cualquier otro campo/caso, para que SelectConSaldo no dibuje ningún encabezado
 	 * (comportamiento normal, sin agrupar). */
+	/** A pedido del usuario: las listas de Centro de Costo Origen/Destino se clasifican por tipo, con un
+	 * encabezado por grupo — primero los Centros de Costos (mismo orden que sus pestañas) y después las
+	 * Cuentas Internas. */
+	const GRUPO_CENTRO_POR_TIPO: Record<string, string> = {
+		proyecto: 'Proyectos de Obra',
+		obra: 'Proyectos de Obra',
+		consultoria: 'Proyectos de Consultoría',
+		'bolsa general': 'Corporativo',
+		prestamo: 'Préstamos',
+		otro: 'Otros',
+		cliente: 'Cuentas internas · Clientes',
+		proveedor: 'Cuentas internas · Proveedores',
+		empleado: 'Cuentas internas · Empleados',
+		subcontratista: 'Cuentas internas · Subcontratistas'
+	};
+	const ORDEN_GRUPO_CENTRO = [...new Set(Object.values(GRUPO_CENTRO_POR_TIPO))];
+	function esCampoCentroCosto(field: (typeof formFields)[number]): boolean {
+		return field.key === 'id_centro_costo_origen' || field.key === 'id_centro_costo_destino';
+	}
+	/** "Proyecto" que recibe un préstamo conserva su agrupación propia (Corporativo/Obra/Consultoría, ver
+	 * grupoProyectoReceptor), que ya viene ordenada. */
+	function usaGrupoReceptorPrestamo(field: (typeof formFields)[number]): boolean {
+		return field.key === 'id_centro_costo_destino' && destinoMuestraTodosLosCentros && origenEsTipoPrestamo;
+	}
 	function grupoParaOpcion(field: (typeof formFields)[number], opt: FieldOption): string | undefined {
-		if (field.key !== 'id_centro_costo_destino' || !destinoMuestraTodosLosCentros) return undefined;
-		if (origenEsTipoPrestamo) return grupoProyectoReceptor(opt.value);
-		return TIPO_CENTRO_COSTO_LABEL_CORTO[centroCostoTipoMap[opt.value]] ?? 'Otros';
+		if (!esCampoCentroCosto(field)) return undefined;
+		if (usaGrupoReceptorPrestamo(field)) return grupoProyectoReceptor(opt.value);
+		return GRUPO_CENTRO_POR_TIPO[centroCostoTipoMap[opt.value]] ?? 'Otros';
+	}
+	/** Opciones de un campo con saldo, ya con su grupo y ordenadas por grupo (orden estable dentro de cada uno). */
+	function opcionesConSaldo(field: (typeof formFields)[number]) {
+		const opciones = optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }));
+		if (!esCampoCentroCosto(field) || usaGrupoReceptorPrestamo(field)) return opciones;
+		const rango = (g: string | undefined) => {
+			const i = ORDEN_GRUPO_CENTRO.indexOf(g ?? '');
+			return i === -1 ? ORDEN_GRUPO_CENTRO.length : i;
+		};
+		return opciones.map((o, i) => ({ o, i })).sort((a, b) => rango(a.o.grupo) - rango(b.o.grupo) || a.i - b.i).map(({ o }) => o);
 	}
 
 	/** Saldo de la opción YA ELEGIDA (no de cada opción de la lista, ver saldoParaOpcion arriba) — a
@@ -2564,7 +2638,7 @@
 			if (field.key === 'id_centro_costo_origen') return 'Prestamista';
 			if (field.key === 'id_centro_costo_destino') return 'Prestatario';
 		}
-		if (formValues.tipo === 'egreso' && categoriaEsPrestamoOtorgado) {
+		if (formValues.tipo === 'egreso' && categoriaEsPrestamoOtorgado && !onConfirm) {
 			if (field.key === 'id_centro_costo_origen') return 'Prestamista';
 			if (field.key === 'id_centro_costo_destino') return 'Prestatario';
 		}
@@ -2582,6 +2656,9 @@
 		if (bloqueadaPorAprobacion) {
 			toast.error('No se puede modificar: el comprobante ya fue aprobado. Un administrador debe quitar la aprobación primero.');
 			return;
+		}
+		if (sinCuentasSeraEfectivo && String(formValues.medio_pago ?? '') !== '1') {
+			formValues = { ...formValues, medio_pago: '1' }; // Efectivo: sin cuenta origen ni destino
 		}
 		revalidate();
 		if (hasErrors) {
@@ -2952,7 +3029,8 @@
 			<SelectConSaldo
 				id={`tr-${field.key}`}
 				value={formValues[field.key]}
-				options={optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }))}
+				options={opcionesConSaldo(field)}
+				encabezadoNombre={field.key.startsWith('id_centro_costo') ? 'Centro de costo' : 'Cuenta'}
 				disabled={isDisabled}
 				hasError={!!fieldErrors[field.key]}
 				onchange={(v) => handleInput(field.key, v)}
@@ -3010,7 +3088,7 @@
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
-		{:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
+{:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
 			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas de Efectivo registradas (Finanzas → Cuentas Bancarias).</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
 			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
@@ -3189,7 +3267,7 @@
 									for="tr-comprobante"
 									ondragover={(e) => e.preventDefault()}
 									ondrop={onComprobanteDrop}
-									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3 ${bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna' ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
+									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
 								>
 									{#if localPreviewUrl}
 										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
@@ -3228,11 +3306,10 @@
 									{#if comprobanteError}
 										<p class="text-xs text-red-600">{comprobanteError}</p>
 									{:else if formValues.tipo_alcance === 'interna'}
-										<!-- A pedido explícito del usuario: por ahora el boucher manual queda bloqueado
-										     para Transacción Interna (el comprobante autogenerado por el ERP alcanza) —
-										     más adelante se van a cargar bouchers antiguos, pero de forma masiva, no acá
-										     uno por uno al registrar. -->
-										<p class="text-xs text-slate-400">Bloqueado temporalmente para Transacción Interna — el comprobante autogenerado por el ERP es suficiente.</p>
+										<!-- A pedido del usuario se desbloqueó para Transacción Interna (antes estaba bloqueado
+										     "temporalmente"): el boucher es OPCIONAL — el ERP igual genera su propio comprobante
+										     de transferencia interna, guardado aparte (comprobanteAutogeneradoUrl). -->
+										<p class="text-xs text-slate-400">Opcional: adjunta el boucher de la transferencia; el ERP también genera su propio comprobante interno.</p>
 									{:else if comprobanteFile || comprobanteUrl}
 										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
 									{:else if mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
@@ -3245,7 +3322,7 @@
 									accept="image/*,application/pdf"
 									multiple={mode === 'create' && !onConfirm}
 									class="hidden"
-									disabled={bloqueadaPorAprobacion || formValues.tipo_alcance === 'interna'}
+									disabled={bloqueadaPorAprobacion}
 									onchange={onComprobanteChange}
 								/>
 								</div>
