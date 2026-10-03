@@ -874,11 +874,14 @@
 	// Campos que llegan ya resueltos con datos reales del pago (ver construirPayloadTransaccionPorPago
 	// en transacciones.service.ts) — esos quedan bloqueados en el TransaccionModal de confirmar pago;
 	// solo lo que no vino en el payload (cuentas bancarias, alcance, etc.) queda disponible para llenar.
+	// A pedido del usuario: Forma de Pago y Medio de Pago SIEMPRE quedan editables al confirmar un pago
+	// (son datos de CÓMO se paga esta cuota, no de la cuenta — ej. la cuota de un préstamo).
+	const CAMPOS_EDITABLES_CONFIRMAR_PAGO = new Set(['forma_pago', 'medio_pago']);
 	const lockedFieldsConfirmarPago = $derived.by(() => {
 		if (!confirmandoPagoId || !transaccionPrefill) return [];
 		return Object.keys(transaccionPrefill).filter((key) => {
 			const value = transaccionPrefill![key];
-			return value !== null && value !== undefined && value !== '';
+			return value !== null && value !== undefined && value !== '' && !CAMPOS_EDITABLES_CONFIRMAR_PAGO.has(key);
 		});
 	});
 

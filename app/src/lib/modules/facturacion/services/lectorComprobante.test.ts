@@ -99,6 +99,35 @@ describe('extraerDatosDeTexto', () => {
 		expect(d.subtotal).toBe(500); // total - IGV
 	});
 
+	it('lee el texto digital de un PDF emitido en el portal de SUNAT (serie E001)', () => {
+		// Como lo devuelve extraerTextoPdf (pdf.js): una línea por fila visual del PDF.
+		const d = extraerDatosDeTexto(`FACTURA ELECTRONICA
+RUC: 20609228343
+E001-245
+CASALLO & MELCHOR S.A.C.
+Fecha de Emisión : 01/10/2026
+Señor(es) : CONSTRUCTORA ANDINA S.A.C.
+RUC : 20512345678
+Tipo de Moneda : SOLES
+Cantidad Unidad Medida Descripción Valor Unitario
+1.00 UNIDAD SERVICIO DE CONSULTORIA 1000.00
+Sub Total Ventas : S/ 1,000.00
+Anticipos : S/ 0.00
+Valor Venta : S/ 1,000.00
+IGV : S/ 180.00
+Monto de redondeo : S/ 0.00
+Importe Total : S/ 1,180.00`);
+		expect(d.tipo).toBe('factura');
+		expect(`${d.serie}-${d.numero}`).toBe('E001-00000245');
+		expect(d.fecha_emision).toBe('2026-10-01');
+		expect(d.doc_receptor).toBe('20512345678');
+		expect(d.nombre_receptor).toBe('CONSTRUCTORA ANDINA S.A.C.');
+		expect(d.moneda).toBe('PEN');
+		expect(d.subtotal).toBe(1000);
+		expect(d.igv).toBe(180);
+		expect(d.total).toBe(1180);
+	});
+
 	it('devuelve todo vacío si no reconoce nada', () => {
 		const d = extraerDatosDeTexto('texto sin datos de comprobante');
 		expect(camposReconocidos(d).encontrados).toBe(0);

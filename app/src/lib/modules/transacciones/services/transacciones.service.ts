@@ -1483,6 +1483,15 @@ async function calcularNumeroCuota(
  * completar y confirmar — ningún pago queda 'pagado' sin que esto se confirme (ver
  * confirmarPagoPagado).
  */
+/** "Forma de Pago" de una Cuenta por Pagar/Cobrar ('1' Contado, '2' Crédito, '3' Por Porcentaje) en el
+ * catálogo de la transacción, que solo tiene Contado ('1') y Crédito ('2'): pagar por porcentaje es pagar en
+ * cuotas, o sea Crédito. Antes '3' pasaba tal cual y daba "Forma de Pago tiene un valor no permitido". */
+function formaPagoParaTransaccion(codigo: number | string | null | undefined): string | null {
+	if (codigo === null || codigo === undefined || codigo === '') return null;
+	const c = String(codigo);
+	return c === '1' ? '1' : c === '2' || c === '3' ? '2' : null;
+}
+
 export async function construirPayloadTransaccionPorPago(
 	client: SupabaseClient,
 	cuentaPagar: {
@@ -1493,10 +1502,50 @@ export async function construirPayloadTransaccionPorPago(
 		tipo_documento: number | null;
 		num_documento: string | null;
 		fotma_pago: number | null;
+		/** Transacción de Ingreso que originó la cuenta (préstamo recibido), si la hay. */
+		id_transaccion?: number | null;
 	},
 	pago: { id_pago?: number; monto: number; fecha_pago: string; medio_pago: string | null; referencia: string | null }
 ): Promise<Record<string, unknown> | null> {
 	if (!cuentaPagar.id_centro_costo) return null;
+
+	// A pedido del usuario: el pago de una cuota de un PRÉSTAMO RECIBIDO toma los datos de la transacción
+	// que originó el préstamo, invertidos — el dinero vuelve de quien lo recibió (Destino original) a quien
+	// lo prestó (Origen original, el prestamista); misma moneda; Categoría "Préstamo" (pago de cuota).
+	// Antes el Destino era el centro del proveedor genérico "PRÉSTAMOS / FINANCIERA", que no figura entre
+	// los centros de la Clase Préstamo: el campo quedaba en blanco y la Categoría vacía.
+	if (cuentaPagar.id_transaccion) {
+		const { data: original } = await client
+			.from(TABLE_NAME)
+			.select('id_transaccion, categoria, id_centro_costo_origen, id_centro_costo_destino, tipo_moneda, tipo_cambio, cuente_origen, cuente_destino')
+			.eq(PK_COLUMN, cuentaPagar.id_transaccion)
+			.maybeSingle();
+		if (original && original.categoria === 'Préstamo' && original.id_centro_costo_origen) {
+			const numeroCuota = pago.id_pago
+				? await calcularNumeroCuota(client, 'pagos', 'id_cuenta_pagar', 'id_pago', 'fecha_pago', cuentaPagar.id_cuenta_pagar, pago.id_pago)
+				: null;
+			return {
+				id_centro_costo_origen: cuentaPagar.id_centro_costo ?? original.id_centro_costo_destino,
+				id_centro_costo_destino: original.id_centro_costo_origen,
+				fecha: pago.fecha_pago,
+				tipo_documento: cuentaPagar.tipo_documento !== null ? String(cuentaPagar.tipo_documento) : null,
+				num_documento: cuentaPagar.num_documento,
+forma_pago: formaPagoParaTransaccion(cuentaPagar.fotma_pago),
+				tipo_transaccion: numeroCuota !== null ? String(numeroCuota).slice(0, 2) : null, // "Número de Cuota"
+				tipo: 'egreso',
+				categoria: 'Préstamo',
+				tipo_moneda: original.tipo_moneda ?? 'soles',
+				tipo_cambio: original.tipo_cambio ?? null,
+				// La cuenta donde entró el préstamo es de donde sale la cuota, y vuelve a la del prestamista.
+				cuente_origen: original.cuente_destino ?? null,
+				cuente_destino: original.cuente_origen ?? null,
+				monto_total: pago.monto,
+				medio_pago: codigoPorLabel(pago.medio_pago),
+descripcion: `Pago${numeroCuota !== null ? ` del ${nombreCuota(numeroCuota)}` : ' de cuota'} del préstamo recibido (transacción #${original.id_transaccion}) - cuenta por pagar #${cuentaPagar.id_cuenta_pagar}${pago.referencia ? ' - ' + pago.referencia : ''}`,
+				estado: 'activo'
+			};
+		}
+	}
 
 	const idCentroDestino = await getOrCrearCentroCostoParaEntidad(
 		client,
@@ -1516,7 +1565,7 @@ export async function construirPayloadTransaccionPorPago(
 		fecha: pago.fecha_pago,
 		tipo_documento: cuentaPagar.tipo_documento !== null ? String(cuentaPagar.tipo_documento) : null,
 		num_documento: cuentaPagar.num_documento,
-		forma_pago: cuentaPagar.fotma_pago !== null ? String(cuentaPagar.fotma_pago) : null,
+forma_pago: formaPagoParaTransaccion(cuentaPagar.fotma_pago),
 		tipo_transaccion: numeroCuota !== null ? String(numeroCuota).slice(0, 2) : null, // "Número de Cuota"
 		tipo: 'egreso',
 		monto_total: pago.monto,
@@ -1572,7 +1621,7 @@ export async function construirPayloadTransaccionPorCobro(
 		fecha: cobro.fecha_cobro,
 		tipo_documento: cuentaCobrar.tipo_documento !== null ? String(cuentaCobrar.tipo_documento) : null,
 		num_documento: cuentaCobrar.num_documento,
-		forma_pago: cuentaCobrar.forma_pago !== null ? String(cuentaCobrar.forma_pago) : null,
+forma_pago: formaPagoParaTransaccion(cuentaCobrar.forma_pago),
 		tipo_transaccion: numeroCuota !== null ? String(numeroCuota).slice(0, 2) : null, // "Número de Cuota"
 		tipo: 'ingreso',
 		monto_total: cobro.monto,

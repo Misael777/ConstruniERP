@@ -273,11 +273,12 @@ Para ejecutar un `.sql` suelto contra Dev (por ejemplo para probar un backfill),
 | `20260925120000_cuenta_banco_numero_cuenta_unico` | Índice único de `numero_cuenta` entre cuentas activas; solo se crea si no hay duplicados (en Producción sí los hay, así que se omite con un aviso) | sí | sí |
 | `20260925130000_cuenta_banco_renombrar_numeros_duplicados` | Renombra las cuentas activas repetidas (WILLY `EFECTIVO` → `EFECTIVO-16`; la más antigua conserva el número y la transacción #259), recalcula sus saldos y crea el índice único | sí | sí |
 | `20260925140000_cuentas_cobrar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, medio 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Cobrar por Prioridad (ticket #39) | sí | sí (aplicada a mano; **falta** `migration repair`) |
-| `20260930032337_comprobante_ingreso_repositorio` | Tablas `comprobante_ingreso` + `comprobante_ingreso_transaccion` del "Repositorio de comprobantes" (Emisión de Comprobante): Factura/Boleta/NC/ND subidos como PDF/foto/XML, leídos con OCR+regex o XML, vinculados a transacciones de ingreso, estado pendiente/revisado/observado | **pendiente** | **pendiente** |
 | `20260929155944_centro_costo_corporativo_unico` | Crea el centro Corporativo (`bolsa general`) si falta e índice único `uq_centro_costo_corporativo_activo` (un solo Corporativo activo). "Nuevo Centro de Costo" ya solo crea Otro/Préstamo | **pendiente** | **pendiente** |
 | `20261001152541_cliente_nombre_mayusculas` | Solo datos: pasa a mayúsculas los nombres de clientes existentes | sí | sí (aplicada a mano; **falta** `migration repair`) |
 | `20261002000000_cuentas_pagar_prioridad_orden` | Columna calculada `prioridad_orden` (alto 1, media 2, bajo 3, sin prioridad 4) para ordenar Cuentas por Pagar por Prioridad (ticket #45) | sí | sí (aplicada a mano; **falta** `migration repair`) |
 | `20261002120000_auditoria` | Control de Accesos → Auditoría (ver §7c): tablas `auditoria_sesion`/`_accion`/`_error`, RPCs, trigger de cambios en 14 tablas de negocio, permiso `ver_iam_auditoria`, purga 14/7 días. Probada en un Postgres 16 local temporal (con stubs de `auth.uid()`), idempotente | sí | sí (aplicada a mano; **falta** `migration repair`) |
+| `20261003000859_restaurar_centros_costo_borrados` | Solo datos: recrea con el MISMO id los 17 centros de costo (6 proyectos de obra, 11 clientes) borrados fuera de la app ~23/09/2026 mientras sus transacciones de adelanto los seguían usando, y crea el de la venta de obra #114. Idempotente | — | **pendiente** |
+| `20261003011526_factura_archivo_sunat` | Amplía `factura_archivo.tipo` con `'sunat'`: el archivo original de SUNAT del que se leyeron los datos (modo "PDF de SUNAT" de Emisión de Comprobante) | **pendiente** | **pendiente** |
 | `20261002130000_sincronizar_reversion_venta_y_verificacion_admin` | Sincroniza a `migrations/` lo que estaba solo en Producción (corrido a mano desde 3 archivos sueltos de la raíz, 2026-09-28): columna `proyecto.id_transaccion_cierre`, `fn_revertir_venta_por_transaccion`, `fn_anular_transaccion` (versión con reversión de venta) y `fn_verificar_credenciales_admin`. Copiadas tal cual de Producción | sí | ya estaba (**falta** `migration repair`) |
 
 **Comparación de esquemas Dev ↔ Producción (2026-10-02):** se compararon columnas, restricciones, índices,
@@ -287,7 +288,7 @@ catálogo. Quedaron idénticos. Las únicas diferencias son cosméticas:
 - Las funciones creadas desde el SQL Editor quedan con saltos de línea `\r\n` en Producción; sin
   espacios en blanco, el texto es el mismo.
 
-`20260929155944` y `20260930032337` no están en ninguna de las dos bases. Para registrar en Producción las
+`20260929155944` no está en ninguna de las dos bases. (`20260930032337`, el "Repositorio de comprobantes", se eliminó el 2026-10-03 sin haberse aplicado nunca: fue reemplazado por el modo "PDF de SUNAT" de Emisión de Comprobante). Para registrar en Producción las
 que ya están aplicadas, hay que correr (con confirmación del usuario):
 `npx supabase migration repair --status applied 20260925140000 20261001152541 20261002000000 20261002120000 20261002130000 --db-url <URL_PROD>`.
 

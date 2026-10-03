@@ -12,9 +12,9 @@
 	// campos simples de cabecera se dibujan desde FIELDS_CONFIG (mismo motor genérico que el resto de
 	// Finanzas).
 	import { supabase } from '$lib/supabaseClient';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
-	import { X, Loader2, Eye, Check, Lock, Trash2, FileText } from '@lucide/svelte';
+	import { X, Loader2, Eye, Check, Lock, Trash2, FileText, CloudUpload, FolderOpen, Camera, FileCheck, Receipt, FileUp, ScanText, CircleCheck, CircleAlert, RefreshCw } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, TIPOS_NOTA_CREDITO } from '$lib/modules/facturacion/config/factura.config';
@@ -30,6 +30,7 @@
 		valorSinIgv,
 		guardarBorradorFactura,
 		autorizarYEmitirFactura,
+		adjuntarComprobanteSunat,
 		TIPO_DOCUMENTO_POR_COMPROBANTE,
 		type Factura,
 		type FacturaDetalle,
@@ -44,6 +45,8 @@
 	import { DETRACCION_CUENTA_BN_DEFAULT, EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 	import { permisosState } from '$lib/stores/permisos.svelte';
 	import FacturaPreviewModal from './FacturaPreviewModal.svelte';
+	import { leerComprobanteSunat, validarArchivoComprobante, ACEPTA_COMPROBANTE, type MetodoLectura } from '$lib/modules/facturacion/services/leerComprobanteArchivo';
+	import { camposReconocidos, type DatosComprobanteLeido } from '$lib/modules/facturacion/services/lectorComprobante';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 
 	let {
@@ -298,6 +301,89 @@
 	let previewDatos = $state<DatosFacturaPdf | null>(null);
 	let autorizando = $state(false);
 
+	// ── Origen de los datos (a pedido del usuario): por CADA documento, un interruptor elige si se arma con
+	// los datos de la transacción (lo de siempre) o leyendo el comprobante ya emitido por SUNAT (PDF, foto o
+	// XML — ver leerComprobanteArchivo.ts). En modo SUNAT el documento lleva el número de SUNAT como folio y
+	// su importe tiene que coincidir con el de las transacciones elegidas (siguen siendo el soporte de pago:
+	// fn_emitir_factura las exige y así una transacción nunca se factura dos veces).
+	let origenDatos = $state<'transaccion' | 'sunat'>('transaccion');
+	let archivoSunat = $state<File | null>(null);
+	let leyendoSunat = $state(false);
+	let datosSunat = $state<DatosComprobanteLeido | null>(null);
+	let metodoLectura = $state<MetodoLectura | null>(null);
+	let serieSunat = $state('');
+	let numeroSunat = $state('');
+	let totalSunat = $state('');
+	let docReceptorSunat = $state('');
+	let clienteSunatNoEncontrado = $state(false);
+	let arrastrandoSunat = $state(false);
+
+	const NOMBRE_TIPO_LEIDO: Record<string, string> = { factura: 'Factura', boleta: 'Boleta', nota_credito: 'Nota de Crédito', nota_debito: 'Nota de Débito' };
+	const ETIQUETA_METODO: Record<MetodoLectura, string> = { xml: 'XML de SUNAT', pdf_texto: 'Texto del PDF', ocr: 'OCR (imagen)' };
+
+	function resetSunat() {
+		archivoSunat = null;
+		datosSunat = null;
+		metodoLectura = null;
+		serieSunat = '';
+		numeroSunat = '';
+		totalSunat = '';
+		docReceptorSunat = '';
+		clienteSunatNoEncontrado = false;
+	}
+
+	async function cargarArchivoSunat(file: File | null | undefined) {
+		if (!file || leyendoSunat) return;
+		const error = validarArchivoComprobante(file);
+		if (error) {
+			toast.error(error);
+			return;
+		}
+		resetSunat();
+		archivoSunat = file;
+		leyendoSunat = true;
+		try {
+			const { datos, metodo } = await leerComprobanteSunat(file);
+			datosSunat = datos;
+			metodoLectura = metodo;
+			serieSunat = datos.serie ?? '';
+			numeroSunat = datos.numero ?? '';
+			totalSunat = datos.total != null ? String(datos.total) : '';
+			docReceptorSunat = datos.doc_receptor ?? '';
+			if (datos.fecha_emision) handleInput('fecha_emision', datos.fecha_emision);
+			await aplicarClienteSunat();
+			const { encontrados, total } = camposReconocidos(datos);
+			if (encontrados === 0) toast.error('No se reconoció ningún dato del comprobante. Complétalos a mano.');
+			else toast.success(`Comprobante leído: ${encontrados} de ${total} datos reconocidos. Revísalos antes de emitir.`);
+		} catch (err: any) {
+			console.error('[FacturaModal] No se pudo leer el comprobante de SUNAT:', err);
+			toast.error(`No se pudo leer el archivo: ${err?.message ?? 'error inesperado'}`);
+		} finally {
+			leyendoSunat = false;
+		}
+	}
+
+	/** Busca en el Directorio de Clientes el RUC/DNI leído; si lo encuentra lo elige y, si hay UNA sola
+	 * transacción sin facturar por el mismo importe, la deja tildada. */
+	async function aplicarClienteSunat() {
+		const doc = docReceptorSunat.replace(/\D/g, '');
+		if (!doc) return;
+		const c = clientes.find((x) => (x.num_documento ?? '').replace(/\D/g, '') === doc);
+		clienteSunatNoEncontrado = !c;
+		if (!c) return;
+		if (String(c.id_cliente) !== idCliente) await handleClienteChange(String(c.id_cliente));
+		const total = Number(totalSunat);
+		if (seleccion.length === 0 && total > 0) {
+			const coinciden = transacciones.filter((t) => t.id_factura == null && Math.abs(t.monto_total - total) < 0.01);
+			if (coinciden.length === 1) seleccion = [coinciden[0].id_transaccion];
+		}
+	}
+
+	const modoSunat = $derived(origenDatos === 'sunat' && mode === 'create' && !modoRuc);
+	const folioSunat = $derived(serieSunat.trim() && numeroSunat.trim() ? `${serieSunat.trim().toUpperCase()}-${numeroSunat.replace(/\D/g, '').padStart(8, '0').slice(-8)}` : '');
+	const totalSunatNum = $derived(Number(totalSunat) || 0);
+	const tipoSunatDistinto = $derived(!!datosSunat?.tipo && datosSunat.tipo !== tipoComprobante);
+
 	async function cargarTransacciones(id: string) {
 		transacciones = [];
 		if (!id) return;
@@ -321,53 +407,61 @@
 
 	$effect(() => {
 		if (!open) return;
-		formValues = buildInitialValues();
-		fieldErrors = {};
-		facturaActual = factura;
-		idCliente = factura ? String(factura.id_cliente) : preseleccion ? String(preseleccion.idCliente) : '';
-		seleccion = detalleInicial.map((d) => d.id_transaccion).filter((v): v is number => v != null);
-		descripciones = Object.fromEntries(detalleInicial.filter((d) => d.id_transaccion != null).map((d) => [d.id_transaccion as number, d.descripcion]));
-		edicionLineas = Object.fromEntries(detalleInicial.filter((d) => d.id_transaccion != null).map((d) => [d.id_transaccion as number, { cantidad: String(d.cantidad), unidad: d.unidad ?? 'Servicio', precio: String(d.precio_unitario) }]));
-		// Anulación por Error en el RUC: serie/número de ambas facturas (se buscan al abrir un borrador guardado).
-		const [rs, rc] = (factura?.folio_referencia ?? '').split('-');
-		refSerie = rs || 'E001';
-		refCorrelativo = rc ?? '';
-		const [ns, nc] = (factura?.folio_nueva_factura ?? '').split('-');
-		nuevaSerie = ns || 'E001';
-		nuevaCorrelativo = nc ?? '';
-		refFactura = null;
-		if (factura?.folio_referencia) resolverReferencia(factura.folio_referencia);
-		if (!factura && folioReferenciaInicial) {
-			const [rs2, rc2] = folioReferenciaInicial.split('-');
-			refSerie = rs2 || 'E001';
-			refCorrelativo = rc2 ?? '';
-			formValues = { ...formValues, folio_referencia: folioReferenciaInicial };
-		}
-		previewOpen = false;
-		previewDatos = null;
-		getCuentasBancoNacionOptions(supabase)
-			.then((data) => {
-				cuentasBancoNacion = data;
-				// Factura NUEVA: la cuenta del Banco de la Nación viene elegida por defecto (a pedido del usuario) —
-				// la de la propia empresa si hay varias, si no la primera. Editando un borrador se respeta lo guardado.
-				if (!factura && !formValues.detraccion_cuenta_bn && data.length > 0) {
-					const preferida = data.find((o) => o.label.toUpperCase().includes(EMPRESA_NOMBRE.toUpperCase())) ?? data[0];
-					formValues = { ...formValues, detraccion_cuenta_bn: preferida.value };
-				}
-			})
-			.catch((err) => console.error('[FacturaModal] No se pudieron cargar las cuentas del Banco de la Nación:', err));
-		if (factura) {
-			cargarTransacciones(String(factura.id_cliente));
-		} else if (preseleccion) {
-			// Viene de "Gestión de Comprobantes" con un check ya marcado — se precarga el cliente y, apenas
-			// llegan sus transacciones, se tilda la que originó el check (mismo criterio de "no perder lo
-			// que el usuario ya eligió" que el resto de flujos de preselección del ERP).
-			cargarTransacciones(String(preseleccion.idCliente)).then(() => {
-				seleccion = preseleccion.idTransaccion != null ? [preseleccion.idTransaccion] : [];
-			});
-		} else {
-			transacciones = [];
-		}
+		// Solo debe correr al ABRIR el modal (o si cambian sus props). Antes leía formValues (folio de referencia de
+		// la Nota de Crédito) y quedaba suscrito: cualquier cambio del formulario (motivo, la fecha leída del PDF de
+		// SUNAT...) lo volvía a correr y devolvía el interruptor a "La transacción" — "se atascaba".
+		void [factura, preseleccion, folioReferenciaInicial, detalleInicial, tipoComprobante];
+		untrack(() => {
+			formValues = buildInitialValues();
+			fieldErrors = {};
+			facturaActual = factura;
+			idCliente = factura ? String(factura.id_cliente) : preseleccion ? String(preseleccion.idCliente) : '';
+			seleccion = detalleInicial.map((d) => d.id_transaccion).filter((v): v is number => v != null);
+			descripciones = Object.fromEntries(detalleInicial.filter((d) => d.id_transaccion != null).map((d) => [d.id_transaccion as number, d.descripcion]));
+			edicionLineas = Object.fromEntries(detalleInicial.filter((d) => d.id_transaccion != null).map((d) => [d.id_transaccion as number, { cantidad: String(d.cantidad), unidad: d.unidad ?? 'Servicio', precio: String(d.precio_unitario) }]));
+			// Anulación por Error en el RUC: serie/número de ambas facturas (se buscan al abrir un borrador guardado).
+			const [rs, rc] = (factura?.folio_referencia ?? '').split('-');
+			refSerie = rs || 'E001';
+			refCorrelativo = rc ?? '';
+			const [ns, nc] = (factura?.folio_nueva_factura ?? '').split('-');
+			nuevaSerie = ns || 'E001';
+			nuevaCorrelativo = nc ?? '';
+			refFactura = null;
+			if (factura?.folio_referencia) resolverReferencia(factura.folio_referencia);
+			if (!factura && folioReferenciaInicial) {
+				const [rs2, rc2] = folioReferenciaInicial.split('-');
+				refSerie = rs2 || 'E001';
+				refCorrelativo = rc2 ?? '';
+				formValues = { ...formValues, folio_referencia: folioReferenciaInicial };
+			}
+			previewOpen = false;
+			previewDatos = null;
+			origenDatos = 'transaccion';
+			resetSunat();
+			getCuentasBancoNacionOptions(supabase)
+				.then((data) => {
+					cuentasBancoNacion = data;
+					// Factura NUEVA: la cuenta del Banco de la Nación viene elegida por defecto (a pedido del usuario) —
+					// la de la propia empresa si hay varias, si no la primera. Editando un borrador se respeta lo guardado.
+					if (!factura && !formValues.detraccion_cuenta_bn && data.length > 0) {
+						const preferida = data.find((o) => o.label.toUpperCase().includes(EMPRESA_NOMBRE.toUpperCase())) ?? data[0];
+						formValues = { ...formValues, detraccion_cuenta_bn: preferida.value };
+					}
+				})
+				.catch((err) => console.error('[FacturaModal] No se pudieron cargar las cuentas del Banco de la Nación:', err));
+			if (factura) {
+				cargarTransacciones(String(factura.id_cliente));
+			} else if (preseleccion) {
+				// Viene de "Gestión de Comprobantes" con un check ya marcado — se precarga el cliente y, apenas
+				// llegan sus transacciones, se tilda la que originó el check (mismo criterio de "no perder lo
+				// que el usuario ya eligió" que el resto de flujos de preselección del ERP).
+				cargarTransacciones(String(preseleccion.idCliente)).then(() => {
+					seleccion = preseleccion.idTransaccion != null ? [preseleccion.idTransaccion] : [];
+				});
+			} else {
+				transacciones = [];
+			}
+		});
 	});
 
 	const clienteLista = $derived(clientes.find((c) => String(c.id_cliente) === idCliente) ?? null);
@@ -530,6 +624,25 @@
 			toast.error('Completa la cantidad y el valor unitario de cada línea del detalle.');
 			return false;
 		}
+		if (modoSunat) {
+			const error = !archivoSunat
+				? 'Sube el comprobante emitido por SUNAT (o cambia a "Datos de la transacción").'
+				: !/^[A-Z][A-Z0-9]{3}-\d{8}$/.test(folioSunat)
+					? 'Completa la serie (4 caracteres, ej. E001) y el número del comprobante de SUNAT.'
+					: tipoSunatDistinto
+						? `El archivo es una ${NOMBRE_TIPO_LEIDO[datosSunat!.tipo!]}, pero estás emitiendo una ${nombreDocumento}.`
+						: !(totalSunatNum > 0)
+							? 'Completa el importe total del comprobante de SUNAT.'
+							: Math.abs(totales.importeTotal - totalSunatNum) >= 0.01
+								? `El importe del comprobante de SUNAT (${fmt(totalSunatNum)}) no coincide con el de las transacciones elegidas (${fmt(totales.importeTotal)}).`
+								: datosSunat?.moneda && datosSunat.moneda !== moneda
+									? 'La moneda del comprobante de SUNAT no coincide con la de las transacciones elegidas.'
+									: null;
+			if (error) {
+				toast.error(error);
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -583,7 +696,8 @@
 			lineas,
 			permisosState.userName || null,
 			tipoComprobante,
-			facturaActual?.id_factura
+			facturaActual?.id_factura,
+			modoSunat ? folioSunat : null
 		);
 		if (!result.success || !result.data) {
 			toast.error(result.message);
@@ -613,7 +727,7 @@
 
 	function handleVistaPrevia() {
 		if (!validarAntesDeContinuar()) return;
-		previewDatos = construirDatosPdf(facturaActual?.folio ?? null, 'VISTA PREVIA');
+		previewDatos = construirDatosPdf(facturaActual?.folio ?? (modoSunat ? folioSunat : null), 'VISTA PREVIA');
 		previewOpen = true;
 	}
 
@@ -630,6 +744,10 @@
 			const result = await autorizarYEmitirFactura(supabase, saved, archivos.pngDataUrl, archivos.pdfBase64, permisosState.userName || null);
 			if (result.success) {
 				toast.success(result.message);
+				if (modoSunat && archivoSunat) {
+					const errorAdjunto = await adjuntarComprobanteSunat(supabase, saved, archivoSunat, permisosState.userName || null);
+					if (errorAdjunto) toast.error(`El documento se emitió, pero no se guardó el archivo original de SUNAT: ${errorAdjunto}`);
+				}
 				previewOpen = false;
 				await onSaved();
 				onClose();
@@ -690,6 +808,170 @@
 						{/if}
 					</div>
 				{/snippet}
+
+				{#if mode === 'create' && !modoRuc && !soloLectura}
+					<!-- Origen de los datos de ESTE documento (ver origenDatos en el script): tarjetas seleccionables. -->
+					<div class="mb-6">
+						<p class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Origen de los datos</p>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-3" role="radiogroup" aria-label="Origen de los datos">
+							{#each [
+								{ v: 'transaccion', titulo: 'Desde la transacción', detalle: 'Arma el documento con los pagos ya registrados del cliente.', icono: Receipt },
+								{ v: 'sunat', titulo: 'Desde PDF de SUNAT', detalle: 'Lee un comprobante ya emitido (PDF, foto o XML) y usa sus datos.', icono: FileUp }
+							] as op (op.v)}
+								{@const activo = origenDatos === op.v}
+								<button
+									type="button"
+									role="radio"
+									aria-checked={activo}
+									onclick={() => (origenDatos = op.v as typeof origenDatos)}
+									class={`group flex items-start gap-3 rounded-xl border p-3.5 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${activo ? 'border-blue-600 bg-blue-50/70 shadow-sm ring-1 ring-blue-600' : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'}`}
+								>
+									<span class={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${activo ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500 group-hover:text-slate-700'}`}>
+										<op.icono size={18} />
+									</span>
+									<span class="min-w-0 flex-1">
+										<span class={`block text-sm font-semibold ${activo ? 'text-blue-900' : 'text-slate-800'}`}>{op.titulo}</span>
+										<span class="mt-0.5 block text-xs text-slate-500">{op.detalle}</span>
+									</span>
+									<span class={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${activo ? 'border-blue-600' : 'border-slate-300'}`}>
+										{#if activo}<span class="h-2 w-2 rounded-full bg-blue-600"></span>{/if}
+									</span>
+								</button>
+							{/each}
+						</div>
+					</div>
+
+					{#if origenDatos === 'sunat'}
+						<section class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+							<header class="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+								<div class="flex items-center gap-2 min-w-0">
+									<ScanText size={17} class="text-[#0f3b5e] shrink-0" />
+									<h3 class="text-sm font-semibold text-[#0f3b5e] truncate">Comprobante de SUNAT · {nombreDocumento}</h3>
+								</div>
+								{#if archivoSunat && !leyendoSunat}
+									<label for="fac-sunat-archivo" class="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 cursor-pointer">
+										<RefreshCw size={13} /> Cambiar archivo
+									</label>
+								{/if}
+							</header>
+
+							<div class="p-4">
+								{#if leyendoSunat}
+									<div class="flex flex-col items-center justify-center gap-2 py-10 text-sm text-slate-500">
+										<Loader2 size={24} class="animate-spin text-blue-600" />
+										Leyendo el comprobante…
+									</div>
+								{:else if !archivoSunat}
+									<div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_13rem] gap-4">
+										<label
+											for="fac-sunat-archivo"
+											ondragover={(e) => { e.preventDefault(); arrastrandoSunat = true; }}
+											ondragleave={() => (arrastrandoSunat = false)}
+											ondrop={(e) => { e.preventDefault(); arrastrandoSunat = false; cargarArchivoSunat(e.dataTransfer?.files?.[0]); }}
+											class={`flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed px-4 py-9 text-center cursor-pointer transition-colors ${arrastrandoSunat ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50/60 hover:border-blue-400 hover:bg-blue-50/40'}`}
+										>
+											<span class="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-blue-100 text-blue-600"><CloudUpload size={22} /></span>
+											<span class="text-sm font-semibold text-slate-800">Arrastra y suelta el comprobante aquí</span>
+											<span class="text-xs text-blue-600 font-medium">o haz clic para seleccionarlo</span>
+											<span class="mt-2 text-[11px] text-slate-400">PDF, JPG, PNG o XML · máximo 20 MB</span>
+										</label>
+										<div class="flex flex-col gap-2">
+											<label for="fac-sunat-archivo" class="flex items-center justify-center gap-2 rounded-lg bg-[#0f3b5e] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#0c3150] cursor-pointer">
+												<FolderOpen size={16} /> Seleccionar archivo
+											</label>
+											<label for="fac-sunat-foto" class="flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 cursor-pointer">
+												<Camera size={16} /> Tomar foto
+											</label>
+											<p class="text-[11px] leading-snug text-slate-400">El PDF de SUNAT se lee al instante; las fotos se leen con OCR y conviene revisarlas.</p>
+										</div>
+									</div>
+								{:else}
+									<div class="mb-4 flex flex-wrap items-center gap-2">
+										<span class="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">
+											<FileCheck size={14} class="shrink-0" /><span class="truncate" title={archivoSunat.name}>{archivoSunat.name}</span>
+										</span>
+										{#if metodoLectura}
+											<span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">Leído con {ETIQUETA_METODO[metodoLectura]}</span>
+										{/if}
+									</div>
+
+									{#if tipoSunatDistinto}
+										<div class="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+											<CircleAlert size={15} class="mt-px shrink-0" />
+											<span>El archivo parece una <b>{NOMBRE_TIPO_LEIDO[datosSunat?.tipo ?? '']}</b>, pero estás emitiendo una <b>{nombreDocumento}</b>. Abre el tipo de documento correcto.</span>
+										</div>
+									{/if}
+
+									<div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3">
+										<div>
+											<label for="fac-sunat-serie" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Serie <span class="text-red-500">*</span></label>
+											<input id="fac-sunat-serie" type="text" maxlength="4" bind:value={serieSunat} placeholder="E001" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 uppercase font-medium" />
+										</div>
+										<div>
+											<label for="fac-sunat-numero" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Número <span class="text-red-500">*</span></label>
+											<input id="fac-sunat-numero" type="text" inputmode="numeric" maxlength="8" bind:value={numeroSunat} placeholder="00000001" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 font-medium" />
+										</div>
+										<div>
+											<label for="fac-sunat-doc" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">RUC / DNI del cliente</label>
+											<input id="fac-sunat-doc" type="text" inputmode="numeric" maxlength="11" bind:value={docReceptorSunat} onchange={aplicarClienteSunat} class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400" />
+										</div>
+										<div>
+											<label for="fac-sunat-total" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Importe total <span class="text-red-500">*</span></label>
+											<input id="fac-sunat-total" type="number" step="0.01" min="0" inputmode="decimal" bind:value={totalSunat} class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 font-semibold text-right" />
+										</div>
+									</div>
+
+									<dl class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3 rounded-lg bg-slate-50 px-4 py-3">
+										<div class="col-span-2">
+											<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cliente</dt>
+											<dd class="mt-0.5 truncate text-sm text-slate-800" title={datosSunat?.nombre_receptor ?? ''}>{datosSunat?.nombre_receptor ?? '—'}</dd>
+										</div>
+										<div>
+											<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Fecha de emisión</dt>
+											<dd class="mt-0.5 text-sm text-slate-800">{datosSunat?.fecha_emision ? datosSunat.fecha_emision.split('-').reverse().join('/') : '—'}</dd>
+										</div>
+										<div>
+											<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Moneda</dt>
+											<dd class="mt-0.5 text-sm text-slate-800">{datosSunat?.moneda === 'USD' ? 'Dólares (US$)' : datosSunat?.moneda === 'PEN' ? 'Soles (S/)' : '—'}</dd>
+										</div>
+										<div>
+											<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Op. gravada</dt>
+											<dd class="mt-0.5 text-sm text-slate-800">{datosSunat?.subtotal != null ? fmt(datosSunat.subtotal) : '—'}</dd>
+										</div>
+										<div>
+											<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">IGV</dt>
+											<dd class="mt-0.5 text-sm text-slate-800">{datosSunat?.igv != null ? fmt(datosSunat.igv) : '—'}</dd>
+										</div>
+										{#if datosSunat?.serie_numero_referencia}
+											<div class="col-span-2">
+												<dt class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Documento que modifica</dt>
+												<dd class="mt-0.5 text-sm text-slate-800">{datosSunat.serie_numero_referencia}</dd>
+											</div>
+										{/if}
+									</dl>
+
+									{#if clienteSunatNoEncontrado}
+										<div class="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+											<CircleAlert size={15} class="mt-px shrink-0" />
+											<span>No hay ningún cliente con el documento <b>{docReceptorSunat}</b> en el Directorio de Clientes: regístralo o elígelo abajo.</span>
+										</div>
+									{/if}
+									{#if totalSunatNum > 0 && lineas.length > 0}
+										{@const cuadra = Math.abs(totales.importeTotal - totalSunatNum) < 0.01}
+										<div class={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${cuadra ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
+											{#if cuadra}<CircleCheck size={15} class="mt-px shrink-0" />{:else}<CircleAlert size={15} class="mt-px shrink-0" />{/if}
+											<span>{cuadra ? 'El importe coincide con' : 'El importe NO coincide con'} las transacciones elegidas ({fmt(totales.importeTotal)}).</span>
+										</div>
+									{:else}
+										<p class="mt-3 text-xs text-slate-500">Elige abajo la(s) transacción(es) de pago que cubre este comprobante: su importe debe coincidir con el total.</p>
+									{/if}
+								{/if}
+							</div>
+							<input id="fac-sunat-archivo" type="file" accept={ACEPTA_COMPROBANTE} class="hidden" onchange={(e) => { const el = e.currentTarget as HTMLInputElement; cargarArchivoSunat(el.files?.[0]); el.value = ''; }} />
+							<input id="fac-sunat-foto" type="file" accept="image/*" capture="environment" class="hidden" onchange={(e) => { const el = e.currentTarget as HTMLInputElement; cargarArchivoSunat(el.files?.[0]); el.value = ''; }} />
+						</section>
+					{/if}
+				{/if}
 
 				{#if modoRuc}
 					<!-- Nota de Crédito "Anulación por Error en el RUC" (pantalla de la imagen del usuario): no lleva

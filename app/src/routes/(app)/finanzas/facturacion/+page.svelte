@@ -37,7 +37,6 @@
 	} from '$lib/modules/facturacion/services/facturacion.service';
 	import FacturaModal from '$lib/modules/facturacion/components/FacturaModal.svelte';
 	import FacturaPreviewModal from '$lib/modules/facturacion/components/FacturaPreviewModal.svelte';
-	import RepositorioComprobantes from '$lib/modules/facturacion/components/RepositorioComprobantes.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
@@ -72,10 +71,6 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	];
 
 	let activeTab = $state<TabValue>('todos');
-	/** "Emitir comprobantes" = lo de siempre (comprobantes internos que genera el ERP). "Repositorio" = los
-	 * comprobantes reales (PDF/foto/XML de SUNAT) de las transacciones de ingreso, leídos con OCR (ver
-	 * RepositorioComprobantes.svelte). */
-	let seccion = $state<'emision' | 'repositorio'>('emision');
 	const tabActual = $derived(TABS.find((t) => t.value === activeTab)!);
 	const nombreTab = $derived(tabActual.label);
 	const pluralTab = $derived(tabActual.plural);
@@ -328,6 +323,32 @@ function irAPaginaTransacciones(nueva: number) {
 
 	/** Tab "con comprobantes emitidos": Nota de Crédito/Débito sobre un comprobante EMITIDO — se abre con su cliente
 	 * y, en la Nota de Crédito, el número de ese comprobante como referencia. */
+	/** A pedido del usuario: en cada documento emitido se MARCA la casilla y se elige el tipo de nota en
+	 * "Emitir nota" (en cualquier orden); con ambas cosas hechas se abre el formulario de esa nota. */
+	let notaFila = $state<Record<number, TipoComprobante>>({});
+	let marcadasNota = $state<number[]>([]);
+	function intentarAbrirNota(item: Factura) {
+		const tipo = notaFila[item.id_factura];
+		if (!tipo || !marcadasNota.includes(item.id_factura)) return;
+		marcadasNota = marcadasNota.filter((id) => id !== item.id_factura);
+		const { [item.id_factura]: _, ...resto } = notaFila;
+		notaFila = resto;
+		emitirNotaDesdeDocumento(item, tipo);
+	}
+	function toggleMarcaNota(item: Factura) {
+		const marcada = marcadasNota.includes(item.id_factura);
+		marcadasNota = marcada ? marcadasNota.filter((id) => id !== item.id_factura) : [...marcadasNota, item.id_factura];
+		if (!marcada) {
+			if (notaFila[item.id_factura]) intentarAbrirNota(item);
+			else toast.info(`Elige en "Emitir nota" si es Nota de Crédito o de Débito para ${item.folio}.`);
+		}
+	}
+	function elegirNotaFila(item: Factura, tipo: TipoComprobante) {
+		notaFila = { ...notaFila, [item.id_factura]: tipo };
+		if (marcadasNota.includes(item.id_factura)) intentarAbrirNota(item);
+		else toast.info(`Marca la casilla de ${item.folio} para generar la nota.`);
+	}
+
 	function emitirNotaDesdeDocumento(item: Factura, tipo: TipoComprobante) {
 		if (item.estado !== 'emitida') return;
 		tipoModal = tipo;
@@ -565,21 +586,6 @@ function irAPaginaTransacciones(nueva: number) {
 		</div>
 	</div>
 
-	<div class="mb-4 flex gap-1 border-b border-slate-200 overflow-x-auto">
-		{#each [{ k: 'emision', l: 'Emitir comprobantes' }, { k: 'repositorio', l: 'Repositorio de comprobantes' }] as t (t.k)}
-			<button
-				type="button"
-				onclick={() => (seccion = t.k as typeof seccion)}
-				class={`whitespace-nowrap px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${seccion === t.k ? 'border-[#0f3b5e] text-[#0f3b5e]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-			>
-				{t.l}
-			</button>
-		{/each}
-	</div>
-
-	{#if seccion === 'repositorio'}
-		<RepositorioComprobantes />
-	{:else}
 	<div class="flex items-center justify-end mb-4 gap-2">
 		{#if isAdmin() && !verEliminados}
 			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
@@ -724,9 +730,10 @@ function irAPaginaTransacciones(nueva: number) {
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<div class="overflow-x-auto">
 			<div class="min-w-[1100px]">
-				<div class="grid grid-cols-[1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_150px_104px] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-											<span>Folio</span>
-						<span>Tipo</span>
+				<div class="grid grid-cols-[auto_1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_170px_104px] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+					<span class="w-4"></span>
+					<span>Folio</span>
+					<span>Tipo</span>
 					<span>Fecha</span>
 					<span>Cliente</span>
 					<span>Forma de pago</span>
@@ -737,8 +744,24 @@ function irAPaginaTransacciones(nueva: number) {
 				</div>
 
 				{#each items as item (item.id_factura)}
-					<div class="grid grid-cols-[1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_150px_104px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
-												<span class="font-semibold text-slate-700 text-sm">{item.folio}</span>
+					<div class="grid grid-cols-[auto_1.2fr_0.9fr_1fr_2fr_1fr_1.1fr_0.9fr_170px_104px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+						{#if !verEliminados && item.estado === 'emitida'}
+							<!-- A pedido del usuario: casilla para marcar el comprobante emitido y pasar a la Nota de
+							     Crédito/Débito elegida en "Emitir nota" (igual que el tab "sin emisión"). -->
+							{@const marcada = marcadasNota.includes(item.id_factura)}
+							<button
+								type="button"
+								role="checkbox"
+								aria-checked={marcada}
+								onclick={() => toggleMarcaNota(item)}
+								class={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-blue-300 ${marcada ? 'bg-[#5b8fd4] border-[#5b8fd4] text-white' : 'bg-white border-[#5b8fd4] hover:bg-blue-100'}`}
+								title={`Marcar ${item.folio} para emitir una nota`}
+								aria-label={`Marcar ${item.folio} para emitir una nota`}
+							>{#if marcada}<Check size={11} />{/if}</button>
+						{:else}
+							<span class="w-4 h-4 shrink-0"></span>
+						{/if}
+						<span class="font-semibold text-slate-700 text-sm">{item.folio}</span>
 						<span class="text-xs text-slate-600">{TABS.find((x) => x.value === item.tipo_comprobante)?.label ?? '—'}</span>
 						<span class="text-sm text-slate-600">{formatDate(item.fecha_emision)}</span>
 						<span class="text-sm text-slate-600 truncate">{item.cliente_nombre ?? item.cliente?.nombre ?? 'Sin cliente'}</span>
@@ -751,13 +774,10 @@ function irAPaginaTransacciones(nueva: number) {
 						</span>
 						{#if !verEliminados && item.estado === 'emitida'}
 							<select
-								value=""
-								onchange={(e) => {
-									const sel = e.target as HTMLSelectElement;
-									if (sel.value) emitirNotaDesdeDocumento(item, sel.value as TipoComprobante);
-									sel.value = '';
-								}}
+								value={notaFila[item.id_factura] ?? ''}
+								onchange={(e) => elegirNotaFila(item, (e.target as HTMLSelectElement).value as TipoComprobante)}
 								class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-1.5 py-1 text-[11px] font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200"
+								aria-label={`Tipo de nota para ${item.folio}`}
 							>
 								<option value="" disabled>Emitir…</option>
 								{#each ACCIONES_NOTA as a (a.value)}
@@ -808,7 +828,6 @@ function irAPaginaTransacciones(nueva: number) {
 				<button type="button" disabled={pageNum >= totalPages} onclick={() => { pageNum += 1; fetchList(); }} class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50">Siguiente</button>
 			</div>
 		</div>
-	{/if}
 	{/if}
 	{/if}
 </div>

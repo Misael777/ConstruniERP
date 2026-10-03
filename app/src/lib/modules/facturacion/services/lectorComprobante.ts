@@ -1,6 +1,6 @@
 /**
  * Lectura de comprobantes electrónicos de INGRESO (Factura, Boleta, Nota de Crédito, Nota de Débito) para
- * el repositorio de "Emisión de Comprobante" (ver comprobantesIngreso.service.ts):
+ * el modo "PDF de SUNAT" de "Emisión de Comprobante" (ver leerComprobanteArchivo.ts y FacturaModal.svelte):
  *   - extraerDatosDeTexto: texto leído por OCR (Tesseract, ver leerTextoComprobante en ocrComprobante.ts)
  *     -> datos, solo con regex. Función pura (sin OCR ni DOM) para poder probarla con vitest.
  *   - leerXmlSunat: XML UBL 2.1 de SUNAT -> datos exactos, sin OCR (DOMParser, disponible en navegador,
