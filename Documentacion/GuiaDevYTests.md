@@ -32,6 +32,15 @@ base, **manda lo que observes ahora**: corrige este documento.
 
 ---
 
+## 0b. Preparar una PC nueva
+
+En una PC con Windows y el repo clonado: `app\setup-dev.bat "<ruta al .env.dev>"`. Instala con winget lo que falte
+(Node.js LTS ≥ 22, Git, cliente de PostgreSQL 17 sin servidor), corre `npm install`, descarga Supabase CLI, copia
+el `.env.dev` (que se pasa por un canal seguro, nunca por chat) y prueba la API, `psql` y el MCP de Dev
+(`scripts/verificar-dev.mjs`, que aborta si el archivo no apunta a Dev). No crea ni toca `app/.env` (Producción).
+
+---
+
 ## 1. Mapa de entornos
 
 | | **Desarrollo (Dev)** | **Producción (Prod)** |
