@@ -157,6 +157,8 @@
 		/** "Hito de cobro" (a pedido del usuario): concepto por el que se cobra esta cuota, texto libre. Se guarda
 		 * en cobros.referencia de la cuota. */
 		concepto: string;
+		/** true = la fecha del ADELANTO se cambió a mano (ventas antiguas): cambiar el monto ya no la pisa. */
+		fechaManual?: boolean;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;

@@ -69,7 +69,6 @@
 	} = $props();
 
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
-	const conHitos = $derived(cuotas.some((c) => c.hito));
 
 
 	function porcentaje(monto: number): string {
@@ -162,7 +161,7 @@
 								<tfoot>
 									<tr class="bg-emerald-50 font-semibold text-emerald-800 border-t border-emerald-100">
 										<td class="px-3 py-2">{etiquetaTotal}</td>
-										{#if conHitos}<td class="px-3 py-2"></td>{/if}
+										{#if mostrarHito}<td class="px-3 py-2"></td>{/if}
 										<td class="px-3 py-2 text-right">{formatCurrency(montoTotal)}</td>
 										<td class="px-3 py-2 text-right">100%</td>
 										<td class="px-3 py-2 text-center">—</td>

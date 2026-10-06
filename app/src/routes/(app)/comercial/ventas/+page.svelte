@@ -652,62 +652,6 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 		openEditModal(e.detail.row);
 	}
 
-	// Ticket #62: "Resumen de venta" de solo lectura (ojito de cada fila) — datos de la venta + su Forma de
-	// cobranza, tomada de la Cuenta por Cobrar del proyecto (misma ventana que el Resumen de cobro).
-	let resumenVentaAbierto = $state(false);
-	let resumenVentaTitulo = $state('Resumen de venta');
-	let resumenVentaCampos = $state<CampoResumen[]>([]);
-	let resumenVentaCuotas = $state<CuotaResumen[]>([]);
-	let resumenVentaTotal = $state(0);
-
-	async function handleVerEvent(e: CustomEvent) {
-		const row = e.detail.row;
-		const id = row?.id ?? row?.id_proyecto;
-		const tipo = row.tipoVenta === 'consultoria' ? 'Consultoría' : row.tipoObra === 'SUP' ? 'Supervisión' : 'Obra';
-		resumenVentaTitulo = `Resumen de venta — ${row.codigo || row.proyecto || ''}`;
-		resumenVentaTotal = Number(row.valor) || 0;
-		resumenVentaCampos = [
-			{ label: 'Código de proyecto', valor: row.codigo || row.proyecto || '—' },
-			{ label: 'Cliente', valor: row.clienteNombre || '—' },
-			{ label: 'Tipo de proyecto', valor: tipo },
-			{ label: 'Estado', valor: row.estado_proyecto === 'venta_cerrada' ? 'Venta cerrada' : row.estado_proyecto === 'baja' ? 'Dado de baja' : 'En borrador' },
-			{ label: 'Fecha de venta', valor: row.fecha || '—' },
-			{ label: 'Asesor', valor: row.asesor || '—' },
-			{ label: 'Valor venta', valor: new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(Number(row.valor) || 0) },
-			{ label: 'Comisión', valor: `${new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(Number(row.comision) || 0)} (${row.comisionPct ?? 0}%)` },
-			{ label: 'Observaciones', valor: row.descripcion || '', completo: true }
-		];
-		resumenVentaCuotas = [];
-		resumenVentaAbierto = true;
-		try {
-			const { data: cuenta } = await supabase
-				.from('cuentas_cobrar')
-				.select('id_cuenta_cobrar')
-				.eq('id_proyecto', id)
-				.eq('activo', true)
-				.order('created_at', { ascending: true })
-				.limit(1)
-				.maybeSingle();
-			if (!cuenta) return;
-			const { data: cobros } = await supabase
-				.from('cobros')
-				.select('*')
-				.eq('id_cuenta_cobrar', cuenta.id_cuenta_cobrar)
-				.neq('estado_cobro', 'cancelado');
-			const hoy = getFechaLocalHoy();
-			resumenVentaCuotas = (cobros ?? []).map((c: any): CuotaResumen => ({
-				id: c.id_cobro,
-				monto: Number(c.monto),
-				fecha: String(c.fecha_cobro).slice(0, 10),
-				estado: c.estado_cobro === 'cobrado' ? 'pagado' : String(c.fecha_cobro).slice(0, 10) < hoy ? 'vencido' : 'pendiente',
-				hito: c.hito ?? null,
-				editable: false
-			}));
-		} catch (err) {
-			console.warn('[Ventas] No se pudo cargar la forma de cobranza del resumen:', err);
-		}
-	}
-
 	let isDandoDeBaja = $state(false);
 
 	/** A pedido del usuario: "Eliminar" (una venta abierta) y "Dar de baja" (una venta cerrada) se
@@ -1055,20 +999,6 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 </div>
 
 <!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
-<ResumenCuentaModal
-	open={resumenVentaAbierto}
-	titulo={resumenVentaTitulo}
-	tituloCronograma="Forma de cobranza"
-	etiquetaTotal="Valor venta"
-	textoPagado="Cobrado"
-	campos={resumenVentaCampos}
-	cuotas={resumenVentaCuotas}
-	montoTotal={resumenVentaTotal}
-	onClose={() => (resumenVentaAbierto = false)}
-	onEditarCuota={() => {}}
-	soloLectura
-/>
-
 <NuevaVentaModal
 	isOpen={isModalOpen}
 	mode={modalMode}
