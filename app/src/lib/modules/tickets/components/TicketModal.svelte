@@ -11,7 +11,8 @@
 	import { toast } from '$lib/stores/toast';
 	import { MODULE_REGISTRY } from '$lib/config/modules';
 	import { uploadProjectDocument } from '$lib/shared/uploadProjectDocument';
-	import { crearTicket, type TipoTicket, type PrioridadTicket } from '../services/tickets.service';
+	import { crearTicket, type TipoTicket, type PrioridadTicket, type PlataformaTicket } from '../services/tickets.service';
+	import { getInfoVersionApp } from '$lib/shared/appVersion';
 
 	const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB, mismo tope que el resto de adjuntos del ERP (ver AnuncioModal.svelte)
 
@@ -42,6 +43,16 @@
 	let titulo = $state('');
 	let descripcion = $state('');
 	let prioridad = $state<PrioridadTicket>('media');
+	// Ticket #63: ¿el problema es de la app del celular o de la web/escritorio? Por defecto, la plataforma desde
+	// donde se está reportando (se puede cambiar, ej. si se reporta desde la PC algo visto en el celular).
+	let plataforma = $state<PlataformaTicket>('web');
+	async function plataformaPorDefecto(): Promise<PlataformaTicket> {
+		const { plataforma: p } = await getInfoVersionApp();
+		return p === 'android' || p === 'ios' ? 'app' : 'web';
+	}
+	$effect(() => {
+		if (open) plataformaPorDefecto().then((p) => (plataforma = p));
+	});
 	let guardando = $state(false);
 	let error = $state('');
 	let imagenFile = $state<File | null>(null);
@@ -101,7 +112,8 @@
 				titulo: titulo.trim(),
 				descripcion: descripcion.trim(),
 				prioridad,
-				imagenUrl
+				imagenUrl,
+				plataforma
 			});
 			if (!result.success) {
 				error = result.message || 'No se pudo registrar el ticket.';
@@ -148,6 +160,20 @@
 							options={[...OPCIONES_PRIORIDAD.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
 							onchange={(v) => (prioridad = v as typeof prioridad)}
 						/>
+					</div>
+				</div>
+				<div>
+					<span class="block text-sm font-bold text-[#0f3b5e] mb-1">¿Dónde ocurre?</span>
+					<div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Dónde ocurre">
+						{#each [{ v: 'web', l: 'Web / Escritorio' }, { v: 'app', l: 'App del celular' }] as op (op.v)}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={plataforma === op.v}
+								onclick={() => (plataforma = op.v as PlataformaTicket)}
+								class={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${plataforma === op.v ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+							>{op.l}</button>
+						{/each}
 					</div>
 				</div>
 				<div>

@@ -1245,6 +1245,13 @@
 	/** Vista previa en vivo del comprobante que aplique — Boucher Interna, Recibo de Pago o Recibo a
 	 * Proveedor, para CUALQUIER medio de pago (con o sin firma). Se recalcula solo, en cada cambio del
 	 * formulario (barato: solo arma el HTML, sin html2canvas). */
+	/** Ticket #71: la plantilla del recibo mide 750px de ancho (es la misma que genera el PDF). En un celular la
+	 * vista previa la apretaba hasta desordenarla; acá se escala el documento COMPLETO para que entre en el ancho
+	 * disponible (como un PDF en el celular), sin tocar la plantilla. En pantallas anchas queda igual (zoom 1). */
+	function ajustarPreviewAlAncho(html: string): string {
+		const script = '<script>(function(){function f(){var w=document.documentElement.clientWidth;document.documentElement.style.zoom=String(Math.min(1,w/790));}f();addEventListener("resize",f);})();<\/script>';
+		return html.includes('</body>') ? html.replace('</body>', `${script}</body>`) : html + script;
+	}
 	const reciboAutoHtml = $derived.by(() => {
 		if (formValues.tipo_alcance === 'interna') {
 			return construirHtmlInterna(construirDatosBoucherInterna(comprobanteInternoNumero ?? 0));
@@ -4467,7 +4474,7 @@
 				</button>
 			</div>
 			<div class="flex-1 overflow-auto bg-slate-100">
-				<iframe title="Vista previa del recibo" srcdoc={reciboAutoHtml} class="w-full h-full border-0 bg-white"></iframe>
+				<iframe title="Vista previa del recibo" srcdoc={ajustarPreviewAlAncho(reciboAutoHtml)} class="w-full h-full border-0 bg-white"></iframe>
 			</div>
 		</div>
 	</div>

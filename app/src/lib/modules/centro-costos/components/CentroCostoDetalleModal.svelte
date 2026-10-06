@@ -113,7 +113,8 @@
 
 			<div class="p-6 space-y-4">
 				<div>
-					<p class="text-xl font-bold text-[#0f3b5e]">{centro.nombre}</p>
+					<!-- Ticket #68: los nombres/códigos largos sin espacios se partían fuera del recuadro en celular. -->
+					<p class="text-xl font-bold text-[#0f3b5e] break-all">{centro.nombre}</p>
 					<p class="text-sm text-slate-400">{centro.codigo}</p>
 				</div>
 
@@ -175,7 +176,7 @@
 					{:else if linkedEntity}
 						<div class="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
 							<Link size={16} class="shrink-0" />
-							<span
+							<span class="min-w-0 break-all"
 								>{linkedEntity.tipo}: <strong>{linkedEntity.nombre}</strong>
 								<span class="text-blue-500">(#{linkedEntity.id})</span></span
 							>

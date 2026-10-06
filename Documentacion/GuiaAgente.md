@@ -10,7 +10,8 @@ MCP ("Axigh", el nombre que le da el equipo; inspirado en gh-axi), (2) las dos b
 Documentos hermanos: [FlujoDeNegocio.md](FlujoDeNegocio.md) (proceso de negocio de punta a punta),
 [AgentTools.md](AgentTools.md) (arquitectura de la capa de herramientas), [tests/README.md](tests/README.md)
 (suite de tests de negocio y hallazgos), [MecanismoCICD.md](MecanismoCICD.md) (releases),
-[../supabase/migrations/README.md](../supabase/migrations/README.md) (migraciones).
+[../supabase/migrations/README.md](../supabase/migrations/README.md) (migraciones),
+[GuiaDevYTests.md](GuiaDevYTests.md) (manual paso a paso de la base Dev, migraciones y cómo escribir/correr tests).
 
 ---
 
@@ -349,7 +350,7 @@ El shell es Git Bash sobre Windows. Trampas ya vistas:
   herramienta de archivos y ejecútalo**.
 - Rutas con Docker: usa `MSYS_NO_PATHCONV=1` y rutas de Windows.
 - `source .env` falla por líneas con espacios antes de las comillas: extrae la variable con `grep | cut`.
-- `npm run check` (svelte-check) debe dar **0 errores** (línea base: 169 warnings preexistentes). `npx vitest run`: 25 tests.
+- `npm run check` (svelte-check) debe dar **0 errores** (línea base: 169 warnings preexistentes). `npx vitest run`: 31 tests (2026-10-06).
 
 ---
 

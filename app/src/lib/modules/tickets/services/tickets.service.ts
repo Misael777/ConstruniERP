@@ -18,6 +18,8 @@ import { permisosState } from '$lib/stores/permisos.svelte';
 export type TipoTicket = 'reclamo' | 'sugerencia' | 'incidencia' | 'requerimiento';
 export type PrioridadTicket = 'baja' | 'media' | 'alta' | 'critica';
 export type EstadoTicket = 'abierto' | 'en_progreso' | 'resuelto' | 'aprobado' | 'rechazado' | 'cerrado';
+/** Ticket #63: 'app' = app del celular, 'web' = navegador o app de escritorio. null = tickets anteriores. */
+export type PlataformaTicket = 'web' | 'app';
 
 export interface Ticket {
 	id_ticket: number;
@@ -37,6 +39,7 @@ export interface Ticket {
 	id_release: number | null;
 	created_at: string;
 	imagen_url: string | null;
+	plataforma?: PlataformaTicket | null;
 }
 
 export interface TicketComentario {
@@ -89,26 +92,30 @@ async function registrarEvento(
  * aprobaciones.service.ts. */
 export async function crearTicket(
 	client: SupabaseClient,
-	params: { tipo: TipoTicket; modulo: string | null; titulo: string; descripcion: string; prioridad: PrioridadTicket; imagenUrl?: string | null }
+	params: { tipo: TipoTicket; modulo: string | null; titulo: string; descripcion: string; prioridad: PrioridadTicket; imagenUrl?: string | null; plataforma?: PlataformaTicket | null }
 ): Promise<ServiceResult<Ticket>> {
 	try {
 		const { data: userData } = await client.auth.getUser();
 		const creadoPor = permisosState.userName || null;
-		const { data, error } = await client
-			.from(TABLE_NAME)
-			.insert({
-				tipo: params.tipo,
-				modulo: params.modulo,
-				titulo: params.titulo,
-				descripcion: params.descripcion,
-				prioridad: params.prioridad,
-				estado: 'abierto',
-				creado_por: creadoPor,
-				creado_por_id: userData?.user?.id ?? null,
-				imagen_url: params.imagenUrl ?? null
-			})
-			.select('*')
-			.single();
+		const fila: Record<string, unknown> = {
+			tipo: params.tipo,
+			modulo: params.modulo,
+			titulo: params.titulo,
+			descripcion: params.descripcion,
+			prioridad: params.prioridad,
+			estado: 'abierto',
+			creado_por: creadoPor,
+			creado_por_id: userData?.user?.id ?? null,
+			imagen_url: params.imagenUrl ?? null,
+			plataforma: params.plataforma ?? null
+		};
+		let { data, error } = await client.from(TABLE_NAME).insert(fila).select('*').single();
+		// Si la base todavía no tiene la columna `plataforma` (falta la migración ticket_plataforma), se guarda
+		// el ticket igual, sin ese dato: reportar nunca debe fallar por esto.
+		if (error && /plataforma/i.test(error.message)) {
+			delete fila.plataforma;
+			({ data, error } = await client.from(TABLE_NAME).insert(fila).select('*').single());
+		}
 		if (error) return { success: false, message: error.message };
 		await registrarEvento(client, (data as Ticket).id_ticket, null, 'abierto', creadoPor);
 		return { success: true, message: 'Ticket registrado correctamente', data: data as Ticket };
@@ -136,12 +143,14 @@ export interface FiltrosTicketDeveloper {
 	estado?: EstadoTicket;
 	tipo?: TipoTicket;
 	prioridad?: PrioridadTicket;
+	plataforma?: PlataformaTicket;
 }
 export async function getTicketsDeveloper(client: SupabaseClient, filtros: FiltrosTicketDeveloper = {}): Promise<Ticket[]> {
 	let query = client.from(TABLE_NAME).select('*').order('created_at', { ascending: false });
 	if (filtros.estado) query = query.eq('estado', filtros.estado);
 	if (filtros.tipo) query = query.eq('tipo', filtros.tipo);
 	if (filtros.prioridad) query = query.eq('prioridad', filtros.prioridad);
+	if (filtros.plataforma) query = query.eq('plataforma', filtros.plataforma);
 	const { data, error } = await query;
 	if (error) throw error;
 	return (data ?? []) as Ticket[];

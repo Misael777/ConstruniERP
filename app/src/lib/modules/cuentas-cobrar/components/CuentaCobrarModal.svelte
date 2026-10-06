@@ -406,16 +406,12 @@
 								/>
 							{:else if field.tipo === 'select' || field.options}
 								<div class="relative">
-									{#if field.optionColors}
-										<span
-											class="absolute left-3 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full pointer-events-none"
-											style={`background-color:${field.optionColors[formValues[field.key]] ?? '#cbd5e1'}`}
-										></span>
-									{/if}
+									<!-- Ticket #59: el punto de color (Prioridad) lo dibuja el propio combo; antes iba superpuesto en
+									     posición absoluta y quedaba encima de la primera letra. -->
 									<SelectConSaldo
 										id={`ccb-${field.key}`}
 										value={formValues[field.key]}
-										options={optionsFor(field)}
+										options={optionsFor(field).map((o) => ({ ...o, color: field.optionColors?.[String(o.value)] }))}
 										placeholder="Selecciona una opción"
 										disabled={isDisabled(field)}
 										onchange={(v) => handleInput(field.key, v)}

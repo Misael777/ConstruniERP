@@ -8,6 +8,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$lib/driveUploadClient';
 	import { extractDriveFileId } from '$lib/shared/uploadProjectDocument';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { resolveApiUrl, parseJsonResponse } from '$lib/apiClient';
 	import type { Anuncio, AnuncioPayload } from '$lib/modules/anuncios/services/anuncios.service';
 
@@ -40,7 +41,8 @@
 	let errores = $state<Record<string, string>>({});
 
 	const title = $derived(mode === 'create' ? 'Nuevo Anuncio' : 'Editar Anuncio');
-	const imagenMostrada = $derived(imagenPreviewUrl ?? imagenUrl);
+	// Ticket #61: la imagen ya guardada se muestra por la miniatura de Drive (la URL de descarga no se puede incrustar).
+	const imagenMostrada = $derived(imagenPreviewUrl ?? (imagenUrl ? toDriveThumbnailUrl(imagenUrl, 1600) : null));
 
 	let abiertoAnterior = false;
 	$effect(() => {

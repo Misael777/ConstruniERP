@@ -85,6 +85,8 @@ export interface Cobro {
 	/** Transacción de respaldo (tipo 'ingreso') que prueba este cobro — ver createCobro y
 	 * confirmarCobroCobrado. Un cobro con estado_cobro='cobrado' SIEMPRE debe tener esto no-nulo. */
 	id_transaccion: number | null;
+	/** "Hito de cobro" de texto libre (ticket #66, ver cobros_hito); undefined si la columna aún no existe. */
+	hito?: string | null;
 	/** Solo viene poblado desde getCobros (join embebido) — usado en la UI para deshabilitar
 	 * editar/eliminar cuando la transacción vinculada ya fue aprobada por un administrador. */
 	transaccion?: { aprobado: boolean; aprobado_por: string | null } | null;
@@ -359,7 +361,7 @@ export async function createCuentaCobrar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
+	fraccionesPersonalizadas: { fecha: string; monto: number; hito?: string | null }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -477,7 +479,7 @@ export async function getPrestatarioDeCuentaCobrar(client: SupabaseClient, cuent
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
-	fracciones: { fecha: string; monto: number }[]
+	fracciones: { fecha: string; monto: number; hito?: string | null }[]
 ): Promise<{ success: boolean; message: string }> {
 	if (fracciones.length > 0) {
 		const { data: cuenta } = await client.from(TABLE_NAME).select('monto, monto_cobrado').eq(PK_COLUMN, idCuentaCobrar).single();
@@ -485,6 +487,17 @@ export async function sincronizarCuotasProgramadas(
 		const errorFracciones = validarSumaFracciones(pendiente, fracciones);
 		if (errorFracciones) return { success: false, message: errorFracciones };
 	}
+	// Ticket #66: las cuotas se borran y se recrean, así que el "Hito de cobro" de cada cuota programada se
+	// conserva por posición (en orden de fecha) cuando quien llama no manda uno propio (ej. FraccionamientoModal
+	// o Panoramas, que no conocen los hitos). Si la columna todavía no existe en la base, se sigue sin hitos.
+	const { data: anteriores, error: hitosError } = await client
+		.from(COBRO_TABLE)
+		.select('hito')
+		.eq(PARENT_FK_COLUMN, idCuentaCobrar)
+		.eq('estado_cobro', 'programado')
+		.order('fecha_cobro', { ascending: true })
+		.order(COBRO_PK, { ascending: true });
+	const hitosAnteriores = hitosError ? [] : (anteriores ?? []).map((c: any) => (c.hito as string | null) ?? null);
 	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
@@ -492,7 +505,16 @@ export async function sincronizarCuotasProgramadas(
 	}
 	if (fracciones.length === 0) return { success: true, message: 'Cuotas eliminadas' };
 
-	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: f.monto, fecha_cobro: f.fecha, estado_cobro: 'programado' }));
+	const ordenadas = [...fracciones].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+	const hitos = ordenadas.map((f, i) => (f.hito !== undefined ? f.hito?.trim() || null : hitosAnteriores[i] ?? null));
+	const conHitos = hitos.some((h) => h);
+	const filas = ordenadas.map((f, i) => ({
+		[PARENT_FK_COLUMN]: idCuentaCobrar,
+		monto: f.monto,
+		fecha_cobro: f.fecha,
+		estado_cobro: 'programado',
+		...(conHitos ? { hito: hitos[i] } : {})
+	}));
 	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);
 	if (insertError) {
 		console.error('No se pudieron guardar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
@@ -506,7 +528,7 @@ export async function updateCuentaCobrar(
 	id: number,
 	payload: Record<string, unknown>,
 	esAdmin: boolean = false,
-	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
+	fraccionesPersonalizadas: { fecha: string; monto: number; hito?: string | null }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {

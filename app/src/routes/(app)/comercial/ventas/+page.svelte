@@ -25,6 +25,8 @@ import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
+	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -650,6 +652,62 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		openEditModal(e.detail.row);
 	}
 
+	// Ticket #62: "Resumen de venta" de solo lectura (ojito de cada fila) — datos de la venta + su Forma de
+	// cobranza, tomada de la Cuenta por Cobrar del proyecto (misma ventana que el Resumen de cobro).
+	let resumenVentaAbierto = $state(false);
+	let resumenVentaTitulo = $state('Resumen de venta');
+	let resumenVentaCampos = $state<CampoResumen[]>([]);
+	let resumenVentaCuotas = $state<CuotaResumen[]>([]);
+	let resumenVentaTotal = $state(0);
+
+	async function handleVerEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		const id = row?.id ?? row?.id_proyecto;
+		const tipo = row.tipoVenta === 'consultoria' ? 'Consultoría' : row.tipoObra === 'SUP' ? 'Supervisión' : 'Obra';
+		resumenVentaTitulo = `Resumen de venta — ${row.codigo || row.proyecto || ''}`;
+		resumenVentaTotal = Number(row.valor) || 0;
+		resumenVentaCampos = [
+			{ label: 'Código de proyecto', valor: row.codigo || row.proyecto || '—' },
+			{ label: 'Cliente', valor: row.clienteNombre || '—' },
+			{ label: 'Tipo de proyecto', valor: tipo },
+			{ label: 'Estado', valor: row.estado_proyecto === 'venta_cerrada' ? 'Venta cerrada' : row.estado_proyecto === 'baja' ? 'Dado de baja' : 'En borrador' },
+			{ label: 'Fecha de venta', valor: row.fecha || '—' },
+			{ label: 'Asesor', valor: row.asesor || '—' },
+			{ label: 'Valor venta', valor: new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(Number(row.valor) || 0) },
+			{ label: 'Comisión', valor: `${new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(Number(row.comision) || 0)} (${row.comisionPct ?? 0}%)` },
+			{ label: 'Observaciones', valor: row.descripcion || '', completo: true }
+		];
+		resumenVentaCuotas = [];
+		resumenVentaAbierto = true;
+		try {
+			const { data: cuenta } = await supabase
+				.from('cuentas_cobrar')
+				.select('id_cuenta_cobrar')
+				.eq('id_proyecto', id)
+				.eq('activo', true)
+				.order('created_at', { ascending: true })
+				.limit(1)
+				.maybeSingle();
+			if (!cuenta) return;
+			const { data: cobros } = await supabase
+				.from('cobros')
+				.select('*')
+				.eq('id_cuenta_cobrar', cuenta.id_cuenta_cobrar)
+				.neq('estado_cobro', 'cancelado');
+			const hoy = getFechaLocalHoy();
+			resumenVentaCuotas = (cobros ?? []).map((c: any): CuotaResumen => ({
+				id: c.id_cobro,
+				monto: Number(c.monto),
+				fecha: String(c.fecha_cobro).slice(0, 10),
+				estado: c.estado_cobro === 'cobrado' ? 'pagado' : String(c.fecha_cobro).slice(0, 10) < hoy ? 'vencido' : 'pendiente',
+				hito: c.hito ?? null,
+				editable: false
+			}));
+		} catch (err) {
+			console.warn('[Ventas] No se pudo cargar la forma de cobranza del resumen:', err);
+		}
+	}
+
 	let isDandoDeBaja = $state(false);
 
 	/** A pedido del usuario: "Eliminar" (una venta abierta) y "Dar de baja" (una venta cerrada) se
@@ -862,10 +920,11 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 
 <div class="flex flex-col h-[calc(100vh-80px)] overflow-hidden bg-slate-50/50">
 	
-	<!-- Header area -->
-	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
-		<div class="flex flex-col">
-			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
+	<!-- Header area — ticket #69: en celular se apila (título arriba, botones abajo); antes el botón
+	     "Volver a Ventas" quedaba aplastado y cortado contra el borde. -->
+	<div class="flex-shrink-0 px-4 sm:px-6 py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 bg-white">
+		<div class="flex flex-col min-w-0">
+			<div class="flex flex-wrap items-center gap-2 text-slate-500 text-sm mb-1">
 				<span class="font-bold text-slate-800 text-2xl">{verEliminados ? 'Ventas eliminadas' : 'Venta cerrada'}</span>
 				{#if verEliminados}
 					<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 uppercase tracking-wide">Solo administradores</span>
@@ -878,9 +937,9 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 			</p>
 		</div>
 
-		<div class="flex items-center gap-3">
+		<div class="flex items-center gap-3 shrink-0">
 			{#if isAdmin()}
-				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 whitespace-nowrap ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
 					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
 					{verEliminados ? 'Volver a Ventas' : 'Ver eliminados'}
 				</button>
@@ -921,7 +980,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} modoEliminados={verEliminados} on:editRow={handleEditEvent} on:darDeBaja={handleDarDeBajaEvent} on:restaurar={handleRestaurarEvent} on:eliminarPermanente={handleEliminarPermanenteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} modoEliminados={verEliminados} on:verRow={handleVerEvent} on:editRow={handleEditEvent} on:darDeBaja={handleDarDeBajaEvent} on:restaurar={handleRestaurarEvent} on:eliminarPermanente={handleEliminarPermanenteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -950,6 +1009,20 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 </div>
 
 <!-- Modal Overlay: crea Y edita/gestiona (proformas, contrato, cierre) la venta -->
+<ResumenCuentaModal
+	open={resumenVentaAbierto}
+	titulo={resumenVentaTitulo}
+	tituloCronograma="Forma de cobranza"
+	etiquetaTotal="Valor venta"
+	textoPagado="Cobrado"
+	campos={resumenVentaCampos}
+	cuotas={resumenVentaCuotas}
+	montoTotal={resumenVentaTotal}
+	onClose={() => (resumenVentaAbierto = false)}
+	onEditarCuota={() => {}}
+	soloLectura
+/>
+
 <NuevaVentaModal
 	isOpen={isModalOpen}
 	mode={modalMode}

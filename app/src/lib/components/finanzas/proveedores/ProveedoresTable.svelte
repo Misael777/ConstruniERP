@@ -148,16 +148,16 @@
 					</td>
 				{/snippet}
 				{#snippet card(proveedor)}
-					<div class="flex items-start justify-between gap-3 mb-2">
-						<div class="min-w-0">
-							<div class="font-semibold text-slate-800 truncate">{proveedor.razon_social}</div>
-							<div class="text-xs text-slate-500 mt-0.5">RUC {proveedor.ruc}</div>
-						</div>
+					<!-- Ticket #72 (con imagen de referencia): razón social arriba, el producto/cargo debajo y luego el resto —
+					     antes el producto iba al costado del nombre y en celular se apretaban los dos. -->
+					<div class="mb-2">
+						<div class="font-semibold text-slate-800 break-words">{proveedor.razon_social}</div>
 						{#if proveedor.vendedor}
-							<span class="shrink-0 px-2.5 py-1 bg-slate-100 rounded text-[11px] font-medium border border-slate-200">{proveedor.vendedor}</span>
+							<span class="inline-block mt-1.5 px-2.5 py-1 bg-slate-100 rounded text-[11px] font-medium border border-slate-200 break-words">{proveedor.vendedor}</span>
 						{:else}
-							<span class="shrink-0 text-[11px] text-slate-400 italic">Sin producto</span>
+							<span class="inline-block mt-1.5 text-[11px] text-slate-400 italic">Sin producto</span>
 						{/if}
+						<div class="text-xs text-slate-500 mt-1.5">RUC {proveedor.ruc}</div>
 					</div>
 					<div class="flex flex-col gap-1 text-slate-600 mb-3">
 						{#if proveedor.contacto}
