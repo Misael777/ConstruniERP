@@ -7,7 +7,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { ArrowLeft, Receipt, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
+	import { Briefcase, HardHat, Building2, Ellipsis, ArrowLeft, Receipt, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
 	import {
 		getCobrosPendientes,
 		getPanoramaItemsCobro,
@@ -26,7 +26,7 @@
 		type BandejaSortBy
 	} from '$lib/modules/panoramas/services/panoramas.service';
 	import { getClienteOptions, getCobros, sincronizarCuotasProgramadas } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { getCentroCostoOptions } from '$lib/modules/transacciones/services/transacciones.service';
+	import { getCentroCostoOptions, getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
@@ -156,7 +156,7 @@
 			const cobros = await getCobros(supabase, item.id_cuenta_cobrar);
 			cuotasFraccionesIniciales = cobros
 				.filter((c) => c.estado_cobro === 'programado')
-				.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto) }))
+				.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto), referencia: c.referencia ?? null }))
 				.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
 			// FraccionamientoModal solo debe repartir lo que TODAVÍA falta cobrar (saldoPendiente), no el
 			// monto total de la cuenta (item.montoTotal) — mismo fix que en cuentas-pagar/panoramas.
@@ -211,8 +211,11 @@
 	async function fetchBandeja() {
 		loading = true;
 		try {
+			const filtroTipo = tipoFilter ? idsParaTipoFiltro(tipoFilter) : null;
 			const result = await getCobrosPendientes(supabase, {
 				idProyecto: filtroObra ? Number(filtroObra) : null,
+				idsCentroCosto: filtroTipo?.ids,
+				incluirSinCentroCosto: filtroTipo?.incluirSinCentroCosto,
 				idCliente: filtroCliente ? Number(filtroCliente) : null,
 				prioridad: filtroPrioridad || null,
 				estado: filtroEstado || null,
@@ -309,13 +312,40 @@
 		}
 	}
 
+	// Filtro "Tipo" de la Bandeja (a pedido del usuario, con imagen de referencia): mismas píldoras
+	// Consultoría/Obra/Corporativo/Otros que Panoramas de Pago, por el TIPO real del centro de costo de cada
+	// cuenta. "Obra" incluye los tipos 'proyecto' y 'obra'; "Otros" es el tipo 'otro' MÁS las cuentas sin
+	// centro de costo (Préstamos y Cuentas Internas no entran en ninguno de los 4).
+	type TipoFiltroCC = 'consultoria' | 'obra' | 'bolsa general' | 'otro';
+	const TIPOS_POR_FILTRO: Record<TipoFiltroCC, string[]> = {
+		consultoria: ['consultoria'],
+		obra: ['proyecto', 'obra'],
+		'bolsa general': ['bolsa general'],
+		otro: ['otro']
+	};
+	let tipoFilter = $state<TipoFiltroCC | null>(null);
+	let centroCostoTipoMap = $state<Record<string, string>>({});
+	function idsParaTipoFiltro(tipo: TipoFiltroCC): { ids: number[]; incluirSinCentroCosto: boolean } {
+		const ids = Object.entries(centroCostoTipoMap)
+			.filter(([, t]) => TIPOS_POR_FILTRO[tipo].includes(t))
+			.map(([id]) => Number(id));
+		return { ids, incluirSinCentroCosto: tipo === 'otro' };
+	}
+	function toggleTipoFilter(tipo: TipoFiltroCC) {
+		tipoFilter = tipoFilter === tipo ? null : tipo;
+		refetchOnFilterChange();
+	}
+
 	onMount(async () => {
 		try {
-			[proyectoOptions, clienteOptions, centroCostoOptions] = await Promise.all([
+			let tipoMap: Record<string, string>;
+			[proyectoOptions, clienteOptions, centroCostoOptions, tipoMap] = await Promise.all([
 				getProyectoOptions(supabase),
 				getClienteOptions(supabase),
-				getCentroCostoOptions(supabase)
+				getCentroCostoOptions(supabase),
+				getCentroCostoTipoMap(supabase)
 			]);
+			centroCostoTipoMap = tipoMap;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar obras/clientes');
 		}
@@ -553,6 +583,31 @@
 
 	{#if loadError}
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
+	{/if}
+
+	{#if vistaActiva === 'tablero'}
+		<!-- Filtro "Tipo" de la Bandeja por Proyectar (ver toggleTipoFilter/fetchBandeja) — mismas píldoras que
+		     Panoramas de Pago. Solo en Tablero: Calendario no muestra la Bandeja. -->
+		<div class="flex flex-wrap gap-3 mb-4">
+			{#each [
+				{ v: 'consultoria', l: 'Consultoria', icono: Briefcase, activo: 'border-blue-300 bg-blue-50', circulo: 'bg-blue-100 text-blue-600' },
+				{ v: 'obra', l: 'Obra', icono: HardHat, activo: 'border-orange-300 bg-orange-50', circulo: 'bg-orange-100 text-orange-500' },
+				{ v: 'bolsa general', l: 'Corporativo', icono: Building2, activo: 'border-emerald-300 bg-emerald-50', circulo: 'bg-emerald-100 text-emerald-600' },
+				{ v: 'otro', l: 'Otros', icono: Ellipsis, activo: 'border-slate-400 bg-slate-100', circulo: 'bg-slate-700 text-white' }
+			] as op (op.v)}
+				<button
+					type="button"
+					onclick={() => toggleTipoFilter(op.v as TipoFiltroCC)}
+					aria-pressed={tipoFilter === op.v}
+					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === op.v ? op.activo : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				>
+					<div class={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${op.circulo}`}>
+						<op.icono size={14} />
+					</div>
+					<span class="font-semibold text-slate-700 text-sm">{op.l}</span>
+				</button>
+			{/each}
+		</div>
 	{/if}
 
 	{#if vistaActiva === 'calendario'}
@@ -982,6 +1037,7 @@
 	fechaEmision={cuotasCuentaActual?.fechaEmision ?? ''}
 	fechaVencimiento={cuotasCuentaActual?.fechaVencimiento ?? null}
 	fraccionesIniciales={cuotasFraccionesIniciales}
+	conHitoDeCobro
 	onClose={() => (cuotasModalOpen = false)}
 	onConfirm={handleCuotasConfirmadas}
 	onEliminar={handleCuotasEliminadas}

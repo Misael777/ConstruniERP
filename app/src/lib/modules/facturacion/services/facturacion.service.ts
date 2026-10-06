@@ -126,6 +126,9 @@ export interface ListParams {
 	columnFilters?: ColumnFilters;
 	soloEliminados?: boolean;
 	tipoComprobante?: TipoComprobante;
+	/** Filtro "Tipo" (Consultoría/Obra/Corporativo/Otros): solo documentos cuyas transacciones van a estos
+	 * centros de costo destino (el proyecto que recibe el ingreso). undefined = sin filtrar. */
+	idsCentroDestino?: number[];
 }
 
 export interface ListResult<T> {
@@ -150,6 +153,13 @@ export async function getFacturas(client: SupabaseClient, params: ListParams = {
 
 	let query = client.from(TABLE_NAME).select(FACTURA_SELECT, { count: 'exact' }).order(sortField, { ascending: sortDir === 'asc' }).range(from, to);
 	if (params.tipoComprobante) query = query.eq('tipo_comprobante', params.tipoComprobante);
+	if (params.idsCentroDestino) {
+		const { data: conDestino } = params.idsCentroDestino.length
+			? await client.from('transaccion').select('id_factura').in('id_centro_costo_destino', params.idsCentroDestino).not('id_factura', 'is', null)
+			: { data: [] };
+		const idsFactura = [...new Set((conDestino ?? []).map((t: any) => t.id_factura as number))];
+		query = query.in(PK_COLUMN, idsFactura.length ? idsFactura : [-1]);
+	}
 
 	const search = params.search?.trim();
 	if (search) {
@@ -326,7 +336,7 @@ export async function getTransaccionesFacturables(
 	client: SupabaseClient,
 	/** undefined = todas (sin filtrar por tipo); null = las que NO tienen tipo de documento; texto = ese tipo. */
 	tipoDocumento: string | null | undefined,
-	params: { page?: number; pageSize?: number; vista?: 'pendientes' | 'emitidas' } = {}
+	params: { page?: number; pageSize?: number; vista?: 'pendientes' | 'emitidas'; idsCentroDestino?: number[] } = {}
 ): Promise<ListResult<TransaccionFacturable>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -349,6 +359,7 @@ export async function getTransaccionesFacturables(
 		.in('id_centro_costo_origen', [...clientePorCentro.keys()]);
 	// Vista: sin comprobante emitido (default) o con comprobante ya emitido.
 	query = params.vista === 'emitidas' ? query.not('id_factura', 'is', null) : query.is('id_factura', null);
+	if (params.idsCentroDestino) query = query.in('id_centro_costo_destino', params.idsCentroDestino.length ? params.idsCentroDestino : [-1]);
 	if (tipoDocumento === null) query = query.is('tipo_documento', null);
 	else if (tipoDocumento !== undefined) query = query.eq('tipo_documento', tipoDocumento);
 	const { data, error, count } = await query.order('fecha', { ascending: false }).range(from, to);

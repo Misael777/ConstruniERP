@@ -359,7 +359,7 @@ export async function createCuentaCobrar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
+	fraccionesPersonalizadas: { fecha: string; monto: number; referencia?: string | null }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -477,7 +477,7 @@ export async function getPrestatarioDeCuentaCobrar(client: SupabaseClient, cuent
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
-	fracciones: { fecha: string; monto: number }[]
+	fracciones: { fecha: string; monto: number; referencia?: string | null }[]
 ): Promise<{ success: boolean; message: string }> {
 	if (fracciones.length > 0) {
 		const { data: cuenta } = await client.from(TABLE_NAME).select('monto, monto_cobrado').eq(PK_COLUMN, idCuentaCobrar).single();
@@ -492,7 +492,14 @@ export async function sincronizarCuotasProgramadas(
 	}
 	if (fracciones.length === 0) return { success: true, message: 'Cuotas eliminadas' };
 
-	const filas = fracciones.map((f) => ({ [PARENT_FK_COLUMN]: idCuentaCobrar, monto: f.monto, fecha_cobro: f.fecha, estado_cobro: 'programado' }));
+	// `referencia` (opcional): concepto de la cuota — ej. el "Hito de cobro" de la Forma de cobranza de Nueva venta.
+	const filas = fracciones.map((f) => ({
+		[PARENT_FK_COLUMN]: idCuentaCobrar,
+		monto: f.monto,
+		fecha_cobro: f.fecha,
+		estado_cobro: 'programado',
+		...(f.referencia?.trim() ? { referencia: f.referencia.trim().slice(0, 100) } : {})
+	}));
 	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);
 	if (insertError) {
 		console.error('No se pudieron guardar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
@@ -506,7 +513,7 @@ export async function updateCuentaCobrar(
 	id: number,
 	payload: Record<string, unknown>,
 	esAdmin: boolean = false,
-	fraccionesPersonalizadas: { fecha: string; monto: number }[] = []
+	fraccionesPersonalizadas: { fecha: string; monto: number; referencia?: string | null }[] = []
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -1093,6 +1100,124 @@ export async function deleteCobro(client: SupabaseClient, idCobro: number, esAdm
  * recalcularCuentaPagar en cuentasPagar.service.ts (ver ahí). Se llama tras registrar/eliminar un
  * cobro, que es cuando cambia la transacción vinculada.
  */
+/** yyyy-mm-dd + n días (calendario, sin depender de la zona horaria). */
+function sumarDias(fecha: string, dias: number): string {
+	const d = new Date(`${fecha}T00:00:00Z`);
+	d.setUTCDate(d.getUTCDate() + dias);
+	return d.toISOString().slice(0, 10);
+}
+
+/**
+ * A pedido del usuario: toda venta CERRADA debe tener su Cuenta por Cobrar (antes solo la creaba "Nueva venta"
+ * con Forma de cobranza; "Cerrar venta" desde Editar venta no creaba ninguna). Si la venta ya tiene una (por
+ * proyecto o por su centro de costo) no hace nada. Si no, la crea por el Valor venta: cada ingreso que ya
+ * entró al centro de costo del proyecto (ej. el adelanto) queda como cuota COBRADA enlazada a su transacción,
+ * y el saldo como una cuota pendiente a 30 días. Misma regla que la migración cuentas_cobrar_ventas_cerradas.
+ * Nunca lanza: devuelve un mensaje si no pudo (el cierre de la venta no debe fallar por esto).
+ */
+export async function asegurarCuentaCobrarDeVenta(
+	client: SupabaseClient,
+	venta: {
+		idProyecto: number;
+		idCliente: number;
+		idCentroCosto: number | null;
+		montoVenta: number;
+		fechaVenta: string;
+		responsable: string | null;
+		proyectoNombre: string;
+	},
+	usuarioRegistro: string | null
+): Promise<{ creada: boolean; mensaje: string | null }> {
+	try {
+		const filtros = [`id_proyecto.eq.${venta.idProyecto}`];
+		if (venta.idCentroCosto) filtros.push(`id_centro_costo.eq.${venta.idCentroCosto}`);
+		const { data: existentes, error: errExistentes } = await client.from(TABLE_NAME).select(PK_COLUMN).eq('activo', true).or(filtros.join(','));
+		if (errExistentes) return { creada: false, mensaje: errExistentes.message };
+		if ((existentes ?? []).length > 0) return { creada: false, mensaje: null };
+
+		const monto = Math.round(Number(venta.montoVenta) * 100) / 100;
+		if (!(monto > 0)) return { creada: false, mensaje: null };
+
+		// Ingresos ya recibidos en el centro de costo del proyecto que todavía no son cuota de ninguna cuenta.
+		let ingresos: { id_transaccion: number; fecha: string; monto: number; categoria: string | null }[] = [];
+		if (venta.idCentroCosto) {
+			const { data: tx } = await client
+				.from('transaccion')
+				.select('id_transaccion, fecha, monto_total, monto_convertido, tipo_moneda, categoria')
+				.eq('id_centro_costo_destino', venta.idCentroCosto)
+				.eq('tipo', 'ingreso')
+				.eq('estado', 'activo')
+				.order('fecha', { ascending: true });
+			const ids = (tx ?? []).map((t: any) => t.id_transaccion);
+			const { data: yaEnCuotas } = ids.length ? await client.from(COBRO_TABLE).select('id_transaccion').in('id_transaccion', ids) : { data: [] };
+			const usados = new Set((yaEnCuotas ?? []).map((c: any) => c.id_transaccion));
+			ingresos = (tx ?? [])
+				.filter((t: any) => !usados.has(t.id_transaccion))
+				.map((t: any) => ({
+					id_transaccion: t.id_transaccion,
+					fecha: t.fecha,
+					monto: Math.round((t.tipo_moneda === 'dolares' && t.monto_convertido != null ? Number(t.monto_convertido) : Number(t.monto_total)) * 100) / 100,
+					categoria: t.categoria ?? null
+				}))
+				.filter((t) => t.monto > 0);
+		}
+		const cobrado = Math.round(ingresos.reduce((s, t) => s + t.monto, 0) * 100) / 100;
+		if (cobrado - monto > 0.01) {
+			return { creada: false, mensaje: `Lo ya cobrado (${formatCurrency(cobrado)}) supera el Valor venta (${formatCurrency(monto)}): crea la Cuenta por Cobrar a mano.` };
+		}
+		const saldo = Math.round((monto - cobrado) * 100) / 100;
+		// 30 días desde la fecha de venta, o desde hoy si la venta es antigua (así el saldo no nace vencido).
+		const hoy = new Date().toLocaleDateString('en-CA');
+		const fechaSaldo = sumarDias(venta.fechaVenta > hoy ? venta.fechaVenta : hoy, 30);
+		const fracciones = [
+			...ingresos.map((t) => ({ fecha: t.fecha, monto: t.monto, referencia: t.categoria })),
+			...(saldo > 0.005 ? [{ fecha: fechaSaldo, monto: saldo, referencia: 'Saldo de la venta' }] : [])
+		];
+
+		const result = await createCuentaCobrar(
+			client,
+			{
+				id_cliente: venta.idCliente,
+				id_centro_costo: venta.idCentroCosto,
+				id_proyecto: venta.idProyecto,
+				monto,
+				forma_pago: '2', // Crédito
+				'condición_pago': fracciones.length,
+				responsable: venta.responsable,
+				fecha_emision: venta.fechaVenta,
+				fecha_vencimiento: saldo > 0.005 ? fechaSaldo : venta.fechaVenta,
+				moneda: 'PEN',
+				observaciones: `Cuenta por cobrar de la venta ${venta.proyectoNombre}`.slice(0, 200)
+			},
+			usuarioRegistro,
+			fracciones
+		);
+		if (!result.success || !result.data) return { creada: false, mensaje: result.message };
+		const idCuenta = result.data.id_cuenta_cobrar;
+
+		// Las cuotas de los ingresos ya recibidos pasan a 'cobrado', enlazadas a su transacción.
+		if (ingresos.length > 0) {
+			const { data: cuotas } = await client
+				.from(COBRO_TABLE)
+				.select('id_cobro, fecha_cobro, monto')
+				.eq(PARENT_FK_COLUMN, idCuenta)
+				.eq('estado_cobro', 'programado')
+				.order('id_cobro', { ascending: true });
+			const libres = [...(cuotas ?? [])];
+			for (const t of ingresos) {
+				const i = libres.findIndex((c: any) => c.fecha_cobro === t.fecha && Math.abs(Number(c.monto) - t.monto) < 0.01);
+				if (i < 0) continue;
+				const [cuota] = libres.splice(i, 1);
+				await client.from(COBRO_TABLE).update({ estado_cobro: 'cobrado', id_transaccion: t.id_transaccion }).eq(COBRO_PK, (cuota as any).id_cobro);
+			}
+			await recalcularCuentaCobrar(client, idCuenta);
+		}
+		return { creada: true, mensaje: null };
+	} catch (err: any) {
+		return { creada: false, mensaje: err?.message ?? String(err) };
+	}
+}
+
 export async function recalcularCuentaCobrar(client: SupabaseClient, idCuentaCobrar: number): Promise<void> {
 	const { error } = await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: idCuentaCobrar });
 	if (error) console.error('[cuentasCobrar.service] No se pudo recalcular la cuenta por cobrar:', idCuentaCobrar, error);

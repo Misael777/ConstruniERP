@@ -25,6 +25,8 @@ import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+import ResumenCuentaModal, { type CampoResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
+import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services/ventasResumen.service';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -679,6 +681,52 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 		}
 	}
 
+	// ── Resumen de venta (ícono ⓘ de cada fila, a pedido del usuario): borrador o cerrada, solo lectura. ──
+	let resumenVentaOpen = $state(false);
+	let resumenVentaFila = $state<any>(null);
+	let resumenVentaDatos = $state<ResumenVenta | null>(null);
+	const formatoSoles = (n: number) => `S/ ${Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+	function etiquetaEstadoVenta(estado: string): string {
+		return estado === 'baja' ? 'Dado de baja' : estado === 'venta_cerrada' ? 'Venta Cerrada' : 'En borrador';
+	}
+	function etiquetaTipoVenta(row: any): string {
+		if (row.tipoVenta === 'consultoria') return 'Consultoría';
+		return row.tipoObra === 'SUP' ? 'Supervisión' : 'Obra';
+	}
+	async function handleVerResumenEvent(e: CustomEvent) {
+		const row = e.detail.row;
+		if (!row?.id) return;
+		try {
+			resumenVentaDatos = await getResumenVenta(supabase, row.id);
+			resumenVentaFila = row;
+			resumenVentaOpen = true;
+		} catch (err) {
+			toast.error(`No se pudo cargar el resumen de la venta. ${describeError(err)}`);
+		}
+	}
+	const camposResumenVenta = $derived.by<CampoResumen[]>(() => {
+		const row = resumenVentaFila;
+		if (!row) return [];
+		const p = resumenVentaDatos?.proyecto ?? {};
+		const ubicacion = [p.distrito, p.provincia, p.departamento].filter(Boolean).join(', ');
+		return [
+			{ label: 'Código de proyecto', valor: row.codigo || row.proyecto || '' },
+			{ label: 'Cliente', valor: row.clienteNombre ?? p.cliente?.nombre ?? '' },
+			{ label: 'Estado', valor: etiquetaEstadoVenta(row.estado_proyecto) },
+			{ label: 'Tipo de proyecto', valor: etiquetaTipoVenta(row) },
+			{ label: 'Fecha de venta', valor: row.fecha ?? '' },
+			{ label: 'Asesor', valor: row.asesor ?? '' },
+			{ label: 'Valor venta', valor: formatoSoles(row.valor) },
+			{ label: 'Comisión', valor: `${formatoSoles(row.comision)} (${row.comisionPct ?? 0}%)` },
+			{ label: 'Contrato', valor: row.contrato ? 'Adjunto' : 'Sin contrato' },
+			{ label: 'Cobrado', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.cobrado) : '' },
+			{ label: 'Por cobrar', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.porCobrar) : '' },
+			{ label: 'Dirección del predio', valor: p.direccion_predio ?? '' },
+			{ label: 'Ubicación', valor: ubicacion },
+			{ label: 'Observaciones', valor: p.descripcion ?? row.descripcion ?? '', completo: true }
+		];
+	});
+
 	async function handleDarDeBajaEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
@@ -921,7 +969,7 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 					{:else}
 						<!-- Data Table -->
 						<div class="md:h-[500px]">
-							<VentasTable data={ventas} modoEliminados={verEliminados} on:editRow={handleEditEvent} on:darDeBaja={handleDarDeBajaEvent} on:restaurar={handleRestaurarEvent} on:eliminarPermanente={handleEliminarPermanenteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
+							<VentasTable data={ventas} modoEliminados={verEliminados} on:editRow={handleEditEvent} on:verResumen={handleVerResumenEvent} on:darDeBaja={handleDarDeBajaEvent} on:restaurar={handleRestaurarEvent} on:eliminarPermanente={handleEliminarPermanenteEvent} on:gestionarProformas={handleViewProforma} on:viewContrato={handleViewContrato} />
 						</div>
 						<!-- Charts Area -->
 						<VentasCharts ventasPorMes={charts.ventasPorMes} ventasVsPropuestas={{ ventas: charts.ventasPorMes, propuestas: charts.propuestasPorMes }} comisionesPorMes={charts.comisionesPorMes} />
@@ -978,6 +1026,23 @@ import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
+/>
+
+<!-- Resumen de venta (ícono ⓘ en Acciones): solo lectura, borrador o cerrada. -->
+<ResumenCuentaModal
+	open={resumenVentaOpen}
+	titulo="Resumen de venta"
+	tituloCronograma="Forma de cobranza"
+	etiquetaTotal="Valor venta"
+	textoPagado="Cobrado"
+	campos={camposResumenVenta}
+	cuotas={resumenVentaDatos?.cuotas ?? []}
+	etiquetaPlan="Plan de pagos"
+	mostrarHito
+	montoTotal={Number(resumenVentaFila?.valor) || 0}
+	soloLectura
+	onClose={() => { resumenVentaOpen = false; resumenVentaFila = null; resumenVentaDatos = null; }}
+	onEditarCuota={() => {}}
 />
 
 <ConfirmModal

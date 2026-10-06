@@ -527,6 +527,8 @@ export interface IngresoPendienteItem {
 	fechaVencimiento: string | null;
 	idProyecto: number | null;
 	idCliente: number | null;
+	/** Centro de costo de la cuenta — para el filtro por tipo (Consultoría/Obra/Corporativo/Otros) de la bandeja. */
+	idCentroCosto: number | null;
 	panoramaId: number | null;
 	panoramaOrden: number | null;
 	prioridad: PrioridadCobro;
@@ -555,6 +557,7 @@ function mapCobroRow(row: any, fracciones: FraccionPanorama[]): IngresoPendiente
 		fechaVencimiento: row.fecha_vencimiento,
 		idProyecto: row.id_proyecto,
 		idCliente: row.id_cliente,
+		idCentroCosto: row.id_centro_costo ?? null,
 		panoramaId: row.panorama_id,
 		panoramaOrden: row.panorama_orden,
 		prioridad: (row.prioridad as PrioridadCobro) || prioridadCobroPorDefecto(row.fecha_vencimiento),
@@ -640,6 +643,10 @@ export async function getCobrosPendientes(
 
 	if (params.idProyecto) items = items.filter((i) => i.idProyecto === params.idProyecto);
 	if (params.idCliente) items = items.filter((i) => i.idCliente === params.idCliente);
+	if (params.idsCentroCosto) {
+		const idsSet = new Set(params.idsCentroCosto);
+		items = items.filter((i) => (i.idCentroCosto !== null && idsSet.has(i.idCentroCosto)) || (params.incluirSinCentroCosto && i.idCentroCosto === null));
+	}
 	if (params.prioridad) items = items.filter((i) => i.prioridad === params.prioridad);
 	if (params.estado) items = items.filter((i) => (params.estado === 'vencido' ? computeEstadoVencimiento(i.fechaVencimiento) === 'vencido' : computeEstadoVencimiento(i.fechaVencimiento) === 'por_vencer'));
 

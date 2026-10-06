@@ -22,6 +22,8 @@
 	export interface Fraccion {
 		fecha: string; // yyyy-mm-dd
 		monto: number;
+		/** "Hito de cobro": concepto de la cuota (cobros.referencia) — solo Cuentas por Cobrar, ver conHitoDeCobro. */
+		referencia?: string | null;
 	}
 
 	let {
@@ -34,7 +36,8 @@
 		metodoSugerido,
 		onClose,
 		onConfirm,
-		onEliminar
+		onEliminar,
+		conHitoDeCobro = false
 	}: {
 		open: boolean;
 		/** Título del encabezado — cada módulo pasa el suyo (ej. "Fraccionar Cobros" en cuentas por
@@ -56,6 +59,9 @@
 		 * guardado (ver `guardando`/handleGuardar). Si lanza un error, la ventana se queda abierta. */
 		onConfirm: (fracciones: Fraccion[]) => void | Promise<void>;
 		onEliminar: () => void | Promise<void>;
+		/** A pedido del usuario (Cuentas por Cobrar, igual que la Forma de cobranza de Nueva venta): cada
+		 * fracción lleva su "Hito de cobro" (concepto), que se conserva al re-fraccionar. */
+		conHitoDeCobro?: boolean;
 	} = $props();
 
 	/** Igual que addMonths en cuentasCobrar.service.ts/cuentasPagar.service.ts: fija el día al último
@@ -348,7 +354,7 @@
 		if (!sumaOk) return;
 		guardando = true;
 		try {
-			await onConfirm(filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto) })));
+			await onConfirm(filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto), referencia: f.referencia ?? null })));
 			onClose();
 		} catch (err: any) {
 			errorGuardado = err?.message ?? 'No se pudo guardar el fraccionamiento.';
@@ -440,7 +446,7 @@
 
 					<div class="space-y-2">
 						{#each filas as fila, i (i)}
-							<div class="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
+							<div class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 p-2">
 								<span class="w-16 shrink-0 text-xs font-medium text-slate-500">Fracción {i + 1}</span>
 								<input
 									type="date"
@@ -479,6 +485,17 @@
 								<button type="button" onclick={() => eliminarFraccion(i)} class="p-1.5 rounded-lg text-red-500 hover:bg-red-50" aria-label="Eliminar fracción">
 									<Trash2 size={16} />
 								</button>
+								{#if conHitoDeCobro}
+									<input
+										type="text"
+										maxlength="100"
+										value={fila.referencia ?? ''}
+										oninput={(e) => (filas[i] = { ...filas[i], referencia: (e.target as HTMLInputElement).value })}
+										placeholder="Hito de cobro (ej. Entrega de planos)"
+										aria-label={`Hito de cobro de la fracción ${i + 1}`}
+										class="basis-full sm:ml-[4.5rem] rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+									/>
+								{/if}
 							</div>
 						{/each}
 					</div>

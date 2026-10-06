@@ -154,6 +154,9 @@
 		/** Importe en S/ — fuente de verdad para las sumas (un % redondeado no siempre da el monto exacto). */
 		importe: number;
 		fechaEstimada: string;
+		/** "Hito de cobro" (a pedido del usuario): concepto por el que se cobra esta cuota, texto libre. Se guarda
+		 * en cobros.referencia de la cuota. */
+		concepto: string;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;
@@ -175,7 +178,7 @@
 		return hito.tipo === 'monto' ? redondear2(n) : redondear2(((Number(valorVenta) || 0) * n) / 100);
 	}
 	function nuevoAbono(importe: number): HitoCobranza {
-		const hito: HitoCobranza = { id: siguienteHitoCobranzaId++, esAdelanto: false, tipo: 'porcentaje', valor: '', importe: redondear2(Math.max(importe, 0)), fechaEstimada: fechaVenta || getFechaLocalHoy() };
+		const hito: HitoCobranza = { id: siguienteHitoCobranzaId++, esAdelanto: false, tipo: 'porcentaje', valor: '', importe: redondear2(Math.max(importe, 0)), fechaEstimada: fechaVenta || getFechaLocalHoy(), concepto: '' };
 		hito.valor = hito.importe > 0 ? valorDesdeImporte(hito) : '';
 		return hito;
 	}
@@ -208,7 +211,7 @@
 		}
 		let fila = hitosCobranza.find((h) => h.esAdelanto);
 		if (!fila) {
-			hitosCobranza = [{ id: siguienteHitoCobranzaId++, esAdelanto: true, tipo: 'porcentaje', valor: '', importe: monto, fechaEstimada: fechaVenta || getFechaLocalHoy() }, ...hitosCobranza];
+			hitosCobranza = [{ id: siguienteHitoCobranzaId++, esAdelanto: true, tipo: 'porcentaje', valor: '', importe: monto, fechaEstimada: fechaVenta || getFechaLocalHoy(), concepto: '' }, ...hitosCobranza];
 			fila = hitosCobranza[0];
 		}
 		fila.importe = monto;
@@ -286,6 +289,21 @@
 				else h.importe = importeDesdeValor(h);
 			}
 			ajustarAbonosAlSaldo();
+		});
+	});
+	// A pedido del usuario: la Fecha de venta y la Fecha estimada van juntas — al cambiar la Fecha de venta, la
+	// fila ADELANTO toma esa fecha y las cuotas que seguían con la fecha anterior se mueven con ella (una cuota a
+	// la que se le puso otra fecha a mano se respeta).
+	let fechaVentaAnterior = ''; // la primera corrida del efecto la toma de fechaVenta
+	$effect(() => {
+		const nueva = fechaVenta;
+		untrack(() => {
+			const anterior = fechaVentaAnterior;
+			fechaVentaAnterior = nueva;
+			if (!nueva || nueva === anterior) return;
+			for (const h of hitosCobranza) {
+				if (h.esAdelanto || h.fechaEstimada === anterior) h.fechaEstimada = nueva;
+			}
 		});
 	});
 	const totalImporteCobranza = $derived(redondear2(hitosCobranza.reduce((s, h) => s + h.importe, 0)));
@@ -1167,6 +1185,8 @@ async function copiarCodigoGenerado() {
 			const { data: userData } = await supabase.auth.getUser();
 			const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
 			if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
+			// Venta cerrada pero sin su Cuenta por Cobrar (ver asegurarCuentaCobrarDeVenta): se avisa, no se bloquea.
+			if (result.message) toast.info(result.message);
 
 			if (!isAdmin()) {
 				await crearSolicitud(supabase, {
@@ -1464,7 +1484,7 @@ async function copiarCodigoGenerado() {
 					// como 'cobrado' con fn_confirmar_cobro, que crea la transacción del adelanto y la vincula a
 					// esa cuota en un solo paso — así la cuenta nace con el adelanto ya descontado del saldo.
 					const detalle = hitosCobranza
-						.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+						.map((h, i) => `${nombreHitoCobranza(h, i)}${h.concepto.trim() ? ` [${h.concepto.trim()}]` : ''}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
 						.join('; ');
 					const fechas = hitosCobranza.map((h) => h.fechaEstimada).sort();
 					const cuentaResult = await createCuentaCobrar(
@@ -1483,7 +1503,7 @@ async function copiarCodigoGenerado() {
 							observaciones: `Forma de cobranza definida al crear la venta — ${detalle}`
 						},
 						asesorFinal,
-						hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: h.importe }))
+						hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }))
 					);
 					if (!cuentaResult.success || !cuentaResult.data) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
 					idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
@@ -1690,6 +1710,8 @@ async function copiarCodigoGenerado() {
 			const { data: userData } = await supabase.auth.getUser();
 			const result = await cerrarVentaAprobada(supabase, cierreParams, userData?.user?.email ?? null, permisosState.userName || null);
 			if (!result.success) throw new Error(result.message || 'No se pudo cerrar la venta.');
+			// Venta cerrada pero sin su Cuenta por Cobrar (ver asegurarCuentaCobrarDeVenta): se avisa, no se bloquea.
+			if (result.message) toast.info(result.message);
 
 			if (!isAdmin()) {
 				await crearSolicitud(supabase, {
@@ -2010,6 +2032,7 @@ async function copiarCodigoGenerado() {
 								<thead>
 									<tr class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide border-b border-slate-200">
 										<th class="text-left py-2 pr-2 w-8">N.°</th>
+										<th class="text-left py-2 pr-2">Plan de pagos</th>
 										<th class="text-left py-2 pr-2">Hito de cobro</th>
 										<th class="text-left py-2 pr-2">Tipo</th>
 										<th class="text-left py-2 pr-2">Valor</th>
@@ -2023,7 +2046,11 @@ async function copiarCodigoGenerado() {
 										<tr class="border-b border-slate-100">
 											<td class="py-2 pr-2 text-slate-400">{i + 1}</td>
 											<td class="py-2 pr-2">
-												<input type="text" value={nombreHitoCobranza(hito, i)} readonly tabindex="-1" title="El nombre de la cuota es automático" class="w-full min-w-[140px] px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 font-semibold cursor-not-allowed outline-none">
+												<input type="text" value={nombreHitoCobranza(hito, i)} readonly tabindex="-1" title="El nombre de la cuota es automático" class="w-full min-w-[120px] px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 font-semibold cursor-not-allowed outline-none">
+											</td>
+											<td class="py-2 pr-2">
+												<!-- "Hito de cobro": concepto por el que se realiza este abono (ej. "Entrega de planos"). -->
+												<input type="text" bind:value={hito.concepto} maxlength="100" placeholder="Ej. Firma de contrato" aria-label={`Hito de cobro de ${nombreHitoCobranza(hito, i)}`} class="w-full min-w-[170px] px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 											</td>
 											<td class="py-2 pr-2">
 												<div class="min-w-[130px]">

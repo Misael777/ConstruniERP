@@ -645,7 +645,7 @@
 			const bloqueado = q.id_cobro !== -1 && !!q.transaccion?.aprobado && !isAdmin();
 			const estado: CuotaResumen['estado'] =
 				q.estado_cobro === 'cobrado' ? 'pagado' : q.estado_cobro === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
-			return { id: q.id_cobro, monto: q.monto, fecha: q.fecha_cobro, estado, editable: q.estado_cobro === 'programado' && !bloqueado && q.id_cobro === cuotaMasProxima?.id_cobro };
+			return { id: q.id_cobro, monto: q.monto, fecha: q.fecha_cobro, concepto: q.referencia ?? null, estado, editable: q.estado_cobro === 'programado' && !bloqueado && q.id_cobro === cuotaMasProxima?.id_cobro };
 		})
 	);
 
@@ -1258,6 +1258,8 @@
 	textoPagado="Cobrado"
 	campos={resumenCampos}
 	cuotas={resumenCuotas}
+	etiquetaPlan="Plan de pagos"
+	mostrarHito
 	montoTotal={Number(selectedCuenta?.monto ?? 0)}
 	onClose={() => (resumenOpen = false)}
 	onEditarCuota={editarCuotaDesdeResumen}

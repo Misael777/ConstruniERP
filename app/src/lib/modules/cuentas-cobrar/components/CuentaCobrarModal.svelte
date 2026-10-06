@@ -129,7 +129,7 @@
 				const cobros = await getCobros(supabase, cuenta.id_cuenta_cobrar);
 				fracciones = cobros
 					.filter((c) => c.estado_cobro === 'programado')
-					.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto) }))
+					.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto), referencia: c.referencia ?? null }))
 					.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
 			})();
 		}
@@ -539,6 +539,7 @@
 	fechaVencimiento={formValues.fecha_vencimiento || null}
 	fraccionesIniciales={fracciones}
 	metodoSugerido={formValues.forma_pago === '3' ? 'por_porcentaje' : undefined}
+	conHitoDeCobro
 	onClose={() => (fraccionamientoOpen = false)}
 	onConfirm={onFraccionesConfirmadas}
 	onEliminar={onFraccionamientoEliminado}

@@ -13,6 +13,8 @@
 		estado: 'pagado' | 'pendiente' | 'vencido' | 'anulado';
 		/** true = el estado se puede tocar para abrir "Editar Cuota Programada" (ver onEditarCuota). */
 		editable: boolean;
+		/** "Hito de cobro" de la cuota (cobros.referencia) — se muestra si mostrarHito. */
+		concepto?: string | null;
 	}
 </script>
 
@@ -41,7 +43,10 @@
 		cuotas,
 		montoTotal,
 		onClose,
-		onEditarCuota
+		onEditarCuota,
+		soloLectura = false,
+		etiquetaPlan = 'Acuerdo de pago',
+		mostrarHito = false
 	}: {
 		open: boolean;
 		titulo: string;
@@ -55,6 +60,12 @@
 		montoTotal: number;
 		onClose: () => void;
 		onEditarCuota: (id: number) => void;
+		/** true = solo consulta (ej. Resumen de venta): sin el texto de ayuda para registrar cobros/pagos. */
+		soloLectura?: boolean;
+		/** Título de la 1.ª columna del cronograma ("Plan de pagos" en Cuentas por Cobrar y Ventas). */
+		etiquetaPlan?: string;
+		/** Agrega la columna "Hito de cobro" (concepto de cada cuota). */
+		mostrarHito?: boolean;
 	} = $props();
 
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
@@ -114,7 +125,8 @@
 							<table class="w-full min-w-[520px] text-sm">
 								<thead>
 									<tr class="bg-slate-50 text-xs font-semibold text-slate-500 border-b border-slate-200">
-										<th class="text-left px-3 py-2">Acuerdo de pago</th>
+										<th class="text-left px-3 py-2">{etiquetaPlan}</th>
+										{#if mostrarHito}<th class="text-left px-3 py-2">Hito de cobro</th>{/if}
 										<th class="text-right px-3 py-2">Monto</th>
 										<th class="text-right px-3 py-2">Porcentaje</th>
 										<th class="text-center px-3 py-2">Fecha</th>
@@ -125,6 +137,7 @@
 									{#each cuotasOrdenadas as cuota, i (cuota.id)}
 										<tr>
 											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length)}</td>
+											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 max-w-[220px] break-words">{cuota.concepto || '—'}</td>{/if}
 											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
 											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>
 											<td class="px-3 py-2 text-center text-slate-500">{formatDate(cuota.fecha)}</td>
@@ -156,7 +169,7 @@
 								</tfoot>
 							</table>
 						</div>
-						<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}. Las siguientes se habilitan en orden.</p>
+{#if !soloLectura}<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}.Las siguientes se habilitan en orden.</p>{/if}
 					{/if}
 				</div>
 			</div>

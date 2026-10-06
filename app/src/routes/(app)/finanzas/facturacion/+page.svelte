@@ -8,11 +8,12 @@
 	// precargados. Documento INTERNO (sin firma digital ni OSE). Una vez emitido, guarda su imagen/PDF en
 	// Drive; el ojito de "Documentos emitidos" abre esa imagen guardada.
 	import { onMount, onDestroy, untrack } from 'svelte';
+	import { getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin } from '$lib/stores/permisos.svelte';
-	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2, Receipt, FileMinus, FilePlus, Check } from '@lucide/svelte';
+	import { Briefcase, HardHat, Building2, Ellipsis, Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2, Receipt, FileMinus, FilePlus, Check } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
 	import { getOptionLabel, formatCurrency, emptyColumnFilters, type ColumnFilters, type FieldOption } from '$lib/shared/fieldConfig';
@@ -157,11 +158,36 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	let confirmEliminarPermanenteOpen = $state(false);
 	let eliminandoPermanente = $state(false);
 
+	// Filtro "Tipo" (a pedido del usuario: los mismos de Panoramas): Consultoría/Obra/Corporativo/Otros por el
+	// TIPO del centro de costo DESTINO de cada transacción (el proyecto que recibe el ingreso). Filtra las
+	// transacciones sin comprobante y los documentos emitidos.
+	type TipoFiltroCC = 'consultoria' | 'obra' | 'bolsa general' | 'otro';
+	const TIPOS_POR_FILTRO: Record<TipoFiltroCC, string[]> = {
+		consultoria: ['consultoria'],
+		obra: ['proyecto', 'obra'],
+		'bolsa general': ['bolsa general'],
+		otro: ['otro']
+	};
+	let tipoFilter = $state<TipoFiltroCC | null>(null);
+	let centroCostoTipoMap = $state<Record<string, string>>({});
+	function idsDestinoFiltro(): number[] | undefined {
+		if (!tipoFilter) return undefined;
+		const tipos = TIPOS_POR_FILTRO[tipoFilter];
+		return Object.entries(centroCostoTipoMap).filter(([, t]) => tipos.includes(t)).map(([id]) => Number(id));
+	}
+	function toggleTipoFilter(tipo: TipoFiltroCC) {
+		tipoFilter = tipoFilter === tipo ? null : tipo;
+		pageNum = 1;
+		transaccionesPageNum = 1;
+		fetchList();
+		fetchSuperior();
+	}
+
 	async function fetchList() {
 		loading = true;
 		loadError = '';
 		try {
-			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados, tipoComprobante: activeTab === 'todos' ? undefined : activeTab });
+			const result = await getFacturas(supabase, { page: pageNum, pageSize: DEFAULT_PAGE_SIZE, search, sortBy, sortDir, columnFilters, soloEliminados: verEliminados, tipoComprobante: activeTab === 'todos' ? undefined : activeTab, idsCentroDestino: idsDestinoFiltro() });
 			items = result.items;
 			total = result.total;
 			totalPages = result.totalPages;
@@ -186,7 +212,7 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	async function fetchSuperior() {
 		cargandoSuperior = true;
 		try {
-			const result = await getTransaccionesFacturables(supabase, activeTab === 'todos' ? undefined : TIPO_DOCUMENTO_POR_COMPROBANTE[activeTab], { page: transaccionesPageNum, pageSize: DEFAULT_PAGE_SIZE, vista: 'pendientes' });
+			const result = await getTransaccionesFacturables(supabase, activeTab === 'todos' ? undefined : TIPO_DOCUMENTO_POR_COMPROBANTE[activeTab], { page: transaccionesPageNum, pageSize: DEFAULT_PAGE_SIZE, vista: 'pendientes', idsCentroDestino: idsDestinoFiltro() });
 			transaccionesPendientes = result.items;
 			transaccionesTotal = result.total;
 			transaccionesTotalPages = result.totalPages;
@@ -240,6 +266,9 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	}
 
 	onMount(async () => {
+		getCentroCostoTipoMap(supabase)
+			.then((mapa) => (centroCostoTipoMap = mapa))
+			.catch((err) => console.error('[Gestión de Comprobantes] No se pudo cargar el tipo de los centros de costo:', err));
 		const manejado = await abrirDesdeTransaccionPrefill();
 		if (!manejado) await fetchTab();
 		fetchDynamicOptions();
@@ -586,7 +615,30 @@ function irAPaginaTransacciones(nueva: number) {
 		</div>
 	</div>
 
-	<div class="flex items-center justify-end mb-4 gap-2">
+	<div class="flex flex-wrap items-center justify-end mb-4 gap-2">
+		{#if !verEliminados}
+			<!-- Filtro "Tipo" (mismas píldoras que Panoramas de Cobro/Pago), ver toggleTipoFilter. -->
+			<div class="mr-auto flex flex-wrap gap-2">
+				{#each [
+					{ v: 'consultoria', l: 'Consultoria', icono: Briefcase, activo: 'border-blue-300 bg-blue-50', circulo: 'bg-blue-100 text-blue-600' },
+					{ v: 'obra', l: 'Obra', icono: HardHat, activo: 'border-orange-300 bg-orange-50', circulo: 'bg-orange-100 text-orange-500' },
+					{ v: 'bolsa general', l: 'Corporativo', icono: Building2, activo: 'border-emerald-300 bg-emerald-50', circulo: 'bg-emerald-100 text-emerald-600' },
+					{ v: 'otro', l: 'Otros', icono: Ellipsis, activo: 'border-slate-400 bg-slate-100', circulo: 'bg-slate-700 text-white' }
+				] as op (op.v)}
+					<button
+						type="button"
+						onclick={() => toggleTipoFilter(op.v as TipoFiltroCC)}
+						aria-pressed={tipoFilter === op.v}
+						class={`flex items-center gap-2 pl-2 pr-4 py-1.5 rounded-full border text-left transition-colors ${tipoFilter === op.v ? op.activo : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+					>
+						<div class={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${op.circulo}`}>
+							<op.icono size={14} />
+						</div>
+						<span class="font-semibold text-slate-700 text-sm">{op.l}</span>
+					</button>
+				{/each}
+			</div>
+		{/if}
 		{#if isAdmin() && !verEliminados}
 			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
 				<Trash2 size={16} /> Ver eliminados

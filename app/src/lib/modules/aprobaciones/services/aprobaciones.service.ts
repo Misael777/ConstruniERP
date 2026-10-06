@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion, desaprobarTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
+import { asegurarCuentaCobrarDeVenta } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 import { describeError } from '$lib/shared/describeError';
@@ -675,7 +676,28 @@ export async function cerrarVentaAprobada(
 			await actualizarSaldoCentroCostoProyecto(client, idCentroProyecto);
 		}
 
-		return { success: true, data: transaccionAdelanto };
+		// A pedido del usuario: toda venta cerrada tiene su Cuenta por Cobrar (si ya la tiene, no hace nada).
+		// Secundario al cierre: si falla, la venta igual queda cerrada y se avisa en el mensaje.
+		const cuenta = await asegurarCuentaCobrarDeVenta(
+			client,
+			{
+				idProyecto: params.idProyecto,
+				idCliente: params.idCliente,
+				idCentroCosto: idCentroProyecto ? Number(idCentroProyecto) : null,
+				montoVenta: Number(params.montoFinalVenta),
+				fechaVenta: String(params.datosProyecto?.fecha_inicio_plan ?? params.adelantoFecha ?? new Date().toISOString().slice(0, 10)),
+				responsable: (params.datosProyecto?.responsable as string | undefined) ?? usuarioNombre ?? null,
+				proyectoNombre: params.proyectoNombre
+			},
+			usuarioNombre ?? usuarioEmail
+		);
+		if (cuenta.mensaje) console.warn('[aprobaciones.service] No se creó la Cuenta por Cobrar de la venta:', cuenta.mensaje);
+
+		return {
+			success: true,
+			data: transaccionAdelanto,
+			...(cuenta.mensaje ? { message: `Venta cerrada, pero no se creó su Cuenta por Cobrar: ${cuenta.mensaje}` } : {})
+		};
 	} catch (err: any) {
 		return { success: false, message: err?.message || String(err) };
 	}

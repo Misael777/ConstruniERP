@@ -202,6 +202,14 @@
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') open = false;
 	}
+	/** El panel se monta directamente en <body>: un ancestro con transform/filter/backdrop-filter (ej. un modal
+	 * con `scale-100` o `backdrop-blur`, como "Registrar Nuevo Empleado") convierte position:fixed en relativo
+	 * a ESE ancestro y el panel aparecía desplazado, lejos de su campo. Desde <body> siempre se mide contra la
+	 * pantalla. Los eventos siguen funcionando igual (el nodo es el mismo, solo cambia de padre). */
+	function alBody(node: HTMLElement) {
+		document.body.appendChild(node);
+		return { destroy: () => node.remove() };
+	}
 	function handleBuscadorKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && opcionesFiltradas.length > 0) {
 			e.preventDefault();
@@ -265,7 +273,7 @@
 </button>
 
 {#if open}
-	<div bind:this={panelEl} style={panelStyle} class="z-[200] flex flex-col rounded-lg border border-slate-200 bg-white shadow-xl overflow-hidden">
+	<div bind:this={panelEl} use:alBody style={panelStyle} class="z-[200] flex flex-col rounded-lg border border-slate-200 bg-white shadow-xl overflow-hidden">
 		<div class="relative p-1.5 border-b border-slate-100 shrink-0">
 			<Search size={13} class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input

@@ -110,7 +110,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'referencia',
-		label: 'Referencia',
+		// Es el "Hito de cobro" de la cuota (concepto), el mismo de la Forma de cobranza de Nueva venta.
+		label: 'Hito de cobro',
 		tipo: 'text',
 		maxLength: 100,
 		showInTable: false,

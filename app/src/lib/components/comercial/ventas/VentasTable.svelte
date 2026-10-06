@@ -326,6 +326,10 @@
 				</td>
 				<td class="px-5 py-4 text-center">
 					<div class="inline-flex gap-2 items-center justify-center">
+						<!-- A pedido del usuario: resumen de la venta (borrador o cerrada), ver ventasResumen.service.ts. -->
+						<button onclick={() => dispatch('verResumen', { row })} class="text-blue-600 hover:bg-blue-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Resumen de la venta" aria-label="Resumen de la venta">
+							<i class="fas fa-circle-info"></i>
+						</button>
 						{#if modoEliminados}
 							<button onclick={() => dispatch('restaurar', { row })} class="text-emerald-600 hover:bg-emerald-50 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Restaurar" aria-label="Restaurar">
 								<i class="fas fa-rotate-left"></i>
@@ -379,6 +383,9 @@
 					</button>
 					<button onclick={() => dispatch('viewContrato', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
 						<i class="far fa-file-pdf"></i> Contrato
+					</button>
+					<button onclick={() => dispatch('verResumen', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-blue-600 flex items-center justify-center active:bg-blue-50" aria-label="Resumen de la venta">
+						<i class="fas fa-circle-info"></i>
 					</button>
 					{#if modoEliminados}
 						<button onclick={() => dispatch('restaurar', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar">
