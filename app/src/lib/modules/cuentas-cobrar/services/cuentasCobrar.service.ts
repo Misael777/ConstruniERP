@@ -85,6 +85,8 @@ export interface Cobro {
 	/** Transacción de respaldo (tipo 'ingreso') que prueba este cobro — ver createCobro y
 	 * confirmarCobroCobrado. Un cobro con estado_cobro='cobrado' SIEMPRE debe tener esto no-nulo. */
 	id_transaccion: number | null;
+	/** "Hito de cobro" de texto libre (ticket #66, ver cobros_hito); undefined si la columna aún no existe. */
+	hito?: string | null;
 	/** Solo viene poblado desde getCobros (join embebido) — usado en la UI para deshabilitar
 	 * editar/eliminar cuando la transacción vinculada ya fue aprobada por un administrador. */
 	transaccion?: { aprobado: boolean; aprobado_por: string | null } | null;
@@ -485,6 +487,17 @@ export async function sincronizarCuotasProgramadas(
 		const errorFracciones = validarSumaFracciones(pendiente, fracciones);
 		if (errorFracciones) return { success: false, message: errorFracciones };
 	}
+	// Ticket #66: las cuotas se borran y se recrean, así que el "Hito de cobro" de cada cuota programada se
+	// conserva por posición (en orden de fecha) cuando quien llama no manda uno propio (ej. FraccionamientoModal
+	// o Panoramas, que no conocen los hitos). Si la columna todavía no existe en la base, se sigue sin hitos.
+	const { data: anteriores, error: hitosError } = await client
+		.from(COBRO_TABLE)
+		.select('hito')
+		.eq(PARENT_FK_COLUMN, idCuentaCobrar)
+		.eq('estado_cobro', 'programado')
+		.order('fecha_cobro', { ascending: true })
+		.order(COBRO_PK, { ascending: true });
+	const hitosAnteriores = hitosError ? [] : (anteriores ?? []).map((c: any) => (c.hito as string | null) ?? null);
 	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);

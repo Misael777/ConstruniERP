@@ -743,8 +743,10 @@
 						<span class="text-slate-400">Tipo</span>
 						<span class="text-right text-slate-700">{cellValue(FIELDS_CONFIG.find((f) => f.key === 'tipo')!, item)}</span>
 						{#if activeTab === 'centros' && item.proyecto}
-							<span class="text-slate-400">Código proy.</span>
-							<span class="text-right text-slate-700">{codigoProyectoDisplay(item)}</span>
+							<!-- Ticket #67: el código (ej. OAM5_1026_Cercado_de_Lima_CLIENTE_...) es una sola "palabra" larga sin
+							     espacios: se sale de la tarjeta en celular. Ocupa su propia fila y se parte donde haga falta. -->
+							<span class="col-span-2 text-slate-400 mt-1">Código proy.</span>
+							<span class="col-span-2 text-slate-700 break-all">{codigoProyectoDisplay(item)}</span>
 						{/if}
 						{#if activeTab === 'cuentas' && item.producto}
 							<span class="text-slate-400">Producto</span>

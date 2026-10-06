@@ -215,7 +215,7 @@
 			fila = hitosCobranza[0];
 		}
 		fila.importe = monto;
-		fila.fechaEstimada = fechaVenta || getFechaLocalHoy();
+		if (!fila.fechaManual) fila.fechaEstimada = fechaVenta || getFechaLocalHoy();
 		fila.valor = valorDesdeImporte(fila);
 		ajustarAbonosAlSaldo();
 	}
@@ -2021,7 +2021,7 @@ async function copiarCodigoGenerado() {
 						</h3>
 						<p class="text-xs text-slate-400 mb-3">
 							El adelanto y las cuotas se registran como una Cuenta por Cobrar del proyecto al guardar (el adelanto queda como cobrado).
-							La suma siempre es 100%: el adelanto cambia solo desde "Monto del adelanto"; al cambiar una cuota, las siguientes se recalculan solas.
+							La suma siempre es 100%: el monto del adelanto cambia solo desde "Monto del adelanto" (su fecha sí se puede editar acá, para ventas antiguas); al cambiar una cuota, las siguientes se recalculan solas.
 						</p>
 						{#if !(Number(valorVenta) > 0)}
 							<p class="text-xs text-amber-600 mb-2">Ingresa el Valor venta para calcular los porcentajes y el saldo.</p>
@@ -2076,7 +2076,7 @@ async function copiarCodigoGenerado() {
 											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(hito.importe)}</td>
 											<td class="py-2 pr-2">
 												{#if hito.esAdelanto}
-													<input type="date" value={hito.fechaEstimada} readonly tabindex="-1" title="Fecha de la venta" class="px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed outline-none">
+													<input type="date" value={hito.fechaEstimada} onchange={(e) => { if (e.currentTarget.value) { hito.fechaEstimada = e.currentTarget.value; hito.fechaManual = true; } }} title="Por defecto, la Fecha de venta; se puede cambiar para registrar ventas antiguas" class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 												{:else}
 													<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 												{/if}
@@ -2110,7 +2110,7 @@ async function copiarCodigoGenerado() {
 								<p class="text-sm font-bold text-slate-700">{formatCurrency(totalImporteCobranza)}</p>
 							</div>
 							<div class="text-center p-2 bg-slate-50 rounded-lg">
-								<p class="text-[10px] text-slate-400 uppercase tracking-wide">Saldo (S/)</p>
+								<p class="text-[10px] text-slate-400 uppercase tracking-wide">Saldo por cobrar (S/)</p>
 								<p class="text-sm font-bold text-rose-600">{formatCurrency(saldoPorCobrar)}</p>
 							</div>
 						</div>
@@ -2584,12 +2584,13 @@ async function copiarCodigoGenerado() {
 			</div>
 			{/if}
 
-			<!-- Footer -->
-			<div class="p-6 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex justify-end gap-3">
-				<button onclick={onClose} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-slate-800 font-medium text-sm transition-colors shadow-sm">
+			<!-- Footer — ticket #70: en celular los botones se reparten el ancho (flex-1, texto sin cortes); antes no
+			     entraban y "Cancelar" quedaba cortado contra el borde. -->
+			<div class="p-3 sm:p-6 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex justify-end gap-2 sm:gap-3">
+				<button onclick={onClose} class="flex-1 sm:flex-none px-2 sm:px-5 py-2.5 whitespace-nowrap bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 hover:text-slate-800 font-medium text-xs sm:text-sm transition-colors shadow-sm">
 					Cancelar
 				</button>
-				<button onclick={() => !isSaving && handleGuardar()} disabled={isSaving} aria-busy={isSaving} class="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+				<button onclick={() => !isSaving && handleGuardar()} disabled={isSaving} aria-busy={isSaving} class="flex-1 sm:flex-none px-2 sm:px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium text-xs sm:text-sm shadow-md shadow-blue-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed">
 					{#if isSaving}
 						<i class="fas fa-spinner fa-spin"></i> Guardando...
 					{:else}
@@ -2601,7 +2602,7 @@ async function copiarCodigoGenerado() {
 						onclick={async () => { if (!canClose) { await avisarCamposFaltantesCierre(); return; } marcarFaltantes = false; handleCerrarVenta(); }}
 						disabled={isClosing}
 						title={!canClose ? 'Completa todos los campos obligatorios (*) de Información general y Características, marca una proforma como final, confirma el monto final de la venta y adjunta el comprobante del adelanto (monto ≤ monto final, con fecha) para poder cerrar la venta' : ''}
-						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+						class="flex-1 sm:flex-none px-2 sm:px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-xs sm:text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						{#if isClosing}
 							<i class="fas fa-spinner fa-spin"></i> Cerrando...
@@ -2615,7 +2616,7 @@ async function copiarCodigoGenerado() {
 						onclick={async () => { if (!canCloseCreate) { await avisarCamposFaltantesCierre(); return; } marcarFaltantes = false; handleGuardarYCerrarVenta(); }}
 						disabled={isClosing || isSaving}
 						title={!canCloseCreate ? 'Completa todos los campos obligatorios (*) de Información general y Características, agrega al menos una proforma y márcala como final, y adjunta el comprobante del adelanto (monto ≤ valor de venta, con fecha) para registrar y cerrar la venta de una vez' : ''}
-						class="px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+						class="flex-1 sm:flex-none px-2 sm:px-6 py-2.5 bg-emerald-600 text-white rounded-xl font-medium text-xs sm:text-sm shadow-md shadow-emerald-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 sm:gap-2 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
 					>
 						{#if isClosing}
 							<i class="fas fa-spinner fa-spin"></i> Cerrando...

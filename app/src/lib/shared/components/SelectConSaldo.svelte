@@ -48,6 +48,9 @@
 		 * Soles) cuando viene definido. undefined = usa formatCurrency tal cual (comportamiento normal,
 		 * ej. saldos de Centro de Costo, que no tienen una moneda propia distinta). */
 		simbolo?: string;
+		/** Color del punto que se dibuja antes de la etiqueta (ej. Prioridad: rojo/ámbar/verde), tanto en el
+		 * valor elegido como en la lista. undefined = sin punto. */
+		color?: string;
 	}
 
 	let {
@@ -250,6 +253,19 @@
 			window.removeEventListener('resize', cerrar);
 		};
 	});
+
+	/** Ticket #60: el panel usa `position:fixed` con coordenadas de pantalla, pero si algún contenedor tiene
+	 * `transform`/`scale`/`filter`/`backdrop-filter` (ej. los modales con `backdrop-blur` + `scale-100`), CSS
+	 * mide el `fixed` desde ESE contenedor y no desde la pantalla: el panel salía desplazado (abajo a la
+	 * derecha) y recortado por el `overflow-hidden` del modal. Moverlo a <body> evita cualquier ancestro así. */
+	function portal(node: HTMLElement) {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				node.remove();
+			}
+		};
+	}
 </script>
 
 <svelte:window onclick={handleClickFuera} onkeydown={handleKeydown} />
@@ -265,6 +281,7 @@
 	class={`w-full flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-left focus:outline-none focus:ring-2 disabled:opacity-60 disabled:bg-slate-50 ${hasError ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
 >
 	{#if selected}
+		{#if selected.color}<span class="w-2.5 h-2.5 rounded-full shrink-0" style={`background-color:${selected.color}`}></span>{/if}
 		<span class="flex-1 min-w-0 truncate text-slate-700" title={selected.label}>{selected.label}</span>
 	{:else}
 		<span class="flex-1 min-w-0 truncate text-slate-400">{placeholder}</span>
@@ -321,6 +338,7 @@
 						onclick={() => choose(opt)}
 						class={`w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-left border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
 					>
+						{#if opt.color}<span class="w-2 h-2 rounded-full shrink-0" style={`background-color:${opt.color}`}></span>{/if}
 						<span class="flex-1 min-w-0 break-words leading-snug" title={opt.label}>{conCortes(opt.label)}</span>
 					</button>
 				{/if}

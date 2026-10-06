@@ -7,6 +7,7 @@
 	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 	import { getAnuncios, createAnuncio, updateAnuncio, eliminarAnuncio, type Anuncio } from '$lib/modules/anuncios/services/anuncios.service';
 	import AnuncioModal from '$lib/modules/anuncios/components/AnuncioModal.svelte';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 
 	// Landing temática de Dashboard — a pedido explícito del usuario: el panel financiero que vivía acá
@@ -170,7 +171,11 @@
 			{#each anuncios as item (item.id_anuncio)}
 				<div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
 					{#if item.imagen_url}
-						<img src={item.imagen_url} alt={item.titulo} class="w-full h-40 object-cover" />
+						<!-- Ticket #61: la URL guardada (uc?export=download) Drive ya no la deja incrustar en una página y se
+						     veía rota; la miniatura de Drive sí. object-contain: la imagen se ve completa, sin deformarse. -->
+						<div class="w-full h-44 bg-slate-50 flex items-center justify-center">
+							<img src={toDriveThumbnailUrl(item.imagen_url, 1600)} alt={item.titulo} class="max-w-full max-h-full object-contain" />
+						</div>
 					{/if}
 					<div class="p-5 flex flex-col gap-2 flex-1">
 						<h3 class="font-bold text-[#0f3b5e] leading-snug">{item.titulo}</h3>

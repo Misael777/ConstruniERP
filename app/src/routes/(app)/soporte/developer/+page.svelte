@@ -43,12 +43,13 @@
 	let tickets = $state<Ticket[]>([]);
 	let loading = $state(true);
 	let filtroEstado = $state<EstadoTicket | ''>('');
+	let filtroPlataforma = $state<'' | 'web' | 'app'>('');
 	let idTicketSeleccionado = $state<number | null>(null);
 
 	async function fetchList() {
 		loading = true;
 		try {
-			tickets = await getTicketsDeveloper(supabase, filtroEstado ? { estado: filtroEstado } : {});
+			tickets = await getTicketsDeveloper(supabase, { ...(filtroEstado ? { estado: filtroEstado } : {}), ...(filtroPlataforma ? { plataforma: filtroPlataforma } : {}) });
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar los tickets');
 		} finally {
@@ -207,6 +208,19 @@
 			fetchList();
 		}}
 	/>
+	<label for="filtro-plataforma" class="text-sm text-slate-500 ml-2">Dónde:</label>
+	<div class="w-44">
+		<SelectConSaldo
+			id="filtro-plataforma"
+			value={filtroPlataforma}
+			options={[{ value: '', label: 'Todos' }, { value: 'web', label: 'Web / Escritorio' }, { value: 'app', label: 'App del celular' }]}
+			placeholder="Todos"
+			onchange={(v) => {
+				filtroPlataforma = v as typeof filtroPlataforma;
+				fetchList();
+			}}
+		/>
+	</div>
 </div>
 
 {#snippet filaTicket(t: Ticket)}
@@ -218,6 +232,7 @@
 		<div class="min-w-0 flex-1">
 			<div class="flex items-center gap-1.5 flex-wrap">
 				<span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{ETIQUETA_TIPO[t.tipo] ?? t.tipo}</span>
+				{#if t.plataforma === 'app'}<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">App</span>{/if}
 				{#if t.modulo}<span class="text-[11px] text-slate-300">· {t.modulo}</span>{/if}
 				<span class={`text-[11px] ${CLASE_PRIORIDAD[t.prioridad] ?? ''}`}>· {t.prioridad}</span>
 			</div>

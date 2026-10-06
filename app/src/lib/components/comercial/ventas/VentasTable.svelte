@@ -338,6 +338,10 @@
 								<i class="fas fa-trash-alt"></i>
 							</button>
 						{:else}
+							<!-- Ticket #62: ver el resumen de la venta sin abrir la edición. -->
+							<button onclick={() => dispatch('verRow', { row })} class="text-slate-500 hover:bg-blue-50 hover:text-blue-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" title="Ver resumen" aria-label="Ver resumen">
+								<i class="fas fa-eye"></i>
+							</button>
 							<button onclick={() => dispatch('editRow', { row })} class="text-slate-500 hover:bg-slate-100 hover:text-slate-600 p-1.5 rounded transition-colors w-8 h-8 flex items-center justify-center" aria-label="Editar">
 								<i class="fas fa-pen"></i>
 							</button>
@@ -395,6 +399,9 @@
 							<i class="fas fa-trash-alt"></i>
 						</button>
 					{:else}
+						<button onclick={() => dispatch('verRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-blue-50" aria-label="Ver resumen">
+							<i class="fas fa-eye"></i>
+						</button>
 						<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
 							<i class="fas fa-pen"></i>
 						</button>

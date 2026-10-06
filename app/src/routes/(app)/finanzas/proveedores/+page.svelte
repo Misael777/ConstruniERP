@@ -179,26 +179,27 @@
 
 <div class="flex flex-col md:h-[calc(100vh-80px)] md:overflow-hidden bg-slate-50/50">
 
-	<!-- Header area -->
-	<div class="flex-shrink-0 px-6 py-5 flex items-center justify-between border-b border-slate-100 bg-white">
-		<div class="flex flex-col">
-			<div class="flex items-center gap-2 text-slate-500 text-sm mb-1">
+	<!-- Header area — ticket #72: en celular el botón "Ver eliminados" queda arriba, alineado con el título (antes
+	     quedaba centrado y empujado hacia abajo por el texto). -->
+	<div class="flex-shrink-0 px-4 sm:px-6 py-5 flex items-start sm:items-center justify-between gap-3 border-b border-slate-100 bg-white">
+		<div class="flex flex-col min-w-0">
+			<div class="flex flex-wrap items-center gap-2 text-slate-500 text-sm mb-1">
 				<a href="/finanzas" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
 				<span class="font-bold text-slate-800 text-2xl ml-2">{verEliminados ? 'Proveedores eliminados' : 'Directorio de Proveedores'}</span>
 				{#if verEliminados}
 					<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 uppercase tracking-wide">Solo administradores</span>
 				{/if}
 			</div>
-			<p class="text-sm text-slate-500 ml-7">
+			<p class="text-sm text-slate-500 sm:ml-7">
 				{verEliminados
 					? 'Proveedores dados de baja — restauralos o elimínalos de la base de datos permanentemente.'
 					: 'Administra los proveedores de materiales, servicios y equipos.'}
 			</p>
 		</div>
 
-		<div class="flex items-center gap-3">
+		<div class="flex items-center gap-3 shrink-0">
 			{#if isAdmin()}
-				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+				<button onclick={toggleVerEliminados} class={`px-3 sm:px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 whitespace-nowrap ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
 					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
 					{verEliminados ? 'Volver al directorio' : 'Ver eliminados'}
 				</button>
