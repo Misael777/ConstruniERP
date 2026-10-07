@@ -107,10 +107,11 @@
 		{ value: 'R', label: 'Casco rojo' },
 		{ value: 'G', label: 'Casco gris' },
 		{ value: 'A', label: 'Acabados' },
-		{ value: 'L', label: 'Llave en mano' }
+		{ value: 'L', label: 'Llave en mano' },
+		{ value: 'DM', label: 'Demolición' } // ticket #79
 	];
 	const TIPO_CONTRATACION_OPTIONS = [
-		{ value: 'A', label: 'Administración' },
+		// Ticket #79: se quitó 'A' (Administración); ninguna venta de Producción la usaba (verificado 2026-10-07).
 		{ value: 'C', label: 'Contrata' },
 		{ value: 'S', label: 'Subcontrata' },
 		{ value: 'P', label: 'Por partidas' }
@@ -169,8 +170,6 @@
 		/** "Hito de cobro" (a pedido del usuario): concepto por el que se cobra esta cuota, texto libre. Se guarda
 		 * en cobros.referencia de la cuota. */
 		concepto: string;
-		/** true = la fecha del ADELANTO se cambió a mano (ventas antiguas): cambiar el monto ya no la pisa. */
-		fechaManual?: boolean;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;
@@ -229,7 +228,7 @@
 			fila = hitosCobranza[0];
 		}
 		fila.importe = monto;
-		if (!fila.fechaManual) fila.fechaEstimada = fechaVenta || getFechaLocalHoy();
+		fila.fechaEstimada = fechaVenta || getFechaLocalHoy(); // ticket #51: la del ADELANTO siempre es la Fecha de venta
 		fila.valor = valorDesdeImporte(fila);
 		ajustarAbonosAlSaldo();
 	}
@@ -2035,7 +2034,7 @@ async function copiarCodigoGenerado() {
 						</h3>
 						<p class="text-xs text-slate-400 mb-3">
 							El adelanto y las cuotas se registran como una Cuenta por Cobrar del proyecto al guardar (el adelanto queda como cobrado).
-							La suma siempre es 100%: el monto del adelanto cambia solo desde "Monto del adelanto" (su fecha sí se puede editar acá, para ventas antiguas); al cambiar una cuota, las siguientes se recalculan solas.
+							La suma siempre es 100%: el monto y la fecha del adelanto salen de "Monto del adelanto" y "Fecha de venta" (para una venta antigua, cambia la Fecha de venta); al cambiar una cuota, las siguientes se recalculan solas.
 						</p>
 						{#if !(Number(valorVenta) > 0)}
 							<p class="text-xs text-amber-600 mb-2">Ingresa el Valor venta para calcular los porcentajes y el saldo.</p>
@@ -2090,7 +2089,8 @@ async function copiarCodigoGenerado() {
 											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(hito.importe)}</td>
 											<td class="py-2 pr-2">
 												{#if hito.esAdelanto}
-													<input type="date" value={hito.fechaEstimada} onchange={(e) => { if (e.currentTarget.value) { hito.fechaEstimada = e.currentTarget.value; hito.fechaManual = true; } }} title="Por defecto, la Fecha de venta; se puede cambiar para registrar ventas antiguas" class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+													<!-- Ticket #51 (rechazo de Romina): la fecha del ADELANTO no se edita; es la Fecha de venta. Las demás cuotas sí. -->
+													<input type="date" value={hito.fechaEstimada} readonly tabindex="-1" title="Es la Fecha de venta: cámbiala arriba" class="px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed outline-none">
 												{:else}
 													<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 												{/if}

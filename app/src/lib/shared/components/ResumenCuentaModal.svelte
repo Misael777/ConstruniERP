@@ -121,12 +121,13 @@
 					{#if cuotasOrdenadas.length === 0}
 						<p class="text-sm text-slate-400 text-center py-6 rounded-lg border border-slate-200">Sin cuotas registradas todavía.</p>
 					{:else}
-						<div class="overflow-x-auto rounded-lg border border-slate-200">
-							<table class="w-full min-w-[520px] text-sm">
+						<!-- Ticket #77: en celular la tabla se desliza de lado y cada columna conserva su ancho (sin partir el texto). -->
+						<div class="overflow-x-auto overscroll-x-contain rounded-lg border border-slate-200">
+							<table class={`w-full text-sm whitespace-nowrap ${mostrarHito ? 'min-w-[700px]' : 'min-w-[520px]'}`}>
 								<thead>
 									<tr class="bg-slate-50 text-xs font-semibold text-slate-500 border-b border-slate-200">
 										<th class="text-left px-3 py-2">{etiquetaPlan}</th>
-										{#if mostrarHito}<th class="text-left px-3 py-2">Hito de cobro</th>{/if}
+										{#if mostrarHito}<th class="text-left px-3 py-2 w-[200px] min-w-[200px]">Hito de cobro</th>{/if}
 										<th class="text-right px-3 py-2">Monto</th>
 										<th class="text-right px-3 py-2">Porcentaje</th>
 										<th class="text-center px-3 py-2">Fecha</th>
@@ -137,7 +138,7 @@
 									{#each cuotasOrdenadas as cuota, i (cuota.id)}
 										<tr>
 											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length)}</td>
-											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 max-w-[220px] break-words">{cuota.concepto || '—'}</td>{/if}
+											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words">{cuota.concepto || '—'}</td>{/if}
 											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
 											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>
 											<td class="px-3 py-2 text-center text-slate-500">{formatDate(cuota.fecha)}</td>
@@ -170,7 +171,7 @@
 								</tfoot>
 							</table>
 						</div>
-{#if !soloLectura}<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}.Las siguientes se habilitan en orden.</p>{/if}
+{#if !soloLectura}<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}. Las siguientes se habilitan en orden.</p>{/if}
 					{/if}
 				</div>
 			</div>
