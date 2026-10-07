@@ -37,7 +37,8 @@
 		onClose,
 		onConfirm,
 		onEliminar,
-		conHitoDeCobro = false
+		conHitoDeCobro = false,
+		etiquetaInterruptor
 	}: {
 		open: boolean;
 		/** Título del encabezado — cada módulo pasa el suyo (ej. "Fraccionar Cobros" en cuentas por
@@ -62,6 +63,8 @@
 		/** A pedido del usuario (Cuentas por Cobrar, igual que la Forma de cobranza de Nueva venta): cada
 		 * fracción lleva su "Hito de cobro" (concepto), que se conserva al re-fraccionar. */
 		conHitoDeCobro?: boolean;
+		/** Texto del interruptor de activar el fraccionamiento; por defecto, el mismo título. */
+		etiquetaInterruptor?: string;
 	} = $props();
 
 	/** Igual que addMonths en cuentasCobrar.service.ts/cuentasPagar.service.ts: fija el día al último
@@ -391,11 +394,11 @@
 
 			<div class="p-6 space-y-4">
 				<div class="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
-					<span class="text-sm font-bold text-[#0f3b5e]">{titulo}</span>
+					<span class="text-sm font-bold text-[#0f3b5e]">{etiquetaInterruptor ?? titulo}</span>
 					<button
 						type="button"
 						role="switch"
-						aria-label={titulo}
+						aria-label={etiquetaInterruptor ?? titulo}
 						aria-checked={activo}
 						onclick={() => (activo = !activo)}
 						class={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${activo ? 'bg-blue-600' : 'bg-slate-300'}`}

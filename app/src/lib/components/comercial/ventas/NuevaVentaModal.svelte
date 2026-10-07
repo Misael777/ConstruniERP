@@ -59,7 +59,18 @@
 		{ value: 'DF', label: 'Declaración de fábrica' },
 		{ value: 'I', label: 'Independización' },
 		{ value: 'DF + I', label: 'Declaratoria de fábrica + Independización' },
-		{ value: 'EMS', label: 'Estudio de mecánica de suelos' }
+		{ value: 'EMS', label: 'Estudio de mecánica de suelos' },
+		// Servicios de consultoría agregados a pedido del usuario (el código entra al código del proyecto;
+		// proyecto.tip_proyecto admite hasta 10 caracteres).
+		{ value: 'VT', label: 'Visita técnica' },
+		{ value: 'MET', label: 'Metrados de obra' },
+		{ value: 'VAL', label: 'Valuación de inmuebles' },
+		{ value: 'TR', label: 'Gestión de trámites' },
+		{ value: 'REN', label: 'Renderizado arquitectónico' },
+		{ value: 'PV', label: 'Permiso de uso de vía pública' },
+		{ value: 'CA', label: 'Cabida arquitectónica' },
+		{ value: 'TOP', label: 'Levantamiento topográfico' },
+		{ value: 'DIA', label: 'Perforación diamantina' }
 	];
 	const ESTADO_PREDIO_OPTIONS = [
 		{ value: 'A', label: 'Ampliación' },
@@ -76,7 +87,8 @@
 		{ value: 'OF', label: 'Oficinas' },
 		{ value: 'E', label: 'Educativo' },
 		{ value: 'S', label: 'Salud' },
-		{ value: 'MX', label: 'Uso Mixto' }
+		{ value: 'MX', label: 'Uso Mixto' },
+		{ value: 'OT', label: 'Otro' }
 	];
 
 	// Campos de "Obra" (a pedido del usuario) — reemplazan por completo al esquema anterior (Tipo de

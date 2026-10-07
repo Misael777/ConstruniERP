@@ -274,6 +274,15 @@ export async function cerrarSesion(): Promise<void> {
 	await supabase.auth.signOut();
 }
 
+/** Cierre automático por inactividad (ver InactividadGuard.svelte) — se registra como 'sesion_expirada' con el
+ * detalle, y se marca como cierre "provocado" (igual que el manual) para que el SIGNED_OUT no se tome como
+ * un cierre inesperado. */
+export async function cerrarSesionPorInactividad(): Promise<void> {
+	cierreManualEnCurso = true;
+	await registrarCierre('sesion_expirada', 'Cierre automático por 10 minutos de inactividad');
+	await supabase.auth.signOut();
+}
+
 /** Descargas, PDFs y subidas de archivos — se llama desde los puntos centrales (saveFile.ts, generadores de
  * PDF, subidas a Drive). `modulo` por defecto = la pantalla donde está el usuario (ej. /comercial/ventas). */
 export function registrarAccion(tipo: TipoAccionManual, resumen: string, modulo?: string): void {

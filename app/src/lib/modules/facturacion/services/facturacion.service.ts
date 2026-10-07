@@ -493,7 +493,10 @@ export async function guardarBorradorFactura(
 	usuarioRegistro: string | null,
 	tipoComprobante: TipoComprobante,
 	idFactura?: number,
-	folioExterno?: string | null
+	folioExterno?: string | null,
+	/** Totales ya calculados por la pantalla (ej. Nota de Crédito "Descuento Global", con ISC/IGV escritos a mano):
+	 * se usan tal cual en vez de recalcularlos a partir de las líneas. */
+	totalesManual?: TotalesFactura | null
 ): Promise<ServiceResult<Factura>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (tipoComprobante === 'nota_credito' && !String(payload.tipo_nota ?? '').trim()) errors.tipo_nota = 'Tipo de nota de crédito es obligatorio';
@@ -506,7 +509,7 @@ export async function guardarBorradorFactura(
 	}
 
 	const sujeta = String(payload.sujeta_detraccion ?? 'no') === 'si';
-	const t = calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0));
+	const t = totalesManual ?? calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0));
 	const datos: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		tipo_comprobante: tipoComprobante,

@@ -115,6 +115,10 @@
 
 	onMount(async () => {
 		console.log('[Login] onMount started');
+		// Llegó acá por el cierre automático por inactividad (ver InactividadGuard.svelte).
+		if (new URL(window.location.href).searchParams.get('inactividad') === '1') {
+			infoMessage = 'Tu sesión se cerró por 10 minutos de inactividad. Ingresa de nuevo para continuar.';
+		}
 
 		// If the user already has a valid session, skip the login form
 		const { data: { session } } = await supabase.auth.getSession();

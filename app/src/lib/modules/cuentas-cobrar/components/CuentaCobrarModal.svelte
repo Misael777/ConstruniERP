@@ -529,7 +529,8 @@
 
 <FraccionamientoModal
 	open={fraccionamientoOpen}
-	titulo="Fraccionar Cobros"
+	titulo="Cronograma de Cobranza"
+	etiquetaInterruptor="Fraccionar Cobros"
 	montoTotal={saldoPendienteReal}
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}

@@ -104,7 +104,7 @@
 		return key === 'sujeta_detraccion' || key === 'porcentaje_detraccion' || key.startsWith('detraccion_');
 	}
 	const formFields = $derived(
-		FIELDS_CONFIG.filter((f) => f.showInForm && (f.key !== 'tipo_nota' || tipoComprobante === 'nota_credito') && ((f.key !== 'folio_referencia' && f.key !== 'folio_nueva_factura') || modoRuc) && !(modoRuc && f.key === 'observacion') && !(tipoComprobante === 'nota_credito' && esCampoDetraccion(f.key)) && !(esNota && f.key === 'forma_pago')).map((f) => {
+		FIELDS_CONFIG.filter((f) => f.showInForm && (f.key !== 'tipo_nota' || tipoComprobante === 'nota_credito') && ((f.key !== 'folio_referencia' && f.key !== 'folio_nueva_factura') || modoRuc || ((modoDescuentoGlobal || modoDevolucionTotal) && f.key === 'folio_referencia')) && !(modoRuc && f.key === 'observacion') && !(tipoComprobante === 'nota_credito' && esCampoDetraccion(f.key)) && !(esNota && f.key === 'forma_pago')).map((f) => {
 			if (f.key === 'folio_referencia' || f.key === 'folio_nueva_factura') return { ...f, required: true };
 			if (f.key === 'detraccion_cuenta_bn') return { ...f, options: cuentasBancoNacion };
 			// Nota de Crédito (a pedido del usuario, según su imagen): "Tipo de nota de crédito" y "Motivo o
@@ -189,7 +189,41 @@
 
 	// ── Nota de Crédito "Anulación por Error en el RUC" (pantalla de la imagen del usuario) ───────────
 	const modoRuc = $derived(tipoComprobante === 'nota_credito' && formValues.tipo_nota === '02');
+	// Nota de Crédito "Descuento Global" (a pedido del usuario, según su imagen): referencia una Factura emitida
+	// (de ahí salen cliente y moneda), sin transacciones; se ingresan el Motivo, el Descuento Global (sin IGV), el
+	// ISC y el IGV (propuesto al 18% del descuento, editable).
+	const modoDescuentoGlobal = $derived(tipoComprobante === 'nota_credito' && formValues.tipo_nota === '04');
+	// Nota de Crédito "Devolución Total" (a pedido del usuario, según su imagen): devuelve la Factura indicada
+	// COMPLETA — sus líneas, totales, cliente y moneda salen de ella (igual que "Anulación por error en el RUC");
+	// solo se piden Fecha, la factura y el Motivo.
+	// Misma pantalla (a pedido del usuario, con imagen) para: 03 Corrección por error en la descripción, 07 Devolución
+	// por ítem, 05 Descuento por ítem, 10 Otros conceptos y 13 Ajustes – montos y/o fechas de pago. Toman las
+	// líneas y totales de la factura indicada (no hay selección de ítems ni montos en el diseño pedido).
+	const TIPOS_NOTA_SOLO_REFERENCIA = new Set(['06', '03', '07', '05', '10', '13']);
+	const modoDevolucionTotal = $derived(tipoComprobante === 'nota_credito' && TIPOS_NOTA_SOLO_REFERENCIA.has(String(formValues.tipo_nota ?? '')));
+	/** Notas que solo referencian otra factura (sin transacciones). */
+	const modoReferencia = $derived(modoRuc || modoDescuentoGlobal || modoDevolucionTotal);
+	let descuentoGlobal = $state('');
+	let iscDescuento = $state('0');
+	let igvDescuento = $state('');
+	let igvDescuentoEditado = false;
+	const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+	function onDescuentoGlobalInput(valor: string) {
+		descuentoGlobal = valor;
+		if (!igvDescuentoEditado) igvDescuento = valor ? String(r2((Number(valor) + (Number(iscDescuento) || 0)) * 0.18)) : '';
+	}
+	function onIscDescuentoInput(valor: string) {
+		iscDescuento = valor;
+		if (!igvDescuentoEditado && descuentoGlobal) igvDescuento = String(r2(((Number(descuentoGlobal) || 0) + (Number(valor) || 0)) * 0.18));
+	}
 	type FacturaCompleta = NonNullable<Awaited<ReturnType<typeof getFacturaPorFolio>>>;
+	// Número de ESTA Nota de Crédito "Anulación por Error en el RUC" (a pedido del usuario, en el encabezado:
+	// "E001 - ____"). Si se deja vacío, el sistema asigna su correlativo (fn_asignar_folio_factura).
+	let notaSerie = $state('E001');
+	let notaCorrelativo = $state('');
+	const folioNotaManual = $derived(
+		notaCorrelativo.replace(/\D/g, '') ? `${notaSerie.trim().toUpperCase()}-${notaCorrelativo.replace(/\D/g, '').padStart(8, '0').slice(-8)}` : ''
+	);
 	let refSerie = $state('E001');
 	let refCorrelativo = $state('');
 	let nuevaSerie = $state('E001');
@@ -379,7 +413,7 @@
 		}
 	}
 
-	const modoSunat = $derived(origenDatos === 'sunat' && mode === 'create' && !modoRuc);
+	const modoSunat = $derived(origenDatos === 'sunat' && mode === 'create' && !modoReferencia);
 	const folioSunat = $derived(serieSunat.trim() && numeroSunat.trim() ? `${serieSunat.trim().toUpperCase()}-${numeroSunat.replace(/\D/g, '').padStart(8, '0').slice(-8)}` : '');
 	const totalSunatNum = $derived(Number(totalSunat) || 0);
 	const tipoSunatDistinto = $derived(!!datosSunat?.tipo && datosSunat.tipo !== tipoComprobante);
@@ -427,6 +461,19 @@
 			nuevaSerie = ns || 'E001';
 			nuevaCorrelativo = nc ?? '';
 			refFactura = null;
+			notaSerie = 'E001';
+			notaCorrelativo = '';
+			igvDescuentoEditado = false;
+			if (factura && factura.tipo_nota === '04') {
+				descuentoGlobal = String(factura.valor_venta ?? '');
+				iscDescuento = String(factura.isc ?? 0);
+				igvDescuento = String(factura.monto_igv ?? '');
+				igvDescuentoEditado = true;
+			} else {
+				descuentoGlobal = '';
+				iscDescuento = '0';
+				igvDescuento = '';
+			}
 			if (factura?.folio_referencia) resolverReferencia(factura.folio_referencia);
 			if (!factura && folioReferenciaInicial) {
 				const [rs2, rc2] = folioReferenciaInicial.split('-');
@@ -481,8 +528,8 @@
 	);
 	const transaccionesSeleccionadas = $derived(transacciones.filter((t) => seleccion.includes(t.id_transaccion)));
 	const primera = $derived(transaccionesSeleccionadas[0] ?? null);
-	const moneda = $derived<'PEN' | 'USD'>(modoRuc && refFactura ? (refFactura.factura.moneda === 'USD' ? 'USD' : 'PEN') : primera?.tipo_moneda === 'dolares' ? 'USD' : 'PEN');
-	const tipoCambio = $derived(modoRuc && refFactura ? refFactura.factura.tipo_cambio : primera?.tipo_moneda === 'dolares' ? primera.tipo_cambio : null);
+	const moneda = $derived<'PEN' | 'USD'>(modoReferencia && refFactura ? (refFactura.factura.moneda === 'USD' ? 'USD' : 'PEN') : primera?.tipo_moneda === 'dolares' ? 'USD' : 'PEN');
+	const tipoCambio = $derived(modoReferencia && refFactura ? refFactura.factura.tipo_cambio : primera?.tipo_moneda === 'dolares' ? primera.tipo_cambio : null);
 
 	function defaultDescripcion(t: TransaccionFacturable): string {
 		const base = [t.categoria, t.descripcion].filter(Boolean).join(' — ') || 'Ingreso';
@@ -518,10 +565,28 @@
 				}))
 			: []
 	);
-	const lineas = $derived<LineaFactura[]>(modoRuc ? lineasDeReferencia : lineasDeTransacciones);
+	const totalesDescuento = $derived.by(() => {
+		const d = r2(Number(descuentoGlobal));
+		const isc = r2(Number(iscDescuento));
+		const igv = r2(Number(igvDescuento));
+		return { subTotalVentas: d, anticipos: 0, descuentos: 0, valorVenta: d, isc, igv, otrosCargos: 0, otrosTributos: 0, redondeo: 0, importeTotal: r2(d + isc + igv), montoDetraccion: 0 };
+	});
+	const lineaDescuento = $derived<LineaFactura[]>(
+		Number(descuentoGlobal) > 0
+			? [{
+					id_transaccion: null,
+					descripcion: `Descuento global${formValues.observacion?.trim() ? ` — ${formValues.observacion.trim()}` : ''}`,
+					unidad: 'Servicio',
+					cantidad: 1,
+					precio_unitario: r2(Number(descuentoGlobal)),
+					monto_total_linea: totalesDescuento.importeTotal
+				}]
+			: []
+	);
+	const lineas = $derived<LineaFactura[]>(modoRuc || modoDevolucionTotal ? lineasDeReferencia : modoDescuentoGlobal ? lineaDescuento : lineasDeTransacciones);
 
 	const sujetaDetraccion = $derived(tipoComprobante !== 'nota_credito' && String(formValues.sujeta_detraccion ?? 'no') === 'si');
-	const totales = $derived.by(() => calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujetaDetraccion, Number(formValues.porcentaje_detraccion || 0)));
+	const totales = $derived.by(() => modoDescuentoGlobal ? totalesDescuento : calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujetaDetraccion, Number(formValues.porcentaje_detraccion || 0)));
 
 	function seleccionable(t: TransaccionFacturable): boolean {
 		if (t.id_factura != null) return false;
@@ -612,6 +677,29 @@
 			toast.error('Revisa los campos marcados');
 			return false;
 		}
+		if (modoReferencia && folioNotaManual && !/^[A-Z][A-Z0-9]{3}-\d{8}$/.test(folioNotaManual)) {
+			toast.error('La serie de la Nota de Crédito debe tener 4 caracteres (ej. E001).');
+			return false;
+		}
+		if (modoDescuentoGlobal) {
+			const error = !refFactura
+				? 'Indica la Factura emitida sobre la que se aplica el descuento (usa "Ver Factura" para verificarla).'
+				: !(Number(descuentoGlobal) > 0)
+					? 'Ingresa el monto del Descuento Global.'
+					: Number(iscDescuento) < 0 || Number(igvDescuento) < 0
+						? 'El ISC y el IGV no pueden ser negativos.'
+						: totalesDescuento.importeTotal - Number(refFactura.factura.monto_total) > 0.01
+							? `El descuento (${fmt(totalesDescuento.importeTotal)}) no puede superar el total de la factura (${fmt(Number(refFactura.factura.monto_total))}).`
+							: null;
+			if (error) {
+				toast.error(error);
+				return false;
+			}
+		}
+		if (modoDevolucionTotal && !refFactura) {
+			toast.error('Indica la Factura emitida a la que corresponde la Nota de Crédito (usa "Ver Factura" para verificarla).');
+			return false;
+		}
 		if (modoRuc && !refFactura) {
 			toast.error('Indica una Factura emitida válida (usa "Ver Factura" para verificarla).');
 			return false;
@@ -697,7 +785,8 @@
 			permisosState.userName || null,
 			tipoComprobante,
 			facturaActual?.id_factura,
-			modoSunat ? folioSunat : null
+			modoSunat ? folioSunat : modoReferencia && mode === 'create' && folioNotaManual ? folioNotaManual : null,
+			modoDescuentoGlobal ? totalesDescuento : null
 		);
 		if (!result.success || !result.data) {
 			toast.error(result.message);
@@ -727,7 +816,7 @@
 
 	function handleVistaPrevia() {
 		if (!validarAntesDeContinuar()) return;
-		previewDatos = construirDatosPdf(facturaActual?.folio ?? (modoSunat ? folioSunat : null), 'VISTA PREVIA');
+		previewDatos = construirDatosPdf(facturaActual?.folio ?? (modoSunat ? folioSunat : modoReferencia && folioNotaManual ? folioNotaManual : null), 'VISTA PREVIA');
 		previewOpen = true;
 	}
 
@@ -767,6 +856,14 @@
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
 			<div class="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}{facturaActual?.folio ? ` — ${facturaActual.folio}` : ''}</h2>
+				{#if modoReferencia && mode === 'create' && !facturaActual?.folio}
+					<!-- Número de esta Nota de Crédito (opcional: vacío = correlativo automático). -->
+					<div class="ml-auto mr-3 flex items-center gap-2">
+						<input type="text" maxlength="4" bind:value={notaSerie} aria-label="Serie de la Nota de Crédito" class="w-20 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm uppercase text-[#0f3b5e] focus:outline-none focus:ring-2 focus:ring-blue-200" />
+						<span class="text-slate-400">-</span>
+						<input type="text" inputmode="numeric" maxlength="8" bind:value={notaCorrelativo} placeholder="Número" aria-label="Número de la Nota de Crédito" title="Opcional: si lo dejas vacío, se asigna el correlativo automático" class="w-28 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm text-[#0f3b5e] focus:outline-none focus:ring-2 focus:ring-blue-200" />
+					</div>
+				{/if}
 				<button onclick={onClose} class="text-slate-400 hover:text-slate-600 w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg" aria-label="Cerrar">
 					<X size={18} />
 				</button>
@@ -809,7 +906,7 @@
 					</div>
 				{/snippet}
 
-				{#if mode === 'create' && !modoRuc && !soloLectura}
+				{#if mode === 'create' && !modoReferencia && !soloLectura}
 					<!-- Origen de los datos de ESTE documento (ver origenDatos en el script): tarjetas seleccionables. -->
 					<div class="mb-6">
 						<p class="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Origen de los datos</p>
@@ -978,7 +1075,7 @@
 					     transacciones ni detalle propios — anula la Factura indicada (de ahí salen cliente, líneas y
 					     monto) y referencia la Nueva Factura emitida con el RUC correcto. -->
 					<div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)] gap-x-6 gap-y-5 items-start mb-6">
-						<span class="text-sm font-semibold text-[#0f3b5e] md:pt-7">Tipo de Nota de Crédito</span>
+						<span class="hidden md:block"></span>
 						<div>{#if campoTipoNota}{@render campo(campoTipoNota)}{/if}</div>
 
 						<span class="text-sm font-semibold text-[#0f3b5e] md:pt-2">Fecha de Emisión</span>
@@ -1021,7 +1118,72 @@
 							{#if fieldErrors.folio_nueva_factura}<p class="mt-1 text-xs text-red-600">{fieldErrors.folio_nueva_factura}</p>{/if}
 						</div>
 					</div>
-					<p class="text-xs text-slate-400">La nota anula la factura indicada por su importe total ({fmt(totales.importeTotal)}); cliente, líneas y moneda se toman de esa factura.</p>
+				{:else if modoDescuentoGlobal || modoDevolucionTotal}
+					<!-- Notas de Crédito "Descuento Global" y "Devolución Total" (pantallas de las imágenes del usuario):
+					     referencian una Factura emitida (cliente y moneda salen de ella), sin transacciones. Descuento
+					     Global pide además los montos; Devolución Total devuelve la factura completa. -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5 mb-6">
+						<div class="hidden md:block"></div>
+						<div>{#if campoTipoNota}{@render campo(campoTipoNota)}{/if}</div>
+
+						<div class="md:col-span-2 max-w-[240px]">
+							<label for="fac-dg-fecha" class="block text-sm font-medium text-[#0f3b5e] mb-1">Fecha de Emisión <span class="text-red-500">*</span></label>
+							<input
+								id="fac-dg-fecha"
+								type="date"
+								value={formValues.fecha_emision}
+								disabled={soloLectura}
+								oninput={(e) => handleInput('fecha_emision', (e.target as HTMLInputElement).value)}
+								class={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 ${fieldErrors.fecha_emision ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`}
+							/>
+							{#if fieldErrors.fecha_emision}<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha_emision}</p>{/if}
+						</div>
+
+						<div class="md:col-span-2">
+							<span class="block text-sm font-medium text-[#0f3b5e] mb-1">Número de FE respecto de la cual se emite la Nota de Crédito <span class="text-red-500">*</span></span>
+							<div class="flex items-center gap-3 max-w-xl">
+								<input type="text" maxlength="4" value={refSerie} disabled={soloLectura} oninput={(e) => setFolio('ref', 'serie', (e.target as HTMLInputElement).value)} class="w-24 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100" aria-label="Serie de la factura" />
+								<input type="text" inputmode="numeric" maxlength="8" placeholder="Número" value={refCorrelativo} disabled={soloLectura} oninput={(e) => setFolio('ref', 'corr', (e.target as HTMLInputElement).value)} onblur={() => resolverReferencia(formValues.folio_referencia)} class={`flex-1 min-w-0 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 disabled:bg-slate-100 ${fieldErrors.folio_referencia ? 'border-red-400 focus:ring-red-200' : 'border-slate-300 focus:ring-blue-200'}`} aria-label="Número de la factura" />
+								<button type="button" onclick={verFacturaReferencia} disabled={cargandoRef} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-sm text-[#0f3b5e] hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap">
+									<FileText size={15} /> Ver Factura
+								</button>
+							</div>
+							{#if fieldErrors.folio_referencia}
+								<p class="mt-1 text-xs text-red-600">{fieldErrors.folio_referencia}</p>
+							{:else if refFactura}
+								<p class="mt-1 text-xs text-emerald-700">{refFactura.factura.folio} · {refFactura.factura.cliente_nombre ?? ''} · Total {fmt(Number(refFactura.factura.monto_total))}</p>
+							{/if}
+						</div>
+
+						<div class="md:col-span-2">{#if campoMotivo}{@render campo(campoMotivo)}{/if}</div>
+
+						{#if modoDevolucionTotal}
+							{#if refFactura}
+								<p class="md:col-span-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">La nota toma las líneas de la factura indicada: <b>{fmt(totales.importeTotal)}</b> ({lineas.length} línea{lineas.length === 1 ? '' : 's'}).</p>
+							{/if}
+						{:else}
+						<div class="md:col-span-2 grid gap-4 max-w-[240px]">
+							<div>
+								<label for="fac-dg-descuento" class="block text-sm font-medium text-[#0f3b5e] mb-1">Descuento Global <span class="text-red-500">*</span></label>
+								<input id="fac-dg-descuento" type="number" min="0" step="0.01" inputmode="decimal" value={descuentoGlobal} disabled={soloLectura} oninput={(e) => onDescuentoGlobalInput((e.target as HTMLInputElement).value)} placeholder="0.00" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100" />
+								<p class="mt-1 text-[11px] text-slate-400">Monto del descuento sin IGV.</p>
+							</div>
+							<div>
+								<label for="fac-dg-isc" class="block text-sm font-medium text-[#0f3b5e] mb-1">ISC</label>
+								<input id="fac-dg-isc" type="number" min="0" step="0.01" inputmode="decimal" value={iscDescuento} disabled={soloLectura} oninput={(e) => onIscDescuentoInput((e.target as HTMLInputElement).value)} placeholder="0.00" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100" />
+							</div>
+							<div>
+								<label for="fac-dg-igv" class="block text-sm font-medium text-[#0f3b5e] mb-1">IGV</label>
+								<input id="fac-dg-igv" type="number" min="0" step="0.01" inputmode="decimal" value={igvDescuento} disabled={soloLectura} oninput={(e) => { igvDescuentoEditado = true; igvDescuento = (e.target as HTMLInputElement).value; }} placeholder="0.00" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-slate-100" />
+								<p class="mt-1 text-[11px] text-slate-400">Se propone el 18%; puedes cambiarlo.</p>
+							</div>
+							<div>
+								<span class="block text-sm font-medium text-[#0f3b5e] mb-1">Importe total de la nota</span>
+								<input type="text" readonly value={fmt(totalesDescuento.importeTotal)} class="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700" />
+							</div>
+						</div>
+						{/if}
+					</div>
 				{:else}
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
 					<div>

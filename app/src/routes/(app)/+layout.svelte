@@ -17,6 +17,7 @@
 	import { mobileFabState } from '$lib/stores/mobileFab.svelte';
 	import MobileFab from '$lib/shared/components/MobileFab.svelte';
 	import ConfirmDialogHost from '$lib/shared/components/ConfirmDialogHost.svelte';
+	import InactividadGuard from '$lib/components/layout/InactividadGuard.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
 	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
 	import { iniciarSesionAuditoria, registrarCierre, cerrarSesion, esCierreManual } from '$lib/shared/auditoria';
@@ -201,6 +202,8 @@
 	     de WebView en Android descrito abajo, ahora también para el drawer en sí, no solo el botón
 	     que lo abre. -->
 	<Sidebar bind:collapsed={sidebarCollapsed} bind:mobileOpen={mobileMenuOpen} />
+	<!-- Cierre de sesión tras 10 minutos de inactividad, con aviso para continuar (ver InactividadGuard). -->
+	<InactividadGuard />
 
 	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Main Content -->

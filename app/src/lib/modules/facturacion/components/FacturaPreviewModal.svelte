@@ -8,6 +8,7 @@
 	// navegador abre el PDF en una pestaña nueva (el visor nativo del navegador ya trae su propio
 	// botón de imprimir); en Tauri no hay una vía nativa confiable de imprimir sin plugins nuevos, así
 	// que ahí "Imprimir" hace lo mismo que "Descargar" con un aviso.
+	import { untrack } from 'svelte';
 	import { X, Download, Printer, Loader2 } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { isRunningInTauri } from '$lib/driveUploadClient';
@@ -44,13 +45,22 @@
 	let pngDataUrl = $state('');
 	let pdfBase64 = $state('');
 
+	// La generación va en untrack: generarFacturaPdf abre la capa "Generando el PDF…" (conCarga), que LEE y
+	// escribe la lista reactiva de cargas (loading.svelte.ts). Sin untrack, este efecto quedaba suscrito a esa
+	// lista: al terminar el PDF la lista cambiaba, el efecto volvía a correr y empezaba otro PDF — un ciclo sin fin
+	// que dejaba la vista previa girando para siempre. Solo debe volver a generar si cambian `open` o `datos`.
 	$effect(() => {
 		if (!open || !datos) return;
+		const datosActuales = datos;
+		untrack(() => generarVistaPrevia(datosActuales));
+	});
+
+	function generarVistaPrevia(datosActuales: DatosFacturaPdf) {
 		loading = true;
 		error = '';
 		pngDataUrl = '';
 		pdfBase64 = '';
-		generarFacturaPdf(datos)
+		generarFacturaPdf(datosActuales)
 			.then((r) => {
 				pngDataUrl = r.pngDataUrl;
 				pdfBase64 = r.pdfBase64;
@@ -62,7 +72,7 @@
 			.finally(() => {
 				loading = false;
 			});
-	});
+	}
 
 	async function handleDescargar() {
 		if (!pdfBase64 || !datos) return;

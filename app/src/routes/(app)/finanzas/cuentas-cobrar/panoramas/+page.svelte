@@ -1032,7 +1032,8 @@
 
 <FraccionamientoModal
 	open={cuotasModalOpen}
-	titulo="Fraccionar Cobros"
+	titulo="Cronograma de Cobranza"
+	etiquetaInterruptor="Fraccionar Cobros"
 	montoTotal={cuotasCuentaActual?.monto ?? 0}
 	fechaEmision={cuotasCuentaActual?.fechaEmision ?? ''}
 	fechaVencimiento={cuotasCuentaActual?.fechaVencimiento ?? null}
