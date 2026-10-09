@@ -1882,8 +1882,15 @@
 			});
 	});
 
+	// Ticket #76: antes estas listas se cargaban UNA sola vez por vida del componente — al cerrar una
+	// segunda venta en la misma sesión (frecuente en el celular, donde la app queda abierta), el proyecto
+	// y el cliente recién creados no estaban en la lista y "Proyecto"/"Persona/Empresa" del adelanto
+	// salían vacíos. Ahora se recargan en CADA apertura (igual que los saldos, ver cargarSaldos).
+	let listasAbiertoAnterior = false;
 	$effect(() => {
-		if (open && !centroCostoClientesCargado) {
+		const abriendo = open && !listasAbiertoAnterior;
+		listasAbiertoAnterior = open;
+		if (abriendo) {
 			centroCostoClientesCargado = true;
 			Promise.all([
 				getCentroCostoOptionsClientes(supabase),
@@ -2362,6 +2369,20 @@
 		});
 	}
 
+	/** Ticket #76: si el Centro de Costo ya elegido (ej. el proyecto y el cliente que trae el adelanto de un
+	 * cierre de venta) no está en la lista — todavía cargando, o creado después de cargarla —, se agrega
+	 * igual (con la etiqueta que haya en la lista general o la que pasó la página contenedora), para que el
+	 * campo nunca aparezca vacío con un valor elegido. */
+	function conValorActual(opciones: FieldOption[], key: string): FieldOption[] {
+		const actual = String(formValues[key] ?? '');
+		if (!actual || opciones.some((o) => o.value === actual)) return opciones;
+		const extra =
+			centroCostoOptionsTodos.find((o) => o.value === actual) ??
+			(dynamicOptions[`${key}_externo`] ?? []).find((o) => o.value === actual) ??
+			(dynamicOptions[key] ?? []).find((o) => o.value === actual);
+		return extra ? [...opciones, extra] : opciones;
+	}
+
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		// Origen/Destino de Transacción muestran una lista distinta según el Alcance: en Interna, solo
 		// proyectos (dynamicOptions[key]); en Externa, proveedores/clientes/empleados (dynamicOptions[key
@@ -2400,7 +2421,7 @@
 			//   "Clase" que aparece entre ambos campos (ver claseDestino/OPCIONES_CLASE_DESTINO) — vacío
 			//   mientras no se haya elegido una Clase todavía.
 			if (formValues.tipo === 'ingreso' && formValues.tipo_alcance === 'externa') {
-				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(centroCostoOptionsPersonaEmpresa);
+				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(conValorActual(centroCostoOptionsPersonaEmpresa, field.key));
 				// A pedido del usuario: si Persona/Empresa es de tipo Préstamo, "Proyecto" muestra solo los
 				// proyectos que pueden recibir ese ingreso (Corporativo, Obra, Consultoría — ver
 				// opcionesProyectoReceptorPrestamo), no las Cuentas Internas ni otros centros de Préstamo/Otro.
@@ -2421,7 +2442,7 @@
 					const corporativo = centroCostoOptionsPersonaEmpresa.find((o) => centroCostoTipoMap[o.value] === 'bolsa general');
 					return corporativo ? soloNombreCentro([corporativo]) : [];
 				}
-				return soloNombreCentro(centroCostoOptionsSoloCentros);
+				return soloNombreCentro(conValorActual(centroCostoOptionsSoloCentros, field.key));
 			}
 			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);

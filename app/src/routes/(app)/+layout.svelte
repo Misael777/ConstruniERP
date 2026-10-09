@@ -19,7 +19,7 @@
 	import ConfirmDialogHost from '$lib/shared/components/ConfirmDialogHost.svelte';
 	import InactividadGuard from '$lib/components/layout/InactividadGuard.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
-	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
+	import SnoopyLoader, { FONDO_CARGA } from '$lib/shared/components/SnoopyLoader.svelte';
 	import { iniciarSesionAuditoria, registrarCierre, cerrarSesion, esCierreManual } from '$lib/shared/auditoria';
 
 	let { children } = $props();
@@ -175,7 +175,7 @@
 </script>
 
 {#if isLoading}
-	<div class="h-screen w-screen flex items-center justify-center bg-slate-50">
+	<div class="h-screen w-screen flex items-center justify-center" style:background-color={FONDO_CARGA}>
 		<SnoopyLoader mensaje="Cargando Construni ERP…" size="lg" />
 	</div>
 {:else if noAccess}

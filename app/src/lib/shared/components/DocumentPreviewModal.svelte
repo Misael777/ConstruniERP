@@ -10,6 +10,7 @@
 	import { resolveApiUrl } from '$lib/apiClient';
 	import { toast } from '$lib/stores/toast';
 	import { abrirEnlaceExterno } from '$lib/shared/enlaceExterno';
+	import { tick, untrack } from 'svelte';
 
 	let {
 		open = false,
@@ -50,6 +51,77 @@
 	const sinDocumentos = $derived(documents.length === 0 && !url);
 	const downloadTitle = $derived(activeDoc?.filename ? activeDoc.filename : documents.length > 1 && activeDoc ? `${title} - ${activeDoc.label}` : title);
 	let previewUrl = $derived(toDrivePreviewUrl(effectiveUrl));
+
+	// ── Visor propio (ticket #81) ─────────────────────────────────────────────────────────────────────────
+	// En la app de escritorio, dentro del visor embebido de Google Drive (iframe) la rueda del mouse no
+	// desplazaba el documento y no se podía ver completo. En la app (Tauri: escritorio y celular) el archivo
+	// se descarga directo de Drive y se muestra aquí mismo: un PDF con pdf.js, página por página, dentro de un
+	// contenedor con scroll propio; una imagen, como <img>. En el navegador web, o si algo falla, se usa el
+	// visor de Drive de siempre.
+	type ModoVisor = 'iframe' | 'cargando' | 'pdf' | 'imagen';
+	let modoVisor = $state<ModoVisor>('iframe');
+	let imagenUrl = $state<string | null>(null);
+	let paginasEl = $state<HTMLDivElement | null>(null);
+	let totalPaginas = $state(0);
+	let cargaId = 0;
+
+	function liberarImagen() {
+		if (imagenUrl) URL.revokeObjectURL(imagenUrl);
+		imagenUrl = null;
+	}
+
+	async function esPdf(blob: Blob): Promise<boolean> {
+		if (blob.type.includes('pdf')) return true;
+		const cabecera = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+		return String.fromCharCode(...cabecera) === '%PDF-';
+	}
+
+	async function cargarVisorPropio(urlDoc: string, id: number) {
+		const fileId = extractDriveFileId(urlDoc);
+		if (!fileId) return;
+		modoVisor = 'cargando';
+		try {
+			const blob = await downloadFromDriveClient(fileId);
+			if (id !== cargaId) return;
+			if (blob.type.startsWith('image/')) {
+				imagenUrl = URL.createObjectURL(blob);
+				modoVisor = 'imagen';
+				return;
+			}
+			if (!(await esPdf(blob))) {
+				modoVisor = 'iframe';
+				return;
+			}
+			modoVisor = 'pdf';
+			await tick();
+			if (id !== cargaId || !paginasEl) return;
+			const ancho = Math.max(Math.min(paginasEl.clientWidth, 900) - 2, 200);
+			totalPaginas = await import('$lib/shared/pdfPreview').then(({ renderizarPdfEnContenedor }) =>
+				renderizarPdfEnContenedor(blob, paginasEl!, ancho, () => id === cargaId)
+			);
+		} catch (err) {
+			console.warn('[DocumentPreviewModal] Visor propio no disponible, se usa el de Drive:', err);
+			if (id === cargaId) modoVisor = 'iframe';
+		}
+	}
+
+	$effect(() => {
+		const urlDoc = effectiveUrl;
+		const abierto = open;
+		const id = ++cargaId;
+		// Solo url/open disparan la carga: el resto se lee sin rastrear para no reiniciarla en bucle.
+		untrack(() => {
+			liberarImagen();
+			totalPaginas = 0;
+			if (paginasEl) paginasEl.replaceChildren();
+			modoVisor = 'iframe';
+			if (abierto && urlDoc && isRunningInTauri()) void cargarVisorPropio(urlDoc, id);
+		});
+		return () => {
+			// Al cerrar o cambiar de documento se descarta lo que siga dibujándose.
+			if (id === cargaId) cargaId++;
+		};
+	});
 
 	function sanitizeFilename(name: string) {
 		return name.replace(/[^a-z0-9\-_.() ]+/gi, '_').trim() || 'document';
@@ -176,7 +248,25 @@
 			</div>
 
 			<div class="flex-1 overflow-hidden bg-slate-100">
-				{#if previewUrl}
+				{#if previewUrl && modoVisor === 'cargando'}
+					<div class="w-full h-full flex items-center justify-center text-slate-500">
+						<div class="text-center">
+							<i class="fas fa-spinner fa-spin text-3xl mb-3"></i>
+							<p class="text-sm">Cargando documento…</p>
+						</div>
+					</div>
+				{:else if previewUrl && modoVisor === 'pdf'}
+					<div class="w-full h-full overflow-y-auto overscroll-contain bg-slate-200 px-3 py-4 sm:px-6">
+						<div bind:this={paginasEl} class="mx-auto max-w-[900px] flex flex-col gap-4"></div>
+						{#if totalPaginas > 40}
+							<p class="text-center text-xs text-slate-500 mt-4">Se muestran las primeras 40 de {totalPaginas} páginas. Descarga el archivo para verlo completo.</p>
+						{/if}
+					</div>
+				{:else if previewUrl && modoVisor === 'imagen' && imagenUrl}
+					<div class="w-full h-full overflow-auto overscroll-contain bg-slate-200 p-4 flex justify-center">
+						<img src={imagenUrl} alt={title} class="max-w-full h-auto self-start shadow-md bg-white" />
+					</div>
+				{:else if previewUrl}
 					<iframe
 						src={previewUrl}
 						{title}

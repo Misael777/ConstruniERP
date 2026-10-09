@@ -405,31 +405,37 @@
 					<span>Comisión</span>
 					<span class="font-medium text-slate-700">{formatMoney(row.comision)} <span class="text-slate-400">({row.comisionPct}%)</span></span>
 				</div>
-				<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-					<button onclick={() => dispatch('gestionarProformas', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Proformas">
-						<i class="far fa-file-pdf"></i> Proforma
-					</button>
-					<button onclick={() => dispatch('viewContrato', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
-						<i class="far fa-file-pdf"></i> Contrato
-					</button>
-					<button onclick={() => dispatch('verResumen', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-blue-600 flex items-center justify-center active:bg-blue-50" aria-label="Resumen de la venta">
-						<i class="fas fa-circle-info"></i>
-					</button>
-					{#if modoEliminados}
-						<button onclick={() => dispatch('restaurar', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar">
-							<i class="fas fa-rotate-left"></i>
+				<!-- Ticket #75 (rechazo): en celular los 5 botones no cabían en una fila y el último quedaba fuera de la
+				     tarjeta. Ahora van en dos filas que siempre caben: documentos arriba y acciones abajo. -->
+				<div class="pt-2 border-t border-slate-100 flex flex-col gap-2">
+					<div class="grid grid-cols-2 gap-2">
+						<button onclick={() => dispatch('gestionarProformas', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Proformas">
+							<i class="far fa-file-pdf"></i> Proforma
 						</button>
-						<button onclick={() => dispatch('eliminarPermanente', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar permanentemente">
-							<i class="fas fa-trash-alt"></i>
+						<button onclick={() => dispatch('viewContrato', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
+							<i class="far fa-file-pdf"></i> Contrato
 						</button>
-					{:else}
-						<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
-							<i class="fas fa-pen"></i>
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<button onclick={() => dispatch('verResumen', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-blue-600 flex items-center justify-center active:bg-blue-50" aria-label="Resumen de la venta" title="Resumen de la venta">
+							<i class="fas fa-circle-info"></i>
 						</button>
-						<button onclick={() => dispatch('darDeBaja', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja">
-							<i class="fas fa-trash"></i>
-						</button>
-					{/if}
+						{#if modoEliminados}
+							<button onclick={() => dispatch('restaurar', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar" title="Restaurar">
+								<i class="fas fa-rotate-left"></i>
+							</button>
+							<button onclick={() => dispatch('eliminarPermanente', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar permanentemente" title="Eliminar permanentemente">
+								<i class="fas fa-trash-alt"></i>
+							</button>
+						{:else}
+							<button onclick={() => dispatch('editRow', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar" title="Editar">
+								<i class="fas fa-pen"></i>
+							</button>
+							<button onclick={() => dispatch('darDeBaja', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja" title="Dar de baja">
+								<i class="fas fa-trash"></i>
+							</button>
+						{/if}
+					</div>
 				</div>
 			{/snippet}
 		</ResponsiveDataView>

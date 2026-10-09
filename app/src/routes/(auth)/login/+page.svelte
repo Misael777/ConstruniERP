@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { confirmActivation, getFirstAdminStatus, createFirstAdmin as crearPrimerAdministrador } from '$lib/edgeFunctionClient';
-	import SnoopyLoader from '$lib/shared/components/SnoopyLoader.svelte';
+	import SnoopyLoader, { FONDO_CARGA } from '$lib/shared/components/SnoopyLoader.svelte';
 	
 	let mode = $state<'login' | 'setup_password' | 'forgot_password' | 'first_admin'>('login');
 	let email = $state('');
@@ -379,7 +379,7 @@ async function handleSetupPassword(e: Event) {
 </svelte:head>
 
 {#if pantallaCompletaCarga}
-	<div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+	<div class="min-h-screen flex items-center justify-center p-4" style:background-color={FONDO_CARGA}>
 		<SnoopyLoader mensaje={mensajeCargaPantallaCompleta} size="lg" />
 	</div>
 {:else}

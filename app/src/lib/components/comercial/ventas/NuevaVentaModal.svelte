@@ -64,7 +64,7 @@
 		// proyecto.tip_proyecto admite hasta 10 caracteres).
 		{ value: 'VT', label: 'Visita técnica' },
 		{ value: 'MET', label: 'Metrados de obra' },
-		{ value: 'VAL', label: 'Valuación de inmuebles' },
+		{ value: 'TAS', label: 'Tasación de inmueble' }, // ticket #80: antes VAL – Valuación de inmuebles (ninguna venta lo usaba)
 		{ value: 'TR', label: 'Gestión de trámites' },
 		{ value: 'REN', label: 'Renderizado arquitectónico' },
 		{ value: 'PV', label: 'Permiso de uso de vía pública' },
@@ -1496,9 +1496,21 @@ async function copiarCodigoGenerado() {
 					// Cuentas por Cobrar, ver createCuentaCobrar). La cuota del ADELANTO se confirma en el acto
 					// como 'cobrado' con fn_confirmar_cobro, que crea la transacción del adelanto y la vincula a
 					// esa cuota en un solo paso — así la cuenta nace con el adelanto ya descontado del saldo.
-					const detalle = hitosCobranza
+					// "Observaciones" de la cuenta admite 200 caracteres (columna VARCHAR(200) + maxLength del config):
+					// con 4+ cuotas o hitos largos el resumen completo no cabía, createCuentaCobrar rechazaba la
+					// cuenta con "Revisa los campos marcados" y la venta entera se revertía (cliente 2026-10-09).
+					// Se usa la versión más detallada que quepa; el detalle completo vive en cada cuota (fecha,
+					// monto y su Hito de cobro en cobros.referencia).
+					const PREFIJO_OBS = 'Forma de cobranza definida al crear la venta — ';
+					const conHito = hitosCobranza
 						.map((h, i) => `${nombreHitoCobranza(h, i)}${h.concepto.trim() ? ` [${h.concepto.trim()}]` : ''}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
 						.join('; ');
+					const sinHito = hitosCobranza
+						.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+						.join('; ');
+					const detalle =
+						[conHito, sinHito].find((t) => (PREFIJO_OBS + t).length <= 200) ??
+						`${hitosCobranza.length} cuotas por ${formatCurrency(precioVenta)} (ver el cronograma de la cuenta)`;
 					const fechas = hitosCobranza.map((h) => h.fechaEstimada).sort();
 					const cuentaResult = await createCuentaCobrar(
 						supabase,
@@ -1513,12 +1525,17 @@ async function copiarCodigoGenerado() {
 							fecha_emision: fechaInicio,
 							fecha_vencimiento: fechas[fechas.length - 1],
 							moneda: 'PEN',
-							observaciones: `Forma de cobranza definida al crear la venta — ${detalle}`
+							observaciones: `${PREFIJO_OBS}${detalle}`
 						},
 						asesorFinal,
 						hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }))
 					);
-					if (!cuentaResult.success || !cuentaResult.data) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
+					if (!cuentaResult.success || !cuentaResult.data) {
+						// Los errores de validación son de campos de la Cuenta por Cobrar, que no están en este formulario:
+						// se nombran en el mensaje (antes solo decía "Revisa los campos marcados", sin marcar nada).
+						const detalleErrores = Object.values(cuentaResult.errors ?? {}).join('; ');
+						throw new Error(`No se pudo crear la Cuenta por Cobrar de la Forma de cobranza: ${detalleErrores || cuentaResult.message || 'error desconocido'}.`);
+					}
 					idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
 
 					// La cuota del adelanto: misma fecha y monto que la fila ADELANTO (la primera que calce).
