@@ -973,10 +973,14 @@ async function copiarCodigoGenerado() {
 	// arriba), así que exigirlo dejaría el formulario imposible de completar para una venta nueva.
 	// AJUSTAR: el sub-chequeo de Obra (tipoObra/tipoTramite/tipoIntervencion/tipoEdificacionObra) se
 	// deja pendiente hasta que esos campos tengan columnas reales donde guardarse (ver su declaración).
+	// "+ Nuevo cliente" con el nombre escrito cuenta como cliente elegido: "Guardar venta" y "Cerrar venta"
+	// lo crean al guardar (validarYResolverDatosBasicos/ensureCliente). Antes solo se aceptaba uno de la
+	// lista, y "Cerrar venta" pedía "Cliente (elige uno de la lista)" aunque el nombre ya estuviera escrito.
+	let clienteElegido = $derived(!!selectedClienteId && (selectedClienteId !== '__new__' || !!nuevoClienteNombre.trim()));
 	let infoGeneralCompleta = $derived(
 		!!proyectoNombre.trim() &&
 		!!fechaVenta &&
-		!!selectedClienteId && selectedClienteId !== '__new__' &&
+		clienteElegido &&
 		!!departamento &&
 		!!provincia &&
 		!!distrito &&
@@ -1062,7 +1066,7 @@ async function copiarCodigoGenerado() {
 	function camposFaltantesCierre(): CampoCierre[] {
 		const f: CampoCierre[] = [];
 		const falta = (cond: boolean, clave: string, etiqueta: string) => { if (cond) f.push({ clave, etiqueta }); };
-		falta(!selectedClienteId || selectedClienteId === '__new__', 'cliente', 'Cliente (elige uno de la lista)');
+		falta(!clienteElegido, 'cliente', selectedClienteId === '__new__' ? 'Cliente (escribe el nombre del nuevo cliente)' : 'Cliente (elige uno de la lista)');
 		falta(!departamento, 'departamento', 'Departamento');
 		falta(!provincia, 'provincia', 'Provincia');
 		falta(!distrito, 'distrito', 'Distrito');
