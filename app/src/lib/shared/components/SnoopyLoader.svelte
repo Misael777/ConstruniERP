@@ -1,26 +1,76 @@
 <script lang="ts">
 	/**
-	 * Snoopy saltando la cuerda (ticket #9) — solo la animación + el mensaje, sin posicionamiento propio,
-	 * para poder usarse tanto suelto a pantalla completa (arranque de la app, login) como dentro de
-	 * LoadingOverlay.svelte (la tarjeta flotante sobre el resto de la pantalla).
+	 * Animación de carga — Snoopy saltando la cuerda + logo con anillo de carga (tickets #9 y #58).
 	 *
-	 * `size` (ticket #9, rechazo): a pedido del cliente, el Snoopy de las pantallas COMPLETAS (login,
-	 * arranque de la app) debe verse grande, proporcional a la referencia que adjuntó — 'lg' lo triplica
-	 * (h-28 -> h-80). La tarjeta flotante de LoadingOverlay.svelte sigue en 'sm' (el tamaño de siempre):
-	 * ahí sí se ve varias veces por sesión en esperas cortas, y agrandarla se sentiría como un salto brusco
-	 * en medio de la pantalla en vez de una espera discreta.
+	 * Ticket #58 (rediseño según la imagen de referencia del cliente): fondo azul oscuro (lo pone quien
+	 * contiene a este componente — ver FONDO_CARGA), Snoopy nítido y blanco (sin la mancha gris bajo los
+	 * pies), y debajo el isotipo dentro de un anillo blanco delgado que gira, "como el del BCP". Antes era
+	 * un solo webp de 164×320 escalado (borroso) con el anillo azul y la sombra incrustados en la imagen.
+	 *   - /snoopy-salto.webp: un cuadro limpio de la animación original (463×577, transparente).
+	 *   - /logo-isotipo.png: el logo de /logo.png sin su cuadro azul.
+	 * El salto y el giro del anillo son CSS (se respetan los ajustes de "reducir movimiento").
+	 *
+	 * `size`: 'lg' para pantallas completas (arranque de la app, login); 'sm' para la tarjeta flotante de
+	 * LoadingOverlay.svelte — 20% más grande que antes, a pedido del cliente para la app de escritorio.
 	 */
 	let { mensaje = 'Cargando…', size = 'sm' }: { mensaje?: string; size?: 'sm' | 'lg' } = $props();
 </script>
 
-<div class="flex flex-col items-center gap-3">
+<script lang="ts" module>
+	/** Azul oscuro de fondo de la referencia del cliente (ticket #58) — úsalo en el contenedor. */
+	export const FONDO_CARGA = '#0b2d5c';
+</script>
+
+<div class="flex flex-col items-center" class:gap-4={size === 'lg'} class:gap-3={size === 'sm'}>
 	<img
-		src="/snoopy-loading.webp"
+		src="/snoopy-salto.webp"
 		alt=""
-		width="164"
-		height="320"
-		class={`w-auto select-none ${size === 'lg' ? 'h-80' : 'h-28'}`}
+		width="463"
+		height="577"
+		class={`snoopy-salto w-auto select-none ${size === 'lg' ? 'h-60 sm:h-72' : 'h-[134px]'}`}
 		draggable="false"
 	/>
-	<p class="text-sm font-semibold text-[#0f3b5e] text-center">{mensaje}</p>
+
+	<div class={`relative shrink-0 ${size === 'lg' ? 'w-24 h-24 sm:w-28 sm:h-28' : 'w-[77px] h-[77px]'}`} aria-hidden="true">
+		<svg viewBox="0 0 100 100" class="absolute inset-0 w-full h-full">
+			<circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="4" />
+			<circle class="anillo-carga" cx="50" cy="50" r="46" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-dasharray="72 217" />
+		</svg>
+		<img src="/logo-isotipo.png" alt="" class="absolute inset-0 m-auto h-[46%] w-auto select-none" draggable="false" />
+	</div>
+
+	<p class={`font-semibold text-white text-center ${size === 'lg' ? 'text-base' : 'text-sm'}`}>{mensaje}</p>
 </div>
+
+<style>
+	.snoopy-salto {
+		animation: snoopy-salto 0.6s ease-in-out infinite;
+		transform-origin: 50% 100%;
+	}
+	@keyframes snoopy-salto {
+		0%,
+		100% {
+			transform: translateY(0) scaleY(0.98);
+		}
+		50% {
+			transform: translateY(-7%) scaleY(1);
+		}
+	}
+	.anillo-carga {
+		transform-origin: 50% 50%;
+		animation: anillo-giro 1s linear infinite;
+	}
+	@keyframes anillo-giro {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.snoopy-salto {
+			animation: none;
+		}
+		.anillo-carga {
+			animation-duration: 2.5s;
+		}
+	}
+</style>

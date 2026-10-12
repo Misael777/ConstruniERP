@@ -184,13 +184,14 @@
 	<div class="flex-shrink-0 px-4 sm:px-6 py-5 flex items-start sm:items-center justify-between gap-3 border-b border-slate-100 bg-white">
 		<div class="flex flex-col min-w-0">
 			<div class="flex flex-wrap items-center gap-2 text-slate-500 text-sm mb-1">
-				<a href="/finanzas" class="hover:text-blue-600 transition-colors"><i class="fas fa-arrow-left"></i></a>
-				<span class="font-bold text-slate-800 text-2xl ml-2">{verEliminados ? 'Proveedores eliminados' : 'Directorio de Proveedores'}</span>
+				<!-- Ticket #78: aquí había una flecha a /finanzas, ruta que no existe (404). Ningún otro módulo la tiene:
+				     se navega con el menú; en "Proveedores eliminados" vuelve el botón de la derecha. -->
+				<span class="font-bold text-slate-800 text-2xl">{verEliminados ? 'Proveedores eliminados' : 'Directorio de Proveedores'}</span>
 				{#if verEliminados}
 					<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 uppercase tracking-wide">Solo administradores</span>
 				{/if}
 			</div>
-			<p class="text-sm text-slate-500 sm:ml-7">
+			<p class="text-sm text-slate-500">
 				{verEliminados
 					? 'Proveedores dados de baja — restauralos o elimínalos de la base de datos permanentemente.'
 					: 'Administra los proveedores de materiales, servicios y equipos.'}

@@ -64,7 +64,7 @@
 		// proyecto.tip_proyecto admite hasta 10 caracteres).
 		{ value: 'VT', label: 'Visita técnica' },
 		{ value: 'MET', label: 'Metrados de obra' },
-		{ value: 'VAL', label: 'Valuación de inmuebles' },
+		{ value: 'TAS', label: 'Tasación de inmueble' }, // ticket #80: antes VAL – Valuación de inmuebles (ninguna venta lo usaba)
 		{ value: 'TR', label: 'Gestión de trámites' },
 		{ value: 'REN', label: 'Renderizado arquitectónico' },
 		{ value: 'PV', label: 'Permiso de uso de vía pública' },
@@ -107,10 +107,11 @@
 		{ value: 'R', label: 'Casco rojo' },
 		{ value: 'G', label: 'Casco gris' },
 		{ value: 'A', label: 'Acabados' },
-		{ value: 'L', label: 'Llave en mano' }
+		{ value: 'L', label: 'Llave en mano' },
+		{ value: 'DM', label: 'Demolición' } // ticket #79
 	];
 	const TIPO_CONTRATACION_OPTIONS = [
-		{ value: 'A', label: 'Administración' },
+		// Ticket #79: se quitó 'A' (Administración); ninguna venta de Producción la usaba (verificado 2026-10-07).
 		{ value: 'C', label: 'Contrata' },
 		{ value: 'S', label: 'Subcontrata' },
 		{ value: 'P', label: 'Por partidas' }
@@ -169,8 +170,6 @@
 		/** "Hito de cobro" (a pedido del usuario): concepto por el que se cobra esta cuota, texto libre. Se guarda
 		 * en cobros.referencia de la cuota. */
 		concepto: string;
-		/** true = la fecha del ADELANTO se cambió a mano (ventas antiguas): cambiar el monto ya no la pisa. */
-		fechaManual?: boolean;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;
@@ -229,7 +228,7 @@
 			fila = hitosCobranza[0];
 		}
 		fila.importe = monto;
-		if (!fila.fechaManual) fila.fechaEstimada = fechaVenta || getFechaLocalHoy();
+		fila.fechaEstimada = fechaVenta || getFechaLocalHoy(); // ticket #51: la del ADELANTO siempre es la Fecha de venta
 		fila.valor = valorDesdeImporte(fila);
 		ajustarAbonosAlSaldo();
 	}
@@ -974,10 +973,14 @@ async function copiarCodigoGenerado() {
 	// arriba), así que exigirlo dejaría el formulario imposible de completar para una venta nueva.
 	// AJUSTAR: el sub-chequeo de Obra (tipoObra/tipoTramite/tipoIntervencion/tipoEdificacionObra) se
 	// deja pendiente hasta que esos campos tengan columnas reales donde guardarse (ver su declaración).
+	// "+ Nuevo cliente" con el nombre escrito cuenta como cliente elegido: "Guardar venta" y "Cerrar venta"
+	// lo crean al guardar (validarYResolverDatosBasicos/ensureCliente). Antes solo se aceptaba uno de la
+	// lista, y "Cerrar venta" pedía "Cliente (elige uno de la lista)" aunque el nombre ya estuviera escrito.
+	let clienteElegido = $derived(!!selectedClienteId && (selectedClienteId !== '__new__' || !!nuevoClienteNombre.trim()));
 	let infoGeneralCompleta = $derived(
 		!!proyectoNombre.trim() &&
 		!!fechaVenta &&
-		!!selectedClienteId && selectedClienteId !== '__new__' &&
+		clienteElegido &&
 		!!departamento &&
 		!!provincia &&
 		!!distrito &&
@@ -1063,7 +1066,7 @@ async function copiarCodigoGenerado() {
 	function camposFaltantesCierre(): CampoCierre[] {
 		const f: CampoCierre[] = [];
 		const falta = (cond: boolean, clave: string, etiqueta: string) => { if (cond) f.push({ clave, etiqueta }); };
-		falta(!selectedClienteId || selectedClienteId === '__new__', 'cliente', 'Cliente (elige uno de la lista)');
+		falta(!clienteElegido, 'cliente', selectedClienteId === '__new__' ? 'Cliente (escribe el nombre del nuevo cliente)' : 'Cliente (elige uno de la lista)');
 		falta(!departamento, 'departamento', 'Departamento');
 		falta(!provincia, 'provincia', 'Provincia');
 		falta(!distrito, 'distrito', 'Distrito');
@@ -1497,9 +1500,21 @@ async function copiarCodigoGenerado() {
 					// Cuentas por Cobrar, ver createCuentaCobrar). La cuota del ADELANTO se confirma en el acto
 					// como 'cobrado' con fn_confirmar_cobro, que crea la transacción del adelanto y la vincula a
 					// esa cuota en un solo paso — así la cuenta nace con el adelanto ya descontado del saldo.
-					const detalle = hitosCobranza
+					// "Observaciones" de la cuenta admite 200 caracteres (columna VARCHAR(200) + maxLength del config):
+					// con 4+ cuotas o hitos largos el resumen completo no cabía, createCuentaCobrar rechazaba la
+					// cuenta con "Revisa los campos marcados" y la venta entera se revertía (cliente 2026-10-09).
+					// Se usa la versión más detallada que quepa; el detalle completo vive en cada cuota (fecha,
+					// monto y su Hito de cobro en cobros.referencia).
+					const PREFIJO_OBS = 'Forma de cobranza definida al crear la venta — ';
+					const conHito = hitosCobranza
 						.map((h, i) => `${nombreHitoCobranza(h, i)}${h.concepto.trim() ? ` [${h.concepto.trim()}]` : ''}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
 						.join('; ');
+					const sinHito = hitosCobranza
+						.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+						.join('; ');
+					const detalle =
+						[conHito, sinHito].find((t) => (PREFIJO_OBS + t).length <= 200) ??
+						`${hitosCobranza.length} cuotas por ${formatCurrency(precioVenta)} (ver el cronograma de la cuenta)`;
 					const fechas = hitosCobranza.map((h) => h.fechaEstimada).sort();
 					const cuentaResult = await createCuentaCobrar(
 						supabase,
@@ -1514,12 +1529,17 @@ async function copiarCodigoGenerado() {
 							fecha_emision: fechaInicio,
 							fecha_vencimiento: fechas[fechas.length - 1],
 							moneda: 'PEN',
-							observaciones: `Forma de cobranza definida al crear la venta — ${detalle}`
+							observaciones: `${PREFIJO_OBS}${detalle}`
 						},
 						asesorFinal,
 						hitosCobranza.map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }))
 					);
-					if (!cuentaResult.success || !cuentaResult.data) throw new Error(cuentaResult.message || 'No se pudo crear la Cuenta por Cobrar de la Forma de cobranza.');
+					if (!cuentaResult.success || !cuentaResult.data) {
+						// Los errores de validación son de campos de la Cuenta por Cobrar, que no están en este formulario:
+						// se nombran en el mensaje (antes solo decía "Revisa los campos marcados", sin marcar nada).
+						const detalleErrores = Object.values(cuentaResult.errors ?? {}).join('; ');
+						throw new Error(`No se pudo crear la Cuenta por Cobrar de la Forma de cobranza: ${detalleErrores || cuentaResult.message || 'error desconocido'}.`);
+					}
 					idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
 
 					// La cuota del adelanto: misma fecha y monto que la fila ADELANTO (la primera que calce).
@@ -2035,7 +2055,7 @@ async function copiarCodigoGenerado() {
 						</h3>
 						<p class="text-xs text-slate-400 mb-3">
 							El adelanto y las cuotas se registran como una Cuenta por Cobrar del proyecto al guardar (el adelanto queda como cobrado).
-							La suma siempre es 100%: el monto del adelanto cambia solo desde "Monto del adelanto" (su fecha sí se puede editar acá, para ventas antiguas); al cambiar una cuota, las siguientes se recalculan solas.
+							La suma siempre es 100%: el monto y la fecha del adelanto salen de "Monto del adelanto" y "Fecha de venta" (para una venta antigua, cambia la Fecha de venta); al cambiar una cuota, las siguientes se recalculan solas.
 						</p>
 						{#if !(Number(valorVenta) > 0)}
 							<p class="text-xs text-amber-600 mb-2">Ingresa el Valor venta para calcular los porcentajes y el saldo.</p>
@@ -2090,7 +2110,8 @@ async function copiarCodigoGenerado() {
 											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(hito.importe)}</td>
 											<td class="py-2 pr-2">
 												{#if hito.esAdelanto}
-													<input type="date" value={hito.fechaEstimada} onchange={(e) => { if (e.currentTarget.value) { hito.fechaEstimada = e.currentTarget.value; hito.fechaManual = true; } }} title="Por defecto, la Fecha de venta; se puede cambiar para registrar ventas antiguas" class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
+													<!-- Ticket #51 (rechazo de Romina): la fecha del ADELANTO no se edita; es la Fecha de venta. Las demás cuotas sí. -->
+													<input type="date" value={hito.fechaEstimada} readonly tabindex="-1" title="Es la Fecha de venta: cámbiala arriba" class="px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 cursor-not-allowed outline-none">
 												{:else}
 													<input type="date" bind:value={hito.fechaEstimada} class="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700">
 												{/if}

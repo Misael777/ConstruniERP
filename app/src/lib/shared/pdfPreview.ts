@@ -34,6 +34,44 @@ export async function renderPdfFirstPageToDataUrl(file: File | Blob, maxWidth = 
 	}
 }
 
+/** Dibuja TODAS las páginas de un PDF (hasta `maxPaginas`) como canvas dentro de `contenedor`, una debajo de
+ * otra, al ancho `anchoCss` — para el visor propio de DocumentPreviewModal (ticket #81: dentro del visor
+ * embebido de Google Drive la rueda del mouse no desplazaba el documento en la app de escritorio). Se dibuja
+ * con la densidad de píxeles de la pantalla para que el texto se vea nítido. `debeSeguir` permite cortar a
+ * mitad de camino si el usuario cierra el popup o cambia de documento. Devuelve el total de páginas. */
+export async function renderizarPdfEnContenedor(
+	file: Blob,
+	contenedor: HTMLElement,
+	anchoCss: number,
+	debeSeguir: () => boolean = () => true,
+	maxPaginas = 40
+): Promise<number> {
+	const buffer = await file.arrayBuffer();
+	const loadingTask = getDocument({ data: buffer });
+	try {
+		const pdf = await loadingTask.promise;
+		const densidad = Math.min(window.devicePixelRatio || 1, 2);
+		for (let n = 1; n <= Math.min(pdf.numPages, maxPaginas); n++) {
+			if (!debeSeguir()) break;
+			const page = await pdf.getPage(n);
+			const base = page.getViewport({ scale: 1 });
+			const viewport = page.getViewport({ scale: (anchoCss / base.width) * densidad });
+			const canvas = document.createElement('canvas');
+			canvas.width = Math.ceil(viewport.width);
+			canvas.height = Math.ceil(viewport.height);
+			canvas.style.width = '100%';
+			canvas.style.height = 'auto';
+			canvas.className = 'block bg-white shadow-md';
+			await page.render({ canvas, viewport }).promise;
+			if (!debeSeguir()) break;
+			contenedor.appendChild(canvas);
+		}
+		return pdf.numPages;
+	} finally {
+		await loadingTask.destroy();
+	}
+}
+
 /** Texto DIGITAL de un PDF (la capa de texto que traen los PDF generados por un sistema, ej. una Factura
  * o Boleta emitida por SUNAT) — exacto y mucho más rápido que OCR. Reconstruye las líneas agrupando los
  * fragmentos por su altura en la página (y ordenándolos de izquierda a derecha), para que los regex que

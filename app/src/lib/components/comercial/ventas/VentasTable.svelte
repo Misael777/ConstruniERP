@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, untrack } from 'svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 
 	const dispatch = createEventDispatcher();
@@ -216,6 +216,34 @@
 		});
 	}
 
+	// Ticket #75: paginación real (antes los botones 1-2-3, las flechas y "Filas por página" eran de adorno).
+	const OPCIONES_FILAS = [10, 20, 50];
+	let filasPorPagina = $state(20);
+	let pagina = $state(1);
+	let inicioLista = $state<HTMLElement | null>(null);
+	const filtradas = $derived(getFilteredData());
+	const totalPaginas = $derived(Math.max(1, Math.ceil(filtradas.length / filasPorPagina)));
+	const paginaActual = $derived(Math.min(pagina, totalPaginas));
+	const filasPagina = $derived(filtradas.slice((paginaActual - 1) * filasPorPagina, paginaActual * filasPorPagina));
+	/** Hasta 5 números de página alrededor de la actual. */
+	const numerosPagina = $derived.by(() => {
+		const desde = Math.max(1, Math.min(paginaActual - 2, totalPaginas - 4));
+		return Array.from({ length: Math.min(5, totalPaginas) }, (_, i) => desde + i);
+	});
+	// Al cambiar un filtro o la cantidad de filas se vuelve a la página 1 (no cuando la lista se refresca sola:
+	// si se acorta, paginaActual ya se ajusta a la última página que exista).
+	$effect(() => {
+		[filtroProyecto, filtroCliente, filtroEstado, filtroTipo, filtroAsesor, valorMin, valorMax, fechaDesde, fechaHasta, filasPorPagina, modoEliminados];
+		untrack(() => (pagina = 1));
+	});
+	function irAPagina(n: number) {
+		const destino = Math.min(Math.max(n, 1), totalPaginas);
+		if (destino === paginaActual) return;
+		pagina = destino;
+		// En celular la lista es larga: se sube al inicio para ver la página nueva desde arriba.
+		inicioLista?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+	}
+
 	function limpiarFiltros() {
 		filtroProyecto = 'Todos';
 		filtroCliente = 'Todos';
@@ -259,8 +287,8 @@
 	</div>
 
 	<!-- Table / Cards -->
-	<div class="overflow-x-auto md:overflow-y-auto md:flex-1">
-		<ResponsiveDataView items={getFilteredData()} keyField="id" {columns} emptyMessage="No se encontraron ventas con esos filtros.">
+	<div bind:this={inicioLista} class="overflow-x-auto md:overflow-y-auto md:flex-1 scroll-mt-4">
+		<ResponsiveDataView items={filasPagina} keyField="id" {columns} emptyMessage="No se encontraron ventas con esos filtros.">
 			{#snippet header()}
 				{#each columns as col}
 					{@const filtro = FILTROS_COLUMNA.find((f) => f.etiqueta.toLowerCase() === col.label.toLowerCase())}
@@ -377,31 +405,37 @@
 					<span>Comisión</span>
 					<span class="font-medium text-slate-700">{formatMoney(row.comision)} <span class="text-slate-400">({row.comisionPct}%)</span></span>
 				</div>
-				<div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-					<button onclick={() => dispatch('gestionarProformas', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Proformas">
-						<i class="far fa-file-pdf"></i> Proforma
-					</button>
-					<button onclick={() => dispatch('viewContrato', { row })} class="flex-1 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
-						<i class="far fa-file-pdf"></i> Contrato
-					</button>
-					<button onclick={() => dispatch('verResumen', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-blue-600 flex items-center justify-center active:bg-blue-50" aria-label="Resumen de la venta">
-						<i class="fas fa-circle-info"></i>
-					</button>
-					{#if modoEliminados}
-						<button onclick={() => dispatch('restaurar', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar">
-							<i class="fas fa-rotate-left"></i>
+				<!-- Ticket #75 (rechazo): en celular los 5 botones no cabían en una fila y el último quedaba fuera de la
+				     tarjeta. Ahora van en dos filas que siempre caben: documentos arriba y acciones abajo. -->
+				<div class="pt-2 border-t border-slate-100 flex flex-col gap-2">
+					<div class="grid grid-cols-2 gap-2">
+						<button onclick={() => dispatch('gestionarProformas', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Proformas">
+							<i class="far fa-file-pdf"></i> Proforma
 						</button>
-						<button onclick={() => dispatch('eliminarPermanente', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar permanentemente">
-							<i class="fas fa-trash-alt"></i>
+						<button onclick={() => dispatch('viewContrato', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center gap-2 text-xs font-medium active:bg-rose-50" aria-label="Ver Contrato">
+							<i class="far fa-file-pdf"></i> Contrato
 						</button>
-					{:else}
-						<button onclick={() => dispatch('editRow', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar">
-							<i class="fas fa-pen"></i>
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<button onclick={() => dispatch('verResumen', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-blue-600 flex items-center justify-center active:bg-blue-50" aria-label="Resumen de la venta" title="Resumen de la venta">
+							<i class="fas fa-circle-info"></i>
 						</button>
-						<button onclick={() => dispatch('darDeBaja', { row })} class="w-10 h-10 shrink-0 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja">
-							<i class="fas fa-trash"></i>
-						</button>
-					{/if}
+						{#if modoEliminados}
+							<button onclick={() => dispatch('restaurar', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-emerald-600 flex items-center justify-center active:bg-emerald-50" aria-label="Restaurar" title="Restaurar">
+								<i class="fas fa-rotate-left"></i>
+							</button>
+							<button onclick={() => dispatch('eliminarPermanente', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-rose-500 flex items-center justify-center active:bg-rose-50" aria-label="Eliminar permanentemente" title="Eliminar permanentemente">
+								<i class="fas fa-trash-alt"></i>
+							</button>
+						{:else}
+							<button onclick={() => dispatch('editRow', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-slate-500 flex items-center justify-center active:bg-slate-100" aria-label="Editar" title="Editar">
+								<i class="fas fa-pen"></i>
+							</button>
+							<button onclick={() => dispatch('darDeBaja', { row })} class="min-w-0 h-10 rounded-lg border border-slate-200 text-red-500 flex items-center justify-center active:bg-red-50" aria-label="Dar de baja" title="Dar de baja">
+								<i class="fas fa-trash"></i>
+							</button>
+						{/if}
+					</div>
 				</div>
 			{/snippet}
 		</ResponsiveDataView>
@@ -462,36 +496,40 @@
 		</div>
 	{/if}
 
-	<!-- Pagination Footer -->
+	<!-- Pagination Footer (ticket #75) -->
 	<div class="p-4 border-t border-slate-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-auto bg-slate-50/30">
-		<span class="text-xs text-slate-500 font-medium">Mostrando {getFilteredData().length} de {data.length} registros</span>
+		<span class="text-xs text-slate-500 font-medium">
+			{#if filtradas.length === 0}
+				Sin registros
+			{:else}
+				Mostrando {(paginaActual - 1) * filasPorPagina + 1}–{(paginaActual - 1) * filasPorPagina + filasPagina.length} de {filtradas.length} registros{filtradas.length < data.length ? ` (filtrados de ${data.length})` : ''}
+			{/if}
+		</span>
 
-		<div class="flex items-center gap-4">
-			<div class="flex items-center gap-2">
-				<span class="text-xs text-slate-500">Filas por página</span>
-				<select class="text-xs border border-slate-200 rounded px-2 py-1 outline-none text-slate-700 bg-white">
-					<option>10</option>
-					<option>20</option>
-					<option>50</option>
+		<div class="flex flex-wrap items-center gap-3 sm:gap-4">
+			<label class="flex items-center gap-2">
+				<span class="text-xs text-slate-500 whitespace-nowrap">Filas por página</span>
+				<select bind:value={filasPorPagina} class="text-xs border border-slate-200 rounded px-2 py-1 outline-none text-slate-700 bg-white">
+					{#each OPCIONES_FILAS as n (n)}<option value={n}>{n}</option>{/each}
 				</select>
-			</div>
+			</label>
 
 			<div class="flex items-center gap-1">
-				<button class="hidden sm:flex w-7 h-7 rounded border border-slate-200 items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled aria-label="Primera página">
+				<button type="button" onclick={() => irAPagina(1)} disabled={paginaActual === 1} class="hidden sm:flex w-7 h-7 rounded border border-slate-200 items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors disabled:text-slate-300 disabled:hover:bg-transparent disabled:cursor-not-allowed" aria-label="Primera página">
 					<i class="fas fa-step-backward text-[10px]"></i>
 				</button>
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors" disabled aria-label="Página anterior">
+				<button type="button" onclick={() => irAPagina(paginaActual - 1)} disabled={paginaActual === 1} class="w-8 h-8 sm:w-7 sm:h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors disabled:text-slate-300 disabled:hover:bg-transparent disabled:cursor-not-allowed" aria-label="Página anterior">
 					<i class="fas fa-chevron-left text-[10px]"></i>
 				</button>
 
-				<button class="w-7 h-7 rounded bg-blue-600 text-white font-bold text-xs shadow-sm flex items-center justify-center">1</button>
-				<button class="w-7 h-7 rounded hover:bg-slate-100 text-slate-600 font-medium text-xs flex items-center justify-center transition-colors">2</button>
-				<button class="w-7 h-7 rounded hover:bg-slate-100 text-slate-600 font-medium text-xs flex items-center justify-center transition-colors">3</button>
+				{#each numerosPagina as n (n)}
+					<button type="button" onclick={() => irAPagina(n)} aria-current={n === paginaActual ? 'page' : undefined} class={`w-8 h-8 sm:w-7 sm:h-7 rounded text-xs flex items-center justify-center transition-colors ${n === paginaActual ? 'bg-blue-600 text-white font-bold shadow-sm' : 'hover:bg-slate-100 text-slate-600 font-medium'}`}>{n}</button>
+				{/each}
 
-				<button class="w-7 h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors" aria-label="Página siguiente">
+				<button type="button" onclick={() => irAPagina(paginaActual + 1)} disabled={paginaActual === totalPaginas} class="w-8 h-8 sm:w-7 sm:h-7 rounded border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors disabled:text-slate-300 disabled:hover:bg-transparent disabled:cursor-not-allowed" aria-label="Página siguiente">
 					<i class="fas fa-chevron-right text-[10px]"></i>
 				</button>
-				<button class="hidden sm:flex w-7 h-7 rounded border border-slate-200 items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors" aria-label="Última página">
+				<button type="button" onclick={() => irAPagina(totalPaginas)} disabled={paginaActual === totalPaginas} class="hidden sm:flex w-7 h-7 rounded border border-slate-200 items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors disabled:text-slate-300 disabled:hover:bg-transparent disabled:cursor-not-allowed" aria-label="Última página">
 					<i class="fas fa-step-forward text-[10px]"></i>
 				</button>
 			</div>
