@@ -257,6 +257,26 @@ async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCo
 	return resultado;
 }
 
+/** Filtro del buscador del listado: además de N° documento/responsable/observaciones, busca por el NOMBRE del
+ * proyecto y del cliente (lo que se ve en la columna "Proyecto / Cliente / Prestatario") — a pedido del usuario:
+ * buscar "Barranco" no encontraba nada. PostgREST no deja filtrar por una tabla embebida dentro de un .or(), así
+ * que primero se buscan los ids de proyectos/clientes que coinciden (mismo patrón que el ticket #49 en
+ * centroCostos.service.ts) y se agregan al .or() como columnas normales. */
+async function filtroBusqueda(client: SupabaseClient, search: string): Promise<string> {
+	const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
+	const patron = `%${escaped}%`;
+	const [{ data: proyectos }, { data: clientes }] = await Promise.all([
+		client.from('proyecto').select('id_proyecto').ilike('nombre_proyecto', patron).limit(500),
+		client.from('cliente').select('id_cliente').ilike('nombre', patron).limit(500)
+	]);
+	const filtros: string[] = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.${patron}`);
+	const idsProyecto = (proyectos ?? []).map((p: any) => p.id_proyecto);
+	const idsCliente = (clientes ?? []).map((c: any) => c.id_cliente);
+	if (idsProyecto.length) filtros.push(`id_proyecto.in.(${idsProyecto.join(',')})`);
+	if (idsCliente.length) filtros.push(`id_cliente.in.(${idsCliente.join(',')})`);
+	return filtros.join(',');
+}
+
 export async function getCuentasCobrar(client: SupabaseClient, params: ListParams = {}): Promise<ListResult<CuentaCobrar>> {
 	const page = Math.max(1, Math.floor(params.page ?? 1));
 	const pageSize = Math.max(1, Math.floor(params.pageSize ?? DEFAULT_PAGE_SIZE));
@@ -275,11 +295,7 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 		.range(from, to);
 
 	const search = params.search?.trim();
-	if (search) {
-		const escaped = search.replace(/[%_]/g, (m) => `\\${m}`);
-		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
-		query = query.or(orFilter);
-	}
+	if (search) query = query.or(await filtroBusqueda(client, search));
 	query = params.soloEliminados ? query.eq('activo', false) : query.eq('activo', true);
 	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
 	query = aplicarFiltroCentroCosto(query, params.idsCentroCosto, params.incluirSinCentroCosto);
@@ -321,11 +337,7 @@ export async function getMontoFiltrado(
 	let query = client.from(TABLE_NAME).select(CAMPO_MONTO).eq('activo', true);
 
 	const trimmed = search.trim();
-	if (trimmed) {
-		const escaped = trimmed.replace(/[%_]/g, (m) => `\\${m}`);
-		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
-		query = query.or(orFilter);
-	}
+	if (trimmed) query = query.or(await filtroBusqueda(client, trimmed));
 	query = applyColumnFilters(query, FIELDS_CONFIG, columnFilters);
 	query = aplicarFiltroCentroCosto(query, idsCentroCosto, incluirSinCentroCosto);
 
