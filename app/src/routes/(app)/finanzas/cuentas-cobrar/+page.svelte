@@ -1023,7 +1023,7 @@
 				type="text"
 				value={searchInput}
 				oninput={(e) => onSearchInput((e.target as HTMLInputElement).value)}
-				placeholder="Buscar por N° documento, responsable..."
+				placeholder="Buscar por proyecto, cliente, N° documento..."
 				class="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
 			/>
 			{#if searchInput}
