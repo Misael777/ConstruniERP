@@ -28,3 +28,6 @@ vite.config.ts.timestamp-*
 # Frames de origen de la animación de carga (Snoopy) — sin optimizar, solo el WebP final va a static/
 assets/Animacion_loading_frames/
 assets/Animacion_loading_frames_rmbkg/
+
+# Archivos temporales de Office (se crean mientras un .docx/.xlsx está abierto)
+~$*

@@ -42,6 +42,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getSaldosCuentaBanco, getMonedasCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { formatearFechaCorta } from '$lib/shared/pdfFormatoUtil';
+	import { getUltimasAperturasPorCuentaBanco } from '$lib/modules/control-financiero/services/conciliacion.service';
 	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
 	import { generarReciboPagoProveedorBase64, construirHtmlCompleto as construirHtmlReciboProveedor, type DatosReciboPagoProveedor } from '$lib/shared/reciboPagoProveedor';
@@ -93,7 +94,9 @@
 		transaccion: Transaccion | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
-		onSaved: () => void;
+		/** Ticket #83: en el guardado principal recibe la transacción guardada y si fue recién creada (para
+		 * abrir "Detalle de Transacción"). Los demás llamadores pueden ignorar el argumento. */
+		onSaved: (guardada?: { transaccion: Transaccion | null; creada: boolean }) => void;
 		/** Cuando se pasa, reemplaza el alta/edición normal: se usa para el flujo "confirmar cobro/pago"
 		 * (ver +page.svelte de cuentas-cobrar/cuentas-pagar) donde esta transacción es la prueba
 		 * obligatoria de un cobro/pago que recién pasa a 'cobrado'/'pagado' — crearla aquí Y enlazarla
@@ -1302,6 +1305,16 @@
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
 		if (key === 'medio_pago') medioPagoAuto = false;
+		// Ticket #89: elegir una cuenta bancaria (no de efectivo) con Medio de Pago "Efectivo" lo cambia a
+		// "Transferencia bancaria" — ver efectivoPrimero.
+		if ((key === 'cuente_destino' || key === 'cuente_origen') && masked && String(formValues.medio_pago ?? '') === '1') {
+			const etiqueta = (dynamicOptions.cuenta_banco || []).find((o) => o.value === masked)?.label ?? '';
+			if (etiqueta && !/efectivo/i.test(etiqueta)) {
+				formValues = { ...formValues, medio_pago: '2' };
+				medioPagoAuto = false;
+				toast.info('Elegiste una cuenta bancaria: el Medio de pago cambió a "Transferencia bancaria".');
+			}
+		}
 		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) y, si el proyecto es de
 		// Obra, también del Centro de Costo elegido (ver esProyectoDeObra) — si cualquiera de los tres
 		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
@@ -1823,7 +1836,12 @@
 	// formateaba en Soles (ver formatCurrency), sin importar la moneda real. Ver getMonedasCuentaBanco/
 	// simboloMonedaCuenta más abajo.
 	let monedasCuentaBanco = $state<Record<string, string>>({});
+	// Ticket #90: Apertura Financiera vigente por cuenta bancaria (ver avisoApertura).
+	let aperturasCuentaBanco = $state<Record<string, { monto: number; fecha_corte: string }>>({});
 	async function cargarSaldos() {
+		getUltimasAperturasPorCuentaBanco(supabase)
+			.then((m) => (aperturasCuentaBanco = m))
+			.catch((err) => console.warn('[TransaccionModal] No se pudieron cargar las aperturas financieras:', err));
 		try {
 			const [cuentas, centros, monedas] = await Promise.all([getSaldosCuentaBanco(supabase), getSaldosCentroCosto(supabase), getMonedasCuentaBanco(supabase)]);
 			saldosCuentaBanco = cuentas;
@@ -2323,6 +2341,34 @@
 	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
 		return opciones.filter((o) => /efectivo/i.test(o.label));
 	}
+	/** Ticket #89: con Medio de Pago "Efectivo" antes SOLO se ofrecían las cuentas de efectivo, y al editar un
+	 * adelanto que había quedado en Efectivo no aparecía la cuenta bancaria real (había que adivinar que primero
+	 * se cambiaba el Medio de Pago). Ahora van primero las de efectivo y después las bancarias; si se elige una
+	 * bancaria, el Medio de Pago pasa solo a "Transferencia bancaria" (ver handleInput), así nunca se guarda
+	 * Efectivo con una cuenta bancaria. */
+	/** Ticket #90: si la fecha de la transacción es igual o anterior al corte de la Apertura Financiera de alguna
+	 * de sus cuentas bancarias, el movimiento se guarda pero NO cambia el saldo de esa cuenta (el saldo de
+	 * apertura ya lo incluye, ver fn_recalcular_saldo_cuenta_banco). Pasaba al cargar ventas antiguas con su
+	 * fecha real después de registrar una apertura: el saldo "no se actualizaba". */
+	const avisoApertura = $derived.by(() => {
+		const fecha = String(formValues.fecha ?? '').slice(0, 10);
+		if (!fecha) return '';
+		const avisos: string[] = [];
+		for (const numero of [formValues.cuente_origen, formValues.cuente_destino]) {
+			const n = String(numero ?? '').trim();
+			const apertura = n ? aperturasCuentaBanco[n] : undefined;
+			if (!apertura || fecha > apertura.fecha_corte) continue;
+			const etiqueta = (dynamicOptions.cuenta_banco || []).find((o) => o.value === n)?.label ?? n;
+			avisos.push(`"${etiqueta}" (apertura al ${formatearFechaCorta(apertura.fecha_corte)})`);
+		}
+		return avisos.length
+			? `Esta fecha es igual o anterior a la Apertura Financiera de ${avisos.join(' y ')}: la transacción se guarda, pero no cambia el saldo de esa cuenta, porque el saldo de apertura ya debería incluirla.`
+			: '';
+	});
+	function efectivoPrimero(opciones: FieldOption[]): FieldOption[] {
+		const efectivo = filtrarCuentasEfectivo(opciones);
+		return [...efectivo, ...opciones.filter((o) => !efectivo.includes(o))];
+	}
 	/** A pedido explícito del usuario: "Cuenta Origen"/"Cuenta Destino" solo ofrecen las cuentas
 	 * bancarias de la MISMA moneda que "Tipo de Moneda" (ver monedasCuentaBanco/getMonedasCuentaBanco)
 	 * — con Soles, solo cuentas en soles; con Dólares, solo cuentas en dólares. Si el valor ya elegido
@@ -2498,13 +2544,13 @@
 			// qué compartir la moneda del origen. Fuera de Interna (Externa+Ingreso), se mantiene el filtro
 			// por moneda de siempre.
 			const todas = bloqueadoPorInterna ? dynamicOptions.cuenta_banco || [] : filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_destino);
-			return medioPagoEsEfectivo ? filtrarCuentasEfectivo(todas) : todas;
+			return medioPagoEsEfectivo ? efectivoPrimero(todas) : todas;
 		}
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
 			const todas = filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_origen);
 			// Efectivo: solo cuentas de caja chica/fondo (ver filtrarCuentasEfectivo) — manda sobre el
 			// filtro de "cuentas que recibieron algún Ingreso" de abajo, no se combinan.
-			if (medioPagoEsEfectivo) return filtrarCuentasEfectivo(todas);
+			if (medioPagoEsEfectivo) return efectivoPrimero(todas);
 			// Egreso Y Transacción Interna: prioriza las cuentas que recibieron algún Ingreso de este
 			// Centro de Costo Origen (ver cuentasBancoIngresosOrigen) — si esa lista sale vacía (el centro
 			// nunca recibió ningún Ingreso), cae de vuelta a TODAS las cuentas registradas, para no dejar
@@ -3009,7 +3055,7 @@
 					cargarDraft(colaIndex);
 				} else {
 					toast.success(result.message ?? 'Operación realizada con éxito');
-					onSaved();
+					onSaved({ transaccion: (result.data as Transaccion | undefined) ?? null, creada: mode === 'create' });
 					onClose();
 					// Ver editandoPrestamo/redirigirAEditarCuentaPrestamo más arriba — la transacción ya se
 					// actualizó, esto solo abre (mejor esfuerzo, nunca bloquea ni deshace lo ya guardado) la
@@ -3117,7 +3163,7 @@
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 {:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
-			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas de Efectivo registradas (Finanzas → Cuentas Bancarias).</p>
+			<p class="mt-1 text-xs text-slate-400">Primero las cuentas de Efectivo; si eliges una cuenta bancaria, el Medio de pago pasa a "Transferencia bancaria".</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
 			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
@@ -3434,6 +3480,9 @@
 											<p class="mt-1 text-xs text-red-600">{fieldErrors.fecha}</p>
 										{:else if fechaLocked}
 											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
+										{/if}
+										{#if avisoApertura}
+											<p class="mt-1 rounded-md bg-amber-50 border border-amber-200 px-2 py-1 text-xs text-amber-800">{avisoApertura}</p>
 										{/if}
 									</div>
 									<div>

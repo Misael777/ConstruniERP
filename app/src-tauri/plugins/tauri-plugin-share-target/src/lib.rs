@@ -27,6 +27,17 @@ pub struct PendingShare {
     pub mime_type: String,
 }
 
+/// Ticket #83: contenido a ENVIAR con el Share Sheet de Android (WhatsApp, correo, etc.) — el
+/// comprobante (base64, opcional) y el mensaje. Ver SharePlugin.compartir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompartirPayload {
+    pub texto: Option<String>,
+    pub data: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
+}
+
 pub trait ShareTargetExt<R: Runtime> {
     fn share_target(&self) -> &ShareTarget<R>;
 }
@@ -39,7 +50,7 @@ impl<R: Runtime, T: Manager<R>> ShareTargetExt<R> for T {
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("share-target")
-        .invoke_handler(tauri::generate_handler![commands::get_pending_share])
+        .invoke_handler(tauri::generate_handler![commands::get_pending_share, commands::compartir])
         .setup(|app, api| {
             #[cfg(mobile)]
             let share_target = mobile::init(app, api)?;

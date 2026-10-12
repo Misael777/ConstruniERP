@@ -317,25 +317,28 @@
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		{#each items as item (item.id_cuenta_banco)}
-			<div class="flex items-center gap-3 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
-				<div class="w-10 h-10 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+			<!-- Ticket #76 (rechazo): en celular todo iba en una fila — los nombres se cortaban ("E…", "Tit…") y el CCI
+			     se montaba sobre "Autorizado". Ahora en celular: nombre + acciones arriba (el nombre baja de línea),
+			     los datos a todo el ancho y abajo estado, saldo y fecha. En pantallas grandes queda igual que antes. -->
+			<div class="flex flex-wrap sm:flex-nowrap items-start sm:items-center gap-x-3 gap-y-2 p-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
+				<div class="order-1 w-10 h-10 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
 					<Landmark size={18} />
 				</div>
-				<div class="flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 truncate">{item.nombre_banco} — {item.numero_cuenta}</p>
-					<p class="text-xs text-slate-500 truncate">Titular: {item.titular_cuenta} · {getOptionLabel(tipoCuentaField, item.tipo_cuenta)} · {getOptionLabel(tipoMonedaField, item.tipo_moneda)}</p>
-					{#if item.cci_cuenta}<p class="text-[11px] text-slate-400">CCI: {item.cci_cuenta}</p>{/if}
+				<div class="order-2 flex-1 min-w-0">
+					<p class="font-semibold text-slate-800 break-words sm:truncate">{item.nombre_banco} — {item.numero_cuenta}</p>
+					<p class="text-xs text-slate-500 break-words sm:truncate">Titular: {item.titular_cuenta} · {getOptionLabel(tipoCuentaField, item.tipo_cuenta)} · {getOptionLabel(tipoMonedaField, item.tipo_moneda)}</p>
+					{#if item.cci_cuenta}<p class="text-[11px] text-slate-400 break-all">CCI: {item.cci_cuenta}</p>{/if}
 				</div>
-				<div class="text-right shrink-0">
+				<div class="order-4 sm:order-3 basis-full sm:basis-auto pl-[52px] sm:pl-0 flex flex-wrap sm:block items-center gap-x-3 gap-y-1 sm:text-right shrink-0">
 					<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 						{getOptionLabel(estadoField, item.estado)}
 					</span>
-					<p class={`text-sm font-bold mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatSaldo(item.saldo_inicial, item.tipo_moneda)}">
+					<p class={`text-sm font-bold sm:mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatSaldo(item.saldo_inicial, item.tipo_moneda)}">
 						{formatSaldo(item.saldo_actual, item.tipo_moneda)}
 					</p>
 					<p class="text-[11px] text-slate-400">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
 				</div>
-				<div class="flex items-center gap-1 shrink-0 ml-2">
+				<div class="order-3 sm:order-4 flex items-center gap-1 shrink-0 sm:ml-2">
 					{#if verEliminados}
 						<button type="button" onclick={() => handleRestaurar(item)} class="p-1.5 rounded-lg text-slate-500 hover:bg-emerald-50 hover:text-emerald-600" title="Restaurar" aria-label="Restaurar">
 							<RotateCcw size={16} />

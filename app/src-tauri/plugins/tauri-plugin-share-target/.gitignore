@@ -1,0 +1,6 @@
+# Artefactos de compilación (Rust y Android/Gradle): se regeneran en cada build. Antes estaban
+# versionados (~1500 archivos) y una ruta demasiado larga rompía "git add" en Windows.
+/target/
+/android/build/
+/android/.tauri/
+.gradle/

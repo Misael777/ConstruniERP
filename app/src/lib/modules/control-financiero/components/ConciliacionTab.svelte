@@ -25,6 +25,7 @@
 		type SaldoDetalleEntidad
 	} from '../services/conciliacion.service';
 	import { Scale, Landmark, Building2, RefreshCw, ShieldCheck, ShieldAlert, Archive } from '@lucide/svelte';
+	import PuntosCorte from './PuntosCorte.svelte';
 
 	let loading = $state(true);
 	let saldoCentros = $state(0);
@@ -165,6 +166,10 @@
 	const diferenciaLote = $derived(Number((totalCentrosLote - totalCuentasLote).toFixed(2)));
 	const loteCuadra = $derived(Math.abs(diferenciaLote) <= 0.01);
 	const puedeGenerarApertura = $derived(loteCuadra && !!fechaCorte && !generandoApertura);
+	// Puntos de corte: un corte con fecha anterior al más reciente NO lo reemplaza (manda el de fecha más
+	// reciente) — se avisa antes de generarlo, que fue justo la confusión del cliente (2026-10-11).
+	const corteMasReciente = $derived(aperturas.reduce((max, a) => (String(a.fecha_corte).slice(0, 10) > max ? String(a.fecha_corte).slice(0, 10) : max), ''));
+	const corteNoMandara = $derived(!!fechaCorte && !!corteMasReciente && fechaCorte < corteMasReciente);
 
 	async function handleGenerarApertura() {
 		if (!puedeGenerarApertura) return;
@@ -328,6 +333,11 @@
 			<div class="flex flex-col gap-1">
 				<label for="af-fecha" class="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Fecha de Corte</label>
 				<input id="af-fecha" type="date" bind:value={fechaCorte} class="px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+				{#if corteNoMandara}
+					<p class="rounded-md bg-amber-50 border border-amber-200 px-2 py-1 text-[11px] text-amber-800">
+						Ya existe un corte al {corteMasReciente.split('-').reverse().join('/')}, más reciente: ese seguirá mandando y este no cambiará los saldos. Elimina o cambia la fecha de ese corte en "Puntos de corte" (abajo).
+					</p>
+				{/if}
 				<p class="text-[10px] text-slate-400">Fecha "a la cual" estos montos se consideran correctos — un ancla histórica, no se recalcula después.</p>
 			</div>
 			<div class="flex flex-col gap-1">
@@ -428,39 +438,10 @@
 			</div>
 		</div>
 
-		<div class="overflow-x-auto">
-			<table class="w-full text-xs text-left whitespace-nowrap">
-				<thead class="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide text-[10px]">
-					<tr>
-						<th class="px-3 py-2.5">Fecha de Corte</th>
-						<th class="px-3 py-2.5 text-right">Monto</th>
-						<th class="px-3 py-2.5">Ámbito</th>
-						<th class="px-3 py-2.5">Fuente</th>
-						<th class="px-3 py-2.5">Observaciones</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-slate-100">
-					{#each aperturas as a (a.id_apertura)}
-						<tr class="hover:bg-slate-50/70">
-							<td class="px-3 py-2">{a.fecha_corte}</td>
-							<td class="px-3 py-2 text-right">{formatCurrency(a.monto)}</td>
-							<td class="px-3 py-2">
-								{#if a.id_cuenta_banco}
-									{cuentasParaApertura.find((c) => c.id_cuenta_banco === a.id_cuenta_banco)?.numero_cuenta ?? `Cuenta #${a.id_cuenta_banco}`}
-								{:else if a.id_centro_costo}
-									{centroCostoOptions.find((c) => c.value === String(a.id_centro_costo))?.label ?? `Centro de Costo #${a.id_centro_costo}`}
-								{:else}
-									Global
-								{/if}
-							</td>
-							<td class="px-3 py-2">{FUENTE_LABELS[a.fuente]}</td>
-							<td class="px-3 py-2 text-slate-500">{a.observaciones ?? '—'}</td>
-						</tr>
-					{:else}
-						<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400">Sin aperturas registradas todavía.</td></tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+	</div>
+
+	<!-- ── Puntos de corte (historial agrupado, qué corte manda, gráfico por cuenta) ─────────────── -->
+	<div class="mt-6">
+		<PuntosCorte {aperturas} cuentas={cuentasParaApertura} {centroCostoOptions} onCambio={cargar} />
 	</div>
 {/if}

@@ -8,7 +8,7 @@
 	 * un solo webp de 164×320 escalado (borroso) con el anillo azul y la sombra incrustados en la imagen.
 	 *   - /snoopy-salto.webp: un cuadro limpio de la animación original (463×577, transparente).
 	 *   - /logo-isotipo.png: el logo de /logo.png sin su cuadro azul.
-	 * El salto y el giro del anillo son CSS (se respetan los ajustes de "reducir movimiento").
+	 * El salto y el giro del anillo son CSS.
 	 *
 	 * `size`: 'lg' para pantallas completas (arranque de la app, login); 'sm' para la tarjeta flotante de
 	 * LoadingOverlay.svelte — 20% más grande que antes, a pedido del cliente para la app de escritorio.
@@ -43,17 +43,29 @@
 </div>
 
 <style>
+	/* Ticket #58 (rechazo "falta que salte"): el salto era sutil (7%) y además se apagaba con el ajuste
+	   "reducir animaciones" del celular/Windows. Ahora es un salto claro, con un leve aplastamiento al caer,
+	   y se mantiene siempre: es la propia señal de "cargando". */
 	.snoopy-salto {
-		animation: snoopy-salto 0.6s ease-in-out infinite;
+		animation: snoopy-salto 0.7s cubic-bezier(0.33, 0, 0.67, 1) infinite;
 		transform-origin: 50% 100%;
+		will-change: transform;
 	}
 	@keyframes snoopy-salto {
-		0%,
-		100% {
-			transform: translateY(0) scaleY(0.98);
+		0% {
+			transform: translateY(0) scale(1.04, 0.94);
+		}
+		12% {
+			transform: translateY(0) scale(1, 1);
 		}
 		50% {
-			transform: translateY(-7%) scaleY(1);
+			transform: translateY(-18%) scale(0.98, 1.03);
+		}
+		88% {
+			transform: translateY(0) scale(1, 1);
+		}
+		100% {
+			transform: translateY(0) scale(1.04, 0.94);
 		}
 	}
 	.anillo-carga {
@@ -63,14 +75,6 @@
 	@keyframes anillo-giro {
 		to {
 			transform: rotate(360deg);
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.snoopy-salto {
-			animation: none;
-		}
-		.anillo-carga {
-			animation-duration: 2.5s;
 		}
 	}
 </style>

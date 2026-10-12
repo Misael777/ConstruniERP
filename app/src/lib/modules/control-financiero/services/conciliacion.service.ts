@@ -97,6 +97,25 @@ export async function getUltimasAperturasPorCentroCosto(client: SupabaseClient):
 	return mapa;
 }
 
+/** Ticket #90: fecha de corte de la Apertura Financiera vigente (la más reciente) de cada cuenta bancaria,
+ * por número de cuenta — fn_recalcular_saldo_cuenta_banco solo suma los movimientos POSTERIORES a esa fecha,
+ * así que TransaccionModal avisa cuando una transacción queda en o antes del corte (no cambia el saldo). */
+export async function getUltimasAperturasPorCuentaBanco(client: SupabaseClient): Promise<Record<string, { monto: number; fecha_corte: string }>> {
+	const [{ data: aperturas, error }, { data: cuentas, error: errorCuentas }] = await Promise.all([
+		client.from('apertura_financiera').select('id_cuenta_banco, monto, fecha_corte, created_at').not('id_cuenta_banco', 'is', null).order('fecha_corte', { ascending: false }).order('created_at', { ascending: false }),
+		client.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta')
+	]);
+	if (error) throw error;
+	if (errorCuentas) throw errorCuentas;
+	const numeroPorId = new Map((cuentas ?? []).map((c: any) => [c.id_cuenta_banco, c.numero_cuenta as string]));
+	const mapa: Record<string, { monto: number; fecha_corte: string }> = {};
+	for (const fila of (aperturas ?? []) as any[]) {
+		const numero = numeroPorId.get(fila.id_cuenta_banco);
+		if (numero && !(numero in mapa)) mapa[numero] = { monto: Number(fila.monto), fecha_corte: String(fila.fecha_corte).slice(0, 10) };
+	}
+	return mapa;
+}
+
 export interface SaldoDetalleEntidad {
 	id: string;
 	label: string;
@@ -389,4 +408,119 @@ export async function crearAperturaFinancieraLote(client: SupabaseClient, payloa
 		message: `Corte financiero registrado — ${filas.length} fila(s) (${payload.cuentas.length} cuenta(s), ${payload.centros.length} centro(s) de costo).`,
 		data: data as AperturaFinanciera[]
 	};
+}
+
+// ── Puntos de corte (Apertura Financiera agrupada) ─────────────────────────────────────────────────────
+// A pedido del cliente (2026-10-11): "Generar Apertura" AGREGA un corte nuevo; no reemplaza los anteriores.
+// Para cada cuenta/centro manda el corte de fecha MÁS RECIENTE (ver fn_recalcular_saldo_cuenta_banco y
+// getUltimasAperturasPorCentroCosto), así que generar un corte al 01/01/2025 después de uno al 11/10/2026
+// no tenía ningún efecto y el cliente no lo podía ver. Esto agrupa las filas por fecha de corte, marca cuál
+// manda y permite cambiar la fecha o eliminar un corte completo (la pantalla pide contraseña de admin).
+
+export interface CorteResumen {
+	fecha_corte: string;
+	filas: number;
+	cuentas: number;
+	centros: number;
+	totalCuentas: number;
+	totalCentros: number;
+	/** En cuántas cuentas/centros este corte es el que manda (el de fecha más reciente de cada uno). */
+	vigenteEn: number;
+	creadoPrimero: string;
+	creadoUltimo: string;
+	usuarios: string[];
+	fuente: FuenteApertura;
+	observaciones: string | null;
+}
+
+const claveAmbito = (a: AperturaFinanciera) => (a.id_cuenta_banco ? `b:${a.id_cuenta_banco}` : a.id_centro_costo ? `c:${a.id_centro_costo}` : 'global');
+
+/** Para cada cuenta/centro, la fila de apertura que manda (fecha_corte más reciente; empate por created_at). */
+export function aperturasVigentes(aperturas: AperturaFinanciera[]): Map<string, AperturaFinanciera> {
+	const vigentes = new Map<string, AperturaFinanciera>();
+	for (const a of aperturas) {
+		const k = claveAmbito(a);
+		const actual = vigentes.get(k);
+		if (!actual || a.fecha_corte > actual.fecha_corte || (a.fecha_corte === actual.fecha_corte && a.created_at > actual.created_at)) vigentes.set(k, a);
+	}
+	return vigentes;
+}
+
+export function agruparCortes(aperturas: AperturaFinanciera[]): CorteResumen[] {
+	const vigentes = new Set([...aperturasVigentes(aperturas).values()].map((a) => a.id_apertura));
+	const grupos = new Map<string, CorteResumen>();
+	for (const a of aperturas) {
+		const fecha = String(a.fecha_corte).slice(0, 10);
+		const g = grupos.get(fecha) ?? {
+			fecha_corte: fecha, filas: 0, cuentas: 0, centros: 0, totalCuentas: 0, totalCentros: 0, vigenteEn: 0,
+			creadoPrimero: a.created_at, creadoUltimo: a.created_at, usuarios: [], fuente: a.fuente, observaciones: a.observaciones
+		};
+		g.filas++;
+		if (a.id_cuenta_banco) { g.cuentas++; g.totalCuentas += Number(a.monto); }
+		if (a.id_centro_costo) { g.centros++; g.totalCentros += Number(a.monto); }
+		if (vigentes.has(a.id_apertura)) g.vigenteEn++;
+		if (a.created_at < g.creadoPrimero) g.creadoPrimero = a.created_at;
+		if (a.created_at > g.creadoUltimo) g.creadoUltimo = a.created_at;
+		if (a.usuario_registro && !g.usuarios.includes(a.usuario_registro)) g.usuarios.push(a.usuario_registro);
+		grupos.set(fecha, g);
+	}
+	return [...grupos.values()].sort((x, y) => (x.fecha_corte < y.fecha_corte ? 1 : -1));
+}
+
+async function recalcularCuentasDeIds(client: SupabaseClient, ids: number[]): Promise<void> {
+	if (ids.length === 0) return;
+	const { data } = await client.from('cuenta_banco').select('numero_cuenta').in('id_cuenta_banco', ids);
+	await Promise.all((data ?? []).map((c: any) => recalcularSaldoCuentaBanco(client, c.numero_cuenta)));
+}
+
+/** Elimina TODAS las filas de un corte (misma fecha_corte) y recalcula el saldo de las cuentas afectadas:
+ * pasa a mandar el corte anterior de cada una (o, si no queda ninguno, su saldo inicial + todo el historial). */
+export async function eliminarCorte(client: SupabaseClient, fechaCorte: string): Promise<ServiceResult<number>> {
+	const { data, error } = await client.from('apertura_financiera').delete().eq('fecha_corte', fechaCorte).select('id_cuenta_banco');
+	if (error) return { success: false, message: `No se pudo eliminar el corte: ${error.message}` };
+	const ids = [...new Set((data ?? []).map((f: any) => f.id_cuenta_banco).filter((v: unknown): v is number => v != null))];
+	await recalcularCuentasDeIds(client, ids);
+	return { success: true, message: `Corte del ${fechaCorte.split('-').reverse().join('/')} eliminado (${data?.length ?? 0} registros).`, data: data?.length ?? 0 };
+}
+
+/** Mueve un corte completo a otra fecha (mismos montos) y recalcula el saldo de las cuentas afectadas. */
+export async function cambiarFechaCorte(client: SupabaseClient, fechaActual: string, fechaNueva: string): Promise<ServiceResult<number>> {
+	if (!fechaNueva || fechaNueva === fechaActual) return { success: false, message: 'Elige una fecha distinta.' };
+	const { data: existentes } = await client.from('apertura_financiera').select('id_apertura').eq('fecha_corte', fechaNueva).limit(1);
+	if ((existentes ?? []).length > 0) return { success: false, message: 'Ya existe un corte en esa fecha: elimínalo primero o elige otra fecha.' };
+	const { data, error } = await client.from('apertura_financiera').update({ fecha_corte: fechaNueva }).eq('fecha_corte', fechaActual).select('id_cuenta_banco');
+	if (error) return { success: false, message: `No se pudo cambiar la fecha del corte: ${error.message}` };
+	const ids = [...new Set((data ?? []).map((f: any) => f.id_cuenta_banco).filter((v: unknown): v is number => v != null))];
+	await recalcularCuentasDeIds(client, ids);
+	return { success: true, message: `Corte movido al ${fechaNueva.split('-').reverse().join('/')}.`, data: data?.length ?? 0 };
+}
+
+export interface MovimientoCuenta {
+	id_transaccion: number;
+	fecha: string;
+	/** + entra a la cuenta, − sale. */
+	monto: number;
+	descripcion: string | null;
+}
+
+/** Movimientos activos de una cuenta bancaria (para el gráfico de "Puntos de corte"). */
+export async function getMovimientosCuentaBanco(client: SupabaseClient, numeroCuenta: string): Promise<MovimientoCuenta[]> {
+	// Dos consultas (origen y destino) en vez de .or(): los números de cuenta tienen espacios ("192 97436464068").
+	const columnas = 'id_transaccion, fecha, monto_total, cuente_origen, cuente_destino, descripcion';
+	const [salen, entran] = await Promise.all([
+		client.from('transaccion').select(columnas).eq('estado', 'activo').eq('cuente_origen', numeroCuenta),
+		client.from('transaccion').select(columnas).eq('estado', 'activo').eq('cuente_destino', numeroCuenta)
+	]);
+	if (salen.error) throw salen.error;
+	if (entran.error) throw entran.error;
+	const porId = new Map<number, any>();
+	for (const t of [...(salen.data ?? []), ...(entran.data ?? [])]) porId.set(t.id_transaccion, t);
+	return [...porId.values()]
+		.map((t: any) => ({
+			id_transaccion: t.id_transaccion,
+			fecha: String(t.fecha).slice(0, 10),
+			monto: (t.cuente_destino === numeroCuenta ? Number(t.monto_total) : 0) - (t.cuente_origen === numeroCuenta ? Number(t.monto_total) : 0),
+			descripcion: t.descripcion ?? null
+		}))
+		.sort((x, y) => (x.fecha === y.fecha ? x.id_transaccion - y.id_transaccion : x.fecha < y.fecha ? -1 : 1));
 }
