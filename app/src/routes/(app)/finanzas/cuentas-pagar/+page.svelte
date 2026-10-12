@@ -12,7 +12,7 @@
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
-	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
+	import { getOptionLabel, formatCurrency, emptyColumnFilters, hasActiveColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-pagar/config/cuentaPagar.config';
 	import {
 		getCuentasPagar,
@@ -58,6 +58,15 @@
 	// tiene RLS real, este guard (isAdmin()) es solo de UI.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
+	// Ticket #87: "Prioridad" no es columna (se dibuja como insignia), pero se ofrece en "Filtros" justo debajo
+	// de "Estado", como pidió el cliente.
+	const filterFields = (() => {
+		const prioridad = FIELDS_CONFIG.find((f) => f.key === 'prioridad');
+		if (!prioridad) return tableFields;
+		const i = tableFields.findIndex((f) => f.key === 'estado');
+		const conPrioridad = { ...prioridad, filterable: true };
+		return i === -1 ? [...tableFields, conPrioridad] : [...tableFields.slice(0, i + 1), conPrioridad, ...tableFields.slice(i + 1)];
+	})();
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
 	const estadoBadgeClass: Record<string, string> = {
 		pendiente: 'bg-amber-100 text-amber-700',
@@ -189,6 +198,25 @@
 
 	function toggleTipoFilter(tipo: TipoFiltroCC) {
 		tipoFilter = tipoFilter === tipo ? null : tipo;
+		pageNum = 1;
+		fetchList();
+		fetchMontoFiltrado();
+	}
+
+	// Ticket #84: un solo botón para volver a la vista inicial — tipo (Consultoría/Obra/Otros), búsqueda,
+	// filtros de columna y orden. Antes "Limpiar filtros" solo limpiaba los de columna y estaba al final
+	// del panel, fuera de la pantalla.
+	const hayFiltrosActivos = $derived(
+		tipoFilter !== null || searchInput.trim() !== '' || hasActiveColumnFilters(columnFilters) || sortBy !== DEFAULT_SORT_FIELD || sortDir !== DEFAULT_SORT_DIR
+	);
+	function limpiarTodo() {
+		clearTimeout(debounceTimer);
+		tipoFilter = null;
+		searchInput = '';
+		search = '';
+		columnFilters = emptyColumnFilters(filterFields);
+		sortBy = DEFAULT_SORT_FIELD;
+		sortDir = DEFAULT_SORT_DIR;
 		pageNum = 1;
 		fetchList();
 		fetchMontoFiltrado();
@@ -912,6 +940,7 @@
 					<Briefcase size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+				{#if tipoFilter === 'consultoria'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 			<button
 				type="button"
@@ -922,6 +951,7 @@
 					<HardHat size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Obra</span>
+				{#if tipoFilter === 'proyecto'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 			<button
 				type="button"
@@ -932,6 +962,7 @@
 					<Ellipsis size={14} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Otros</span>
+				{#if tipoFilter === 'otro'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 		</div>
 	{/if}
@@ -1005,7 +1036,7 @@
 
 	<!-- A pedido del usuario: Filtros, búsqueda y orden en una sola línea (en pantallas angostas bajan solos). -->
 	<div class="mb-4 flex flex-wrap items-center gap-2">
-		<ColumnFilterBar flotante fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
+		<ColumnFilterBar flotante fields={filterFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
 		<div class="relative w-full sm:w-72">
 			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
@@ -1038,23 +1069,28 @@
 		>
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>
+		{#if hayFiltrosActivos}
+			<button type="button" onclick={limpiarTodo} class="flex items-center gap-1 px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-sm font-medium text-red-600 hover:bg-red-100" title="Quitar el tipo, la búsqueda, los filtros y el orden">
+				<X size={14} /> Limpiar todo
+			</button>
+		{/if}
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
 			<div class="min-w-[1360px]">
-				<div class="grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+				<div class="grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_5.5rem_6.5rem_0.8fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
 					<span>Proveedor / Cliente / Prestamista</span>
 					<span>Centro de Costo</span>
 					<span>N° Documento</span>
 					<span>Vencimiento</span>
 					<span class="text-right">Saldo actual</span>
 					<span class="text-right">Valor Venta</span>
-					<div class="flex gap-2 pl-4">
-						<span class="flex-1">Prioridad</span>
-						<span class="flex-1">Estado</span>
-					</div>
+					<!-- Ticket #88: Prioridad y Estado compartían una sola columna (mitad cada uno) y en pantallas angostas
+					     "Pendiente" se salía de su lugar y no calzaba con el título. Ahora son dos columnas de ancho fijo. -->
+					<span>Prioridad</span>
+					<span>Estado</span>
 					<span class="text-right">Días de Retraso</span>
 					<span class="text-right">Acciones</span>
 				</div>
@@ -1062,7 +1098,7 @@
 				{#each items as item (item.id_cuenta_pagar)}
 					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.fecha_pago_programada)}
 					<div
-						class={`grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_1.1fr_0.8fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[2.2fr_1.6fr_0.9fr_0.9fr_0.9fr_0.9fr_5.5rem_6.5rem_0.8fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_pagar ? 'bg-blue-100 hover:bg-blue-100' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -1083,19 +1119,17 @@
 						<div class="text-sm text-slate-600 whitespace-nowrap">{formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}</div>
 						<div class="text-right font-semibold text-slate-700 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
 						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
-						<div class="flex items-center gap-2 pl-4">
-							<div class="flex-1">
-								{#if item.prioridad}
-									<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
-										{getOptionLabel(prioridadField, item.prioridad)}
-									</span>
-								{/if}
-							</div>
-							<div class="flex-1">
-								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-									{getOptionLabel(estadoField, item.estado)}
+						<div class="min-w-0">
+							{#if item.prioridad}
+								<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
-							</div>
+							{/if}
+						</div>
+						<div class="min-w-0">
+							<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
+							</span>
 						</div>
 						<div class="text-right text-sm">
 							{#if retraso !== null}
