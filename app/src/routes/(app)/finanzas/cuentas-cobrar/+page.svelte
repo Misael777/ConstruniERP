@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState, puedeVerEliminados, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -339,7 +339,8 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
 			goto('/dashboard');
 			return;
 		}
@@ -991,7 +992,7 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
-			{#if isAdmin()}
+			{#if puedeVerEliminados()}
 				<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
 					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
 					{verEliminados ? 'Volver' : 'Ver eliminados'}
@@ -1106,7 +1107,7 @@
 				</div>
 
 				{#each items as item (item.id_cuenta_cobrar)}
-					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
+					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.proxima_cuota)}
 					<div
 						class={`grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_5.5rem_6.5rem_0.9fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
@@ -1134,7 +1135,7 @@
 							{/if}
 						</div>
 						<div class="min-w-0">
-							{#if item.prioridad}
+							{#if item.prioridad && item.estado !== 'pagado'}
 								<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
@@ -1182,7 +1183,7 @@
 		<!-- Mobile: tarjetas apiladas -->
 		<div class="md:hidden">
 			{#each items as item (item.id_cuenta_cobrar)}
-				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
+				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.proxima_cuota)}
 				<div
 					role="button"
 					tabindex="0"
@@ -1211,7 +1212,7 @@
 					</div>
 					<div class="flex items-center justify-between gap-2 mb-2">
 						<div class="flex items-center gap-1.5 flex-wrap">
-							{#if item.prioridad}
+							{#if item.prioridad && item.estado !== 'pagado'}
 								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
@@ -1294,6 +1295,7 @@
 	cuotas={resumenCuotas}
 	etiquetaPlan="Plan de pagos"
 	mostrarHito
+	esObra={selectedCuenta?.proyecto?.tipo_venta === 'obra'}
 	montoTotal={Number(selectedCuenta?.monto ?? 0)}
 	onClose={() => (resumenOpen = false)}
 	onEditarCuota={editarCuotaDesdeResumen}

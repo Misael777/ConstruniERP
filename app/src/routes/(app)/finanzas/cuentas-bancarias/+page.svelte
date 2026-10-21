@@ -4,7 +4,7 @@
 	import { setMobileFab } from '$lib/stores/mobileFab.svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { hasPermiso } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -97,7 +97,8 @@
 	onDestroy(setMobileFab(openCreate, 'Nueva Cuenta Bancaria'));
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_cuentas_bancarias')) {
 			goto('/dashboard');
 			return;
 		}

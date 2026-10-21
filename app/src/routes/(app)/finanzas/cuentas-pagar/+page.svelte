@@ -5,7 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState, puedeVerEliminados, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Wallet, Receipt, FileText, LayoutGrid, Lock, ShieldCheck, CreditCard, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { toast } from '$lib/stores/toast';
@@ -304,7 +304,8 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
 			goto('/dashboard');
 			return;
 		}
@@ -980,7 +981,7 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
-			{#if isAdmin()}
+			{#if puedeVerEliminados()}
 				<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
 					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
 					{verEliminados ? 'Volver' : 'Ver eliminados'}
@@ -1120,7 +1121,7 @@
 						<div class="text-right font-semibold text-slate-700 text-sm">{formatCurrency(item.saldo_pendiente)}</div>
 						<div class="text-right font-bold text-slate-800 text-sm">{formatCurrency(item.monto_comprometido)}</div>
 						<div class="min-w-0">
-							{#if item.prioridad}
+							{#if item.prioridad && item.estado !== 'pagado'}
 								<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
@@ -1195,7 +1196,7 @@
 					</div>
 					<div class="flex items-center justify-between gap-2 mb-2">
 						<div class="flex items-center gap-1.5 flex-wrap">
-							{#if item.prioridad}
+							{#if item.prioridad && item.estado !== 'pagado'}
 								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>

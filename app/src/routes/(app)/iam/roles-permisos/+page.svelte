@@ -57,7 +57,11 @@
 			id: 'configuracion', name: 'Configuración', icon: 'fas fa-cog', colorClass: 'text-slate-600 bg-slate-50 border-slate-200',
 			submodules: [
 				{ key: 'ver_iam', label: 'Control de Accesos' },
-				{ key: 'ver_roles_permisos', label: 'Roles y Permisos' }
+				{ key: 'ver_roles_permisos', label: 'Roles y Permisos' },
+				// Ticket #97: faltaba en la matriz, así que no había cómo otorgarlo a otro rol que no fuera administrador.
+				{ key: 'ver_iam_auditoria', label: 'Auditoría (sesiones, acciones y errores)' },
+				// Ticket #98: ver y restaurar registros dados de baja (eliminar permanente sigue pidiendo contraseña de admin).
+				{ key: 'ver_eliminados', label: 'Ver eliminados (registros dados de baja)' }
 			]
 		},
 		{

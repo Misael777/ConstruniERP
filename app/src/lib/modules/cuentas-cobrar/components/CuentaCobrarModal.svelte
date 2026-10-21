@@ -145,7 +145,7 @@
 	// "Estado" ya no es un select editable a mano (showInForm:false en cuentaCobrar.config.ts, se
 	// recalcula solo en el servicio) — a pedido del usuario, igual se muestra acá como vista previa en
 	// un textbox de solo lectura, con la misma fórmula que usará el servicio al guardar.
-	const estadoActual = $derived(computeEstadoCuentaCobrar(saldoPendienteReal, formValues.fecha_vencimiento || null));
+	const estadoActual = $derived(computeEstadoCuentaCobrar(saldoPendienteReal, formValues.fecha_vencimiento || null, fracciones[0]?.fecha ?? null));
 	const estadoLabel: Record<string, string> = { pendiente: 'Pendiente', pagado: 'Pagado', vencido: 'Vencido' };
 	// Mismos colores que el badge de "Estado" en la tabla del listado (+page.svelte), para consistencia.
 	const estadoTextClass: Record<string, string> = { pendiente: 'text-amber-700', pagado: 'text-emerald-700', vencido: 'text-red-700' };
@@ -291,6 +291,8 @@
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// Ticket #93: se podía poner prioridad pero no quitarla — "Sin prioridad" la deja vacía (se guarda NULL).
+		if (field.key === 'prioridad') return [{ value: '', label: 'Sin prioridad' }, ...base];
 		// Préstamo Otorgado: la única opción de "Cliente" es el cliente ya elegido, mostrado con el nombre del prestatario.
 		if (field.key === 'id_cliente' && prestatarioNombre !== null) return [{ value: formValues.id_cliente, label: prestatarioNombre || 'Prestatario' }];
 		// Flujo "Préstamo Otorgado" (clienteBloqueado, ver finanzas/cuentas-cobrar/+page.svelte): "Centro

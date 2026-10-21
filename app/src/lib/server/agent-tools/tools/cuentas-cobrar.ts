@@ -67,7 +67,7 @@ const auditarCuentasCobrar: AgentTool = {
 		if (error) throw new Error(error.message);
 		const ids = (cuentas ?? []).map((c) => c.id_cuenta_cobrar);
 		const { data: cobros, error: e2 } = ids.length
-			? await ctx.client.from('cobros').select('id_cobro, id_cuenta_cobrar, monto, estado_cobro, id_transaccion').in('id_cuenta_cobrar', ids)
+			? await ctx.client.from('cobros').select('id_cobro, id_cuenta_cobrar, monto, estado_cobro, id_transaccion, fecha_cobro').in('id_cuenta_cobrar', ids)
 			: { data: [], error: null };
 		if (e2) throw new Error(e2.message);
 		const idsTrx = (cobros ?? []).map((c) => c.id_transaccion).filter((x): x is number => x != null);
@@ -94,7 +94,8 @@ const auditarCuentasCobrar: AgentTool = {
 					if (redondear(soles) !== redondear(Number(x.monto))) add('monto_cobro_vs_transaccion', `cobro #${x.id_cobro} vale ${x.monto} pero su transacción #${t.id_transaccion} equivale a ${redondear(soles)} soles`);
 				}
 			}
-			const esperado = computeEstadoCuentaCobrar(saldoEsperado, c.fecha_vencimiento);
+			const proximaCuota = propios.filter((x: any) => x.estado_cobro === 'programado' && x.fecha_cobro).map((x: any) => String(x.fecha_cobro).slice(0, 10)).sort()[0] ?? null;
+			const esperado = computeEstadoCuentaCobrar(saldoEsperado, c.fecha_vencimiento, proximaCuota);
 			if (c.estado !== esperado) add('estado', `guardado "${c.estado}", calculado "${esperado}"`);
 		}
 		return { cuentas_revisadas: (cuentas ?? []).length, inconsistencias_encontradas: inconsistencias.length, inconsistencias };

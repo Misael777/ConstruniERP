@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { hasPermiso } from '$lib/stores/permisos.svelte';
 	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins, Eye, ChevronDown, Briefcase, HardHat, Ellipsis, DollarSign } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, emptyColumnFilters, isColumnFilterActive, type FieldConfig, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
@@ -302,7 +302,8 @@
 	}
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_transacciones')) {
 			goto('/dashboard');
 			return;
 		}

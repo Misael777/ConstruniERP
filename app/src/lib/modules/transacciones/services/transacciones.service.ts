@@ -8,7 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency } from '$lib/shared/fieldConfig';
-import { nombreCuota } from '$lib/shared/acuerdoDePago';
+import { nombreCuota, contarArmadasAdelanto } from '$lib/shared/acuerdoDePago';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -1463,13 +1463,17 @@ async function calcularNumeroCuota(
 ): Promise<number | null> {
 	const { data } = await client
 		.from(tabla)
-		.select(`${columnaPk}, ${columnaFecha}`)
+		.select(`${columnaPk}, ${columnaFecha}${tabla === 'cobros' ? ', referencia' : ''}`)
 		.eq(columnaFk, idCuenta)
 		.order(columnaFecha, { ascending: true })
 		.order(columnaPk, { ascending: true });
 	if (!data) return null;
 	const index = (data as any[]).findIndex((row) => row[columnaPk] === idFila);
-	return index === -1 ? null : index + 1;
+	if (index === -1) return null;
+	// Ticket #102: si el adelanto se cobró en varias armadas, todas cuentan como la cuota 1 ("Adelanto") y la
+	// siguiente sigue siendo el "1er abono" / "Valorización 1" (ver contarArmadasAdelanto).
+	const armadas = tabla === 'cobros' ? contarArmadasAdelanto((data as any[]).map((row) => row.referencia)) : 1;
+	return index < armadas ? 1 : index - armadas + 2;
 }
 
 /**

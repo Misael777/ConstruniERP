@@ -12,7 +12,7 @@
 	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { isAdmin, puedeVerEliminados } from '$lib/stores/permisos.svelte';
 	import { Briefcase, HardHat, Building2, Ellipsis, Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2, Receipt, FileMinus, FilePlus, Check } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
@@ -639,7 +639,7 @@ function irAPaginaTransacciones(nueva: number) {
 				{/each}
 			</div>
 		{/if}
-		{#if isAdmin() && !verEliminados}
+		{#if puedeVerEliminados() && !verEliminados}
 			<button type="button" onclick={toggleVerEliminados} class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50">
 				<Trash2 size={16} /> Ver eliminados
 			</button>

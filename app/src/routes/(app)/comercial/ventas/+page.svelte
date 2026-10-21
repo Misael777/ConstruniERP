@@ -2,7 +2,7 @@
 import { onMount, onDestroy } from 'svelte';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '$lib/supabaseClient';
-import { isAdmin } from '$lib/stores/permisos.svelte';
+import { isAdmin, puedeVerEliminados } from '$lib/stores/permisos.svelte';
 import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 import { Plus, Download } from '@lucide/svelte';
 import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
@@ -928,7 +928,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 		</div>
 
 		<div class="flex items-center gap-3 shrink-0">
-			{#if isAdmin()}
+			{#if puedeVerEliminados()}
 				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 whitespace-nowrap ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
 					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
 					{verEliminados ? 'Volver a Ventas' : 'Ver eliminados'}
@@ -1040,6 +1040,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	cuotas={resumenVentaDatos?.cuotas ?? []}
 	etiquetaPlan="Plan de pagos"
 	mostrarHito
+	esObra={resumenVentaFila?.tipoVenta === 'obra'}
 	montoTotal={Number(resumenVentaFila?.valor) || 0}
 	soloLectura
 	onClose={() => { resumenVentaOpen = false; resumenVentaFila = null; resumenVentaDatos = null; }}

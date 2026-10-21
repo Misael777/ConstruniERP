@@ -161,6 +161,13 @@ export function hasPermiso(key: string): boolean {
 }
 
 /** Check if current user is the administrador role */
+/** Ticket #98: "Ver eliminados" (registros dados de baja, para revisarlos o restaurarlos) — ya no es solo del
+ * administrador: también quien tenga el permiso ver_eliminados (se asigna en Roles y Permisos). Eliminar de
+ * forma permanente sigue pidiendo la contraseña de un administrador. */
+export function puedeVerEliminados(): boolean {
+  return isAdmin() || hasPermiso('ver_eliminados');
+}
+
 export function isAdmin(): boolean {
   const result = permisosState.rolNombre === ADMIN_ROLE;
   console.log(`[Permisos Check] Checking if user is admin. Current role: "${permisosState.rolNombre}". Result: ${result}`);

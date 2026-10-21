@@ -3,6 +3,7 @@ import { isRunningInTauri, uploadToDriveClient, deleteDriveFileClient } from '$l
 import { generateUniqueFileName } from '$lib/shared/fileNaming';
 import { conCarga } from '$lib/stores/loading.svelte';
 import { registrarAccion } from '$lib/shared/auditoria';
+import { iniciarOperacion, terminarOperacion } from '$lib/shared/diagnostico.svelte';
 
 // 'ticket': adjuntos de imagen del módulo de Tickets (ver ticket_imagenes_migration.sql) — a
 // diferencia de los otros 4 tipos, no pertenece a ningún proyecto, por eso projectId es opcional acá.
@@ -38,9 +39,18 @@ export async function uploadProjectDocument(
 				? `documento_${documentType || 'Otro'}_${documentName || file.name}_${projectName || 'Proyecto'}`
 				: type;
 		const fileName = generateUniqueFileName(baseLabel, file.name);
-		const { url } = await uploadToDriveClient(file, fileName, type);
-		console.log(`[uploadProjectDocument] ✓ Tauri upload OK. URL: ${url}`);
-		return { url, fileName };
+		// Modo diagnóstico (congelamiento en Android): si la app muere subiendo, el registro lo muestra.
+		const operacion = `Subida a Drive (${type})`;
+		iniciarOperacion(operacion, { archivo: file.name, kb: Math.round(file.size / 1024) });
+		try {
+			const { url } = await uploadToDriveClient(file, fileName, type);
+			terminarOperacion(operacion);
+			console.log(`[uploadProjectDocument] ✓ Tauri upload OK. URL: ${url}`);
+			return { url, fileName };
+		} catch (err) {
+			terminarOperacion(operacion, { error: err instanceof Error ? err.message : String(err) });
+			throw err;
+		}
 	}
 
 	// Ticket #9: rama sin Tauri (navegador) — pasa por el servidor en vez de driveUploadClient.ts, así que

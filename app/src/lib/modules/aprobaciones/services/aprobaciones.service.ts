@@ -124,7 +124,7 @@ export async function getSolicitudesResueltas(client: SupabaseClient): Promise<S
 		.select('*')
 		.neq('estado', 'pendiente')
 		.order('resuelto_en', { ascending: false })
-		.limit(30);
+		.limit(100); // ticket #99: el buscador y el filtro por estado del admin trabajan sobre estas
 	if (error) throw error;
 	return ((data ?? []) as SolicitudAprobacion[]).filter(
 		(s) => !(s.tipo_accion === 'cerrar_venta' && s.resuelto_por === s.solicitado_por)
@@ -552,6 +552,9 @@ export interface CerrarVentaParams {
 	adelantoMonto?: number;
 	adelantoFecha?: string;
 	comprobanteUrl?: string;
+	/** Ticket #102: el adelanto en varias armadas (depósitos), cada una con su comprobante ya subido. Si viene,
+	 * reemplaza a adelantoMonto/adelantoFecha/comprobanteUrl (que quedan para solicitudes viejas). */
+	adelantos?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null }[];
 	/** Resto de "Información general" + "Características del proyecto" a persistir junto con el cierre
 	 * (ver handleCerrarVenta en NuevaVentaModal.svelte) — mismas columnas que actualiza "Guardar
 	 * cambios", MENOS precio_venta/costo_estima/estado_proyecto, que este servicio ya fija a partir de
@@ -593,42 +596,55 @@ export async function cerrarVentaAprobada(
 
 		let transaccionAdelanto: Transaccion | undefined;
 		if (!params.adelantoYaRegistrado) {
-			if (!params.comprobanteUrl || !params.adelantoMonto) {
-				return { success: false, message: 'Falta el comprobante o el monto del adelanto.' };
+			// Ticket #102: una transacción por armada; las solicitudes viejas traen un solo adelanto suelto.
+			const armadas = params.adelantos?.length
+				? params.adelantos
+				: params.comprobanteUrl && params.adelantoMonto
+					? [{ monto: Number(params.adelantoMonto), fecha: params.adelantoFecha ?? '', comprobanteUrl: params.comprobanteUrl, observacion: null }]
+					: [];
+			if (armadas.length === 0 || armadas.some((a) => !a.comprobanteUrl || !(Number(a.monto) > 0) || !a.fecha)) {
+				return { success: false, message: 'Falta el comprobante, el monto o la fecha del adelanto.' };
 			}
 			if (!idCentroProyecto) return { success: false, message: 'No se pudo obtener el centro de costo del proyecto.' };
 
 			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(client, 'cliente', params.idCliente, params.clienteNombre);
 			if (!idCentroCliente) return { success: false, message: 'No se pudo obtener el centro de costo del cliente.' };
 
-			const transResult = await createTransaccion(
-				client,
-				{
-					tipo_alcance: 'externa',
-					id_centro_costo_origen: idCentroCliente,
-					id_centro_costo_destino: idCentroProyecto,
-					fecha: params.adelantoFecha,
-					monto_total: Number(params.adelantoMonto),
-					tipo: 'ingreso',
-					// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
-					// porque adelantoMonto siempre llega en Soles desde NuevaVentaModal.svelte. Sin esto,
-					// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
-					// transacción del adelanto ni el cierre de la venta se completaban.
-					tipo_moneda: 'soles',
-					// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
-					// 'Adelanto' es la categoría de Ingreso correcta para este movimiento (ver el catálogo
-					// de esa config). Sin esto, cerrar una venta con un adelanto todavía no registrado
-					// volvía a fallar con "Revisa los campos marcados", esta vez por falta de categoria.
-					categoria: 'Adelanto',
-					estado: 'activo',
-					comprobante_url: params.comprobanteUrl,
-					descripcion: `Adelanto inicial - ${params.proyectoNombre} (proyecto #${params.idProyecto})`
-				},
-				usuarioEmail,
-				usuarioNombre
-			);
-			if (!transResult.success) return { success: false, message: transResult.message || 'No se pudo registrar la transacción del adelanto.' };
-			transaccionAdelanto = transResult.data;
+			for (const [i, armada] of armadas.entries()) {
+				const etiquetaArmada = armadas.length > 1 ? ` (${i + 1}/${armadas.length})` : '';
+				const transResult = await createTransaccion(
+					client,
+					{
+						tipo_alcance: 'externa',
+						id_centro_costo_origen: idCentroCliente,
+						id_centro_costo_destino: idCentroProyecto,
+						fecha: armada.fecha,
+						monto_total: Number(armada.monto),
+						tipo: 'ingreso',
+						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+						// porque adelantoMonto siempre llega en Soles desde NuevaVentaModal.svelte. Sin esto,
+						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
+						// transacción del adelanto ni el cierre de la venta se completaban.
+						tipo_moneda: 'soles',
+						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento (ver el catálogo
+						// de esa config). Sin esto, cerrar una venta con un adelanto todavía no registrado
+						// volvía a fallar con "Revisa los campos marcados", esta vez por falta de categoria.
+						categoria: 'Adelanto',
+						estado: 'activo',
+						comprobante_url: armada.comprobanteUrl,
+						tipo_transaccion: '1', // N° de cuota: todas las armadas son el "Adelanto" (ver acuerdoDePago.ts)
+						descripcion: `Adelanto inicial${etiquetaArmada}${armada.observacion?.trim() ? ` - ${armada.observacion.trim()}` : ''} - ${params.proyectoNombre} (proyecto #${params.idProyecto})`
+					},
+					usuarioEmail,
+					usuarioNombre
+				);
+				if (!transResult.success) {
+					const yaCreadas = i > 0 ? ` Ya se registraron ${i} de ${armadas.length} armadas; revisa Transacciones antes de reintentar.` : '';
+					return { success: false, message: (transResult.message || 'No se pudo registrar la transacción del adelanto.') + yaCreadas };
+				}
+				transaccionAdelanto ??= transResult.data;
+			}
 		}
 
 		const { error: clearError } = await client

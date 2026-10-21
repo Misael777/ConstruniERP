@@ -60,6 +60,7 @@
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables, getCuentaPagarPorTransaccion } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables, getCuentaCobrarPorTransaccion } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
+	import { COMPROBANTE_POR_TIPO_DOCUMENTO } from '$lib/modules/facturacion/services/facturacion.service';
 
 	/** Algunos orígenes de archivo (ej. selector de galería en el WebView de Android) no informan bien
 	 * `File.type` — llega vacío o genérico ("application/octet-stream") aunque el archivo SÍ sea una
@@ -143,6 +144,23 @@
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
+	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. Solo los que
+	 * tienen pestaña en Gestión de Comprobantes (COMPROBANTE_POR_TIPO_DOCUMENTO) se pueden "Generar" desde acá;
+	 * Recibo por Honorarios y Comprobante de Venta todavía no se emiten desde el ERP. */
+	const TIPOS_COMPROBANTE_INGRESO = [
+		{ value: '1', label: 'Factura' },
+		{ value: '3', label: 'Recibo por Honorarios' },
+		{ value: '2', label: 'Boleta de Venta' },
+		{ value: '12', label: 'Comprobante de Venta' },
+		{ value: '10', label: 'Nota de Crédito' },
+		{ value: '11', label: 'Nota de Débito' }
+	];
+	const tipoComprobanteEmitible = (tipo: string) => tipo in COMPROBANTE_POR_TIPO_DOCUMENTO;
+	function onTipoComprobanteErpChange(v: string) {
+		handleInput('tipo_documento', v);
+		if (!tipoComprobanteEmitible(v)) generarComprobanteErp = 'no';
+	}
+
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
@@ -167,7 +185,7 @@
 		// más abajo) arranca en 'Factura' ('1') si no trae ya uno de los 4 valores de ese catálogo — así
 		// una transacción vieja (de antes de este campo, o con un tipo_documento de otro flujo) no
 		// aparece con un valor extraño ni vacío. A pedido explícito del usuario.
-		if (values.tipo === 'ingreso' && !['1', '2', '10', '11'].includes(values.tipo_documento)) values.tipo_documento = '1';
+		if (values.tipo === 'ingreso' && !TIPOS_COMPROBANTE_INGRESO.some((t) => t.value === values.tipo_documento)) values.tipo_documento = '1';
 		return values;
 	}
 
@@ -3063,7 +3081,7 @@
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
 					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
-					if (generarComprobanteErp === 'si' && mostrarComprobanteErp) {
+					if (generarComprobanteErp === 'si' && mostrarComprobanteErp && tipoComprobanteEmitible(formValues.tipo_documento)) {
 						if (transaccion?.id_factura) {
 							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
 						} else {
@@ -3685,9 +3703,9 @@
 													<SelectConSaldo
 														id="tr-tipo-comprobante-erp"
 														value={formValues.tipo_documento}
-														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
+														options={TIPOS_COMPROBANTE_INGRESO}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(v) => (handleInput('tipo_documento', v))}
+														onchange={onTipoComprobanteErpChange}
 													/>
 												</div>
 											</div>
@@ -3698,11 +3716,11 @@
 														id="tr-generar-comprobante-erp"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion}
+														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
 											</div>
 										{/if}
 									</div>
@@ -3714,9 +3732,9 @@
 													<SelectConSaldo
 														id="tr-tipo-comprobante-erp-2"
 														value={formValues.tipo_documento}
-														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
+														options={TIPOS_COMPROBANTE_INGRESO}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(v) => (handleInput('tipo_documento', v))}
+														onchange={onTipoComprobanteErpChange}
 													/>
 												</div>
 											</div>
@@ -3727,11 +3745,11 @@
 														id="tr-generar-comprobante-erp-2"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion}
+														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
 											</div>
 										</div>
 									{/if}

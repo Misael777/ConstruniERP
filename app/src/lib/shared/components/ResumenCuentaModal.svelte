@@ -31,7 +31,7 @@
 	import { X, Lock } from '@lucide/svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	// Adelanto / 1er abono / ... — mismo nombre que la lista de Transacciones (ver acuerdoDePago.ts).
-	import { acuerdoDePago } from '$lib/shared/acuerdoDePago';
+	import { acuerdoDePago, contarArmadasAdelanto } from '$lib/shared/acuerdoDePago';
 
 	let {
 		open = false,
@@ -46,7 +46,8 @@
 		onEditarCuota,
 		soloLectura = false,
 		etiquetaPlan = 'Acuerdo de pago',
-		mostrarHito = false
+		mostrarHito = false,
+		esObra = false
 	}: {
 		open: boolean;
 		titulo: string;
@@ -66,9 +67,14 @@
 		etiquetaPlan?: string;
 		/** Agrega la columna "Hito de cobro" (concepto de cada cuota). */
 		mostrarHito?: boolean;
+		/** Ticket #95: cuenta de una venta de Obra — las cuotas se llaman "Valorización 1, 2...". */
+		esObra?: boolean;
 	} = $props();
 
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
+	// Ticket #102: si el adelanto se pagó en varias armadas, todas se llaman "Adelanto (…armada)" y los abonos o
+	// valorizaciones se numeran desde la cuota siguiente.
+	const armadasAdelanto = $derived(contarArmadasAdelanto(cuotasOrdenadas.map((c) => c.concepto)));
 
 
 	function porcentaje(monto: number): string {
@@ -137,7 +143,7 @@
 								<tbody class="divide-y divide-slate-100">
 									{#each cuotasOrdenadas as cuota, i (cuota.id)}
 										<tr>
-											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length)}</td>
+											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length, esObra, armadasAdelanto)}</td>
 											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words">{cuota.concepto || '—'}</td>{/if}
 											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
 											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>

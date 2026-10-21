@@ -296,6 +296,8 @@
 
 	function optionsFor(field: (typeof formFields)[number]): FieldOption[] {
 		const base = (field.optionsSource && dynamicOptions[field.key]) || field.options || [];
+		// Ticket #93: se podía poner prioridad pero no quitarla — "Sin prioridad" la deja vacía (se guarda NULL).
+		if (field.key === 'prioridad') return [{ value: '', label: 'Sin prioridad' }, ...base];
 		// Préstamo Recibido: la única opción es el proveedor ya elegido, mostrado con el nombre del prestamista.
 		if (field.key === 'id_proveedor' && prestamistaNombre) return [{ value: formValues.id_proveedor, label: prestamistaNombre }];
 		// A pedido explícito del usuario: "Responsable" se veía vacío (el <select> nativo no muestra

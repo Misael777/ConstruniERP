@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin } from '$lib/stores/permisos.svelte';
+	import { isAdmin, puedeVerEliminados } from '$lib/stores/permisos.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Download } from '@lucide/svelte';
 	import { crearSolicitud, darDeBajaCliente, restaurarCliente, deleteClienteCascade, mensajeClienteConProyectosActivos } from '$lib/modules/aprobaciones/services/aprobaciones.service';
@@ -281,7 +281,7 @@
 		</div>
 
 		<div class="flex items-center gap-3">
-			{#if isAdmin()}
+			{#if puedeVerEliminados()}
 				<button onclick={toggleVerEliminados} class={`px-4 py-2 rounded-xl font-medium text-sm transition-colors shadow-sm flex items-center gap-2 ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
 					<i class={`fas ${verEliminados ? 'fa-arrow-left' : 'fa-trash-can'}`}></i>
 					{verEliminados ? 'Volver al directorio' : 'Ver eliminados'}

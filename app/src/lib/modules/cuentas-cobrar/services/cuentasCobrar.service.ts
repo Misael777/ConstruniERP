@@ -19,6 +19,7 @@ import { construirPayloadTransaccionPorCobro, construirInsertDataTransaccion, CE
 import { NOMBRE_CLIENTE_PRESTAMOS } from '../../clientes/services/clientes.service';
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+import { referenciaArmada } from '$lib/shared/acuerdoDePago';
 
 /** Embed proyecto con los campos que generarCodigoProyecto necesita (mismo criterio que
  * getProyectoOptions más abajo) — a pedido explícito del usuario, para agregar el código del proyecto
@@ -64,7 +65,9 @@ export interface CuentaCobrar {
 	 * ese flujo. Permite que TransaccionModal.svelte encuentre esta cuenta al editar esa transacción. */
 	id_transaccion: number | null;
 	cliente?: { nombre: string } | null;
-	proyecto?: { nombre_proyecto: string } | null;
+	proyecto?: { nombre_proyecto: string; tipo_venta?: string | null } | null;
+	/** Fecha de la cuota pendiente más próxima (calculada al listar, no es columna) — ticket #92. */
+	proxima_cuota?: string | null;
 }
 
 export interface Cobro {
@@ -174,12 +177,16 @@ async function cobroTieneTransaccionAprobada(client: SupabaseClient, idCobro: nu
  * 'pendiente'. `saldoPendiente` debe venir calculado con el mismo criterio que "Saldo Pendiente" en
  * CuentaCobrarModal.svelte (transacciones de ingreso reales del centro de costo, ver
  * calcularMontoCobradoYEstado más abajo), no con `monto_cobrado`/`cobros`. */
-export function computeEstadoCuentaCobrar(saldoPendiente: number, fechaVencimiento: string | null): string {
+export function computeEstadoCuentaCobrar(saldoPendiente: number, fechaVencimiento: string | null, proximaCuota: string | null = null): string {
 	if (saldoPendiente <= 0) return 'pagado';
 	const hoy = new Date();
 	hoy.setHours(0, 0, 0, 0);
-	if (fechaVencimiento) {
-		const d = new Date(fechaVencimiento);
+	// Ticket #92: también vence si la cuota pendiente más próxima ya pasó (antes solo miraba el vencimiento
+	// final de la cuenta, y una cuenta con el "1er abono" atrasado seguía en "Pendiente") — mismo criterio
+	// que computeEstadoCuentaPagar (fecha_pago_programada).
+	for (const fecha of [proximaCuota, fechaVencimiento]) {
+		if (!fecha) continue;
+		const d = new Date(fecha);
 		if (!Number.isNaN(d.getTime()) && d.getTime() < hoy.getTime()) return 'vencido';
 	}
 	return 'pendiente';
@@ -209,12 +216,17 @@ async function calcularMontoCobradoYEstado(
 	// (igual que Pagar sale de sus pagos), no de todos los ingresos hacia el centro de costo destino. Una
 	// cuenta que todavía no existe (alta) no tiene cobros: 0.
 	let montoCobrado = 0;
+	let proximaCuota: string | null = null;
 	if (idCuentaCobrar != null) {
-		const { data } = await client.from(COBRO_TABLE).select('monto').eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'cobrado');
-		montoCobrado = Number((data ?? []).reduce((s: number, c: any) => s + Number(c.monto), 0).toFixed(2));
+		const { data } = await client.from(COBRO_TABLE).select('monto, estado_cobro, fecha_cobro').eq(PARENT_FK_COLUMN, idCuentaCobrar).in('estado_cobro', ['cobrado', 'programado']);
+		montoCobrado = Number((data ?? []).filter((c: any) => c.estado_cobro === 'cobrado').reduce((s: number, c: any) => s + Number(c.monto), 0).toFixed(2));
+		// Ticket #92: la cuota pendiente más próxima también cuenta para "Vencido".
+		for (const c of (data ?? []) as any[]) {
+			if (c.estado_cobro === 'programado' && c.fecha_cobro && (!proximaCuota || c.fecha_cobro < proximaCuota)) proximaCuota = String(c.fecha_cobro).slice(0, 10);
+		}
 	}
 	const saldoPendiente = Math.max(monto - montoCobrado, 0);
-	return { montoCobrado, saldoPendiente, estado: computeEstadoCuentaCobrar(saldoPendiente, fechaVencimiento) };
+	return { montoCobrado, saldoPendiente, estado: computeEstadoCuentaCobrar(saldoPendiente, fechaVencimiento, proximaCuota) };
 }
 
 /**
@@ -230,21 +242,27 @@ async function autoCorregirEstadosCobrar(client: SupabaseClient, items: CuentaCo
 	if (items.length === 0) return items;
 
 	const ids = items.map((item) => item.id_cuenta_cobrar);
-	const { data: cobros } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, monto').in(PARENT_FK_COLUMN, ids).eq('estado_cobro', 'cobrado');
+	const { data: cobros } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar, monto, estado_cobro, fecha_cobro').in(PARENT_FK_COLUMN, ids).in('estado_cobro', ['cobrado', 'programado']);
 	const cobradoMap: Record<number, number> = {};
-	for (const c of (cobros ?? []) as { id_cuenta_cobrar: number; monto: number }[]) {
-		cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+	const proximaCuotaMap: Record<number, string> = {};
+	for (const c of (cobros ?? []) as { id_cuenta_cobrar: number; monto: number; estado_cobro: string; fecha_cobro: string }[]) {
+		if (c.estado_cobro === 'cobrado') {
+			cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+		} else if (c.fecha_cobro && (!proximaCuotaMap[c.id_cuenta_cobrar] || c.fecha_cobro < proximaCuotaMap[c.id_cuenta_cobrar])) {
+			proximaCuotaMap[c.id_cuenta_cobrar] = String(c.fecha_cobro).slice(0, 10);
+		}
 	}
 
 	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
 	const resultado = items.map((item) => {
 		const recibido = cobradoMap[item.id_cuenta_cobrar] ?? 0;
 		const saldo = Math.max(Number(item.monto) - recibido, 0);
-		const estado = computeEstadoCuentaCobrar(saldo, item.fecha_vencimiento);
+		const proximaCuota = proximaCuotaMap[item.id_cuenta_cobrar] ?? null;
+		const estado = computeEstadoCuentaCobrar(saldo, item.fecha_vencimiento, proximaCuota);
 		const sinCambios = estado === item.estado && Math.abs(saldo - Number(item.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(item.monto_cobrado)) < 0.01;
-		if (sinCambios) return item;
+		if (sinCambios) return { ...item, proxima_cuota: proximaCuota };
 		actualizaciones.push({ id: item.id_cuenta_cobrar, estado, saldo, recibido });
-		return { ...item, estado, saldo_pendiente: saldo, monto_cobrado: recibido };
+		return { ...item, estado, saldo_pendiente: saldo, monto_cobrado: recibido, proxima_cuota: proximaCuota };
 	});
 
 	if (actualizaciones.length > 0) {
@@ -288,7 +306,7 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 
 	let query = client
 		.from(TABLE_NAME)
-		.select('*, cliente(nombre), proyecto(nombre_proyecto)', { count: 'exact' })
+		.select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)', { count: 'exact' })
 		// Prioridad se ordena por su equivalente numérico (alto=1, medio=2, bajo=3): por el texto saldría alfabético.
 		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })
 		.order('id_cuenta_cobrar', { ascending: false })
@@ -397,7 +415,7 @@ export async function createCuentaCobrar(
 		id_transaccion: payload.id_transaccion != null ? Number(payload.id_transaccion) : null
 	};
 
-	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto)').single();
+	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
 	await sincronizarCuotasProgramadas(client, data.id_cuenta_cobrar, fraccionesPersonalizadas);
@@ -411,7 +429,7 @@ export async function createCuentaCobrar(
  * ninguna cuenta vinculada (préstamo creado antes de cuentas_pagar_cobrar_id_transaccion_migration.sql,
  * o no viene de ese flujo). */
 export async function getCuentaCobrarPorTransaccion(client: SupabaseClient, idTransaccion: number): Promise<CuentaCobrar | null> {
-	const { data, error } = await client.from(TABLE_NAME).select('*, cliente(nombre), proyecto(nombre_proyecto)').eq('id_transaccion', idTransaccion).maybeSingle();
+	const { data, error } = await client.from(TABLE_NAME).select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').eq('id_transaccion', idTransaccion).maybeSingle();
 	if (error) throw error;
 	return (data as CuentaCobrar) ?? null;
 }
@@ -565,7 +583,7 @@ export async function updateCuentaCobrar(
 		.from(TABLE_NAME)
 		.update(updateData)
 		.eq(PK_COLUMN, id)
-		.select('*, cliente(nombre), proyecto(nombre_proyecto)')
+		.select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)')
 		.single();
 	if (error) return { success: false, message: `No se pudo actualizar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
@@ -1181,8 +1199,15 @@ export async function asegurarCuentaCobrarDeVenta(
 		// 30 días desde la fecha de venta, o desde hoy si la venta es antigua (así el saldo no nace vencido).
 		const hoy = new Date().toLocaleDateString('en-CA');
 		const fechaSaldo = sumarDias(venta.fechaVenta > hoy ? venta.fechaVenta : hoy, 30);
+		// Ticket #102: si el adelanto llegó en varias armadas, cada una queda como "Adelanto – Nª armada" (así el
+		// cronograma las nombra a todas como adelanto, ver contarArmadasAdelanto).
+		const adelantos = ingresos.filter((t) => t.categoria === 'Adelanto');
 		const fracciones = [
-			...ingresos.map((t) => ({ fecha: t.fecha, monto: t.monto, referencia: t.categoria })),
+			...ingresos.map((t) => ({
+				fecha: t.fecha,
+				monto: t.monto,
+				referencia: adelantos.length > 1 && t.categoria === 'Adelanto' ? referenciaArmada(adelantos.indexOf(t)) : t.categoria
+			})),
 			...(saldo > 0.005 ? [{ fecha: fechaSaldo, monto: saldo, referencia: 'Saldo de la venta' }] : [])
 		];
 

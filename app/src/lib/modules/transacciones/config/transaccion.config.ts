@@ -552,7 +552,9 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			// (Factura/Boleta/Nota de Crédito/Nota de Débito) exactamente por este mismo campo, igual
 			// criterio que ya usa para Factura('1')/Boleta('2') — ver facturacion.service.ts.
 			{ value: '10', label: 'Nota de Crédito' },
-			{ value: '11', label: 'Nota de Débito' }
+			{ value: '11', label: 'Nota de Débito' },
+			// Ticket #101: "Comprobante de Venta" en la lista de Tipo de Comprobante de un Ingreso (TransaccionModal.svelte).
+			{ value: '12', label: 'Comprobante de Venta' }
 		],
 		// En Interna, un comprobante externo (factura/boleta/etc.) no aplica — solo talonario/boucher
 		// internos. En Externa se mantiene el catálogo original — ver TransaccionModal.svelte, que
