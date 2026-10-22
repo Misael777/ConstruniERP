@@ -164,6 +164,45 @@ Además: capturas sin sesión de cada pantalla (escritorio y celular) y una prue
 
 ---
 
+## 6b. Estado de la implementación (22/10/2026)
+
+Implementado y probado en **Dev**; falta Prod. No está en git.
+
+**Base de datos:** `supabase/migrations/20261022120000_finanzas_obras.sql`. Se aplicó 2 veces (idempotente) y se registró en el historial de Dev. Contiene:
+- `cobro_grupo`, `cobros.id_grupo/partida`;
+- `documento_proyecto.vigente/monto`, contratos migrados;
+- `proyecto_valor_historial`, `fn_ajustar_valor_venta`;
+- los 3 permisos y el backfill;
+- `fn_confirmar_cobro` actualizada: el resto de un cobro parcial se queda en su grupo.
+
+**Código:**
+- **Servicios:** `modules/cobranza-obra/services/cobranzaObra.service.ts` y `documentosVenta.service.ts`.
+- **Protecciones en Cuentas por Cobrar:** no se puede refraccionar ni rebalancear una cuenta de Obra, y editarla no borra los pagos.
+- **Transacción y recibo:** concepto "Adelanto 2 - Armada 1" / "Valorización 2 - Pago 5 (partida)"; categorías de Obra = Adelanto, Valorización.
+- **Nueva venta (Obra):** varios adelantos con armadas, sin Forma de cobranza.
+- **Editar venta (Obra cerrada):** proformas y contratos/adendas Actual/Anterior, armadas y adelantos nuevos, valor por RPC.
+- **Resumen de cobro de Obra:** `modules/cobranza-obra/components/ResumenCobroObra.svelte`, en Cuentas por Cobrar y en Ventas (solo lectura).
+
+**Diferencias con el diseño de arriba:**
+- Las proformas siguen usando `es_proforma_final` como "Actual"; `vigente` es solo para contratos y adendas.
+- En Obra las valorizaciones ya no se definen en Nueva venta: se programan en el Resumen de cobro.
+
+**Pruebas hechas en Dev:**
+- 26 pruebas de servicio (O-01 a O-11, cobro parcial y protecciones), con sesión real de un admin y un asesor de prueba.
+- Recorrido en pantalla con sesión:
+  - Resumen de cobro de Obra.
+  - "Pendiente" → Editar Transacción (categoría Valorización) → Cobrado.
+  - Editar venta de una Obra cerrada.
+  - Agregar una armada y guardar.
+
+**Sin probar en pantalla:**
+- crear una venta de Obra desde "Nueva venta" de punta a punta (sí está probado a nivel de servicio);
+- que el asesor no vea "Agregar adelanto" (sí está probado que la base le niega cambiar el valor).
+
+**Para Prod:**
+1. Ejecutar `20261022120000_finanzas_obras.sql` en el SQL Editor y luego `migration repair --status applied 20261022120000`.
+2. Publicar la versión.
+
 ## 7. Riesgos
 
 - **Prod tiene 1 sola venta de Obra (2 cuotas)** → es el mejor momento para cambiar el modelo: la migración es trivial.

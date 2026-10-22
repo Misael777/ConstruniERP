@@ -9,7 +9,9 @@
 	import { isAdmin, permisosState, puedeVerEliminados, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
-	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar, prepararTransaccionDeCuota } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+	import ResumenCobroObra from '$lib/modules/cobranza-obra/components/ResumenCobroObra.svelte';
+	import { cuentaTieneGrupos } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
@@ -622,8 +624,24 @@
 		return prestatariosPorCuenta.has(item.id_cuenta_cobrar);
 	}
 
+	// Finanzas de Obras: una cuenta de Obra con adelantos/valorizaciones (cobro_grupo) abre su propio Resumen de cobro.
+	let resumenObraOpen = $state(false);
+	let resumenObraRecargar = $state(0);
+	async function cobrarPagoObra(idCobro: number) {
+		const r = await prepararTransaccionDeCuota(supabase, idCobro);
+		if (!r.success) {
+			toast.error(r.message);
+			return;
+		}
+		handleTransaccionSugerida(r.payload, idCobro);
+	}
+
 	async function openResumen(item: CuentaCobrar) {
 		selectedId = item.id_cuenta_cobrar;
+		if (item.proyecto?.tipo_venta === 'obra' && (await cuentaTieneGrupos(supabase, item.id_cuenta_cobrar))) {
+			resumenObraOpen = true;
+			return;
+		}
 		const [, prestatario] = await Promise.all([fetchSelectedCobros(), getPrestatarioDeCuentaCobrar(supabase, item).catch(() => null)]);
 		prestatarioResumen = prestatario;
 		resumenOpen = true;
@@ -924,7 +942,10 @@
 	async function confirmarTransaccionCobro(payload: Record<string, unknown>, idempotencyKey: string) {
 		const { data: userData } = await supabase.auth.getUser();
 		const result = await confirmarCobroCobrado(supabase, confirmandoCobroId as number, payload, userData?.user?.email ?? null, permisosState.userName || null, idempotencyKey);
-		if (result.success) await Promise.all([fetchList(), fetchSelectedCobros(), fetchMontoFiltrado(), fetchKpis()]);
+		if (result.success) {
+			await Promise.all([fetchList(), fetchSelectedCobros(), fetchMontoFiltrado(), fetchKpis()]);
+			resumenObraRecargar++;
+		}
 		return result;
 	}
 
@@ -1299,6 +1320,16 @@
 	montoTotal={Number(selectedCuenta?.monto ?? 0)}
 	onClose={() => (resumenOpen = false)}
 	onEditarCuota={editarCuotaDesdeResumen}
+/>
+<ResumenCobroObra
+	open={resumenObraOpen}
+	idCuentaCobrar={selectedId}
+	recargar={resumenObraRecargar}
+	onClose={() => {
+		resumenObraOpen = false;
+		fetchList();
+	}}
+	onCobrarPago={cobrarPagoObra}
 />
 <CobroModal
 	open={cobroModalOpen}

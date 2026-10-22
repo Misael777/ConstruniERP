@@ -14,6 +14,7 @@ import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { createTransaccion, desaprobarTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { asegurarCuentaCobrarDeVenta } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
+import { asegurarCuentaObra, registrarArmadas } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 import { describeError } from '$lib/shared/describeError';
@@ -555,6 +556,8 @@ export interface CerrarVentaParams {
 	/** Ticket #102: el adelanto en varias armadas (depósitos), cada una con su comprobante ya subido. Si viene,
 	 * reemplaza a adelantoMonto/adelantoFecha/comprobanteUrl (que quedan para solicitudes viejas). */
 	adelantos?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null }[];
+	/** Finanzas de Obras: Adelanto 2, 3… (cada uno con sus armadas). Solo para ventas de Obra. */
+	adelantosExtra?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null }[][];
 	/** Resto de "Información general" + "Características del proyecto" a persistir junto con el cierre
 	 * (ver handleCerrarVenta en NuevaVentaModal.svelte) — mismas columnas que actualiza "Guardar
 	 * cambios", MENOS precio_venta/costo_estima/estado_proyecto, que este servicio ya fija a partir de
@@ -610,40 +613,74 @@ export async function cerrarVentaAprobada(
 			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(client, 'cliente', params.idCliente, params.clienteNombre);
 			if (!idCentroCliente) return { success: false, message: 'No se pudo obtener el centro de costo del cliente.' };
 
-			for (const [i, armada] of armadas.entries()) {
-				const etiquetaArmada = armadas.length > 1 ? ` (${i + 1}/${armadas.length})` : '';
-				const transResult = await createTransaccion(
+			if (params.tipoVenta === 'obra') {
+				// Finanzas de Obras: Cuenta por Cobrar de la obra + un grupo por adelanto, cada armada como cuota cobrada con
+				// su transacción (fn_confirmar_cobro, ver cobranzaObra.service.ts).
+				const cta = await asegurarCuentaObra(
 					client,
 					{
-						tipo_alcance: 'externa',
-						id_centro_costo_origen: idCentroCliente,
-						id_centro_costo_destino: idCentroProyecto,
-						fecha: armada.fecha,
-						monto_total: Number(armada.monto),
-						tipo: 'ingreso',
-						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
-						// porque adelantoMonto siempre llega en Soles desde NuevaVentaModal.svelte. Sin esto,
-						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
-						// transacción del adelanto ni el cierre de la venta se completaban.
-						tipo_moneda: 'soles',
-						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
-						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento (ver el catálogo
-						// de esa config). Sin esto, cerrar una venta con un adelanto todavía no registrado
-						// volvía a fallar con "Revisa los campos marcados", esta vez por falta de categoria.
-						categoria: 'Adelanto',
-						estado: 'activo',
-						comprobante_url: armada.comprobanteUrl,
-						tipo_transaccion: '1', // N° de cuota: todas las armadas son el "Adelanto" (ver acuerdoDePago.ts)
-						descripcion: `Adelanto inicial${etiquetaArmada}${armada.observacion?.trim() ? ` - ${armada.observacion.trim()}` : ''} - ${params.proyectoNombre} (proyecto #${params.idProyecto})`
+						idProyecto: params.idProyecto,
+						idCliente: params.idCliente,
+						idCentroCosto: Number(idCentroProyecto),
+						montoVenta: Number(params.montoFinalVenta),
+						fechaVenta: String(params.datosProyecto?.fecha_inicio_plan ?? armadas[0].fecha),
+						responsable: (params.datosProyecto?.responsable as string | undefined) ?? usuarioNombre ?? null,
+						proyectoNombre: params.proyectoNombre
 					},
-					usuarioEmail,
-					usuarioNombre
+					usuarioNombre ?? usuarioEmail
 				);
-				if (!transResult.success) {
-					const yaCreadas = i > 0 ? ` Ya se registraron ${i} de ${armadas.length} armadas; revisa Transacciones antes de reintentar.` : '';
-					return { success: false, message: (transResult.message || 'No se pudo registrar la transacción del adelanto.') + yaCreadas };
+				if ('error' in cta) return { success: false, message: `No se pudo crear la Cuenta por Cobrar de la obra: ${cta.error}` };
+				for (const lista of [armadas, ...(params.adelantosExtra ?? [])].filter((l) => l.length > 0)) {
+					const r = await registrarArmadas(client, {
+						idCuentaCobrar: cta.idCuentaCobrar,
+						idCentroCliente: Number(idCentroCliente),
+						idCentroProyecto: Number(idCentroProyecto),
+						armadas: lista.map((a) => ({ monto: Number(a.monto), fecha: a.fecha, comprobanteUrl: a.comprobanteUrl, observacion: a.observacion ?? null })),
+						usuarioEmail,
+						usuarioNombre
+					});
+					if (!r.success) return { success: false, message: r.message };
+					if (!transaccionAdelanto && r.transacciones[0]) {
+						const { data: tx } = await client.from('transaccion').select('*').eq('id_transaccion', r.transacciones[0]).single();
+						transaccionAdelanto = (tx as Transaccion) ?? undefined;
+					}
 				}
-				transaccionAdelanto ??= transResult.data;
+			} else {
+				for (const [i, armada] of armadas.entries()) {
+					const etiquetaArmada = armadas.length > 1 ? ` (${i + 1}/${armadas.length})` : '';
+					const transResult = await createTransaccion(
+						client,
+						{
+							tipo_alcance: 'externa',
+							id_centro_costo_origen: idCentroCliente,
+							id_centro_costo_destino: idCentroProyecto,
+							fecha: armada.fecha,
+							monto_total: Number(armada.monto),
+							tipo: 'ingreso',
+							// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+							// porque adelantoMonto siempre llega en Soles desde NuevaVentaModal.svelte. Sin esto,
+							// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y ni la
+							// transacción del adelanto ni el cierre de la venta se completaban.
+							tipo_moneda: 'soles',
+							// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+							// 'Adelanto' es la categoría de Ingreso correcta para este movimiento (ver el catálogo
+							// de esa config). Sin esto, cerrar una venta con un adelanto todavía no registrado
+							// volvía a fallar con "Revisa los campos marcados", esta vez por falta de categoria.
+							categoria: 'Adelanto',
+							estado: 'activo',
+							comprobante_url: armada.comprobanteUrl,
+							tipo_transaccion: '1', // N° de cuota: todas las armadas son el "Adelanto" (ver acuerdoDePago.ts)
+							descripcion: `Adelanto inicial${etiquetaArmada}${armada.observacion?.trim() ? ` - ${armada.observacion.trim()}` : ''} - ${params.proyectoNombre} (proyecto #${params.idProyecto})`
+						},
+						usuarioEmail,
+						usuarioNombre
+					);
+					if (!transResult.success) {
+						const yaCreadas = i > 0 ? ` Ya se registraron ${i} de ${armadas.length} armadas; revisa Transacciones antes de reintentar.` : '';
+						return { success: false, message: (transResult.message || 'No se pudo registrar la transacción del adelanto.') + yaCreadas };
+					}
+					transaccionAdelanto ??= transResult.data;
+				}
 			}
 		}
 
@@ -694,7 +731,24 @@ export async function cerrarVentaAprobada(
 
 		// A pedido del usuario: toda venta cerrada tiene su Cuenta por Cobrar (si ya la tiene, no hace nada).
 		// Secundario al cierre: si falla, la venta igual queda cerrada y se avisa en el mensaje.
-		const cuenta = await asegurarCuentaCobrarDeVenta(
+		// Obra: su cuenta ya la aseguró asegurarCuentaObra arriba (o al crear la venta); acá solo se completa si la venta
+		// se cerró con el adelanto ya registrado de antes (adelantos sueltos → Adelanto 1).
+		const cuenta =
+			params.tipoVenta === 'obra' && idCentroProyecto
+				? await asegurarCuentaObra(
+						client,
+						{
+							idProyecto: params.idProyecto,
+							idCliente: params.idCliente,
+							idCentroCosto: Number(idCentroProyecto),
+							montoVenta: Number(params.montoFinalVenta),
+							fechaVenta: String(params.datosProyecto?.fecha_inicio_plan ?? params.adelantoFecha ?? new Date().toISOString().slice(0, 10)),
+							responsable: (params.datosProyecto?.responsable as string | undefined) ?? usuarioNombre ?? null,
+							proyectoNombre: params.proyectoNombre
+						},
+						usuarioNombre ?? usuarioEmail
+					).then((r) => ({ mensaje: 'error' in r ? r.error : null }))
+				: await asegurarCuentaCobrarDeVenta(
 			client,
 			{
 				idProyecto: params.idProyecto,

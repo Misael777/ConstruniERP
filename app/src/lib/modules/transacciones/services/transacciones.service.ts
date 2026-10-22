@@ -1618,6 +1618,9 @@ export async function construirPayloadTransaccionPorCobro(
 	const numeroCuota = cobro.id_cobro
 		? await calcularNumeroCuota(client, 'cobros', 'id_cuenta_cobrar', 'id_cobro', 'fecha_cobro', cuentaCobrar.id_cuenta_cobrar, cobro.id_cobro)
 		: null;
+	// Finanzas de Obras: si la cuota es una armada o un pago de valorización, la descripción (= concepto del recibo) y
+	// la categoría salen de su grupo.
+	const obra = cobro.id_cobro ? await etiquetaCobroObra(client, cobro.id_cobro) : null;
 
 	return {
 		id_centro_costo_origen: idCentroOrigen,
@@ -1631,8 +1634,34 @@ forma_pago: formaPagoParaTransaccion(cuentaCobrar.forma_pago),
 		monto_total: cobro.monto,
 		medio_pago: cobro.medio_cobro !== null ? String(cobro.medio_cobro) : null,
 		cuente_destino: cobro.cuenta_banco,
-		descripcion: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${numeroCuota !== null ? ` - ${nombreCuota(numeroCuota)}` : ''}${cuentaCobrar.proyectoCodigo ? ` - ${cuentaCobrar.proyectoCodigo}` : ''}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
+		descripcion: obra
+			? `${obra.concepto}${cobro.referencia ? ' - ' + cobro.referencia : ''}`
+			: `Cobro de cuenta por cobrar #${cuentaCobrar.id_cuenta_cobrar}${numeroCuota !== null ? ` - ${nombreCuota(numeroCuota)}` : ''}${cuentaCobrar.proyectoCodigo ? ` - ${cuentaCobrar.proyectoCodigo}` : ''}${cobro.referencia ? ' - ' + cobro.referencia : ''}`,
+		...(obra ? { categoria: obra.categoria } : {}),
 		estado: 'activo'
+	};
+}
+
+/** Finanzas de Obras (ver cobranzaObra.service.ts): concepto y categoría de una cuota agrupada — "Adelanto 2" o
+ * "Valorización 2 - Pago 5 (partida)", con Pago N correlativo en toda la obra. null si la cuota no tiene grupo. */
+async function etiquetaCobroObra(client: SupabaseClient, idCobro: number): Promise<{ categoria: string; concepto: string } | null> {
+	const { data: c } = await client.from('cobros').select('id_grupo, partida, id_cuenta_cobrar, cobro_grupo(tipo, numero)').eq('id_cobro', idCobro).maybeSingle();
+	const grupo = (c as any)?.cobro_grupo;
+	if (!c?.id_grupo || !grupo) return null;
+	if (grupo.tipo === 'adelanto') return { categoria: 'Adelanto', concepto: grupo.numero > 1 ? `Adelanto ${grupo.numero}` : 'Adelanto' };
+	const { data: pagos } = await client
+		.from('cobros')
+		.select('id_cobro, fecha_cobro, cobro_grupo!inner(tipo, numero)')
+		.eq('id_cuenta_cobrar', c.id_cuenta_cobrar)
+		.eq('cobro_grupo.tipo', 'valorizacion')
+		.neq('estado_cobro', 'cancelado');
+	const orden = [...(pagos ?? [])].sort(
+		(a: any, b: any) => a.cobro_grupo.numero - b.cobro_grupo.numero || (a.fecha_cobro < b.fecha_cobro ? -1 : a.fecha_cobro > b.fecha_cobro ? 1 : 0) || a.id_cobro - b.id_cobro
+	);
+	const numeroPago = orden.findIndex((x: any) => x.id_cobro === idCobro) + 1;
+	return {
+		categoria: 'Valorización',
+		concepto: `Valorización ${grupo.numero} - Pago ${numeroPago}${(c as any).partida?.trim() ? ` (${(c as any).partida.trim()})` : ''}`
 	};
 }
 

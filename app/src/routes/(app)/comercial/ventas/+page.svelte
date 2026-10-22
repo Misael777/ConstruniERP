@@ -26,6 +26,8 @@ import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
 import { sanitizeFileSegment } from '$lib/shared/fileNaming';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 import ResumenCuentaModal, { type CampoResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
+import ResumenCobroObra from '$lib/modules/cobranza-obra/components/ResumenCobroObra.svelte';
+import { cuentaTieneGrupos } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services/ventasResumen.service';
 
 	const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -693,9 +695,19 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 		if (row.tipoVenta === 'consultoria') return 'Consultoría';
 		return row.tipoObra === 'SUP' ? 'Supervisión' : 'Obra';
 	}
+	// Finanzas de Obras: una venta de Obra con adelantos/valorizaciones muestra su Resumen de cobro de Obra (solo
+	// lectura; los cobros se registran desde Cuentas por Cobrar).
+	let resumenObraCuenta = $state<number | null>(null);
 	async function handleVerResumenEvent(e: CustomEvent) {
 		const row = e.detail.row;
 		if (!row?.id) return;
+		if (row.tipoVenta === 'obra') {
+			const { data: cc } = await supabase.from('cuentas_cobrar').select('id_cuenta_cobrar').eq('id_proyecto', row.id).eq('activo', true).limit(1).maybeSingle();
+			if (cc && (await cuentaTieneGrupos(supabase, cc.id_cuenta_cobrar))) {
+				resumenObraCuenta = cc.id_cuenta_cobrar;
+				return;
+			}
+		}
 		try {
 			resumenVentaDatos = await getResumenVenta(supabase, row.id);
 			resumenVentaFila = row;
@@ -1028,6 +1040,8 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
 />
+
+<ResumenCobroObra open={resumenObraCuenta !== null} idCuentaCobrar={resumenObraCuenta} titulo="Resumen de venta" soloLectura onClose={() => (resumenObraCuenta = null)} onCobrarPago={() => {}} />
 
 <!-- Resumen de venta (ícono ⓘ en Acciones): solo lectura, borrador o cerrada. -->
 <ResumenCuentaModal

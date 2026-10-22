@@ -20,6 +20,7 @@ import { NOMBRE_CLIENTE_PRESTAMOS } from '../../clientes/services/clientes.servi
 import type { Transaccion } from '../../transacciones/services/transacciones.service';
 import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
 import { referenciaArmada } from '$lib/shared/acuerdoDePago';
+import { cuentaTieneGrupos } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 
 /** Embed proyecto con los campos que generarCodigoProyecto necesita (mismo criterio que
  * getProyectoOptions más abajo) — a pedido explícito del usuario, para agregar el código del proyecto
@@ -509,6 +510,9 @@ export async function sincronizarCuotasProgramadas(
 	idCuentaCobrar: number,
 	fracciones: { fecha: string; monto: number; referencia?: string | null }[]
 ): Promise<{ success: boolean; message: string }> {
+	// Finanzas de Obras: las cuotas de una cuenta de Obra están agrupadas (adelantos/valorizaciones, cobro_grupo) y
+	// se gestionan desde su Resumen de cobro — borrarlas y recrearlas acá perdería los grupos y las partidas.
+	if (await cuentaTieneGrupos(client, idCuentaCobrar)) return { success: true, message: 'Cuenta de obra: las cuotas se gestionan desde el Resumen de cobro' };
 	if (fracciones.length > 0) {
 		const { data: cuenta } = await client.from(TABLE_NAME).select('monto, monto_cobrado').eq(PK_COLUMN, idCuentaCobrar).single();
 		const pendiente = Math.max(Number(cuenta?.monto ?? 0) - Number(cuenta?.monto_cobrado ?? 0), 0);
@@ -573,6 +577,9 @@ export async function updateCuentaCobrar(
 	const { data: cuotasActuales } = await client.from(COBRO_TABLE).select('fecha_cobro, monto').eq(PARENT_FK_COLUMN, id).eq('estado_cobro', 'programado');
 	const firma = (xs: { fecha: string; monto: number }[]) => JSON.stringify(xs.map((x) => [x.fecha, Number(x.monto)]).sort());
 	const sinCambios = firma((cuotasActuales ?? []).map((c: any) => ({ fecha: c.fecha_cobro, monto: c.monto }))) === firma(fraccionesPersonalizadas);
+	if (!sinCambios && (await cuentaTieneGrupos(client, id))) {
+		return { success: false, message: 'Esta cuenta es de una venta de Obra: sus adelantos, valorizaciones y pagos se programan desde el Resumen de cobro (ícono del ojo).' };
+	}
 	const errorFracciones = sinCambios ? null : validarSumaFracciones(saldoPendiente, fraccionesPersonalizadas);
 	if (errorFracciones) return { success: false, message: errorFracciones };
 	updateData.monto_cobrado = montoCobrado;
@@ -885,6 +892,29 @@ export async function updateCobro(
 }
 
 /**
+ * Finanzas de Obras: "Pendiente" de un pago de valorización en el Resumen de cobro de Obra abre directo "Editar
+ * Transacción" — esto arma el payload sugerido de una cuota programada SIN modificarla (mismo armado que updateCobro
+ * cuando pasa a 'cobrado'). Se confirma después con confirmarCobroCobrado.
+ */
+export async function prepararTransaccionDeCuota(client: SupabaseClient, idCobro: number): Promise<{ success: true; payload: Record<string, unknown> } | { success: false; message: string }> {
+	const { data: cobro } = await client.from(COBRO_TABLE).select('*').eq(COBRO_PK, idCobro).single();
+	if (!cobro) return { success: false, message: 'Pago no encontrado.' };
+	if (cobro.estado_cobro !== 'programado') return { success: false, message: 'Este pago ya no está pendiente.' };
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select(`id_cuenta_cobrar, id_centro_costo, id_cliente, tipo_documento, num_documento, forma_pago, cliente:id_cliente(nombre), ${PROYECTO_CODIGO_EMBED}`)
+		.eq(PK_COLUMN, cobro.id_cuenta_cobrar)
+		.single();
+	if (!cuenta?.id_centro_costo) return { success: false, message: 'La cuenta no tiene un Centro de Costo asignado (necesario para la transacción).' };
+	const payload = await construirPayloadTransaccionPorCobro(
+		client,
+		{ ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre, proyectoCodigo: codigoProyectoDe(cuenta) },
+		{ id_cobro: cobro.id_cobro, monto: Number(cobro.monto), fecha_cobro: cobro.fecha_cobro, medio_cobro: cobro.medio_cobro, cuenta_banco: cobro.cuenta_banco, referencia: cobro.referencia }
+	);
+	return payload ? { success: true, payload } : { success: false, message: 'No se pudo preparar la transacción del pago.' };
+}
+
+/**
  * Segundo paso, obligatorio, para pasar una cuota programada a 'cobrado': confirma el cobro como
  * 'cobrado' Y crea su transacción de respaldo en UNA sola llamada atómica a fn_confirmar_cobro (ver
  * financial_integrity_rpc_migration.sql) — mismo motivo/beneficio que confirmarPagoPagado en
@@ -1077,6 +1107,9 @@ async function montoDisponible(client: SupabaseClient, idCuentaCobrar: number): 
  * no queda ninguna otra cuota 'programado' para absorber la diferencia, no se toca nada.
  */
 async function rebalancearUltimaCuota(client: SupabaseClient, idCuentaCobrar: number, idCobroEditado: number): Promise<void> {
+	// Obra: cada pago pertenece a su valorización; la diferencia de un cobro no se pasa a otra cuota (el avance de la
+	// valorización lo refleja). fn_confirmar_cobro ya deja el resto de un cobro parcial dentro del mismo grupo.
+	if (await cuentaTieneGrupos(client, idCuentaCobrar)) return;
 	const { data: cuenta } = await client.from(TABLE_NAME).select('monto').eq(PK_COLUMN, idCuentaCobrar).single();
 	if (!cuenta) return;
 

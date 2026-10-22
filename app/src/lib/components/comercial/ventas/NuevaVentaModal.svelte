@@ -11,7 +11,9 @@
 	import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { createCuentaCobrar, confirmarCobroCobrado, deleteCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
-	import { permisosState, isAdmin } from '$lib/stores/permisos.svelte';
+	import { permisosState, isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
+	import { asegurarCuentaObra, registrarArmadas, getResumenCobroObra, type GrupoObra } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+	import { listarContratos, registrarContrato, marcarContratoVigente, type DocumentoContrato, type TipoContrato } from '$lib/modules/cobranza-obra/services/documentosVenta.service';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
@@ -151,9 +153,186 @@
 	// opcional para "Guardar venta" y obligatorio para cerrarla; en Editar venta se pide al cerrar si todavía no se
 	// registró ninguno (ver checkAdelantoExistente). Una fila totalmente vacía no cuenta (armadasUsadas).
 	let armadas = $state<ArmadaAdelanto[]>([]);
+	// Finanzas de Obras: en Obra se pueden registrar varios adelantos — `armadas` es el Adelanto 1 y `adelantosExtra`
+	// el 2, 3… ("+ Agregar adelanto", solo con el permiso registrar_adelantos_adicionales: el asesor registra solo el 1.º).
+	let adelantosExtra = $state<{ id: number; armadas: ArmadaAdelanto[] }[]>([]);
+	let siguienteAdelantoExtraId = 1;
+	const puedeAdelantosAdicionales = $derived(hasPermiso('registrar_adelantos_adicionales'));
 	const armadasConDatos = $derived(armadasUsadas(armadas));
-	const armadasCompletas = $derived(armadasConDatos.length > 0 && faltantesArmadas(armadas).length === 0);
-	const totalAdelanto = $derived(Math.round(armadasConDatos.reduce((s, a) => s + (Number(a.monto) > 0 ? Number(a.monto) : 0), 0) * 100) / 100);
+	/** Qué falta en todos los adelantos (el 1.º es obligatorio; uno adicional vacío no cuenta). */
+	function faltantesAdelantos(): string[] {
+		const varios = adelantosExtra.length > 0;
+		return [
+			...faltantesArmadas(armadas, varios ? 'Adelanto 1, ' : ''),
+			...adelantosExtra.flatMap((a, k) => faltantesArmadas(a.armadas, `Adelanto ${k + 2}, `, false))
+		];
+	}
+	const armadasCompletas = $derived(armadasConDatos.length > 0 && faltantesAdelantos().length === 0);
+	const totalAdelanto = $derived(
+		Math.round([armadas, ...adelantosExtra.map((a) => a.armadas)].flat().reduce((s, a) => s + (Number(a.monto) > 0 ? Number(a.monto) : 0), 0) * 100) / 100
+	);
+	function agregarAdelantoExtra() {
+		adelantosExtra = [...adelantosExtra, { id: siguienteAdelantoExtraId++, armadas: [nuevaArmada(fechaVenta || getFechaLocalHoy())] }];
+	}
+	function quitarAdelantoExtra(id: number) {
+		adelantosExtra = adelantosExtra.filter((a) => a.id !== id);
+	}
+
+	// ---- Finanzas de Obras: Editar venta de una venta de Obra CERRADA (imagen 5 del Excel del cliente) ----
+	// Adelantos ya registrados (solo lectura) + armadas nuevas por adelanto + adelantos nuevos (adelantosExtra), todo
+	// con el permiso registrar_adelantos_adicionales; contratos/adendas con historial; y el valor de venta/comisión se
+	// cambia solo por fn_ajustar_valor_venta (permiso ajustar_valor_venta), sin tocar cobros ni transacciones.
+	let cuentaObra = $state<{ id: number; idCentro: number | null; adelantos: GrupoObra[] } | null>(null);
+	let armadasNuevas = $state<Record<number, ArmadaAdelanto[]>>({});
+	let contratos = $state<DocumentoContrato[]>([]);
+	let nuevoContratoTipo = $state<TipoContrato>('Adenda');
+	let nuevoContratoMonto = $state('');
+	let mostrarFormContrato = $state(false);
+	const puedeAjustarValor = $derived(hasPermiso('ajustar_valor_venta'));
+	const totalAdelantosObraRegistrados = $derived(Math.round((cuentaObra?.adelantos ?? []).reduce((s, g) => s + g.total, 0) * 100) / 100);
+	const totalArmadasNuevas = $derived(
+		Math.round([...Object.values(armadasNuevas), ...adelantosExtra.map((a) => a.armadas)].flat().reduce((s, a) => s + (Number(a.monto) > 0 ? Number(a.monto) : 0), 0) * 100) / 100
+	);
+
+	async function cargarDatosObra(idProyecto: number, cerrada: boolean) {
+		cuentaObra = null;
+		armadasNuevas = {};
+		try {
+			contratos = await listarContratos(supabase, idProyecto);
+			if (!cerrada) return;
+			const { data: cc } = await supabase.from('cuentas_cobrar').select('id_cuenta_cobrar, id_centro_costo').eq('id_proyecto', idProyecto).eq('activo', true).limit(1).maybeSingle();
+			if (!cc) return;
+			const resumen = await getResumenCobroObra(supabase, cc.id_cuenta_cobrar);
+			cuentaObra = { id: cc.id_cuenta_cobrar, idCentro: cc.id_centro_costo, adelantos: resumen.adelantos };
+			armadasNuevas = Object.fromEntries(resumen.adelantos.map((g) => [g.id_grupo, [] as ArmadaAdelanto[]]));
+		} catch (err) {
+			console.error('[NuevaVentaModal] No se pudieron cargar los adelantos/contratos de la obra:', err);
+		}
+	}
+
+	/** Armadas nuevas de una venta de Obra cerrada: qué falta (ninguna es obligatoria). */
+	function faltantesObraCerrada(): string[] {
+		return [
+			...(cuentaObra?.adelantos ?? []).flatMap((g) => faltantesArmadas(armadasNuevas[g.id_grupo] ?? [], `Adelanto ${g.numero}, `, false, g.pagos.length + 1)),
+			...adelantosExtra.flatMap((a, k) => faltantesArmadas(a.armadas, `Adelanto ${(cuentaObra?.adelantos.length ?? 0) + k + 1}, `, false))
+		];
+	}
+
+	/** Guardar cambios de una venta de Obra cerrada: valor de venta (RPC) y armadas/adelantos nuevos. false = se cortó
+	 * (saveError ya tiene el motivo). */
+	async function guardarObraCerrada(basicos: DatosBasicosVenta): Promise<boolean> {
+		const valorAntes = Number(ventaOriginalRaw?.precio_venta ?? 0);
+		const comisionAntes = Number(ventaOriginalRaw?.comision_asesor ?? 0);
+		const cambiaValor = Math.abs(basicos.precioVenta - valorAntes) > 0.005 || Math.abs(basicos.comision - comisionAntes) > 0.0001;
+		const hayNuevas = Object.values(armadasNuevas).some((l) => armadasUsadas(l).length > 0) || adelantosExtra.some((a) => armadasUsadas(a.armadas).length > 0);
+
+		if (hayNuevas) {
+			const faltan = faltantesObraCerrada();
+			if (faltan.length) {
+				saveError = `Completa el adelanto — ${faltan.join('; ')}.`;
+				marcarFaltantes = true;
+				return false;
+			}
+			if (!puedeAdelantosAdicionales) {
+				saveError = 'No tienes permiso para registrar armadas o adelantos adicionales.';
+				return false;
+			}
+		}
+		if (cambiaValor) {
+			if (!puedeAjustarValor) {
+				saveError = 'No tienes permiso para cambiar el valor de venta o la comisión de una venta cerrada.';
+				return false;
+			}
+			const vigente = contratos.find((c) => c.vigente);
+			const { error } = await supabase.rpc('fn_ajustar_valor_venta', {
+				p_id_proyecto: Number(ventaId),
+				p_valor_nuevo: basicos.precioVenta,
+				p_comision_pct: basicos.comision,
+				p_id_documento: vigente?.id_documento ?? null,
+				p_motivo: vigente ? `Editar venta — ${vigente.tipo_documento} vigente: ${vigente.nombre}` : 'Editar venta',
+				p_usuario: permisosState.userName || basicos.asesorFinal
+			});
+			if (error) {
+				saveError = `No se pudo cambiar el valor de venta: ${error.message}`;
+				return false;
+			}
+		}
+		if (hayNuevas && cuentaObra) {
+			const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', basicos.clienteId, basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`);
+			if (!idCentroCliente || !cuentaObra.idCentro) {
+				saveError = 'No se pudo obtener el centro de costo del cliente o del proyecto.';
+				return false;
+			}
+			const vigente = contratos.find((c) => c.vigente);
+			const lotes: { idGrupo: number | null; lista: ArmadaAdelanto[] }[] = [
+				...cuentaObra.adelantos.map((g) => ({ idGrupo: g.id_grupo, lista: armadasNuevas[g.id_grupo] ?? [] })),
+				...adelantosExtra.map((a) => ({ idGrupo: null, lista: a.armadas }))
+			].filter((l) => armadasUsadas(l.lista).length > 0);
+			for (const lote of lotes) {
+				const subidas = await subirArmadas(Number(ventaId), lote.lista);
+				const r = await registrarArmadas(supabase, {
+					idCuentaCobrar: cuentaObra.id,
+					idGrupo: lote.idGrupo,
+					// Un adelanto NUEVO en una venta cerrada suele venir de una adenda: queda vinculado al contrato vigente.
+					idDocumento: lote.idGrupo ? null : (vigente?.id_documento ?? null),
+					idCentroCliente: Number(idCentroCliente),
+					idCentroProyecto: Number(cuentaObra.idCentro),
+					armadas: subidas,
+					usuarioEmail: basicos.sessionEmail,
+					usuarioNombre: permisosState.userName || basicos.asesorFinal
+				});
+				if (!r.success) {
+					saveError = r.message;
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	async function handleNuevoContratoObra(event: Event) {
+		const file = (event.currentTarget as HTMLInputElement).files?.[0];
+		(event.currentTarget as HTMLInputElement).value = '';
+		if (!file || !ventaId) return;
+		isUploadingContratoGestion = true;
+		saveError = '';
+		try {
+			const { url } = await uploadProjectDocument(file, { type: 'contrato', projectId: ventaId, projectName: proyectoNombre });
+			const r = await registrarContrato(supabase, {
+				idProyecto: Number(ventaId),
+				url,
+				nombre: file.name.replace(/\.[^.]+$/, ''),
+				tipo: nuevoContratoTipo,
+				monto: Number(nuevoContratoMonto) || null,
+				fileSize: file.size,
+				fileType: file.type,
+				usuario: permisosState.userName || null
+			});
+			if (!r.success) throw new Error(r.message);
+			localContratoUrl = url;
+			contratos = await listarContratos(supabase, Number(ventaId));
+			mostrarFormContrato = false;
+			nuevoContratoMonto = '';
+			toast.success(`${nuevoContratoTipo} registrada como documento actual.${nuevoContratoTipo === 'Adenda' ? ' Si cambia el valor de venta, actualízalo en Información general y guarda.' : ''}`);
+			onSaved();
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error subiendo contrato/adenda:', err);
+			saveError = `No se pudo subir el documento. ${describeError(err)}`;
+		} finally {
+			isUploadingContratoGestion = false;
+		}
+	}
+
+	async function handleMarcarContratoVigente(doc: DocumentoContrato) {
+		if (!ventaId || doc.vigente) return;
+		const r = await marcarContratoVigente(supabase, Number(ventaId), doc.id_documento);
+		if (!r.success) {
+			toast.error(`No se pudo marcar como actual: ${r.message}`);
+			return;
+		}
+		localContratoUrl = doc.storage_url;
+		contratos = await listarContratos(supabase, Number(ventaId));
+	}
 	/** Fecha de la primera armada (la más antigua) — es la fecha de la fila ADELANTO de la Forma de cobranza. */
 	const fechaPrimeraArmada = $derived(armadasConDatos.map((a) => a.fecha).filter(Boolean).sort()[0] ?? '');
 	/** Compatibilidad con el resto del formulario (Forma de cobranza, validaciones): el monto del adelanto es el
@@ -251,8 +430,12 @@
 	$effect(() => {
 		void totalAdelanto;
 		void fechaPrimeraArmada;
+		const tab = caracteristicasTab;
 		untrack(() => {
-			if (mode === 'create') sincronizarAdelantoCobranza();
+			// Obra no usa Forma de cobranza: sus valorizaciones se programan en el Resumen de cobro.
+			if (mode !== 'create') return;
+			if (tab === 'obra') hitosCobranza = [];
+			else sincronizarAdelantoCobranza();
 		});
 	});
 	/** Reparte `monto` en `n` partes iguales con céntimos exactos (la última absorbe el redondeo) — igual que
@@ -500,6 +683,7 @@
 				proformaFiles = [];
 				selectedFinalFileIndex = null;
 				armadas = [nuevaArmada(getFechaLocalHoy())];
+				adelantosExtra = [];
 				observaciones = '';
 				// A pedido explícito del usuario: arranca sin elegir, obliga a elegir en el nuevo dropdown
 				// "Tipo de Proyecto" (ver su declaración más arriba).
@@ -582,6 +766,7 @@
 			// A pedido del usuario: en Editar Venta, el Adelanto inicial arranca con la Fecha de venta
 			// del registro (no la fecha de hoy) — fechaVenta ya quedó fijada un par de líneas arriba.
 			armadas = [nuevaArmada(fechaVenta)];
+			adelantosExtra = [];
 
 			localContratoUrl = data.contrato || null;
 			localEstado = data.estado_proyecto || 'activo';
@@ -589,6 +774,11 @@
 
 			await loadProformas();
 			await checkAdelantoExistente();
+			if (data.tipo_venta === 'obra') await cargarDatosObra(id, data.estado_proyecto === 'venta_cerrada');
+			else {
+				cuentaObra = null;
+				contratos = [];
+			}
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cargando venta para editar:', err);
 			saveError = `No se pudo cargar la venta. ${describeError(err)}`;
@@ -926,6 +1116,12 @@ async function copiarCodigoGenerado() {
 			});
 
 			if (error) throw error;
+			// Obra cerrada (imagen 5): la proforma nueva (trabajos adicionales) pasa a ser la "Actual"; las demás, "Anterior".
+			if (esObraCerrada) {
+				const { data: nueva } = await supabase.from('documento_proyecto').select('id_documento').eq('id_proyecto', Number(ventaId)).eq('storage_url', url).order('id_documento', { ascending: false }).limit(1).single();
+				await supabase.from('documento_proyecto').update({ es_proforma_final: false }).eq('id_proyecto', Number(ventaId)).eq('es_proforma_final', true);
+				if (nueva) await supabase.from('documento_proyecto').update({ es_proforma_final: true }).eq('id_documento', nueva.id_documento);
+			}
 			await loadProformas();
 			onSaved();
 		} catch (err) {
@@ -1027,6 +1223,7 @@ async function copiarCodigoGenerado() {
 	// los bloqueos de "venta ya cerrada" (tabs, edición de proformas/cierre, botón "Cerrar venta")
 	// aplican igual para ambos.
 	let ventaFinalizada = $derived(localEstado === 'venta_cerrada' || localEstado === 'baja');
+	const esObraCerrada = $derived(mode === 'edit' && localEstado === 'venta_cerrada' && caracteristicasTab === 'obra');
 
 	// A pedido del usuario: una vez cerrada la venta, ya no se puede cambiar de Consultoría a Obra (ni
 	// al revés) — el tipo de proyecto queda fijo. Solo en modo edición, y solo aplica una vez cerrada
@@ -1106,13 +1303,13 @@ async function copiarCodigoGenerado() {
 			falta(proformaFiles.length === 0, 'proformas', 'Proformas (agrega al menos una)');
 			falta(proformaFiles.length > 0 && selectedFinalFileIndex === null, 'proformas', 'Proforma final (marca una)');
 			// Ticket #102: el adelanto en armadas — qué le falta a cada una y que el total no pase el Valor venta.
-			for (const detalle of faltantesArmadas(armadas)) falta(true, 'adelantoArmadas', `Adelanto (${detalle})`);
+			for (const detalle of faltantesAdelantos()) falta(true, 'adelantoArmadas', `Adelanto (${detalle})`);
 			falta(totalAdelanto > Number(valorVenta), 'adelantoArmadas', 'Adelanto (no puede ser mayor que el Valor venta)');
 		} else {
 			falta(selectedFinalId === null, 'proformasGestion', 'Proforma final (marca una)');
 			falta(!(Number(montoFinalVenta) > 0), 'montoFinal', 'Monto final de la venta');
 			if (!adelantoYaRegistrado) {
-				for (const detalle of faltantesArmadas(armadas)) falta(true, 'adelantoGestion', `Adelanto (${detalle})`);
+				for (const detalle of faltantesAdelantos()) falta(true, 'adelantoGestion', `Adelanto (${detalle})`);
 				falta(totalAdelanto > Number(montoFinalVenta), 'adelantoGestion', 'Adelanto (no puede ser mayor que el monto final)');
 			}
 		}
@@ -1148,9 +1345,9 @@ async function copiarCodigoGenerado() {
 
 	/** Ticket #102: sube el comprobante de cada armada a Drive (en orden) y devuelve los datos para registrar
 	 * sus transacciones. */
-	async function subirArmadas(idProyecto: number): Promise<{ monto: number; fecha: string; comprobanteUrl: string; observacion: string }[]> {
+	async function subirArmadas(idProyecto: number, lista: ArmadaAdelanto[] = armadasConDatos): Promise<{ monto: number; fecha: string; comprobanteUrl: string; observacion: string }[]> {
 		const subidas: { monto: number; fecha: string; comprobanteUrl: string; observacion: string }[] = [];
-		for (const a of armadasConDatos) {
+		for (const a of armadasUsadas(lista)) {
 			const { url } = await uploadProjectDocument(a.file!, { type: 'comprobante', projectId: idProyecto, projectName: proyectoNombre });
 			subidas.push({ monto: redondear2(Number(a.monto)), fecha: a.fecha, comprobanteUrl: url, observacion: a.observacion.trim() });
 		}
@@ -1175,6 +1372,11 @@ async function copiarCodigoGenerado() {
 			// El adelanto puede haberse registrado ya al crear la venta — en ese caso no hace falta
 			// pedirlo/crearlo de nuevo acá.
 			const adelantos = !adelantoYaRegistrado ? await subirArmadas(Number(ventaId)) : undefined;
+			// Obra: Adelanto 2, 3… (cada uno con sus armadas); los vacíos no se mandan.
+			const adelantosExtraSubidos: Awaited<ReturnType<typeof subirArmadas>>[] = [];
+			if (!adelantoYaRegistrado && caracteristicasTab === 'obra') {
+				for (const a of adelantosExtra) if (armadasUsadas(a.armadas).length) adelantosExtraSubidos.push(await subirArmadas(Number(ventaId), a.armadas));
+			}
 
 			const cierreParams = {
 				idProyecto: Number(ventaId),
@@ -1187,6 +1389,7 @@ async function copiarCodigoGenerado() {
 				montoFinalVenta: Number(montoFinalVenta),
 				adelantoYaRegistrado,
 				adelantos,
+				adelantosExtra: adelantosExtraSubidos,
 				// Mismas columnas que actualiza "Guardar cambios" (ver proyectoUpdatePayload en
 				// handleGuardar) — precio_venta/costo_estima/estado_proyecto quedan fuera, esos ya los
 				// fija cerrarVentaAprobada a partir de montoFinalVenta.
@@ -1313,7 +1516,7 @@ async function copiarCodigoGenerado() {
 		// Ticket #102: el adelanto es opcional para "Guardar venta", pero una armada empezada tiene que estar
 		// completa (monto, fecha y comprobante) — antes de insertar nada.
 		if (mode === 'create' && armadasConDatos.length > 0) {
-			const faltan = faltantesArmadas(armadas);
+			const faltan = faltantesAdelantos();
 			if (faltan.length > 0) {
 				saveError = `Completa el adelanto — ${faltan.join('; ')}. Si todavía no hay adelanto, deja la armada vacía.`;
 				return null;
@@ -1499,111 +1702,130 @@ async function copiarCodigoGenerado() {
 				const idCentroCliente = await getOrCrearCentroCostoParaEntidad(supabase, 'cliente', clienteId, clienteNombreFinal || `Cliente #${clienteId}`);
 				if (!idCentroCliente) throw new Error('No se pudo obtener el centro de costo del cliente para registrar el adelanto.');
 
-				const subidas = await subirArmadas(nuevoProyectoId);
-				const payloadArmada = (a: (typeof subidas)[number], i: number) => ({
-					tipo_alcance: 'externa',
-					id_centro_costo_origen: idCentroCliente,
-					id_centro_costo_destino: idCentroCosto,
-					fecha: a.fecha,
-					monto_total: a.monto,
-					tipo: 'ingreso',
-					// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
-					// porque el adelanto siempre se pide en Soles en este formulario. Sin esto,
-					// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
-					// se creaba ni la transacción del adelanto ni la venta.
-					tipo_moneda: 'soles',
-					// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
-					// 'Adelanto' es la categoría de Ingreso correcta para este movimiento.
-					categoria: 'Adelanto',
-					// N° de cuota: todas las armadas son el "Adelanto" (cuota 1, ver acuerdoDePago.ts), así la lista
-					// de Transacciones lo nombra igual que el Resumen de cobro.
-					tipo_transaccion: '1',
-					estado: 'activo',
-					comprobante_url: a.comprobanteUrl,
-					descripcion: `Adelanto inicial${subidas.length > 1 ? ` (${i + 1}/${subidas.length})` : ''}${a.observacion ? ` - ${a.observacion}` : ''} - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
-				});
-
-				const filaAdelanto = hitosCobranza.find((h) => h.esAdelanto);
-				if (filaAdelanto) {
-					// "Forma de cobranza": UNA Cuenta por Cobrar del proyecto por el Valor venta. Ticket #102: cada
-					// armada es su propia cuota (con su fecha y su monto, referencia "Adelanto – Nª armada") y después
-					// van las cuotas (1ER ABONO, ...). Cada cuota de armada se confirma en el acto como 'cobrado' con
-					// fn_confirmar_cobro, que crea su transacción y la vincula — así la cuenta nace con el adelanto ya
-					// descontado del saldo.
-					// "Observaciones" de la cuenta admite 200 caracteres (columna VARCHAR(200) + maxLength del config):
-					// con 4+ cuotas o hitos largos el resumen completo no cabía, createCuentaCobrar rechazaba la
-					// cuenta con "Revisa los campos marcados" y la venta entera se revertía (cliente 2026-10-09).
-					// Se usa la versión más detallada que quepa; el detalle completo vive en cada cuota (fecha,
-					// monto y su Hito de cobro en cobros.referencia).
-					const PREFIJO_OBS = 'Forma de cobranza definida al crear la venta — ';
-					const conHito = hitosCobranza
-						.map((h, i) => `${nombreHitoCobranza(h, i)}${h.concepto.trim() ? ` [${h.concepto.trim()}]` : ''}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
-						.join('; ');
-					const sinHito = hitosCobranza
-						.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
-						.join('; ');
-					const detalle =
-						[conHito, sinHito].find((t) => (PREFIJO_OBS + t).length <= 200) ??
-						`${hitosCobranza.length} cuotas por ${formatCurrency(precioVenta)} (ver el cronograma de la cuenta)`;
-					const fraccionesArmadas = subidas.map((a, i) => ({
-						fecha: a.fecha,
-						monto: a.monto,
-						referencia: subidas.length > 1 ? referenciaArmada(i) : filaAdelanto.concepto
-					}));
-					const fraccionesCuotas = hitosCobranza.filter((h) => !h.esAdelanto).map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }));
-					const fracciones = [...fraccionesArmadas, ...fraccionesCuotas];
-					const fechas = fracciones.map((f) => f.fecha).sort();
-					const cuentaResult = await createCuentaCobrar(
-						supabase,
-						{
-							id_cliente: clienteId,
-							id_centro_costo: idCentroCosto,
-							id_proyecto: nuevoProyectoId,
-							monto: precioVenta,
-							forma_pago: '3', // 'Por Porcentaje' — ver cuentaCobrar.config.ts
-							'condición_pago': fracciones.length,
-							responsable: asesorFinal,
-							fecha_emision: fechaInicio,
-							fecha_vencimiento: fechas[fechas.length - 1],
-							moneda: 'PEN',
-							observaciones: `${PREFIJO_OBS}${detalle}`
-						},
-						asesorFinal,
-						fracciones
-					);
-					if (!cuentaResult.success || !cuentaResult.data) {
-						// Los errores de validación son de campos de la Cuenta por Cobrar, que no están en este formulario:
-						// se nombran en el mensaje (antes solo decía "Revisa los campos marcados", sin marcar nada).
-						const detalleErrores = Object.values(cuentaResult.errors ?? {}).join('; ');
-						throw new Error(`No se pudo crear la Cuenta por Cobrar de la Forma de cobranza: ${detalleErrores || cuentaResult.message || 'error desconocido'}.`);
-					}
-					idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
-
-					// La cuota de cada armada: misma fecha y monto (la primera libre que calce, en orden de creación).
-					const { data: cuotas, error: cuotasError } = await supabase
-						.from('cobros')
-						.select('id_cobro, monto, fecha_cobro')
-						.eq('id_cuenta_cobrar', idCuentaCobrarCreada)
-						.eq('estado_cobro', 'programado')
-						.order('id_cobro', { ascending: true });
-					if (cuotasError) throw cuotasError;
-					const libres = [...(cuotas ?? [])];
-					for (const [i, a] of subidas.entries()) {
-						const indice = libres.findIndex((c: any) => Math.abs(Number(c.monto) - a.monto) < 0.01 && c.fecha_cobro === a.fecha);
-						if (indice < 0) throw new Error(`No se encontró la cuota de la ${i + 1}.ª armada del adelanto en la Cuenta por Cobrar recién creada.`);
-						const [cuota] = libres.splice(indice, 1);
-						const cobroResult = await confirmarCobroCobrado(supabase, cuota.id_cobro, payloadArmada(a, i), sessionEmail, permisosState.userName || null);
-						if (!cobroResult.success || !cobroResult.data?.id_transaccion) throw new Error(cobroResult.message || 'No se pudo registrar la transacción del adelanto.');
-						if (!transaccionAdelanto) {
-							const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', cobroResult.data.id_transaccion).single();
+				if (caracteristicasTab === 'obra') {
+					// Finanzas de Obras: Cuenta por Cobrar sin cuotas + un grupo por adelanto con sus armadas como cuotas
+					// cobradas (cobranzaObra.service.ts). Sin Forma de cobranza: las valorizaciones se programan en el
+					// Resumen de cobro.
+					const cta = await asegurarCuentaObra(supabase, { idProyecto: nuevoProyectoId, idCliente: clienteId, idCentroCosto: Number(idCentroCosto), montoVenta: precioVenta, fechaVenta: fechaInicio, responsable: asesorFinal, proyectoNombre }, asesorFinal);
+					if ('error' in cta) throw new Error(`No se pudo crear la Cuenta por Cobrar de la obra: ${cta.error}`);
+					idCuentaCobrarCreada = cta.idCuentaCobrar;
+					const listas = [armadas, ...adelantosExtra.map((x) => x.armadas)].filter((l) => armadasUsadas(l).length > 0);
+					for (const lista of listas) {
+						const subidasObra = await subirArmadas(nuevoProyectoId, lista);
+						const r = await registrarArmadas(supabase, { idCuentaCobrar: cta.idCuentaCobrar, idCentroCliente: Number(idCentroCliente), idCentroProyecto: Number(idCentroCosto), armadas: subidasObra, usuarioEmail: sessionEmail, usuarioNombre: permisosState.userName || asesorFinal });
+						if (!r.success) throw new Error(r.message);
+						if (!transaccionAdelanto && r.transacciones[0]) {
+							const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', r.transacciones[0]).single();
 							transaccionAdelanto = (tx as Transaccion) ?? null;
 						}
 					}
 				} else {
-					for (const [i, a] of subidas.entries()) {
-						const transResult = await createTransaccion(supabase, payloadArmada(a, i), sessionEmail, permisosState.userName || null);
-						if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
-						transaccionAdelanto ??= transResult.data ?? null;
+					const subidas = await subirArmadas(nuevoProyectoId);
+					const payloadArmada = (a: (typeof subidas)[number], i: number) => ({
+						tipo_alcance: 'externa',
+						id_centro_costo_origen: idCentroCliente,
+						id_centro_costo_destino: idCentroCosto,
+						fecha: a.fecha,
+						monto_total: a.monto,
+						tipo: 'ingreso',
+						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
+						// porque el adelanto siempre se pide en Soles en este formulario. Sin esto,
+						// createTransaccion fallaba con "Revisa los campos marcados" (validatePayload) y no
+						// se creaba ni la transacción del adelanto ni la venta.
+						tipo_moneda: 'soles',
+						// categoria pasó a ser obligatoria en transaccion.config.ts (a pedido del usuario) —
+						// 'Adelanto' es la categoría de Ingreso correcta para este movimiento.
+						categoria: 'Adelanto',
+						// N° de cuota: todas las armadas son el "Adelanto" (cuota 1, ver acuerdoDePago.ts), así la lista
+						// de Transacciones lo nombra igual que el Resumen de cobro.
+						tipo_transaccion: '1',
+						estado: 'activo',
+						comprobante_url: a.comprobanteUrl,
+						descripcion: `Adelanto inicial${subidas.length > 1 ? ` (${i + 1}/${subidas.length})` : ''}${a.observacion ? ` - ${a.observacion}` : ''} - ${proyectoNombre} (proyecto #${nuevoProyectoId})`
+					});
+
+					const filaAdelanto = hitosCobranza.find((h) => h.esAdelanto);
+					if (filaAdelanto) {
+						// "Forma de cobranza": UNA Cuenta por Cobrar del proyecto por el Valor venta. Ticket #102: cada
+						// armada es su propia cuota (con su fecha y su monto, referencia "Adelanto – Nª armada") y después
+						// van las cuotas (1ER ABONO, ...). Cada cuota de armada se confirma en el acto como 'cobrado' con
+						// fn_confirmar_cobro, que crea su transacción y la vincula — así la cuenta nace con el adelanto ya
+						// descontado del saldo.
+						// "Observaciones" de la cuenta admite 200 caracteres (columna VARCHAR(200) + maxLength del config):
+						// con 4+ cuotas o hitos largos el resumen completo no cabía, createCuentaCobrar rechazaba la
+						// cuenta con "Revisa los campos marcados" y la venta entera se revertía (cliente 2026-10-09).
+						// Se usa la versión más detallada que quepa; el detalle completo vive en cada cuota (fecha,
+						// monto y su Hito de cobro en cobros.referencia).
+						const PREFIJO_OBS = 'Forma de cobranza definida al crear la venta — ';
+						const conHito = hitosCobranza
+							.map((h, i) => `${nombreHitoCobranza(h, i)}${h.concepto.trim() ? ` [${h.concepto.trim()}]` : ''}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+							.join('; ');
+						const sinHito = hitosCobranza
+							.map((h, i) => `${nombreHitoCobranza(h, i)}: ${formatearValor((h.importe / precioVenta) * 100)}% = ${formatCurrency(h.importe)} (${h.fechaEstimada})`)
+							.join('; ');
+						const detalle =
+							[conHito, sinHito].find((t) => (PREFIJO_OBS + t).length <= 200) ??
+							`${hitosCobranza.length} cuotas por ${formatCurrency(precioVenta)} (ver el cronograma de la cuenta)`;
+						const fraccionesArmadas = subidas.map((a, i) => ({
+							fecha: a.fecha,
+							monto: a.monto,
+							referencia: subidas.length > 1 ? referenciaArmada(i) : filaAdelanto.concepto
+						}));
+						const fraccionesCuotas = hitosCobranza.filter((h) => !h.esAdelanto).map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }));
+						const fracciones = [...fraccionesArmadas, ...fraccionesCuotas];
+						const fechas = fracciones.map((f) => f.fecha).sort();
+						const cuentaResult = await createCuentaCobrar(
+							supabase,
+							{
+								id_cliente: clienteId,
+								id_centro_costo: idCentroCosto,
+								id_proyecto: nuevoProyectoId,
+								monto: precioVenta,
+								forma_pago: '3', // 'Por Porcentaje' — ver cuentaCobrar.config.ts
+								'condición_pago': fracciones.length,
+								responsable: asesorFinal,
+								fecha_emision: fechaInicio,
+								fecha_vencimiento: fechas[fechas.length - 1],
+								moneda: 'PEN',
+								observaciones: `${PREFIJO_OBS}${detalle}`
+							},
+							asesorFinal,
+							fracciones
+						);
+						if (!cuentaResult.success || !cuentaResult.data) {
+							// Los errores de validación son de campos de la Cuenta por Cobrar, que no están en este formulario:
+							// se nombran en el mensaje (antes solo decía "Revisa los campos marcados", sin marcar nada).
+							const detalleErrores = Object.values(cuentaResult.errors ?? {}).join('; ');
+							throw new Error(`No se pudo crear la Cuenta por Cobrar de la Forma de cobranza: ${detalleErrores || cuentaResult.message || 'error desconocido'}.`);
+						}
+						idCuentaCobrarCreada = cuentaResult.data.id_cuenta_cobrar;
+
+						// La cuota de cada armada: misma fecha y monto (la primera libre que calce, en orden de creación).
+						const { data: cuotas, error: cuotasError } = await supabase
+							.from('cobros')
+							.select('id_cobro, monto, fecha_cobro')
+							.eq('id_cuenta_cobrar', idCuentaCobrarCreada)
+							.eq('estado_cobro', 'programado')
+							.order('id_cobro', { ascending: true });
+						if (cuotasError) throw cuotasError;
+						const libres = [...(cuotas ?? [])];
+						for (const [i, a] of subidas.entries()) {
+							const indice = libres.findIndex((c: any) => Math.abs(Number(c.monto) - a.monto) < 0.01 && c.fecha_cobro === a.fecha);
+							if (indice < 0) throw new Error(`No se encontró la cuota de la ${i + 1}.ª armada del adelanto en la Cuenta por Cobrar recién creada.`);
+							const [cuota] = libres.splice(indice, 1);
+							const cobroResult = await confirmarCobroCobrado(supabase, cuota.id_cobro, payloadArmada(a, i), sessionEmail, permisosState.userName || null);
+							if (!cobroResult.success || !cobroResult.data?.id_transaccion) throw new Error(cobroResult.message || 'No se pudo registrar la transacción del adelanto.');
+							if (!transaccionAdelanto) {
+								const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', cobroResult.data.id_transaccion).single();
+								transaccionAdelanto = (tx as Transaccion) ?? null;
+							}
+						}
+					} else {
+						for (const [i, a] of subidas.entries()) {
+							const transResult = await createTransaccion(supabase, payloadArmada(a, i), sessionEmail, permisosState.userName || null);
+							if (!transResult.success) throw new Error(transResult.message || 'No se pudo registrar la transacción del adelanto.');
+							transaccionAdelanto ??= transResult.data ?? null;
+						}
 					}
 				}
 			}
@@ -1655,7 +1877,12 @@ async function copiarCodigoGenerado() {
 		// original — ventas/+page.svelte los usa para filtrar "mis ventas" de un no-administrador; si
 		// un admin edita la venta de otro asesor, no debe reasignarse solo por guardar cambios). ===
 		if (mode === 'edit' && ventaId) {
-			const proyectoUpdatePayload = {
+			// Obra cerrada: valor de venta (RPC) y armadas/adelantos nuevos van primero, por su propio camino.
+			if (esObraCerrada && !(await guardarObraCerrada(basicos))) {
+				isSaving = false;
+				return;
+			}
+			const proyectoUpdatePayload: Record<string, unknown> = {
 				id_cliente: basicos.clienteId,
 				nombre_proyecto: proyectoNombre,
 				fecha_inicio_plan: basicos.fechaInicio,
@@ -1682,6 +1909,12 @@ async function copiarCodigoGenerado() {
 				direccion_predio: direccionPredio?.trim() ? direccionPredio.trim() : null,
 				descripcion: observaciones?.trim() ? observaciones.trim() : null
 			};
+			// El valor y la comisión de una Obra cerrada solo los cambia fn_ajustar_valor_venta (ya corrió arriba).
+			if (esObraCerrada) {
+				delete proyectoUpdatePayload.precio_venta;
+				delete proyectoUpdatePayload.costo_estima;
+				delete proyectoUpdatePayload.comision_asesor;
+			}
 
 			// A pedido del usuario: un no-administrador ya no guarda los cambios directo — se envía una
 			// solicitud de aprobación con el payload propuesto, visible para todos los admins en la
@@ -1813,6 +2046,44 @@ async function copiarCodigoGenerado() {
 		}
 	}
 </script>
+
+{#snippet registroAdelanto(valorBase: number, etiquetaValor: string)}
+	{#if caracteristicasTab === 'obra'}
+		<!-- Finanzas de Obras (imagen 1 del Excel del cliente): Adelanto 1, 2… cada uno con sus armadas. -->
+		<div class="space-y-6">
+			<ArmadasAdelanto
+				bind:armadas
+				modoObra
+				titulo="Adelanto 1"
+				valorVenta={valorBase}
+				{etiquetaValor}
+				fechaPorDefecto={fechaVenta || getFechaLocalHoy()}
+				{marcarFaltantes}
+				mostrarResumen={adelantosExtra.length === 0}
+				totalAdelantosGlobal={totalAdelanto}
+				onAgregarAdelanto={adelantosExtra.length === 0 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
+			/>
+			{#each adelantosExtra as extra, k (extra.id)}
+				<ArmadasAdelanto
+					bind:armadas={extra.armadas}
+					modoObra
+					titulo={`Adelanto ${k + 2}`}
+					valorVenta={valorBase}
+					{etiquetaValor}
+					fechaPorDefecto={fechaVenta || getFechaLocalHoy()}
+					{marcarFaltantes}
+					mostrarInfo={false}
+					mostrarResumen={k === adelantosExtra.length - 1}
+					totalAdelantosGlobal={totalAdelanto}
+					onAgregarAdelanto={k === adelantosExtra.length - 1 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
+					onQuitarAdelanto={() => quitarAdelantoExtra(extra.id)}
+				/>
+			{/each}
+		</div>
+	{:else}
+		<ArmadasAdelanto bind:armadas valorVenta={valorBase} fechaPorDefecto={fechaVenta || getFechaLocalHoy()} {etiquetaValor} {marcarFaltantes} />
+	{/if}
+{/snippet}
 
 {#if isOpen}
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto" transition:fade={{duration: 200}}>
@@ -2064,11 +2335,11 @@ async function copiarCodigoGenerado() {
 							<div class="w-1.5 h-4 bg-blue-600 rounded-full"></div>
 							Registro del adelanto
 						</h3>
-						<ArmadasAdelanto bind:armadas valorVenta={Number(valorVenta) || 0} fechaPorDefecto={fechaVenta || getFechaLocalHoy()} marcarFaltantes={marcarFaltantes} />
+						{@render registroAdelanto(Number(valorVenta) || 0, 'Valor venta total')}
 					</section>
 					{/if}
 
-					{#if mode === 'create' && Number(adelantoMonto) > 0}
+					{#if mode === 'create' && Number(adelantoMonto) > 0 && caracteristicasTab !== 'obra'}
 					<!-- Forma de cobranza: se abre sola al ingresar el Monto del adelanto (Consultoría y Obra) — ver
 					     hitosCobranza más arriba. -->
 					<section class="border-t border-slate-100 pt-6">
@@ -2197,13 +2468,13 @@ async function copiarCodigoGenerado() {
 						<div data-campo="proformasGestion" class:campo-faltante={faltaCampo('proformasGestion')} class="mt-4">
 							<div class="flex items-center justify-between mb-3">
 								<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide">Proformas</h4>
-								{#if !ventaFinalizada}
+								{#if !ventaFinalizada || (esObraCerrada && puedeAjustarValor)}
 									<label class="cursor-pointer px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 flex items-center gap-1.5 transition-colors">
 										<input type="file" accept="application/pdf" class="hidden" onchange={handleAddProformaFileGestion} disabled={isUploadingProformaGestion} />
 										{#if isUploadingProformaGestion}
 											<i class="fas fa-spinner fa-spin"></i> Subiendo...
 										{:else}
-											<i class="fas fa-plus"></i> Agregar proforma
+											<i class="fas fa-plus"></i> {esObraCerrada ? 'Agregar nueva proforma' : 'Agregar proforma'}
 										{/if}
 									</label>
 								{/if}
@@ -2240,7 +2511,9 @@ async function copiarCodigoGenerado() {
 												<p class="text-sm font-medium text-slate-700 truncate">{doc.nombre}</p>
 												<p class="text-[11px] text-slate-400">{fmtDate(doc.created_at)} · {fmtSize(doc.file_size)}</p>
 											</div>
-											{#if doc.es_proforma_final}
+											{#if esObraCerrada}
+												<span class={`shrink-0 px-2 py-0.5 rounded-md text-[10px] font-bold border ${doc.es_proforma_final ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>{doc.es_proforma_final ? 'Actual' : 'Anterior'}</span>
+											{:else if doc.es_proforma_final}
 												<span class="shrink-0 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold border border-emerald-200">Final</span>
 											{/if}
 											<button onclick={() => handleVerProforma(doc)} class="shrink-0 text-slate-400 hover:text-blue-600 p-1.5 rounded transition-colors" title="Ver" aria-label="Ver proforma">
@@ -2259,6 +2532,69 @@ async function copiarCodigoGenerado() {
 
 						<!-- Contrato -->
 						<div class="mt-6 border-t border-slate-100 pt-5">
+							{#if caracteristicasTab === 'obra'}
+								<!-- Finanzas de Obras: contratos y adendas con historial (Actual / Anterior), ver documentosVenta.service.ts. -->
+								<div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+									<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide">Contrato</h4>
+									{#if !ventaFinalizada || puedeAjustarValor}
+										<button type="button" onclick={() => (mostrarFormContrato = !mostrarFormContrato)} class="px-3 py-1.5 border border-blue-200 rounded-lg text-xs font-semibold text-blue-600 hover:bg-blue-50 flex items-center gap-1.5">
+											<i class="fas fa-plus"></i> Agregar nuevo contrato u Adenda
+										</button>
+									{/if}
+								</div>
+								{#if mostrarFormContrato}
+									<div class="mb-3 p-3 rounded-xl border border-blue-100 bg-blue-50/50 flex flex-wrap items-end gap-3">
+										<label class="flex flex-col gap-1 text-xs font-semibold text-[#0f3b5e]">
+											Tipo
+											<select bind:value={nuevoContratoTipo} class="px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm">
+												<option value="Contrato">Contrato</option>
+												<option value="Adenda">Adenda</option>
+											</select>
+										</label>
+										<label class="flex flex-col gap-1 text-xs font-semibold text-[#0f3b5e]">
+											Monto (S/, opcional)
+											<input type="number" min="0" step="0.01" bind:value={nuevoContratoMonto} placeholder="Ej. 55500" class="w-36 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-sm" />
+										</label>
+										<label class="cursor-pointer px-3 py-2 border border-dashed border-slate-300 rounded-lg text-sm text-slate-600 bg-white hover:bg-slate-50 flex items-center gap-2">
+											<input type="file" accept="application/pdf" class="hidden" onchange={handleNuevoContratoObra} disabled={isUploadingContratoGestion} />
+											{#if isUploadingContratoGestion}<i class="fas fa-spinner fa-spin"></i> Subiendo...{:else}<i class="fas fa-cloud-upload-alt"></i> Elegir PDF y guardar{/if}
+										</label>
+										<p class="w-full text-[11px] text-slate-500">El documento nuevo queda como <b>Actual</b> y el anterior como <b>Anterior</b>. Si la adenda cambia el valor de venta, actualízalo en Información general y guarda.</p>
+									</div>
+								{/if}
+								{#if contratos.length > 0}
+									<div class="space-y-2">
+										{#each contratos as doc (doc.id_documento)}
+											<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
+												{#if doc.vigente}
+													<i class="fas fa-check-circle text-emerald-500 shrink-0" title="Documento actual"></i>
+												{:else if !ventaFinalizada || puedeAjustarValor}
+													<button type="button" onclick={() => handleMarcarContratoVigente(doc)} class="shrink-0 w-4 h-4 rounded-full border-2 border-slate-300 hover:border-blue-500" title="Marcar como actual" aria-label="Marcar como actual"></button>
+												{:else}
+													<span class="w-4 shrink-0"></span>
+												{/if}
+												<i class="far fa-file-pdf text-rose-500 shrink-0"></i>
+												<div class="min-w-0 flex-1">
+													<p class="text-sm font-medium text-slate-700 truncate">{doc.tipo_documento === 'Adenda' ? 'ADENDA · ' : ''}{doc.nombre}</p>
+													<p class="text-[11px] text-slate-400">{fmtDate(doc.created_at)}{doc.file_size ? ` · ${fmtSize(doc.file_size)}` : ''}{doc.monto ? ` · ${formatCurrency(doc.monto)}` : ''}</p>
+												</div>
+												<span class={`shrink-0 px-2 py-0.5 rounded-md text-[10px] font-bold border ${doc.vigente ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>{doc.vigente ? 'Actual' : 'Anterior'}</span>
+												{#if doc.storage_url}
+													<button type="button" onclick={() => { previewUrl = doc.storage_url!; previewTitle = doc.nombre; previewOpen = true; }} class="shrink-0 text-slate-400 hover:text-blue-600 p-1.5 rounded" title="Ver" aria-label="Ver documento"><i class="fas fa-eye"></i></button>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{:else if localContratoUrl}
+									<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
+										<i class="far fa-file-pdf text-rose-500 shrink-0"></i>
+										<p class="text-sm font-medium text-slate-700 flex-1">Contrato adjunto</p>
+										<button onclick={handleVerContrato} class="shrink-0 text-slate-400 hover:text-blue-600 p-1.5 rounded" title="Ver" aria-label="Ver contrato"><i class="fas fa-eye"></i></button>
+									</div>
+								{:else}
+									<p class="text-sm text-slate-400 py-3 text-center border-2 border-dashed border-slate-200 rounded-xl">Aún no se adjuntó ningún contrato.</p>
+								{/if}
+							{:else}
 							<h4 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-3">Contrato</h4>
 							{#if localContratoUrl}
 								<div class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
@@ -2288,7 +2624,59 @@ async function copiarCodigoGenerado() {
 									{/if}
 								</label>
 							{/if}
+							{/if}
 						</div>
+
+						<!-- Finanzas de Obras: Registro de adelanto de una Obra cerrada (imagen 5) — los registrados en solo lectura y,
+						     con el permiso, armadas nuevas por adelanto y adelantos nuevos (se guardan con "Guardar cambios"). -->
+						{#if esObraCerrada && cuentaObra}
+							<div data-campo="adelantoGestion" class="mt-6 border-t border-slate-100 pt-5 space-y-6">
+								<h4 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+									<div class="w-1.5 h-4 bg-blue-600 rounded-full"></div>
+									Registro de adelanto
+								</h4>
+								{#if cuentaObra.adelantos.length === 0 && adelantosExtra.length === 0}
+									<p class="text-sm text-slate-400">Esta venta todavía no tiene adelantos registrados.</p>
+									{#if puedeAdelantosAdicionales}
+										<button type="button" onclick={agregarAdelantoExtra} class="px-3 py-2 border border-blue-200 text-blue-600 rounded-lg text-xs font-semibold hover:bg-blue-50"><i class="fas fa-plus"></i> Agregar adelanto</button>
+									{/if}
+								{/if}
+								{#each cuentaObra.adelantos as g, k (g.id_grupo)}
+									<ArmadasAdelanto
+										bind:armadas={armadasNuevas[g.id_grupo]}
+										modoObra
+										titulo={`Adelanto ${g.numero}`}
+										valorVenta={Number(valorVenta) || 0}
+										fechaPorDefecto={getFechaLocalHoy()}
+										{marcarFaltantes}
+										mostrarInfo={k === 0}
+										armadasRegistradas={g.pagos.map((p) => ({ monto: p.monto, fecha: p.fecha, comprobante_url: p.comprobante_url, observacion: p.observacion }))}
+										puedeAgregarArmadas={puedeAdelantosAdicionales}
+										mostrarResumen={k === cuentaObra.adelantos.length - 1 && adelantosExtra.length === 0}
+										totalAdelantosGlobal={totalAdelantosObraRegistrados + totalArmadasNuevas}
+										onAgregarAdelanto={k === cuentaObra.adelantos.length - 1 && adelantosExtra.length === 0 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
+									/>
+								{/each}
+								{#each adelantosExtra as extra, k (extra.id)}
+									<ArmadasAdelanto
+										bind:armadas={extra.armadas}
+										modoObra
+										titulo={`Adelanto ${cuentaObra.adelantos.length + k + 1}`}
+										valorVenta={Number(valorVenta) || 0}
+										fechaPorDefecto={getFechaLocalHoy()}
+										{marcarFaltantes}
+										mostrarInfo={false}
+										mostrarResumen={k === adelantosExtra.length - 1}
+										totalAdelantosGlobal={totalAdelantosObraRegistrados + totalArmadasNuevas}
+										onAgregarAdelanto={k === adelantosExtra.length - 1 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
+										onQuitarAdelanto={() => quitarAdelantoExtra(extra.id)}
+									/>
+								{/each}
+								{#if !puedeAdelantosAdicionales}
+									<p class="text-[11px] text-slate-400">Solo un usuario con el permiso "Registrar adelantos adicionales" puede agregar armadas o adelantos a una venta cerrada.</p>
+								{/if}
+							</div>
+						{/if}
 
 						<!-- Cierre financiero: monto final de la venta + adelanto inicial -->
 						{#if !ventaFinalizada}
@@ -2317,7 +2705,7 @@ async function copiarCodigoGenerado() {
 									</div>
 								{:else}
 									<p class="text-xs text-slate-400 mb-3">Pago inicial que confirma la venta — obligatorio para cerrarla. Si llegó en varios depósitos, registra cada uno como una armada.</p>
-									<ArmadasAdelanto bind:armadas valorVenta={Number(montoFinalVenta) || 0} fechaPorDefecto={fechaVenta || getFechaLocalHoy()} etiquetaValor="Monto final de la venta" marcarFaltantes={marcarFaltantes} />
+									{@render registroAdelanto(Number(montoFinalVenta) || 0, 'Monto final de la venta')}
 								{/if}
 							</div>
 						{/if}

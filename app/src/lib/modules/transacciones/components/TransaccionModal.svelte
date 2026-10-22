@@ -2038,10 +2038,11 @@
 			else claseDestino = 'otro';
 		}
 	});
+	// Finanzas de Obras (decisión 21/10/2026): solo Adelanto y Valorización — que un depósito es una armada o viene de
+	// una adenda ya lo dice su grupo (cobro_grupo) y su concepto ("Adelanto 2 - Armada 1").
 	const CATEGORIA_OBRA_INGRESO: FieldOption[] = [
 		{ value: 'Adelanto', label: 'Adelanto' },
-		{ value: 'Valorización', label: 'Valorización' },
-		{ value: 'Adenda', label: 'Adenda' }
+		{ value: 'Valorización', label: 'Valorización' }
 	];
 	const CATEGORIA_OBRA_EGRESO: FieldOption[] = [
 		{ value: 'Sub Contrata', label: 'Sub Contrata' },
@@ -2579,6 +2580,8 @@
 			}
 			return todas;
 		}
+		// Cobro de una venta de Obra (ej. "Pendiente" de un pago de valorización en el Resumen de cobro): Adelanto/Valorización.
+		if (field.key === 'categoria' && esConfirmarCobro && esProyectoDeObra) return CATEGORIA_OBRA_INGRESO;
 		if (field.key === 'categoria' && esConfirmarCobro) return CATEGORIA_CONFIRMAR_COBRO;
 		// A pedido explícito del usuario: en Egreso, basta con que Clase="Otro"/"Préstamo"/"Tributo" para
 		// que "Categoría" ofrezca su catálogo reducido correspondiente (Inyecciones/Préstamo para
