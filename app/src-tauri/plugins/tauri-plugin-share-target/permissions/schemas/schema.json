@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the compartir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-compartir",
+          "markdownDescription": "Enables the compartir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the compartir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-compartir",
+          "markdownDescription": "Denies the compartir command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_pending_share command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-pending-share",
@@ -307,16 +319,22 @@
           "markdownDescription": "Denies the get_pending_share command without any pre-configured scope."
         },
         {
-          "description": "Permisos por defecto del plugin share-target.\n#### This default permission set includes:\n\n- `allow-get-pending-share`",
+          "description": "Permisos por defecto del plugin share-target.\n#### This default permission set includes:\n\n- `allow-get-pending-share`\n- `allow-compartir`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Permisos por defecto del plugin share-target.\n#### This default permission set includes:\n\n- `allow-get-pending-share`"
+          "markdownDescription": "Permisos por defecto del plugin share-target.\n#### This default permission set includes:\n\n- `allow-get-pending-share`\n- `allow-compartir`"
         },
         {
           "description": "Permite leer, si existe, la imagen que otra app acaba de compartir con Construni ERP (Share Sheet de Android).",
           "type": "string",
           "const": "allow-get-pending-share",
           "markdownDescription": "Permite leer, si existe, la imagen que otra app acaba de compartir con Construni ERP (Share Sheet de Android)."
+        },
+        {
+          "description": "Permite abrir el Share Sheet de Android para enviar el comprobante y el mensaje de una transacción (ticket #83).",
+          "type": "string",
+          "const": "allow-compartir",
+          "markdownDescription": "Permite abrir el Share Sheet de Android para enviar el comprobante y el mensaje de una transacción (ticket #83)."
         }
       ]
     }

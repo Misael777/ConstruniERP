@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use tauri::{plugin::PluginApi, AppHandle, Runtime};
 
-use crate::PendingShare;
+use crate::{CompartirPayload, PendingShare};
 
 pub fn init<R: Runtime, C: DeserializeOwned>(app: &AppHandle<R>, _api: PluginApi<R, C>) -> tauri::Result<ShareTarget<R>> {
     Ok(ShareTarget(app.clone()))
@@ -15,5 +15,10 @@ pub struct ShareTarget<R: Runtime>(#[allow(dead_code)] AppHandle<R>);
 impl<R: Runtime> ShareTarget<R> {
     pub fn get_pending_share(&self) -> tauri::Result<Option<PendingShare>> {
         Ok(None)
+    }
+
+    /// Sin Share Sheet nativo en escritorio: el frontend usa navigator.share o el portapapeles.
+    pub fn compartir(&self, _payload: CompartirPayload) -> Result<(), String> {
+        Err("Compartir nativo no disponible en escritorio".into())
     }
 }

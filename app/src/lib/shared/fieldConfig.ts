@@ -53,6 +53,9 @@ export interface FieldConfig {
 	placeholder?: string;
 	helpText?: string;
 	showInTable?: boolean;
+	/** Se ofrece en el panel "Filtros" (ColumnFilterBar) aunque no sea una columna de la tabla — ticket #87
+	 * (Prioridad en Cuentas por Cobrar/Pagar, que se dibuja aparte como insignia). */
+	filterable?: boolean;
 	showInForm?: boolean;
 	sortable?: boolean;
 	defaultSort?: 'asc' | 'desc';
@@ -328,7 +331,7 @@ export function columnFilterKind(field: FieldConfig): ColumnFilterValue['kind'] 
 export function emptyColumnFilters(fields: FieldConfig[]): ColumnFilters {
 	const result: ColumnFilters = {};
 	for (const field of fields) {
-		if (!field.showInTable) continue;
+		if (!field.showInTable && !field.filterable) continue;
 		const kind = columnFilterKind(field);
 		result[field.key] =
 			kind === 'text'

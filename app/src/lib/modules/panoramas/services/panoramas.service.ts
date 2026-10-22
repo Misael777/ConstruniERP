@@ -828,10 +828,13 @@ export async function getResumenCobros(client: SupabaseClient): Promise<ResumenC
 	// H6: lo cobrado de cada cuenta sale de SUS PROPIOS cobros 'cobrado', no de los ingresos al centro de costo.
 	const idsCuentas = rows.map((r) => r.id_cuenta_cobrar as number);
 	const { data: cobradosRows } =
-		idsCuentas.length > 0 ? await client.from('cobros').select('id_cuenta_cobrar, monto').in('id_cuenta_cobrar', idsCuentas).eq('estado_cobro', 'cobrado') : { data: [] };
+		idsCuentas.length > 0 ? await client.from('cobros').select('id_cuenta_cobrar, monto, estado_cobro, fecha_cobro').in('id_cuenta_cobrar', idsCuentas).in('estado_cobro', ['cobrado', 'programado']) : { data: [] };
 	const cobradoMap: Record<number, number> = {};
-	for (const c of (cobradosRows ?? []) as { id_cuenta_cobrar: number; monto: number }[]) {
-		cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+	// Ticket #92: misma regla que Cuentas por Cobrar — la cuota pendiente más próxima también cuenta para "Vencido".
+	const proximaCuotaMap: Record<number, string> = {};
+	for (const c of (cobradosRows ?? []) as { id_cuenta_cobrar: number; monto: number; estado_cobro: string; fecha_cobro: string }[]) {
+		if (c.estado_cobro === 'cobrado') cobradoMap[c.id_cuenta_cobrar] = Number(((cobradoMap[c.id_cuenta_cobrar] ?? 0) + Number(c.monto)).toFixed(2));
+		else if (c.fecha_cobro && (!proximaCuotaMap[c.id_cuenta_cobrar] || c.fecha_cobro < proximaCuotaMap[c.id_cuenta_cobrar])) proximaCuotaMap[c.id_cuenta_cobrar] = String(c.fecha_cobro).slice(0, 10);
 	}
 
 	const actualizaciones: { id: number; estado: string; saldo: number; recibido: number }[] = [];
@@ -839,7 +842,7 @@ export async function getResumenCobros(client: SupabaseClient): Promise<ResumenC
 		.map((r) => {
 			const recibido = cobradoMap[r.id_cuenta_cobrar] ?? 0;
 			const saldo = Math.max(Number(r.monto) - recibido, 0);
-			const estado = computeEstadoCuentaCobrar(saldo, r.fecha_vencimiento);
+			const estado = computeEstadoCuentaCobrar(saldo, r.fecha_vencimiento, proximaCuotaMap[r.id_cuenta_cobrar] ?? null);
 			const sinCambios = estado === r.estado && Math.abs(saldo - Number(r.saldo_pendiente)) < 0.01 && Math.abs(recibido - Number(r.monto_cobrado ?? 0)) < 0.01;
 			if (!sinCambios) actualizaciones.push({ id: r.id_cuenta_cobrar, estado, saldo, recibido });
 			return { id_cliente: r.id_cliente, saldo, estado };

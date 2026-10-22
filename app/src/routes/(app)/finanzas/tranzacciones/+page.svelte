@@ -5,11 +5,12 @@
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { pendingShareState } from '$lib/stores/pendingShare.svelte';
 	import { setMobileFabActions } from '$lib/stores/mobileFab.svelte';
 	import { Plus, Pencil, Trash2, Search, ChevronUp, ChevronDown, X, ArrowLeftRight, ListTree, FileText, ShieldCheck, Wallet, LayoutGrid, CalendarDays, Eye, Info, Lock, MessageSquare, Copy, Loader2 } from '@lucide/svelte';
-	import { armarMensajeEgreso, armarMensajeIngreso, armarMensajeIngresoEfectivo } from '$lib/shared/mensajeR2';
+	import { armarMensajeEgreso, armarMensajeIngreso, armarMensajeIngresoEfectivo, armarMensajeEgresoParaProveedor, armarMensajeIngresoParaCliente } from '$lib/shared/mensajeR2';
+	import DetalleTransaccionModal from '$lib/modules/transacciones/components/DetalleTransaccionModal.svelte';
 	import { getFacturaEmitidaDocumento } from '$lib/modules/facturacion/services/facturacion.service';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import AdminConfirmModal from '$lib/shared/components/AdminConfirmModal.svelte';
@@ -353,7 +354,8 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_transacciones')) {
 			goto('/dashboard');
 			return;
 		}
@@ -486,37 +488,30 @@
 	// `msjeCargandoId` (spinner instantáneo) por si en el futuro vuelve a necesitar una consulta puntual.
 	let mensajeR2Texto = $state<string | null>(null);
 	let msjeCargandoId = $state<number | null>(null);
+	/** Mensaje interno ("Msje") y, para el ticket #83, el mismo dato redactado para el proveedor/cliente. */
+	function mensajesDe(item: Transaccion): { propio: string; tercero: string } {
+		if (item.tipo === 'ingreso') {
+			const datos = {
+				monto: item.monto_total,
+				fecha: item.fecha,
+				cliente: centroCostoLabel(item.id_centro_costo_origen),
+				cuentaBancaria: cuentaBancoLookup.get(item.cuente_destino ?? '') ?? item.cuente_destino ?? '—',
+				nombreProyecto: centroCostoNombre(item.id_centro_costo_destino)
+			};
+			return { propio: item.medio_pago === '1' ? armarMensajeIngresoEfectivo(datos) : armarMensajeIngreso(datos), tercero: armarMensajeIngresoParaCliente(datos) };
+		}
+		const datos = {
+			monto: item.monto_total,
+			proveedor: centroCostoLabel(item.id_centro_costo_destino),
+			cuentaBancaria: cuentaBancoLookup.get(item.cuente_origen ?? '') ?? item.cuente_origen ?? '—',
+			fecha: item.fecha
+		};
+		return { propio: armarMensajeEgreso({ ...datos, usuario: permisosState.userName || 'Usuario' }), tercero: armarMensajeEgresoParaProveedor(datos) };
+	}
 	function mostrarMsjeDe(item: Transaccion) {
 		msjeCargandoId = item.id_transaccion;
 		try {
-			if (item.tipo === 'ingreso') {
-				const cuentaDestino = cuentaBancoLookup.get(item.cuente_destino ?? '') ?? item.cuente_destino ?? '—';
-				if (item.medio_pago === '1') {
-					mensajeR2Texto = armarMensajeIngresoEfectivo({
-						monto: item.monto_total,
-						fecha: item.fecha,
-						cliente: centroCostoLabel(item.id_centro_costo_origen),
-						cuentaBancaria: cuentaDestino,
-						nombreProyecto: centroCostoNombre(item.id_centro_costo_destino)
-					});
-				} else {
-					mensajeR2Texto = armarMensajeIngreso({
-						monto: item.monto_total,
-						fecha: item.fecha,
-						cliente: centroCostoLabel(item.id_centro_costo_origen),
-						cuentaBancaria: cuentaDestino,
-						nombreProyecto: centroCostoNombre(item.id_centro_costo_destino)
-					});
-				}
-			} else {
-				mensajeR2Texto = armarMensajeEgreso({
-					usuario: permisosState.userName || 'Usuario',
-					monto: item.monto_total,
-					proveedor: centroCostoLabel(item.id_centro_costo_destino),
-					cuentaBancaria: cuentaBancoLookup.get(item.cuente_origen ?? '') ?? item.cuente_origen ?? '—',
-					fecha: item.fecha
-				});
-			}
+			mensajeR2Texto = mensajesDe(item).propio;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo armar el mensaje');
 		} finally {
@@ -672,9 +667,28 @@
 		editingDetalle = null;
 	}
 
-	async function handleSaved() {
+	// Ticket #83: al terminar de REGISTRAR un Ingreso o Egreso externo se abre "Detalle de Transacción"
+	// (resultado, comprobante, mensaje y botones de compartir). Al editar no se abre.
+	let detalleTx = $state<{ tipo: 'ingreso' | 'egreso'; monto: number; fechaHora: string; comprobanteUrl: string | null; mensaje: string; mensajeTercero: string } | null>(null);
+	function fechaHoraDe(item: Transaccion): string {
+		const [a, m, d] = String(item.fecha).slice(0, 10).split('-');
+		const creada = (item as any).created_at ? new Date((item as any).created_at) : new Date();
+		const hora = creada.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', hour12: true });
+		return `${d}/${m}/${a} - ${hora}`;
+	}
+	async function handleSaved(guardada?: { transaccion: Transaccion | null; creada: boolean }) {
 		await fetchList();
 		if (calendarCargado) await fetchCalendarData();
+		const tx = guardada?.creada ? guardada.transaccion : null;
+		if (!tx || tx.tipo_alcance !== 'externa' || (tx.tipo !== 'ingreso' && tx.tipo !== 'egreso')) return;
+		// Se prefiere la fila recién leída de la lista (trae todo lo necesario para las etiquetas).
+		const item = items.find((t) => t.id_transaccion === tx.id_transaccion) ?? tx;
+		try {
+			const { propio, tercero } = mensajesDe(item);
+			detalleTx = { tipo: item.tipo as 'ingreso' | 'egreso', monto: Number(item.monto_total), fechaHora: fechaHoraDe(item), comprobanteUrl: item.comprobante_url ?? null, mensaje: propio, mensajeTercero: tercero };
+		} catch (err) {
+			console.error('[tranzacciones] No se pudo armar el Detalle de Transacción:', err);
+		}
 	}
 
 	async function handleDetalleSaved() {
@@ -1024,6 +1038,17 @@
 	forceReadOnly={viewOnly}
 	onClose={closeModal}
 	onSaved={handleSaved}
+/>
+<DetalleTransaccionModal
+	open={detalleTx !== null}
+	tipo={detalleTx?.tipo ?? 'egreso'}
+	monto={detalleTx?.monto ?? 0}
+	fechaHora={detalleTx?.fechaHora ?? ''}
+	comprobanteUrl={detalleTx?.comprobanteUrl ?? null}
+	mensaje={detalleTx?.mensaje ?? ''}
+	mensajeTercero={detalleTx?.mensajeTercero ?? ''}
+	tercero={detalleTx?.tipo === 'ingreso' ? 'cliente' : 'proveedor'}
+	onClose={() => (detalleTx = null)}
 />
 <TransDetalleModal open={detalleModalOpen} idTransaccion={selectedId} detalle={editingDetalle} dynamicOptions={detalleDynamicOptions} onClose={closeDetalleModal} onSaved={handleDetalleSaved} />
 <DocumentPreviewModal open={previewOpen} documents={previewDocuments} title={previewTitle} onClose={() => (previewOpen = false)} />

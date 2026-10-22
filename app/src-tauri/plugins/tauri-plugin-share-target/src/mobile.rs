@@ -4,7 +4,7 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::PendingShare;
+use crate::{CompartirPayload, PendingShare};
 
 // Identificador del plugin Kotlin — debe calzar con el `package` declarado en SharePlugin.kt y con
 // `register_android_plugin(identifier, className)` abajo. Solo Android está implementado (no hay
@@ -24,5 +24,10 @@ impl<R: Runtime> ShareTarget<R> {
     /// que se manda `()` como payload.
     pub fn get_pending_share(&self) -> tauri::Result<Option<PendingShare>> {
         Ok(self.0.run_mobile_plugin("getPendingShare", ())?)
+    }
+
+    /// Ticket #83: abre el Share Sheet con el comprobante + mensaje (ver SharePlugin.compartir).
+    pub fn compartir(&self, payload: CompartirPayload) -> Result<(), String> {
+        self.0.run_mobile_plugin::<()>("compartir", payload).map_err(|e| e.to_string())
     }
 }

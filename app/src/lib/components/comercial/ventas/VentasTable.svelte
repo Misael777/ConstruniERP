@@ -493,6 +493,10 @@
 					{/each}
 				</div>
 			{/if}
+			<!-- Ticket #86: botón "Aceptar" para cerrar el filtro al terminar de elegir (abajo a la izquierda). -->
+			<div class="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
+				<button type="button" onclick={cerrarFiltro} class="px-4 py-1.5 rounded-lg bg-[#0f3b5e] text-white text-sm font-semibold hover:bg-[#0c3150]">Aceptar</button>
+			</div>
 		</div>
 	{/if}
 

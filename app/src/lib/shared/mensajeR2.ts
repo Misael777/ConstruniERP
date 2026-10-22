@@ -62,3 +62,14 @@ export interface DatosMensajeIngresoEfectivo {
 export function armarMensajeIngresoEfectivo(datos: DatosMensajeIngresoEfectivo): string {
 	return `Se ha registrado un ingreso en efectivo de ${formatCurrency(datos.monto)}, el día ${formatearFechaCorta(datos.fecha)} del cliente ${datos.cliente}, a la cuenta a nombre de ${datos.cuentaBancaria}, por el proyecto ${datos.nombreProyecto}`;
 }
+
+/** Ticket #83 — "Compartir a proveedor": mismo pago de armarMensajeEgreso, pero redactado para enviarlo
+ * al propio proveedor (en tercera persona, sin "Yo, …"), como en la imagen de referencia del cliente. */
+export function armarMensajeEgresoParaProveedor(datos: Omit<DatosMensajeEgreso, 'usuario'>): string {
+	return `Se pagó ${formatCurrency(datos.monto)} al proveedor ${datos.proveedor}, realizado a la cuenta de ${datos.cuentaBancaria}, con fecha ${formatearFechaCorta(datos.fecha)}.`;
+}
+
+/** Ticket #83 — "Compartir a cliente": confirmación del ingreso redactada para enviarla al cliente. */
+export function armarMensajeIngresoParaCliente(datos: DatosMensajeIngreso): string {
+	return `Se registró el pago recibido de ${formatCurrency(datos.monto)} del cliente ${datos.cliente}, con fecha ${formatearFechaCorta(datos.fecha)}, por el proyecto ${datos.nombreProyecto}.`;
+}

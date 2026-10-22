@@ -42,6 +42,7 @@
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getSaldosCuentaBanco, getMonedasCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { formatearFechaCorta } from '$lib/shared/pdfFormatoUtil';
+	import { getUltimasAperturasPorCuentaBanco } from '$lib/modules/control-financiero/services/conciliacion.service';
 	import { generarComprobanteTransferenciaInternaBase64, construirHtmlCompleto as construirHtmlInterna, type DatosComprobanteInterno } from '$lib/shared/comprobanteTransferenciaInterna';
 	import { generarReciboPagoBase64, construirHtmlCompleto as construirHtmlReciboPago, type DatosReciboPago } from '$lib/shared/reciboPagoEfectivo';
 	import { generarReciboPagoProveedorBase64, construirHtmlCompleto as construirHtmlReciboProveedor, type DatosReciboPagoProveedor } from '$lib/shared/reciboPagoProveedor';
@@ -59,6 +60,7 @@
 	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables, getCuentaPagarPorTransaccion } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables, getCuentaCobrarPorTransaccion } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
+	import { COMPROBANTE_POR_TIPO_DOCUMENTO } from '$lib/modules/facturacion/services/facturacion.service';
 
 	/** Algunos orígenes de archivo (ej. selector de galería en el WebView de Android) no informan bien
 	 * `File.type` — llega vacío o genérico ("application/octet-stream") aunque el archivo SÍ sea una
@@ -93,7 +95,9 @@
 		transaccion: Transaccion | null;
 		dynamicOptions?: Record<string, FieldOption[]>;
 		onClose: () => void;
-		onSaved: () => void;
+		/** Ticket #83: en el guardado principal recibe la transacción guardada y si fue recién creada (para
+		 * abrir "Detalle de Transacción"). Los demás llamadores pueden ignorar el argumento. */
+		onSaved: (guardada?: { transaccion: Transaccion | null; creada: boolean }) => void;
 		/** Cuando se pasa, reemplaza el alta/edición normal: se usa para el flujo "confirmar cobro/pago"
 		 * (ver +page.svelte de cuentas-cobrar/cuentas-pagar) donde esta transacción es la prueba
 		 * obligatoria de un cobro/pago que recién pasa a 'cobrado'/'pagado' — crearla aquí Y enlazarla
@@ -140,6 +144,23 @@
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
+	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. Solo los que
+	 * tienen pestaña en Gestión de Comprobantes (COMPROBANTE_POR_TIPO_DOCUMENTO) se pueden "Generar" desde acá;
+	 * Recibo por Honorarios y Comprobante de Venta todavía no se emiten desde el ERP. */
+	const TIPOS_COMPROBANTE_INGRESO = [
+		{ value: '1', label: 'Factura' },
+		{ value: '3', label: 'Recibo por Honorarios' },
+		{ value: '2', label: 'Boleta de Venta' },
+		{ value: '12', label: 'Comprobante de Venta' },
+		{ value: '10', label: 'Nota de Crédito' },
+		{ value: '11', label: 'Nota de Débito' }
+	];
+	const tipoComprobanteEmitible = (tipo: string) => tipo in COMPROBANTE_POR_TIPO_DOCUMENTO;
+	function onTipoComprobanteErpChange(v: string) {
+		handleInput('tipo_documento', v);
+		if (!tipoComprobanteEmitible(v)) generarComprobanteErp = 'no';
+	}
+
 	function buildInitialValues(): Record<string, string> {
 		const values: Record<string, string> = {};
 		for (const field of formFields) {
@@ -164,7 +185,7 @@
 		// más abajo) arranca en 'Factura' ('1') si no trae ya uno de los 4 valores de ese catálogo — así
 		// una transacción vieja (de antes de este campo, o con un tipo_documento de otro flujo) no
 		// aparece con un valor extraño ni vacío. A pedido explícito del usuario.
-		if (values.tipo === 'ingreso' && !['1', '2', '10', '11'].includes(values.tipo_documento)) values.tipo_documento = '1';
+		if (values.tipo === 'ingreso' && !TIPOS_COMPROBANTE_INGRESO.some((t) => t.value === values.tipo_documento)) values.tipo_documento = '1';
 		return values;
 	}
 
@@ -1302,6 +1323,16 @@
 		const masked = applyFieldMask(field, rawValue);
 		formValues = { ...formValues, [key]: masked };
 		if (key === 'medio_pago') medioPagoAuto = false;
+		// Ticket #89: elegir una cuenta bancaria (no de efectivo) con Medio de Pago "Efectivo" lo cambia a
+		// "Transferencia bancaria" — ver efectivoPrimero.
+		if ((key === 'cuente_destino' || key === 'cuente_origen') && masked && String(formValues.medio_pago ?? '') === '1') {
+			const etiqueta = (dynamicOptions.cuenta_banco || []).find((o) => o.value === masked)?.label ?? '';
+			if (etiqueta && !/efectivo/i.test(etiqueta)) {
+				formValues = { ...formValues, medio_pago: '2' };
+				medioPagoAuto = false;
+				toast.info('Elegiste una cuenta bancaria: el Medio de pago cambió a "Transferencia bancaria".');
+			}
+		}
 		// Categoría depende de Tipo (ver optionsWhen en transaccion.config.ts) y, si el proyecto es de
 		// Obra, también del Centro de Costo elegido (ver esProyectoDeObra) — si cualquiera de los tres
 		// cambia, la categoría elegida antes puede ya no ser válida, así que se limpia para que el
@@ -1823,7 +1854,12 @@
 	// formateaba en Soles (ver formatCurrency), sin importar la moneda real. Ver getMonedasCuentaBanco/
 	// simboloMonedaCuenta más abajo.
 	let monedasCuentaBanco = $state<Record<string, string>>({});
+	// Ticket #90: Apertura Financiera vigente por cuenta bancaria (ver avisoApertura).
+	let aperturasCuentaBanco = $state<Record<string, { monto: number; fecha_corte: string }>>({});
 	async function cargarSaldos() {
+		getUltimasAperturasPorCuentaBanco(supabase)
+			.then((m) => (aperturasCuentaBanco = m))
+			.catch((err) => console.warn('[TransaccionModal] No se pudieron cargar las aperturas financieras:', err));
 		try {
 			const [cuentas, centros, monedas] = await Promise.all([getSaldosCuentaBanco(supabase), getSaldosCentroCosto(supabase), getMonedasCuentaBanco(supabase)]);
 			saldosCuentaBanco = cuentas;
@@ -2323,6 +2359,34 @@
 	function filtrarCuentasEfectivo(opciones: FieldOption[]): FieldOption[] {
 		return opciones.filter((o) => /efectivo/i.test(o.label));
 	}
+	/** Ticket #89: con Medio de Pago "Efectivo" antes SOLO se ofrecían las cuentas de efectivo, y al editar un
+	 * adelanto que había quedado en Efectivo no aparecía la cuenta bancaria real (había que adivinar que primero
+	 * se cambiaba el Medio de Pago). Ahora van primero las de efectivo y después las bancarias; si se elige una
+	 * bancaria, el Medio de Pago pasa solo a "Transferencia bancaria" (ver handleInput), así nunca se guarda
+	 * Efectivo con una cuenta bancaria. */
+	/** Ticket #90: si la fecha de la transacción es igual o anterior al corte de la Apertura Financiera de alguna
+	 * de sus cuentas bancarias, el movimiento se guarda pero NO cambia el saldo de esa cuenta (el saldo de
+	 * apertura ya lo incluye, ver fn_recalcular_saldo_cuenta_banco). Pasaba al cargar ventas antiguas con su
+	 * fecha real después de registrar una apertura: el saldo "no se actualizaba". */
+	const avisoApertura = $derived.by(() => {
+		const fecha = String(formValues.fecha ?? '').slice(0, 10);
+		if (!fecha) return '';
+		const avisos: string[] = [];
+		for (const numero of [formValues.cuente_origen, formValues.cuente_destino]) {
+			const n = String(numero ?? '').trim();
+			const apertura = n ? aperturasCuentaBanco[n] : undefined;
+			if (!apertura || fecha > apertura.fecha_corte) continue;
+			const etiqueta = (dynamicOptions.cuenta_banco || []).find((o) => o.value === n)?.label ?? n;
+			avisos.push(`"${etiqueta}" (apertura al ${formatearFechaCorta(apertura.fecha_corte)})`);
+		}
+		return avisos.length
+			? `Esta fecha es igual o anterior a la Apertura Financiera de ${avisos.join(' y ')}: la transacción se guarda, pero no cambia el saldo de esa cuenta, porque el saldo de apertura ya debería incluirla.`
+			: '';
+	});
+	function efectivoPrimero(opciones: FieldOption[]): FieldOption[] {
+		const efectivo = filtrarCuentasEfectivo(opciones);
+		return [...efectivo, ...opciones.filter((o) => !efectivo.includes(o))];
+	}
 	/** A pedido explícito del usuario: "Cuenta Origen"/"Cuenta Destino" solo ofrecen las cuentas
 	 * bancarias de la MISMA moneda que "Tipo de Moneda" (ver monedasCuentaBanco/getMonedasCuentaBanco)
 	 * — con Soles, solo cuentas en soles; con Dólares, solo cuentas en dólares. Si el valor ya elegido
@@ -2498,13 +2562,13 @@
 			// qué compartir la moneda del origen. Fuera de Interna (Externa+Ingreso), se mantiene el filtro
 			// por moneda de siempre.
 			const todas = bloqueadoPorInterna ? dynamicOptions.cuenta_banco || [] : filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_destino);
-			return medioPagoEsEfectivo ? filtrarCuentasEfectivo(todas) : todas;
+			return medioPagoEsEfectivo ? efectivoPrimero(todas) : todas;
 		}
 		if (field.key === 'cuente_origen' && cuentaOrigenEsBancaria) {
 			const todas = filtrarCuentasPorMoneda(dynamicOptions.cuenta_banco || [], formValues.cuente_origen);
 			// Efectivo: solo cuentas de caja chica/fondo (ver filtrarCuentasEfectivo) — manda sobre el
 			// filtro de "cuentas que recibieron algún Ingreso" de abajo, no se combinan.
-			if (medioPagoEsEfectivo) return filtrarCuentasEfectivo(todas);
+			if (medioPagoEsEfectivo) return efectivoPrimero(todas);
 			// Egreso Y Transacción Interna: prioriza las cuentas que recibieron algún Ingreso de este
 			// Centro de Costo Origen (ver cuentasBancoIngresosOrigen) — si esa lista sale vacía (el centro
 			// nunca recibió ningún Ingreso), cae de vuelta a TODAS las cuentas registradas, para no dejar
@@ -3009,7 +3073,7 @@
 					cargarDraft(colaIndex);
 				} else {
 					toast.success(result.message ?? 'Operación realizada con éxito');
-					onSaved();
+					onSaved({ transaccion: (result.data as Transaccion | undefined) ?? null, creada: mode === 'create' });
 					onClose();
 					// Ver editandoPrestamo/redirigirAEditarCuentaPrestamo más arriba — la transacción ya se
 					// actualizó, esto solo abre (mejor esfuerzo, nunca bloquea ni deshace lo ya guardado) la
@@ -3017,7 +3081,7 @@
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
 					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
-					if (generarComprobanteErp === 'si' && mostrarComprobanteErp) {
+					if (generarComprobanteErp === 'si' && mostrarComprobanteErp && tipoComprobanteEmitible(formValues.tipo_documento)) {
 						if (transaccion?.id_factura) {
 							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
 						} else {
@@ -3117,7 +3181,7 @@
 		{:else if isBloqueadoPorMedioPago}
 			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 {:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
-			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas de Efectivo registradas (Finanzas → Cuentas Bancarias).</p>
+			<p class="mt-1 text-xs text-slate-400">Primero las cuentas de Efectivo; si eliges una cuenta bancaria, el Medio de pago pasa a "Transferencia bancaria".</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
 			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
@@ -3435,6 +3499,9 @@
 										{:else if fechaLocked}
 											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
 										{/if}
+										{#if avisoApertura}
+											<p class="mt-1 rounded-md bg-amber-50 border border-amber-200 px-2 py-1 text-xs text-amber-800">{avisoApertura}</p>
+										{/if}
 									</div>
 									<div>
 										<label for="tr-monto" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
@@ -3636,9 +3703,9 @@
 													<SelectConSaldo
 														id="tr-tipo-comprobante-erp"
 														value={formValues.tipo_documento}
-														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
+														options={TIPOS_COMPROBANTE_INGRESO}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(v) => (handleInput('tipo_documento', v))}
+														onchange={onTipoComprobanteErpChange}
 													/>
 												</div>
 											</div>
@@ -3649,11 +3716,11 @@
 														id="tr-generar-comprobante-erp"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion}
+														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
 											</div>
 										{/if}
 									</div>
@@ -3665,9 +3732,9 @@
 													<SelectConSaldo
 														id="tr-tipo-comprobante-erp-2"
 														value={formValues.tipo_documento}
-														options={[{ value: '1', label: 'Factura' }, { value: '2', label: 'Boleta' }, { value: '10', label: 'Nota de Crédito' }, { value: '11', label: 'Nota de Débito' }]}
+														options={TIPOS_COMPROBANTE_INGRESO}
 														disabled={bloqueadaPorAprobacion}
-														onchange={(v) => (handleInput('tipo_documento', v))}
+														onchange={onTipoComprobanteErpChange}
 													/>
 												</div>
 											</div>
@@ -3678,11 +3745,11 @@
 														id="tr-generar-comprobante-erp-2"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion}
+														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
 											</div>
 										</div>
 									{/if}

@@ -21,8 +21,56 @@
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
 	import SnoopyLoader, { FONDO_CARGA } from '$lib/shared/components/SnoopyLoader.svelte';
 	import { iniciarSesionAuditoria, registrarCierre, cerrarSesion, esCierreManual } from '$lib/shared/auditoria';
+	import { cargarClientes } from '$lib/stores/clientes.svelte';
+	import { reportarDiagnostico } from '$lib/shared/auditoria';
+	import { diag, revisarCaidaAnterior, leerLog, formatearEntrada, infoEquipo, diagState, activarDiagnostico } from '$lib/shared/diagnostico.svelte';
+	import DiagnosticoPanel from '$lib/shared/components/DiagnosticoPanel.svelte';
 
 	let { children } = $props();
+
+	// Ticket #96: botón "Actualizar" del encabezado — vuelve a leer TODO de la BD sin cerrar sesión: rol y
+	// permisos (Control de Accesos), menú, clientes, la campanita y la pantalla abierta (se remonta con
+	// {#key}, así cada módulo vuelve a correr su carga inicial). Si al usuario le quitaron el acceso a la
+	// pantalla en la que está, lo manda al primer módulo que sí puede ver.
+	// Modo diagnóstico: 5 toques seguidos (en menos de 3 s) sobre la versión lo activan/desactivan.
+	let toquesVersion: number[] = [];
+	function tocarVersion() {
+		const ahora = Date.now();
+		toquesVersion = [...toquesVersion.filter((t) => ahora - t < 3000), ahora];
+		if (toquesVersion.length < 5) return;
+		toquesVersion = [];
+		activarDiagnostico(!diagState.activo);
+		if (diagState.activo) diagState.abierto = true;
+		toast.info(diagState.activo ? 'Modo diagnóstico activado.' : 'Modo diagnóstico desactivado.');
+	}
+
+	let refreshKey = $state(0);
+	let sincronizando = $state(false);
+	async function sincronizarTodo() {
+		if (sincronizando) return;
+		sincronizando = true;
+		try {
+			const { data: { session } } = await supabase.auth.getSession();
+			if (!session) {
+				goto('/login');
+				return;
+			}
+			await Promise.all([loadPermisos(session.user.id), cargarClientes()]);
+			if (permisosState.rolNombre) userRole = permisosState.rolNombre;
+			const requerido = getRequiredPermiso(page.url.pathname);
+			if (requerido && !hasPermiso(requerido)) {
+				const destino = getFirstAccessiblePath(hasPermiso);
+				if (destino) await goto(destino, { replaceState: true });
+			}
+			refreshKey++;
+			toast.success('ERP actualizado con los datos más recientes.');
+		} catch (err) {
+			console.error('[Layout] No se pudo actualizar:', err);
+			toast.error('No se pudo actualizar. Revisa tu conexión e inténtalo de nuevo.');
+		} finally {
+			sincronizando = false;
+		}
+	}
 
 	// Versión instalada, visible en el encabezado — para que cualquiera (incluida quien reporta un
 	// problema) pueda decir exactamente con qué versión está.
@@ -52,6 +100,7 @@
 	async function checkPendingShare() {
 		const sharedFile = await consumePendingSharedFile();
 		if (sharedFile) {
+			diag('Imagen compartida recibida desde otra app', { archivo: sharedFile.name, tipo: sharedFile.type, kb: Math.round(sharedFile.size / 1024) });
 			pendingShareState.file = sharedFile;
 			goto('/finanzas/tranzacciones');
 		}
@@ -79,6 +128,10 @@
 		}
 
 		console.log('[Layout] onMount initiated for (app) layout. Path:', page.url.pathname);
+		diag('App iniciada', { version: versionApp || null, ruta: page.url.pathname, ...infoEquipo() });
+		// Al elegir una imagen de la galería la app pasa a segundo plano: si Android la mata ahí (falta de
+		// memoria), el registro muestra "segundo plano" y nunca "volvió".
+		document.addEventListener('visibilitychange', () => diag(document.visibilityState === 'visible' ? 'App volvió al frente' : 'App pasó a segundo plano'));
 		try {
 			// 1. Verificar Sesión
 			console.log('[Layout] Fetching supabase session...');
@@ -108,7 +161,15 @@
 			// "Versiones instaladas"). Sin await a propósito: es best-effort y no debe demorar el arranque.
 			void registrarVersionUsuario(supabase, session.user.id, permisosState.userName || null);
 			// Control de Accesos → Auditoría: sesión, latido, cierre y eventos pendientes. Best-effort, sin await.
-			void iniciarSesionAuditoria(session.user.id);
+			void iniciarSesionAuditoria(session.user.id).then(() => {
+				// Modo diagnóstico: si la vez anterior la app murió en medio del OCR (u otra operación marcada),
+				// se reporta a la auditoría con el registro paso a paso, para verlo desde Prod.
+				const caida = revisarCaidaAnterior();
+				if (caida) {
+					const ultimos = leerLog().slice(-40).map(formatearEntrada);
+					reportarDiagnostico(`La app se cerró en medio de "${caida.nombre}"`, [JSON.stringify(infoEquipo()), ...ultimos].join('\n'));
+				}
+			});
 
 			// 2. Obtener rol del empleado desde base de datos
 			console.log('[Layout] Fetching employee role locally for layout checks...');
@@ -204,6 +265,7 @@
 	<Sidebar bind:collapsed={sidebarCollapsed} bind:mobileOpen={mobileMenuOpen} />
 	<!-- Cierre de sesión tras 10 minutos de inactividad, con aviso para continuar (ver InactividadGuard). -->
 	<InactividadGuard />
+	<DiagnosticoPanel />
 
 	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Main Content -->
@@ -212,10 +274,22 @@
 			<header class="bg-white border-b border-slate-100 h-16 px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
 				<div class="flex items-center gap-4">
 					{#if versionApp}
-						<span class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</span>
+						<button type="button" onclick={tocarVersion} class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</button>
 					{/if}
+					<button
+						type="button"
+						onclick={sincronizarTodo}
+						disabled={sincronizando}
+						title="Actualizar: vuelve a cargar roles, permisos y los datos de todos los módulos"
+						class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-[#0f3b5e] disabled:opacity-60"
+					>
+						<i class={`fas fa-sync-alt ${sincronizando ? 'fa-spin' : ''}`}></i>
+						<span class="hidden sm:inline">Actualizar</span>
+					</button>
 					<ActualizacionBell />
-					<NotificacionesBell />
+					{#key refreshKey}
+						<NotificacionesBell />
+					{/key}
 					<div class="flex items-center gap-2 pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl">
 						<div class="w-8 h-8 rounded-full bg-[#1a233a] text-white flex items-center justify-center text-xs font-bold">
 							U
@@ -236,7 +310,9 @@
 			</header>
 			
 			<div class="p-4 md:p-8">
-				{@render children()}
+				{#key refreshKey}
+					{@render children()}
+				{/key}
 			</div>
 		</main>
 	</div>

@@ -13,6 +13,14 @@
 import { recognize } from 'tesseract.js';
 import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
 import { conCarga } from '$lib/stores/loading.svelte';
+import { diag, iniciarOperacion, terminarOperacion } from '$lib/shared/diagnostico.svelte';
+
+/** Modo diagnóstico (congelamiento al subir una transferencia en Android): 'actual' es el pipeline de siempre;
+ * 'propuesto' es el candidato a arreglo — nunca agranda, limita el lado más largo a LADO_MAX_PROPUESTO y le pasa
+ * el canvas directo a Tesseract (sin generar un PNG). Solo el panel de diagnóstico usa 'propuesto' (prueba A/B
+ * en el mismo teléfono, ver probarOcr). */
+export type ModoOcr = 'actual' | 'propuesto';
+const LADO_MAX_PROPUESTO = 2000;
 
 /**
  * "Filtros de realce" — a pedido explícito del usuario, mejora la imagen ANTES de pasarla a Tesseract
@@ -35,9 +43,19 @@ const UMBRAL_UPSCALE_PX = 1200;
 function cargarImagen(fuente: File | string): Promise<HTMLImageElement> {
 	return new Promise((resolve, reject) => {
 		const img = new Image();
-		img.onload = () => resolve(img);
-		img.onerror = () => reject(new Error('No se pudo cargar la imagen para preprocesarla.'));
-		img.src = typeof fuente === 'string' ? fuente : URL.createObjectURL(fuente);
+		const url = typeof fuente === 'string' ? fuente : URL.createObjectURL(fuente);
+		const liberar = () => {
+			if (typeof fuente !== 'string') URL.revokeObjectURL(url);
+		};
+		img.onload = () => {
+			liberar();
+			resolve(img);
+		};
+		img.onerror = () => {
+			liberar();
+			reject(new Error('No se pudo cargar la imagen para preprocesarla.'));
+		};
+		img.src = url;
 	});
 }
 
@@ -67,17 +85,29 @@ function calcularUmbralOtsu(histograma: number[], total: number): number {
 	return umbral;
 }
 
-async function preprocesarImagenParaOcr(fuente: File | string): Promise<File | string> {
+async function preprocesarImagenParaOcr(fuente: File | string, modo: ModoOcr = 'actual'): Promise<File | string | HTMLCanvasElement> {
 	try {
+		diag('Cargando imagen');
 		const img = await cargarImagen(fuente);
-		const escala = img.width < UMBRAL_UPSCALE_PX ? 2 : 1;
+		const escala =
+			modo === 'propuesto'
+				? Math.min(1, LADO_MAX_PROPUESTO / Math.max(img.width, img.height))
+				: img.width < UMBRAL_UPSCALE_PX ? 2 : 1;
 		const canvas = document.createElement('canvas');
-		canvas.width = img.width * escala;
-		canvas.height = img.height * escala;
+		canvas.width = Math.round(img.width * escala);
+		canvas.height = Math.round(img.height * escala);
+		diag('Imagen cargada; creando canvas', {
+			original: `${img.width}x${img.height}`,
+			escala: Math.round(escala * 100) / 100,
+			canvas: `${canvas.width}x${canvas.height}`,
+			megapixeles: Math.round((canvas.width * canvas.height) / 10000) / 100,
+			memoriaCanvasMB: Math.round((canvas.width * canvas.height * 4) / 1048576)
+		});
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return fuente;
 		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+		diag('Leyendo píxeles (getImageData)');
 		const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 		const pixeles = imageData.data;
 		const cantidadPixeles = pixeles.length / 4;
@@ -89,15 +119,24 @@ async function preprocesarImagenParaOcr(fuente: File | string): Promise<File | s
 			histograma[gris]++;
 		}
 
+		diag('Píxeles leídos; binarizando');
 		const umbral = calcularUmbralOtsu(histograma, cantidadPixeles);
 		for (let i = 0; i < pixeles.length; i += 4) {
 			const valor = grises[i / 4] > umbral ? 255 : 0;
 			pixeles[i] = pixeles[i + 1] = pixeles[i + 2] = valor;
 		}
 		ctx.putImageData(imageData, 0, 0);
-		return canvas.toDataURL('image/png');
+		if (modo === 'propuesto') {
+			diag('Realce listo; se pasa el canvas directo a Tesseract');
+			return canvas;
+		}
+		diag('Realce listo; generando PNG (toDataURL)');
+		const png = canvas.toDataURL('image/png');
+		diag('PNG generado', { pngKB: Math.round((png.length * 0.75) / 1024) });
+		return png;
 	} catch (err) {
 		console.warn('[ocrComprobante] No se pudo preprocesar la imagen, se usa el original:', err);
+		diag('Error en el realce (se usa el original)', { error: err instanceof Error ? err.message : String(err) });
 		return fuente;
 	}
 }
@@ -432,17 +471,46 @@ export interface ReconocerComprobantePagoResult {
  * imágenes), esta SÍ procesa PDF: renderiza su primera página a imagen (ver
  * renderPdfFirstPageToDataUrl, a mayor resolución que la miniatura de vista previa, para que el OCR
  * tenga texto más nítido) antes de pasarla a Tesseract. Nunca lanza. */
+/** PDF/imagen → realce → Tesseract, con cada paso anotado en el registro de diagnóstico (ver
+ * diagnostico.svelte.ts): si Android mata la app a la mitad, el registro dice en qué paso fue. */
+async function leerTextoOcr(file: File, etiqueta: string, anchoPdf: number, modo: ModoOcr = 'actual'): Promise<string> {
+	const operacion = `OCR ${etiqueta}${modo === 'propuesto' ? ' (propuesto)' : ''}`;
+	iniciarOperacion(operacion, { archivo: file.name, tipo: file.type, kb: Math.round(file.size / 1024) });
+	const inicio = performance.now();
+	try {
+		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+		let fuente: File | string = file;
+		if (esPdf) {
+			diag('PDF: renderizando la primera página', { ancho: anchoPdf });
+			fuente = await renderPdfFirstPageToDataUrl(file, anchoPdf);
+		}
+		const fuenteRealzada = await preprocesarImagenParaOcr(fuente, modo);
+		diag('Tesseract: iniciando (descarga/arranque del motor + lectura)');
+		const inicioTesseract = performance.now();
+		const { data } = await recognize(fuenteRealzada, 'spa');
+		diag('Tesseract: terminó', { segundos: Math.round((performance.now() - inicioTesseract) / 100) / 10, caracteres: (data.text || '').length });
+		terminarOperacion(operacion, { segundosTotal: Math.round((performance.now() - inicio) / 100) / 10 });
+		return data.text || '';
+	} catch (err) {
+		terminarOperacion(operacion, { error: err instanceof Error ? err.message : String(err) });
+		throw err;
+	}
+}
+
+/** Prueba A/B del panel de diagnóstico: corre el OCR completo con el pipeline actual o el propuesto. */
+export async function probarOcr(file: File, modo: ModoOcr): Promise<{ segundos: number; caracteres: number }> {
+	const inicio = performance.now();
+	const texto = await leerTextoOcr(file, `prueba ${file.name}`, 1600, modo);
+	return { segundos: Math.round((performance.now() - inicio) / 100) / 10, caracteres: texto.length };
+}
+
 export async function reconocerComprobantePago(file: File): Promise<ReconocerComprobantePagoResult> {
 	return conCarga('Leyendo el comprobante…', () => reconocerComprobantePagoInterno(file));
 }
 
 async function reconocerComprobantePagoInterno(file: File): Promise<ReconocerComprobantePagoResult> {
 	try {
-		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
-		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
-		const { data } = await recognize(fuenteRealzada, 'spa');
-		const texto = data.text || '';
+		const texto = await leerTextoOcr(file, 'comprobante de pago', 1600);
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada factura/boleta
 		// (en vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un archivo.
 		console.log('[ocrComprobante] Texto reconocido (comprobante de pago):', texto);
@@ -469,11 +537,7 @@ async function reconocerComprobantePagoInterno(file: File): Promise<ReconocerCom
  * Tesseract falla; quien llama decide cómo avisar. */
 export async function leerTextoComprobante(file: File): Promise<string> {
 	return conCarga('Leyendo el comprobante…', async () => {
-		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 2000) : file;
-		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
-		const { data } = await recognize(fuenteRealzada, 'spa');
-		return data.text || '';
+		return leerTextoOcr(file, 'factura/boleta', 2000);
 	});
 }
 
@@ -492,11 +556,7 @@ export async function reconocerComprobante(file: File): Promise<ReconocerComprob
 
 async function reconocerComprobanteInterno(file: File): Promise<ReconocerComprobanteResult> {
 	try {
-		const esPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-		const fuente: File | string = esPdf ? await renderPdfFirstPageToDataUrl(file, 1600) : file;
-		const fuenteRealzada = await preprocesarImagenParaOcr(fuente);
-		const { data } = await recognize(fuenteRealzada, 'spa');
-		const texto = data.text || '';
+		const texto = await leerTextoOcr(file, 'boucher de transferencia', 1600);
 		// Log temporal para ajustar los regex con el texto REAL que lee Tesseract en cada boucher (en
 		// vez de adivinar formatos) — revisar en la consola del navegador (F12) tras subir un boucher.
 		console.log('[ocrComprobante] Texto reconocido:', texto);

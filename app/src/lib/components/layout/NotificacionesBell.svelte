@@ -51,6 +51,45 @@
 	// pendientes de arriba.
 	let resueltas = $state<SolicitudAprobacion[]>([]);
 	let misSolicitudes = $state<SolicitudAprobacion[]>([]);
+	// Ticket #99: para quien no es administrador — filtro por estado (empieza en "Pendientes", lo que espera
+	// aprobación) y buscador de texto; las pendientes van siempre primero.
+	let filtroEstadoMias = $state<'pendiente' | 'aprobado' | 'rechazado' | 'todas'>('pendiente');
+	let busquedaMias = $state('');
+	const conteoMias = $derived({
+		pendiente: misSolicitudes.filter((s) => s.estado === 'pendiente').length,
+		aprobado: misSolicitudes.filter((s) => s.estado === 'aprobado').length,
+		rechazado: misSolicitudes.filter((s) => s.estado === 'rechazado').length,
+		todas: misSolicitudes.length
+	});
+	const misSolicitudesFiltradas = $derived.by(() => {
+		const q = busquedaMias.trim().toLowerCase();
+		return misSolicitudes
+			.filter((s) => filtroEstadoMias === 'todas' || s.estado === filtroEstadoMias)
+			.filter((s) => !q || [s.descripcion_entidad, etiquetaEntidad(s.tipo_entidad), etiquetaAccion(s.tipo_accion), descripcionAccion(s), s.resuelto_por].filter(Boolean).join(' ').toLowerCase().includes(q))
+			.sort((a, b) => (a.estado === 'pendiente') === (b.estado === 'pendiente') ? (a.created_at < b.created_at ? 1 : -1) : a.estado === 'pendiente' ? -1 : 1);
+	});
+	// Ticket #99 (rechazado: faltaba en la vista del administrador) — mismo buscador y filtro por estado, en la
+	// cabecera del panel. "Pendientes" filtra las por aprobar; "Aprobadas"/"Rechazadas", las resueltas.
+	let filtroEstadoAdmin = $state<'todas' | 'pendiente' | 'aprobado' | 'rechazado'>('todas');
+	let busquedaAdmin = $state('');
+	function coincideBusqueda(s: SolicitudAprobacion, q: string): boolean {
+		return !q || [s.descripcion_entidad, etiquetaEntidad(s.tipo_entidad), etiquetaAccion(s.tipo_accion), descripcionAccion(s), s.solicitado_por, s.resuelto_por].filter(Boolean).join(' ').toLowerCase().includes(q);
+	}
+	const pendientesAdminFiltradas = $derived.by(() => {
+		const q = busquedaAdmin.trim().toLowerCase();
+		return filtroEstadoAdmin === 'todas' || filtroEstadoAdmin === 'pendiente' ? solicitudesAdmin.filter((s) => coincideBusqueda(s, q)) : [];
+	});
+	const resueltasFiltradas = $derived.by(() => {
+		const q = busquedaAdmin.trim().toLowerCase();
+		if (filtroEstadoAdmin === 'pendiente') return [];
+		return resueltas.filter((s) => (filtroEstadoAdmin === 'todas' || s.estado === filtroEstadoAdmin) && coincideBusqueda(s, q));
+	});
+	const avisosFiltrados = $derived.by(() => {
+		const q = busquedaAdmin.trim().toLowerCase();
+		return filtroEstadoAdmin === 'todas' ? avisos.filter((a) => coincideBusqueda(a, q)) : [];
+	});
+	const hayFiltroAdmin = $derived(filtroEstadoAdmin !== 'todas' || busquedaAdmin.trim() !== '');
+
 	// Avisos informativos para el admin: ventas cerradas directo por su asesor, sin pasar por
 	// aprobación (a pedido del usuario) — de solo lectura, sin Aprobar/Rechazar.
 	let avisos = $state<SolicitudAprobacion[]>([]);
@@ -527,6 +566,20 @@
 						? 'Ediciones/eliminaciones pedidas por usuarios sin rango de administrador.'
 						: 'Estado de tus solicitudes enviadas para aprobación de un administrador.'}
 				</p>
+				{#if isAdmin()}
+					<div class="mt-2.5 flex gap-2">
+						<div class="relative flex-1 min-w-0">
+							<i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]"></i>
+							<input type="text" bind:value={busquedaAdmin} placeholder="Buscar solicitud..." class="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+						</div>
+						<select bind:value={filtroEstadoAdmin} aria-label="Filtrar por estado" class="shrink-0 px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-200">
+							<option value="todas">Todas</option>
+							<option value="pendiente">Pendientes ({solicitudesAdmin.length})</option>
+							<option value="aprobado">Aprobadas</option>
+							<option value="rechazado">Rechazadas</option>
+						</select>
+					</div>
+				{/if}
 			</div>
 
 			{#if errorMsg}
@@ -537,7 +590,7 @@
 			     independiente de solicitud_aprobacion de arriba/abajo, visible tanto para developer
 			     (que no es isAdmin()) como para admin, y para cualquier otro usuario con sus propios
 			     tickets. -->
-			{#if hasPermiso('ver_soporte_developer') && ticketsPendientes.length > 0}
+			{#if !isAdmin() && hasPermiso('ver_soporte_developer') && ticketsPendientes.length > 0}
 				<a href="/soporte/developer" class="block mx-4 mt-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 hover:bg-blue-100 transition-colors">
 					<span class="font-semibold">{ticketsPendientes.length} ticket{ticketsPendientes.length === 1 ? '' : 's'}</span> pendiente{ticketsPendientes.length === 1 ? '' : 's'} en el Panel Developer.
 				</a>
@@ -552,16 +605,16 @@
 					<i class="fas fa-spinner fa-spin"></i> Cargando...
 				</div>
 			{:else if isAdmin()}
-				{#if solicitudesAdmin.length === 0 && resueltas.length === 0 && avisos.length === 0}
+				{#if pendientesAdminFiltradas.length === 0 && resueltasFiltradas.length === 0 && avisosFiltrados.length === 0}
 					<div class="p-8 text-center text-slate-400 text-sm">
 						<i class="fas fa-check-circle text-2xl mb-2 block"></i>
-						No hay novedades.
+						{hayFiltroAdmin ? 'No hay solicitudes que coincidan con el filtro.' : 'No hay novedades.'}
 					</div>
 				{:else}
-					{#if solicitudesAdmin.length > 0}
+					{#if pendientesAdminFiltradas.length > 0}
 						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Pendientes de aprobar</p>
 						<div class="divide-y divide-slate-100">
-							{#each solicitudesAdmin as s (s.id_solicitud)}
+							{#each pendientesAdminFiltradas as s (s.id_solicitud)}
 								<div class="p-4">
 									<div class="flex items-start justify-between gap-2 mb-1.5">
 										<div class="min-w-0">
@@ -636,10 +689,10 @@
 						</div>
 					{/if}
 
-					{#if resueltas.length > 0}
+					{#if resueltasFiltradas.length > 0}
 						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Resueltas recientemente</p>
 						<div class="divide-y divide-slate-100">
-							{#each resueltas as s (s.id_solicitud)}
+							{#each resueltasFiltradas as s (s.id_solicitud)}
 								<div class="p-4">
 									<div class="flex items-start justify-between gap-2 mb-1.5">
 										<div class="min-w-0">
@@ -668,10 +721,10 @@
 						</div>
 					{/if}
 
-					{#if avisos.length > 0}
+					{#if avisosFiltrados.length > 0}
 						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Avisos</p>
 						<div class="divide-y divide-slate-100">
-							{#each avisos as a (a.id_solicitud)}
+							{#each avisosFiltrados as a (a.id_solicitud)}
 								<div class="p-4 flex items-start gap-2.5">
 									<i class="fas fa-circle-info text-blue-500 mt-0.5 shrink-0"></i>
 									<div class="min-w-0">
@@ -692,8 +745,21 @@
 					No tienes solicitudes enviadas.
 				</div>
 			{:else}
+				<div class="px-4 pt-3 pb-2 space-y-2 border-b border-slate-100">
+					<div class="flex flex-wrap gap-1.5">
+						{#each [['pendiente', 'Pendientes'], ['aprobado', 'Aprobadas'], ['rechazado', 'Rechazadas'], ['todas', 'Todas']] as [valor, etiqueta] (valor)}
+							<button type="button" onclick={() => (filtroEstadoMias = valor as typeof filtroEstadoMias)} class={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${filtroEstadoMias === valor ? 'bg-[#0f3b5e] text-white border-[#0f3b5e]' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+								{etiqueta} ({conteoMias[valor as keyof typeof conteoMias]})
+							</button>
+						{/each}
+					</div>
+					<div class="relative">
+						<i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+						<input type="text" bind:value={busquedaMias} placeholder="Buscar solicitud..." class="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
+					</div>
+				</div>
 				<div class="divide-y divide-slate-100">
-					{#each misSolicitudes as s (s.id_solicitud)}
+					{#each misSolicitudesFiltradas as s (s.id_solicitud)}
 						<div class="p-4">
 							<div class="flex items-start justify-between gap-2 mb-1.5">
 								<div class="min-w-0">
@@ -727,6 +793,8 @@
 								</button>
 							{/if}
 						</div>
+					{:else}
+						<p class="p-6 text-center text-xs text-slate-400">No hay solicitudes {filtroEstadoMias === 'todas' ? '' : filtroEstadoMias === 'pendiente' ? 'pendientes' : filtroEstadoMias === 'aprobado' ? 'aprobadas' : 'rechazadas'}{busquedaMias.trim() ? ' que coincidan con la búsqueda' : ''}.</p>
 					{/each}
 				</div>
 			{/if}

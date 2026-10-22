@@ -317,6 +317,12 @@ function registrarErrorJs(mensaje: string, stack: string | null) {
 	});
 }
 
+/** Modo diagnóstico (ver diagnostico.svelte.ts): manda a auditoria_error un resumen + el registro paso a paso,
+ * para leerlo desde Prod. Usa el mismo canal que los errores de JS (sesión, diario local si no hay red). */
+export function reportarDiagnostico(mensaje: string, detalle: string): void {
+	registrarErrorJs(`[diagnóstico] ${mensaje}`, detalle);
+}
+
 function instalarListeners() {
 	if (listenersInstalados || typeof window === 'undefined') return;
 	listenersInstalados = true;

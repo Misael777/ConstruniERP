@@ -49,7 +49,7 @@
 	let openDropdown = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
-	const filterableFields = $derived(fields.filter((f) => f.showInTable));
+	const filterableFields = $derived(fields.filter((f) => f.showInTable || f.filterable));
 	const activeCount = $derived(Object.values(filters).filter(isColumnFilterActive).length);
 
 	function optionsFor(field: FieldConfig): FieldOption[] {
@@ -108,8 +108,11 @@
 	</button>
 
 	{#if expanded}
-		<div class={flotante ? 'absolute left-0 top-full z-30 mt-2 w-[min(28rem,calc(100vw-2rem))] p-4 bg-white rounded-xl border border-slate-200 shadow-lg' : 'mt-2 p-4 bg-white rounded-xl border border-slate-200'}>
-			<div class="flex flex-col gap-4 max-w-md">
+		<!-- Ticket #84: el panel flotante tiene alto máximo con scroll propio (antes crecía más que la pantalla y no
+		     se llegaba a "Limpiar filtros"). Ticket #86: abajo, siempre visible, "Aceptar" (cierra el panel) a la
+		     izquierda y "Limpiar filtros" a la derecha, según la imagen del cliente. -->
+		<div class={flotante ? 'absolute left-0 top-full z-30 mt-2 w-[min(28rem,calc(100vw-2rem))] max-h-[min(36rem,calc(100dvh-12rem))] overflow-y-auto overscroll-contain bg-white rounded-xl border border-slate-200 shadow-lg' : 'mt-2 bg-white rounded-xl border border-slate-200'}>
+			<div class="flex flex-col gap-4 max-w-md p-4">
 				{#each filterableFields as field (field.key)}
 					{@const kind = columnFilterKind(field)}
 					{@const raw = filters[field.key]}
@@ -219,13 +222,16 @@
 				{/each}
 			</div>
 
-			{#if activeCount > 0}
-				<div class="mt-3 pt-3 border-t border-slate-100 flex justify-end">
-					<button type="button" onclick={clearAll} class="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-red-600">
+			<div class="sticky bottom-0 z-10 flex items-center justify-between gap-3 px-4 py-3 bg-white border-t border-slate-100 rounded-b-xl">
+				<button type="button" onclick={() => { expanded = false; openDropdown = null; }} class="px-4 py-1.5 rounded-lg bg-[#0f3b5e] text-white text-sm font-semibold hover:bg-[#0c3150]">
+					Aceptar
+				</button>
+				{#if activeCount > 0}
+					<button type="button" onclick={clearAll} class="flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700">
 						<X size={14} /> Limpiar filtros
 					</button>
-				</div>
-			{/if}
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>

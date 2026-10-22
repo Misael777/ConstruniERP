@@ -3,6 +3,11 @@ identifier = "allow-get-pending-share"
 description = "Permite leer, si existe, la imagen que otra app acaba de compartir con Construni ERP (Share Sheet de Android)."
 commands.allow = ["get_pending_share"]
 
+[[permission]]
+identifier = "allow-compartir"
+description = "Permite abrir el Share Sheet de Android para enviar el comprobante y el mensaje de una transacción (ticket #83)."
+commands.allow = ["compartir"]
+
 [default]
 description = "Permisos por defecto del plugin share-target."
-permissions = ["allow-get-pending-share"]
+permissions = ["allow-get-pending-share", "allow-compartir"]

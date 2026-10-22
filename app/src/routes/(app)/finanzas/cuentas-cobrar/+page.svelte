@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
-	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, permisosState, puedeVerEliminados, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -14,7 +14,7 @@
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { describeError } from '$lib/shared/describeError';
 	import { verifyAdminCredentials } from '$lib/shared/adminAuth';
-	import { getOptionLabel, formatCurrency, emptyColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
+	import { getOptionLabel, formatCurrency, emptyColumnFilters, hasActiveColumnFilters, diasDeRetraso, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG, DEFAULT_SORT_FIELD, DEFAULT_SORT_DIR, DEFAULT_PAGE_SIZE } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
 	import { FIELDS_CONFIG as COBRO_FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cobro.config';
 	import {
@@ -60,6 +60,15 @@
 	// tiene RLS real, este guard (isAdmin()) es solo de UI.
 
 	const tableFields = FIELDS_CONFIG.filter((f) => f.showInTable);
+	// Ticket #87: "Prioridad" no es columna (se dibuja como insignia), pero se ofrece en "Filtros" justo debajo
+	// de "Estado", como pidió el cliente.
+	const filterFields = (() => {
+		const prioridad = FIELDS_CONFIG.find((f) => f.key === 'prioridad');
+		if (!prioridad) return tableFields;
+		const i = tableFields.findIndex((f) => f.key === 'estado');
+		const conPrioridad = { ...prioridad, filterable: true };
+		return i === -1 ? [...tableFields, conPrioridad] : [...tableFields.slice(0, i + 1), conPrioridad, ...tableFields.slice(i + 1)];
+	})();
 	const estadoField = FIELDS_CONFIG.find((f) => f.key === 'estado')!;
 	const estadoBadgeClass: Record<string, string> = {
 		pendiente: 'bg-amber-100 text-amber-700',
@@ -144,6 +153,25 @@
 
 	function toggleTipoFilter(tipo: TipoFiltroCC) {
 		tipoFilter = tipoFilter === tipo ? null : tipo;
+		pageNum = 1;
+		fetchList();
+		fetchMontoFiltrado();
+	}
+
+	// Ticket #84: un solo botón para volver a la vista inicial — tipo (Consultoría/Obra/Otros), búsqueda,
+	// filtros de columna y orden. Antes "Limpiar filtros" solo limpiaba los de columna y estaba al final
+	// del panel, fuera de la pantalla.
+	const hayFiltrosActivos = $derived(
+		tipoFilter !== null || searchInput.trim() !== '' || hasActiveColumnFilters(columnFilters) || sortBy !== DEFAULT_SORT_FIELD || sortDir !== DEFAULT_SORT_DIR
+	);
+	function limpiarTodo() {
+		clearTimeout(debounceTimer);
+		tipoFilter = null;
+		searchInput = '';
+		search = '';
+		columnFilters = emptyColumnFilters(filterFields);
+		sortBy = DEFAULT_SORT_FIELD;
+		sortDir = DEFAULT_SORT_DIR;
 		pageNum = 1;
 		fetchList();
 		fetchMontoFiltrado();
@@ -311,7 +339,8 @@
 	);
 
 	onMount(async () => {
-		if (!isAdmin()) {
+		// Ticket #100: respeta el permiso del rol (Roles y Permisos), igual que el menú y el guard de rutas — no solo Administrador.
+		if (!hasPermiso('ver_finanzas_cuentas_pendientes')) {
 			goto('/dashboard');
 			return;
 		}
@@ -923,6 +952,7 @@
 					<Briefcase size={18} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+				{#if tipoFilter === 'consultoria'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 			<button
 				type="button"
@@ -933,6 +963,7 @@
 					<HardHat size={18} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Obra</span>
+				{#if tipoFilter === 'proyecto'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 			<button
 				type="button"
@@ -943,6 +974,7 @@
 					<Ellipsis size={18} />
 				</div>
 				<span class="font-semibold text-slate-700 text-sm">Otros</span>
+				{#if tipoFilter === 'otro'}<span class="ml-auto shrink-0 text-slate-400" title="Quitar este filtro" aria-label="Quitar este filtro"><X size={14} /></span>{/if}
 			</button>
 		</div>
 	{/if}
@@ -960,7 +992,7 @@
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
-			{#if isAdmin()}
+			{#if puedeVerEliminados()}
 				<button type="button" onclick={toggleVerEliminados} class={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${verEliminados ? 'bg-slate-800 text-white hover:bg-slate-900' : 'border border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
 					{#if verEliminados}<ChevronLeft size={16} />{:else}<Trash2 size={16} />{/if}
 					{verEliminados ? 'Volver' : 'Ver eliminados'}
@@ -1016,7 +1048,7 @@
 
 	<!-- A pedido del usuario: Filtros, búsqueda y orden en una sola línea (en pantallas angostas bajan solos). -->
 	<div class="mb-4 flex flex-wrap items-center gap-2">
-		<ColumnFilterBar flotante fields={tableFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
+		<ColumnFilterBar flotante fields={filterFields} bind:filters={columnFilters} dynamicOptions={dynamicOptions} onChange={handleColumnFiltersChange} />
 		<div class="relative w-full sm:w-72">
 			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
@@ -1049,30 +1081,35 @@
 		>
 			{#if sortDir === 'asc'}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
 		</button>
+		{#if hayFiltrosActivos}
+			<button type="button" onclick={limpiarTodo} class="flex items-center gap-1 px-3 py-2 rounded-lg border border-red-200 bg-red-50 text-sm font-medium text-red-600 hover:bg-red-100" title="Quitar el tipo, la búsqueda, los filtros y el orden">
+				<X size={14} /> Limpiar todo
+			</button>
+		{/if}
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
 		<!-- Desktop: filas tipo tabla -->
 		<div class="hidden md:block overflow-x-auto">
 			<div class="min-w-[1240px]">
-				<div class="grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_1fr_0.9fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
+				<div class="grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_5.5rem_6.5rem_0.9fr_7rem] gap-3 items-center px-4 py-2 border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-600 uppercase tracking-wide">
 					<span>Proyecto / Cliente / Prestatario</span>
 					<span>N° Documento</span>
 					<span>Vencimiento</span>
 					<span class="text-right">Saldo pendiente</span>
 					<span class="text-right">Valor Venta</span>
-					<div class="flex gap-2 pl-4">
-						<span class="flex-1">Prioridad</span>
-						<span class="flex-1">Estado</span>
-					</div>
+					<!-- Ticket #88: Prioridad y Estado compartían una sola columna (mitad cada uno) y en pantallas angostas
+					     "Pendiente" se salía de su lugar y no calzaba con el título. Ahora son dos columnas de ancho fijo. -->
+					<span>Prioridad</span>
+					<span>Estado</span>
 					<span class="text-right">Días de Retraso</span>
 					<span class="text-right">Acciones</span>
 				</div>
 
 				{#each items as item (item.id_cuenta_cobrar)}
-					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
+					{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.proxima_cuota)}
 					<div
-						class={`grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_1fr_0.9fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
+						class={`grid grid-cols-[2.6fr_1.1fr_0.9fr_1fr_1.1fr_5.5rem_6.5rem_0.9fr_7rem] gap-3 items-center px-4 py-4 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 cursor-pointer transition-colors ${
 							selectedId === item.id_cuenta_cobrar ? 'bg-blue-50 hover:bg-blue-50' : (estadoCardClass[item.estado] ?? '')
 						}`}
 						onclick={() => selectRow(item)}
@@ -1097,19 +1134,17 @@
 								<p class="text-[11px] text-slate-400">{formatUSD(item.monto_dolares)}</p>
 							{/if}
 						</div>
-						<div class="flex items-center gap-2 pl-4">
-							<div class="flex-1">
-								{#if item.prioridad}
-									<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
-										{getOptionLabel(prioridadField, item.prioridad)}
-									</span>
-								{/if}
-							</div>
-							<div class="flex-1">
-								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
-									{getOptionLabel(estadoField, item.estado)}
+						<div class="min-w-0">
+							{#if item.prioridad && item.estado !== 'pagado'}
+								<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
+									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
-							</div>
+							{/if}
+						</div>
+						<div class="min-w-0">
+							<span class={`inline-block whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
+								{getOptionLabel(estadoField, item.estado)}
+							</span>
 						</div>
 						<div class="text-right text-sm">
 							{#if retraso !== null}
@@ -1148,7 +1183,7 @@
 		<!-- Mobile: tarjetas apiladas -->
 		<div class="md:hidden">
 			{#each items as item (item.id_cuenta_cobrar)}
-				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento)}
+				{@const retraso = diasDeRetraso(item.estado, item.fecha_vencimiento, item.proxima_cuota)}
 				<div
 					role="button"
 					tabindex="0"
@@ -1177,7 +1212,7 @@
 					</div>
 					<div class="flex items-center justify-between gap-2 mb-2">
 						<div class="flex items-center gap-1.5 flex-wrap">
-							{#if item.prioridad}
+							{#if item.prioridad && item.estado !== 'pagado'}
 								<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${prioridadBadgeClass[item.prioridad] ?? 'bg-slate-100 text-slate-600'}`}>
 									{getOptionLabel(prioridadField, item.prioridad)}
 								</span>
@@ -1260,6 +1295,7 @@
 	cuotas={resumenCuotas}
 	etiquetaPlan="Plan de pagos"
 	mostrarHito
+	esObra={selectedCuenta?.proyecto?.tipo_venta === 'obra'}
 	montoTotal={Number(selectedCuenta?.monto ?? 0)}
 	onClose={() => (resumenOpen = false)}
 	onEditarCuota={editarCuotaDesdeResumen}
