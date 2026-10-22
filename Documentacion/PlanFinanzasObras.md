@@ -30,6 +30,13 @@ Fecha: 21/10/2026.
 
 ## 2. Puntos ambiguos o contradictorios (confirmar con el cliente antes de programar)
 
+**Decidido (21/10/2026, Misael):**
+- **2.1:** las categorías de ingreso quedan como *Adelanto* y *Valorización*; no se agregan "Armada" ni "Adenda". El concepto dice "Adelanto 2 – Armada 1".
+- **2.2:** aplica **solo a Obra**. Consultoría se queda como está.
+- **2.5:** al cerrar la venta se abre "Editar Transacción" solo para **completar** la transacción ya creada de la Armada 1.
+
+Pendientes: 2.3, 2.4 y 2.6.
+
 1. **Categorías "Armada" y "Adenda".** Una armada es parte de un adelanto, y una adenda es un documento (contrato), no un tipo de cobro. Si se usan como categorías, el mismo dinero quedaría clasificado de dos maneras (¿un depósito de la Armada 2 del Adelanto 2 de una adenda es "Adelanto", "Armada" o "Adenda"?) y los reportes por categoría se partirían. **Propuesta:** categoría = *Adelanto* o *Valorización*. Que es armada (o que viene de una adenda) ya lo dice su vínculo con el adelanto, y se muestra en el concepto ("Adelanto 2 – Armada 1"). Si el cliente insiste, se agregan como etiquetas visibles, sin romper los reportes.
 2. **¿Solo Obra?** El Excel se titula "Finanzas Obras". Propuesta: Consultoría sigue como hoy (adelanto + abonos); Obra pasa al modelo de adelantos + valorizaciones.
 3. **"El asesor solo tendrá acceso al ingreso del 1er adelanto".** ¿Quiere decir que solo administración registra el Adelanto 2 en adelante, armadas nuevas y valorizaciones? Propuesta: un permiso nuevo, asignable en Roles y Permisos.
