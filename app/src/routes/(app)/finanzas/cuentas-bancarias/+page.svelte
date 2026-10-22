@@ -282,8 +282,9 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="relative flex-1 min-w-[220px] max-w-sm">
+	<!-- A pedido del usuario: búsqueda, orden y dirección en UNA sola línea (en pantallas angostas bajan solos). -->
+	<div class="mb-4 flex flex-wrap items-center gap-2">
+		<div class="relative w-full sm:w-72">
 			<Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
 				type="text"
@@ -299,11 +300,18 @@
 			{/if}
 		</div>
 
-		<SelectConSaldo
-			value={sortBy}
-			options={[...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))]}
-			onchange={(v) => (toggleSort(v, true))}
-		/>
+		<div class="w-52">
+			<!-- El orden inicial (más recientes) no es una columna ordenable: se agrega como opción para que no
+			     aparezca "Selecciona una opción". -->
+			<SelectConSaldo
+				value={sortBy}
+				options={[
+					...(tableFields.some((f) => f.sortable && String(f.key) === sortBy) ? [] : [{ value: sortBy, label: 'Ordenar: Más recientes' }]),
+					...tableFields.filter((f) => f.sortable).map((field) => ({ value: String(field.key), label: `Ordenar: ${field.label}` }))
+				]}
+				onchange={(v) => (toggleSort(v, true))}
+			/>
+		</div>
 		<button
 			type="button"
 			onclick={() => { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; pageNum = 1; fetchList(); }}

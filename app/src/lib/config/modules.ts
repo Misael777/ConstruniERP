@@ -41,6 +41,11 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     permiso: 'ver_proyectos',
     subItems: [
       { path: '/proyectos/dashboard', label: 'Dashboard', permiso: 'ver_proyectos_dashboard' },
+      // A pedido del usuario (con imagen): submódulos nuevos — se suman a Gestión y Partidas y Plantillas.
+      { path: '/proyectos/consultoria', label: 'Consultoría', permiso: 'ver_proyectos_consultoria' },
+      { path: '/proyectos/obra', label: 'Obra', permiso: 'ver_proyectos_obra' },
+      { path: '/proyectos/catalogo', label: 'Catálogo', permiso: 'ver_proyectos_catalogo' },
+      { path: '/proyectos/reuniones', label: 'Reuniones, acuerdos y mejoras', permiso: 'ver_proyectos_reuniones' },
       // "Presupuesto" ya no es un enlace propio del menú — a pedido explícito del usuario, ahora vive
       // como pestaña DENTRO de Gestión (ver proyectos/gestion/+page.svelte, PresupuestoModule.svelte).
       { path: '/proyectos/gestion', label: 'Gestión', permiso: 'ver_proyectos_gestion' },
