@@ -9,7 +9,7 @@
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import { supabase } from '$lib/supabaseClient';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
-	import { isAdmin, hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { isAdmin, hasPermiso, permisosState, esDeveloper } from '$lib/stores/permisos.svelte';
 	import {
 		getSolicitudesPendientes,
 		getSolicitudesResueltas,
@@ -590,7 +590,7 @@
 			     independiente de solicitud_aprobacion de arriba/abajo, visible tanto para developer
 			     (que no es isAdmin()) como para admin, y para cualquier otro usuario con sus propios
 			     tickets. -->
-			{#if !isAdmin() && hasPermiso('ver_soporte_developer') && ticketsPendientes.length > 0}
+			{#if esDeveloper() && ticketsPendientes.length > 0}
 				<a href="/soporte/developer" class="block mx-4 mt-3 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 hover:bg-blue-100 transition-colors">
 					<span class="font-semibold">{ticketsPendientes.length} ticket{ticketsPendientes.length === 1 ? '' : 's'}</span> pendiente{ticketsPendientes.length === 1 ? '' : 's'} en el Panel Developer.
 				</a>

@@ -130,3 +130,9 @@ export function getFirstAccessiblePath(hasPermisoFn: (key: string) => boolean): 
 
 /** The bypass role name — sees everything regardless of permissions */
 export const ADMIN_ROLE = 'administrador';
+/** Rol del desarrollador del ERP. A pedido del usuario (22/10/2026) tiene automáticamente los mismos permisos
+ * que el administrador (en la base: is_admin(), ver 20261022150000_developer_igual_admin.sql) y además lo
+ * exclusivo de desarrollo (cambiar entre Prod y Dev, vaciar Dev). */
+export const DEVELOPER_ROLE = 'developer';
+/** Roles con todos los permisos. */
+export const ROLES_ADMIN = [ADMIN_ROLE, DEVELOPER_ROLE];

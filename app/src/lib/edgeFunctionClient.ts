@@ -3,11 +3,9 @@
  * Llamadas directas a user-admin para CRUD de usuarios Auth
  */
 
-import { env } from '$env/dynamic/public';
 import { conCarga } from '$lib/stores/loading.svelte';
-
-const SUPABASE_URL = env.PUBLIC_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = env.PUBLIC_SUPABASE_ANON_KEY || '';
+// Misma base que el cliente principal (PRD o DEV, ver cambiarEntorno en supabaseClient.ts).
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/supabaseClient';
 
 if (!SUPABASE_URL) {
 	console.error('[edgeFunctionClient] Missing PUBLIC_SUPABASE_URL in environment');

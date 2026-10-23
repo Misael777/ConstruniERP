@@ -399,6 +399,24 @@ proveedores 5-6, proyectos 7-8).
 
 ---
 
+## 7b. Cambiar de base y vaciar Dev desde el ERP (rol developer)
+
+- **Rol developer = administrador.** Tiene todos los permisos del administrador: en la app por `ROLES_ADMIN` (`config/modules.ts`) y en la base por `is_admin()` (`20261022150000_developer_igual_admin.sql`). Lo exclusivo de desarrollo usa `esDeveloper()` (`stores/permisos.svelte.ts`).
+- **Cambio PRD ⇄ DEV:** menú **DEV/PRD** en la cabecera (`shared/components/EntornoDeveloper.svelte`), visible solo para el rol developer.
+  - Necesita `PUBLIC_SUPABASE_URL_DEV` y `PUBLIC_SUPABASE_ANON_KEY_DEV` en `app/.env`, que quedan dentro del build.
+  - La elección se guarda en el equipo (`localStorage.construni_entorno`). Al cambiar, se cierra la sesión y se recarga en `/login` de la otra base, porque cada base tiene sus propios usuarios.
+  - Con `npm run dev -- --mode dev` la app queda fija en Dev y no muestra el cambio.
+- **Etiqueta "BASE DEV":** la ve cualquiera conectado a Dev, en la cabecera y en el login. El login de Dev tiene "Volver a Producción".
+- **Vaciar Dev:** menú DEV → "Vaciar base de desarrollo".
+  - Escribe **VACIAR DEV** para confirmar.
+  - Llama a `dev_vaciar_base()`, que **solo existe en Dev**: está en `supabase/dev-only/dev_vaciar_base.sql`, **no** en `migrations/`, así que nunca se aplica en Prod.
+  - Exige la marca `dev_entorno_marca`, el rol developer y la confirmación exacta.
+  - **Conserva:** usuarios (auth), empleados, roles, permisos, roles_permisos, area, unidad_medida y recurso_familia.
+  - **Vacía:** todo lo demás del esquema `public`, incluidas las tablas nuevas que se agreguen en el futuro.
+  - Para volver a cargar datos de ejemplo: `npm run seed:dev`.
+  - Si se recrea la base Dev, hay que volver a aplicar `supabase/dev-only/dev_vaciar_base.sql` con psql.
+- **Ojo:** los archivos que se suben desde Dev (comprobantes, contratos) van a las **mismas carpetas de Google Drive** que Prod, porque Drive no cambia con la base.
+
 ## 8. La lógica de los tests
 
 Hay **cuatro niveles**, de más barato a más caro. Usa el más bajo que pruebe de verdad lo que cambiaste.

@@ -25,6 +25,7 @@
 	import { reportarDiagnostico } from '$lib/shared/auditoria';
 	import { diag, revisarCaidaAnterior, leerLog, formatearEntrada, infoEquipo, diagState, activarDiagnostico } from '$lib/shared/diagnostico.svelte';
 	import DiagnosticoPanel from '$lib/shared/components/DiagnosticoPanel.svelte';
+	import EntornoDeveloper from '$lib/shared/components/EntornoDeveloper.svelte';
 
 	let { children } = $props();
 
@@ -276,6 +277,7 @@
 					{#if versionApp}
 						<button type="button" onclick={tocarVersion} class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</button>
 					{/if}
+					<EntornoDeveloper />
 					<button
 						type="button"
 						onclick={sincronizarTodo}
