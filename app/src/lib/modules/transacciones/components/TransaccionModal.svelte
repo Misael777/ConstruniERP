@@ -38,7 +38,8 @@
 		getSiguienteNumeroReciboPagoProveedor,
 		getSaldosCentroCosto,
 		getCuentasBancoUsadasEnIngresos,
-		validarSaldoSuficiente
+		validarSaldoSuficiente,
+		getEmpleadoOptions
 	} from '$lib/modules/transacciones/services/transacciones.service';
 	import { getSaldosCuentaBanco, getMonedasCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 	import { formatearFechaCorta } from '$lib/shared/pdfFormatoUtil';
@@ -195,6 +196,32 @@
 	let aprobando = $state(false);
 	/** Ver nota junto al bloque "Tipo de Comprobante de ERP" — Sí/No de una sola vez, nunca se persiste. */
 	let generarComprobanteErp = $state<'si' | 'no'>('no');
+
+	// Ticket #105: "Responsable" (Documento pendiente = Sí) salía vacío cuando el modal se abre desde una
+	// pantalla que no le pasa el catálogo de empleados (Cuentas por Cobrar/Pagar, Ventas, Movimientos de Caja —
+	// solo Transacciones lo cargaba). Si no viene en dynamicOptions, el modal lo carga solo, una vez. Además el
+	// valor ya guardado se agrega a la lista si no está (ej. un empleado renombrado), para que no se vea en blanco.
+	let empleadosPropios = $state<FieldOption[] | null>(null);
+	let cargandoEmpleados = false;
+	$effect(() => {
+		if (formValues.documento_pendiente !== 'si') return;
+		if ((dynamicOptions.responsable_documento_pendiente ?? []).length > 0 || empleadosPropios !== null || cargandoEmpleados) return;
+		cargandoEmpleados = true;
+		getEmpleadoOptions(supabase)
+			.then((o) => (empleadosPropios = o))
+			.catch((err) => {
+				empleadosPropios = [];
+				toast.error(`No se pudo cargar la lista de responsables: ${err?.message ?? err}`);
+			})
+			.finally(() => (cargandoEmpleados = false));
+	});
+	const opcionesResponsable = $derived.by(() => {
+		const recibidas = dynamicOptions.responsable_documento_pendiente ?? [];
+		const base = (recibidas.length > 0 ? recibidas : (empleadosPropios ?? [])).map((o) => ({ value: String(o.value), label: String(o.label) }));
+		const actual = formValues.responsable_documento_pendiente;
+		if (actual && !base.some((o) => o.value === String(actual))) base.unshift({ value: String(actual), label: String(actual) });
+		return base;
+	});
 
 	// "Monto Convertido" (= Monto (reconocido) × Tipo de Cambio) — a pedido explícito del usuario, se
 	// calcula solo, no es editable a mano (ver disabledValue en transaccion.config.ts, que guarda este
@@ -3675,7 +3702,7 @@
 													<SelectConSaldo
 														id="tr-responsable-doc-pendiente"
 														value={formValues.responsable_documento_pendiente}
-														options={[...(dynamicOptions.responsable_documento_pendiente ?? []).map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+														options={opcionesResponsable}
 														placeholder="Selecciona una opción"
 														disabled={bloqueadaPorAprobacion}
 														onchange={(v) => (handleInput('responsable_documento_pendiente', v))}
