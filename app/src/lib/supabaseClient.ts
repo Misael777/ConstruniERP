@@ -1,9 +1,45 @@
 import { createClient } from '@supabase/supabase-js';
 import { env } from '$env/dynamic/public';
 
-const supabaseUrl = env.PUBLIC_SUPABASE_URL || 'https://mock.supabase.co';
-const supabaseAnonKey = env.PUBLIC_SUPABASE_ANON_KEY || 'mock-anon-key';
+/**
+ * Cambio de base PRD / DEV (a pedido del usuario, 22/10/2026 — solo el rol developer lo ve, ver
+ * shared/components/EntornoDeveloper.svelte). La elección se guarda en este equipo (localStorage) y se aplica al
+ * abrir la app: el cliente de Supabase se crea una sola vez, así que cambiar de base recarga la app en /login
+ * (cada base tiene sus propios usuarios). Sin PUBLIC_SUPABASE_URL_DEV/ANON_KEY_DEV en el build, siempre es PRD.
+ */
+export type Entorno = 'prd' | 'dev';
+const CLAVE_ENTORNO = 'construni_entorno';
+const devUrl = env.PUBLIC_SUPABASE_URL_DEV || '';
+const devKey = env.PUBLIC_SUPABASE_ANON_KEY_DEV || '';
+/** true si este build trae la base de desarrollo configurada (para mostrar el cambio de base). */
+export const DEV_DISPONIBLE = Boolean(devUrl && devKey);
+function entornoElegido(): Entorno {
+	if (typeof window === 'undefined' || !DEV_DISPONIBLE) return 'prd';
+	try {
+		return window.localStorage.getItem(CLAVE_ENTORNO) === 'dev' ? 'dev' : 'prd';
+	} catch {
+		return 'prd';
+	}
+}
+const usarDev = entornoElegido() === 'dev';
+const supabaseUrl = (usarDev ? devUrl : env.PUBLIC_SUPABASE_URL) || 'https://mock.supabase.co';
+const supabaseAnonKey = (usarDev ? devKey : env.PUBLIC_SUPABASE_ANON_KEY) || 'mock-anon-key';
 const hasSupabaseConfig = Boolean(env.PUBLIC_SUPABASE_URL && env.PUBLIC_SUPABASE_ANON_KEY);
+/** Base a la que está conectada la app ahora. 'dev' también cuando el build mismo apunta a Dev (npm run dev --mode dev). */
+export const ENTORNO: Entorno = usarDev || (DEV_DISPONIBLE && env.PUBLIC_SUPABASE_URL === devUrl) || /hlfaxszecrxgkbjafepv/.test(supabaseUrl) ? 'dev' : 'prd';
+/** true si se puede cambiar de base desde la app (el build trae Dev y no está fijado a Dev por --mode dev). */
+export const CAMBIO_ENTORNO_POSIBLE = DEV_DISPONIBLE && env.PUBLIC_SUPABASE_URL !== devUrl;
+/** Cambia de base y reinicia la app en el login de la otra base. */
+export function cambiarEntorno(nuevo: Entorno): void {
+	try {
+		if (nuevo === 'dev') window.localStorage.setItem(CLAVE_ENTORNO, 'dev');
+		else window.localStorage.removeItem(CLAVE_ENTORNO);
+		window.sessionStorage.clear();
+	} catch {
+		/* almacenamiento bloqueado: no se puede cambiar */
+	}
+	window.location.href = '/login';
+}
 
 if (!hasSupabaseConfig) {
     console.error('[supabaseClient] Missing PUBLIC_SUPABASE_URL or PUBLIC_SUPABASE_ANON_KEY. The partidas tree will show a configuration error until these values are set.');

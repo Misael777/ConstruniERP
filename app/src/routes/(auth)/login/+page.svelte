@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { ENTORNO, CAMBIO_ENTORNO_POSIBLE, cambiarEntorno } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { confirmActivation, getFirstAdminStatus, createFirstAdmin as crearPrimerAdministrador } from '$lib/edgeFunctionClient';
@@ -405,6 +406,15 @@ async function handleSetupPassword(e: Event) {
 		
 		<!-- Formulario -->
 		{#if mode === 'login'}
+			{#if ENTORNO === 'dev'}
+				<!-- Cambio de base PRD/DEV (rol developer): en el login de Dev se avisa y se puede volver a Producción. -->
+				<div class="mx-8 mt-6 -mb-2 px-3 py-2 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-sm flex items-center justify-between gap-2">
+					<span><i class="fas fa-database mr-1"></i> Base de <b>DESARROLLO</b> (datos de prueba)</span>
+					{#if CAMBIO_ENTORNO_POSIBLE}
+						<button type="button" onclick={() => cambiarEntorno('prd')} class="text-xs font-semibold underline">Volver a Producción</button>
+					{/if}
+				</div>
+			{/if}
 			<form class="p-8 space-y-6" onsubmit={handleLogin}>
 				<div class="text-center mb-4">
 					<h2 class="text-xl font-bold text-slate-800">Bienvenido de nuevo</h2>

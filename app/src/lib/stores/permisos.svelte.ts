@@ -4,7 +4,7 @@
 // =============================================
 
 import { supabase } from '$lib/supabaseClient';
-import { ADMIN_ROLE } from '$lib/config/modules';
+import { ROLES_ADMIN, DEVELOPER_ROLE } from '$lib/config/modules';
 
 // --------------- Reactive State ---------------
 export const permisosState = $state<{
@@ -88,8 +88,8 @@ export async function loadPermisos(userId: string): Promise<void> {
       }
     })();
 
-    // 2. If admin, set wildcard — no need to query permissions
-    if (rolNombre === ADMIN_ROLE) {
+    // 2. If admin (o developer, mismos permisos), set wildcard — no need to query permissions
+    if (ROLES_ADMIN.includes(rolNombre)) {
       console.log('[Permisos] User is an administrator. Assigning wildcard permission ("*").');
       permisosState.permisos = ['*'];
       permisosState.loaded = true;
@@ -164,12 +164,18 @@ export function hasPermiso(key: string): boolean {
 /** Ticket #98: "Ver eliminados" (registros dados de baja, para revisarlos o restaurarlos) — ya no es solo del
  * administrador: también quien tenga el permiso ver_eliminados (se asigna en Roles y Permisos). Eliminar de
  * forma permanente sigue pidiendo la contraseña de un administrador. */
+/** Solo el rol developer: herramientas de desarrollo (cambiar de base Prod/Dev, vaciar Dev, Panel Developer). */
+export function esDeveloper(): boolean {
+  return permisosState.rolNombre === DEVELOPER_ROLE;
+}
+
 export function puedeVerEliminados(): boolean {
   return isAdmin() || hasPermiso('ver_eliminados');
 }
 
+/** Administrador o developer (mismos permisos, ver ROLES_ADMIN). */
 export function isAdmin(): boolean {
-  const result = permisosState.rolNombre === ADMIN_ROLE;
+  const result = ROLES_ADMIN.includes(permisosState.rolNombre);
   console.log(`[Permisos Check] Checking if user is admin. Current role: "${permisosState.rolNombre}". Result: ${result}`);
   return result;
 }
