@@ -8,7 +8,7 @@
 	 */
 	import { supabase } from '$lib/supabaseClient';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
-	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import { hasPermiso } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
@@ -121,9 +121,29 @@
 		const sugerido = Math.max(resumen?.diferenciaPlan ?? 0, 0);
 		formVal = { idGrupo: null, monto: sugerido > 0 ? String(sugerido) : '', observaciones: '' };
 	}
+	// "Ver" comprobante (a pedido del usuario): antes abría una miniatura de Drive con window.open, que en la app
+	// (Tauri Windows/Android) no hace nada. Ahora abre el visor de la app (DocumentPreviewModal, PDF o imagen, igual
+	// en navegador, Windows y Android) con TODOS los comprobantes de la venta — adelantos/armadas, pagos de
+	// valorizaciones y cuotas sueltas —, posicionado en el que se tocó y con pastillas para pasar a los demás.
+	const documentosVenta = $derived.by(() => {
+		if (!resumen) return [] as { url: string; label: string }[];
+		const docs: { url: string; label: string }[] = [];
+		const agregar = (url: string | null, label: string) => {
+			if (url && !docs.some((d) => d.url === url)) docs.push({ url, label });
+		};
+		for (const g of resumen.adelantos) for (const a of g.pagos) agregar(a.comprobante_url, g.pagos.length > 1 ? `Adelanto ${g.numero} · Armada ${a.numero}` : `Adelanto ${g.numero}`);
+		for (const g of resumen.valorizaciones) for (const p of g.pagos) agregar(p.comprobante_url, `Valorización ${g.numero} · Pago ${p.numero}`);
+		for (const p of resumen.sinGrupo) agregar(p.comprobante_url, `Cuota ${p.numero}`);
+		return docs;
+	});
+	let visorAbierto = $state(false);
+	let visorInicial = $state(0);
 	function verComprobante(url: string | null) {
-		if (url) window.open(toDriveThumbnailUrl(url, 1600), '_blank', 'noopener');
+		if (!url) return;
+		visorInicial = Math.max(0, documentosVenta.findIndex((d) => d.url === url));
+		visorAbierto = true;
 	}
+	const comprobantesDe = (g: GrupoObra) => g.pagos.filter((p) => p.comprobante_url).length;
 </script>
 
 {#if open}
@@ -131,7 +151,12 @@
 		<div class="w-full max-w-6xl max-h-[95dvh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
 			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-4 sm:px-6 py-3 border-b border-slate-100">
 				<h2 class="text-xl font-bold text-[#0f3b5e]">{titulo}</h2>
+				<div class="ml-auto flex items-center gap-2">
+					{#if documentosVenta.length > 0}
+						<button type="button" onclick={() => { visorInicial = 0; visorAbierto = true; }} class="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-[#0f3b5e] hover:bg-slate-50"><i class="fas fa-eye"></i> Comprobantes ({documentosVenta.length})</button>
+					{/if}
 				<button type="button" onclick={onClose} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Cerrar"><i class="fas fa-times"></i></button>
+				</div>
 			</div>
 
 			{#if cargando && !resumen}
@@ -187,7 +212,7 @@
 											<td class="py-2 px-2 text-right">{pct(g.total)}</td>
 											<td class="py-2 px-2 text-right">100.00 %</td>
 											<td class="py-2 px-2">
-												{#if g.pagos.length === 1 && g.pagos[0].comprobante_url}<button type="button" onclick={() => verComprobante(g.pagos[0].comprobante_url)} class="text-xs text-blue-600 hover:underline"><i class="fas fa-eye mr-1"></i>Ver</button>{:else}<span class="text-xs text-slate-400">{g.pagos.length} armadas</span>{/if}
+												{#if comprobantesDe(g) > 0}<button type="button" onclick={() => verComprobante(g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null)} class="text-xs text-blue-600 hover:underline"><i class="fas fa-eye mr-1"></i>Ver{comprobantesDe(g) > 1 ? ` (${comprobantesDe(g)})` : ''}</button>{:else}<span class="text-xs text-slate-400">Sin comprobante</span>{/if}
 											</td>
 											<td class="py-2 px-2 text-xs text-slate-600">{g.observaciones ?? ''}</td>
 											<td class="py-2 px-2 text-center"><span class={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${g.estado === 'completada' ? estadoVal.completada.clase : estadoVal.pendiente.clase}`}>{g.estado === 'completada' ? 'Cobrado' : 'Pendiente'}</span></td>
@@ -337,6 +362,8 @@
 		</div>
 	</div>
 {/if}
+
+<DocumentPreviewModal open={visorAbierto} documents={documentosVenta} initialIndex={visorInicial} title={`Comprobantes - ${titulo}`} onClose={() => (visorAbierto = false)} />
 
 {#snippet formularioValorizacion()}
 	{#if formVal}
