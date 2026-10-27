@@ -102,6 +102,7 @@ export async function cobrarDetraccionConSuArmada(
 	const payload: Record<string, unknown> = Object.fromEntries(CAMPOS_HEREDADOS.map((k) => [k, (armada as any)[k] ?? null]));
 	Object.assign(payload, {
 		monto_total: r2(p.monto),
+		categoria: 'Detracción',
 		estado: 'activo',
 		cuente_destino: cuentasBN[0]?.value ?? (armada as any).cuente_destino ?? null,
 		descripcion: `${nombreDetraccion(p.concepto)} (de la transacción #${p.idTransaccionArmada})`.slice(0, 250)

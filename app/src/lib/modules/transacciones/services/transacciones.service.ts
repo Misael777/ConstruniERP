@@ -1651,11 +1651,11 @@ forma_pago: formaPagoParaTransaccion(cuentaCobrar.forma_pago),
 /** Finanzas de Obras (ver cobranzaObra.service.ts): concepto y categoría de una cuota agrupada — "Adelanto 2" o
  * "Valorización 2 - Pago 5 (partida)", con Pago N correlativo en toda la obra. null si la cuota no tiene grupo. */
 async function etiquetaCobroObra(client: SupabaseClient, idCobro: number): Promise<{ categoria: string; concepto: string } | null> {
-	// Una detracción lleva el concepto y la categoría de su cuota: "Detracción – Valorización 2 - Pago 5".
+	// Una detracción lleva el concepto de su cuota ("Detracción – Valorización 2 - Pago 5") y la categoría Detracción.
 	const { data: propia } = await client.from('cobros').select('*').eq('id_cobro', idCobro).maybeSingle();
 	if ((propia as any)?.es_detraccion && (propia as any).id_cobro_origen) {
 		const origen = await etiquetaCobroObra(client, (propia as any).id_cobro_origen);
-		return origen ? { categoria: origen.categoria, concepto: nombreDetraccion(origen.concepto) } : null;
+		return origen ? { categoria: 'Detracción', concepto: nombreDetraccion(origen.concepto) } : null;
 	}
 	const { data: c } = await client.from('cobros').select('id_grupo, partida, id_cuenta_cobrar, cobro_grupo(tipo, numero)').eq('id_cobro', idCobro).maybeSingle();
 	const grupo = (c as any)?.cobro_grupo;

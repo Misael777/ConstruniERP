@@ -931,6 +931,8 @@ export async function prepararTransaccionDeCuota(client: SupabaseClient, idCobro
 		{ ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre, proyectoCodigo: codigoProyectoDe(cuenta) },
 		{ id_cobro: cobro.id_cobro, monto: Number(cobro.monto), fecha_cobro: cobro.fecha_cobro, medio_cobro: cobro.medio_cobro, cuenta_banco: cobro.cuenta_banco, referencia: cobro.referencia }
 	);
+	// Cuota de detracción: su transacción va con la categoría Detracción (y queda relacionada a la de su cuota al confirmarse).
+	if (payload && (cobro as any).es_detraccion) payload.categoria = 'Detracción';
 	return payload ? { success: true, payload } : { success: false, message: 'No se pudo preparar la transacción del pago.' };
 }
 
@@ -949,7 +951,7 @@ export async function confirmarCobroCobrado(
 	usuarioNombre: string | null = null,
 	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Cobro>> {
-	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar').eq(COBRO_PK, idCobro).single();
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('*').eq(COBRO_PK, idCobro).single();
 	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
 
 	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
@@ -966,6 +968,11 @@ export async function confirmarCobroCobrado(
 	// rebalancearUltimaCuota puede ajustar el monto de OTRA cuota 'programado' después de que
 	// fn_confirmar_cobro ya recalculó la cuenta — se recalcula una vez más (mismo orden que antes).
 	await rebalancearUltimaCuota(client, data.id_cuenta_cobrar, idCobro);
+	// Cuota de detracción: su transacción queda relacionada a la de la cuota que la genera (si ya se cobró).
+	if ((cobroActual as any).es_detraccion && (cobroActual as any).id_cobro_origen && (data as any).id_transaccion) {
+		const { data: origen } = await client.from(COBRO_TABLE).select('id_transaccion').eq(COBRO_PK, (cobroActual as any).id_cobro_origen).maybeSingle();
+		if (origen?.id_transaccion) await client.from('transaccion').update({ id_transaccion_origen: origen.id_transaccion }).eq('id_transaccion', (data as any).id_transaccion);
+	}
 	// Detracción marcada "junto con la cuota": se registra cobrada ahora, relacionada a esta transacción.
 	const errorDetraccion = await cobrarDetraccionJuntoSiCorresponde(client, data.id_cuenta_cobrar, idCobro, (data as any).id_transaccion);
 	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);

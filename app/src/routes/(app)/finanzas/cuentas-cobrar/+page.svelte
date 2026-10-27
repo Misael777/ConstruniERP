@@ -378,6 +378,7 @@
 		abrirCreacionPrecargadaDesdeTransaccion();
 		abrirEdicionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
+		await abrirResumenDesdeCierreVenta();
 	});
 
 	function onSearchInput(value: string) {
@@ -634,6 +635,25 @@
 			return;
 		}
 		handleTransaccionSugerida(r.payload, idCobro);
+	}
+
+	/** Último paso del cierre de una venta (ver flujoCierreVenta.ts): se llega con ?resumenCuenta=<id> y se abre el
+	 * Resumen de cobro de esa cuenta. Si no está en la página actual de la lista, se trae y se agrega arriba. */
+	async function abrirResumenDesdeCierreVenta() {
+		const id = Number(page.url.searchParams.get('resumenCuenta'));
+		if (!id) return;
+		window.history.replaceState({}, '', '/finanzas/cuentas-cobrar');
+		let item = items.find((i) => i.id_cuenta_cobrar === id);
+		if (!item) {
+			const { data } = await supabase.from('cuentas_cobrar').select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').eq('id_cuenta_cobrar', id).maybeSingle();
+			if (!data) {
+				toast.error('No se encontró la Cuenta por Cobrar de la venta.');
+				return;
+			}
+			item = data as CuentaCobrar;
+			items = [item, ...items];
+		}
+		await openResumen(item);
 	}
 
 	async function openResumen(item: CuentaCobrar) {

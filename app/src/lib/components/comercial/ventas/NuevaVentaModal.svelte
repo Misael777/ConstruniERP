@@ -1,3 +1,13 @@
+<script lang="ts" module>
+	/** Contexto que la venta pasa al padre al cerrarse (ver onTransaccionSugerida y el flujo de cierre en ventas/+page.svelte). */
+	export interface ContextoCierreVenta {
+		clienteNombre: string;
+		proyectoCodigo: string;
+		idProyecto?: number;
+		idCliente?: number;
+	}
+</script>
+
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { onMount, onDestroy, untrack, tick } from 'svelte';
@@ -51,8 +61,11 @@
 		 * resueltos acá (frescos, no lo que haya quedado guardado en `centro_costo.nombre`, que puede
 		 * estar desactualizado) — a pedido del usuario, el padre los usa para que el <select> de Origen
 		 * muestre el centro de costo + nombre del CLIENTE, y el de Destino el centro de costo + código
-		 * del PROYECTO de esta misma venta, en vez de lo que sea que diga la etiqueta genérica. */
-		onTransaccionSugerida?: (transaccion: Transaccion, contexto: { clienteNombre: string; proyectoCodigo: string }) => void;
+		 * del PROYECTO de esta misma venta, en vez de lo que sea que diga la etiqueta genérica.
+		 * Flujo de cierre (a pedido del usuario): se llama SIEMPRE al cerrar (transaccion = null si el cierre no
+		 * creó una nueva): el padre muestra en orden las transacciones del adelanto/detracción, el comprobante (si
+		 * en la transacción se eligió "Generar Comprobante" = Sí) y la Cuenta por Cobrar (ver ventas/+page.svelte). */
+		onTransaccionSugerida?: (transaccion: Transaccion | null, contexto: ContextoCierreVenta) => void;
 	}>();
 
 	// Opciones de "Tipo de proyecto", "Estado del predio" y "Tipo de edificación" (Consultoría) — a
@@ -163,6 +176,12 @@
 	}
 	const AVISO_SIN_MIGRACION =
 		'La detracción todavía no está habilitada en la base de datos (falta aplicar la migración detraccion_venta). Elige Detracción = No para guardar esta venta, o pide que se aplique la migración.';
+	const contextoCierre = (idProyecto: number, idCliente: number, clienteNombre: string): ContextoCierreVenta => ({
+		clienteNombre,
+		proyectoCodigo: proyectoNombre,
+		idProyecto,
+		idCliente
+	});
 	const detraccionMonto = $derived(detraccionPct ? partirDetraccion(Number(valorVenta) || 0, detraccionPct).detraccion : 0);
 	/** Casilla de la detracción de la fila ADELANTO (Forma de cobranza) = la de todas sus armadas. */
 	const detraccionAdelantoJunto = $derived.by(() => armadasUsadas(armadas).length > 0 && armadasUsadas(armadas).every((a) => a.detraccionCobrada));
@@ -1491,7 +1510,7 @@ async function copiarCodigoGenerado() {
 			// ingreso Y abrir el popup de Transacciones para completar la información que el cierre de
 			// venta no pide — solo si esta llamada creó una transacción nueva (result.data viene undefined
 			// si el adelanto ya estaba registrado de antes, ver cerrarVentaAprobada).
-			if (result.data) onTransaccionSugerida(result.data, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
+			onTransaccionSugerida(result.data ?? null, contextoCierre(Number(ventaId), basicos.clienteId, basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`));
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
 			toast.error(`No se pudo cerrar la venta. ${describeError(err)}`);
@@ -2104,7 +2123,7 @@ async function copiarCodigoGenerado() {
 			// crea acá DENTRO de crearVentaYSubirDocumentos (no en cerrarVentaAprobada, que en este flujo
 			// recibe adelantoYaRegistrado:true y no vuelve a crearla), así que se toma de `resultado`, no
 			// de `result.data`.
-			if (resultado.transaccionAdelanto) onTransaccionSugerida(resultado.transaccionAdelanto, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
+			onTransaccionSugerida(resultado.transaccionAdelanto ?? null, contextoCierre(resultado.proyectoId, basicos.clienteId, basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`));
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error creando y cerrando la venta:', err);
 			saveError = `No se pudo cerrar la venta.\n${describeError(err)}`;
