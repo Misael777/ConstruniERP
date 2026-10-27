@@ -11,6 +11,8 @@
 	import { getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { clientesState, suscribirClientes, opcionesClientes } from '$lib/stores/clientes.svelte';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { CLAVE_FLUJO_CIERRE_VENTA } from '$lib/modules/ventas/services/flujoCierreVenta';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, puedeVerEliminados } from '$lib/stores/permisos.svelte';
 	import { Briefcase, HardHat, Building2, Ellipsis, Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, FileText, Eye, TrendingUp, Inbox, Percent, CheckCircle2, Receipt, FileMinus, FilePlus, Check } from '@lucide/svelte';
@@ -143,7 +145,7 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	let modalMode = $state<'create' | 'edit'>('create');
 	let editingFactura = $state<Factura | null>(null);
 	let editingDetalle = $state<FacturaDetalle[]>([]);
-	let preseleccion = $state<{ idCliente: number; idTransaccion: number | null } | null>(null);
+	let preseleccion = $state<{ idCliente: number; idTransaccion: number | null; idTransacciones?: number[] } | null>(null);
 	let folioReferenciaModal = $state<string | null>(null);
 
 	let previewOpen = $state(false);
@@ -247,15 +249,26 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 		if (!crudo) return false;
 		try {
 			const datos = JSON.parse(crudo);
-				const tipoPrecarga = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)] ?? 'factura';
-				activeTab = tipoPrecarga;
-				tipoModal = tipoPrecarga;
-				vistaTx = 'pendientes';
+			const tipoPrecarga = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)];
+			// Viene del cierre de una venta (ver ventas/+page.svelte): al cerrar el comprobante se sigue a la Cuenta por
+			// Cobrar. Si este tipo no se emite desde el ERP, se sigue de una vez.
+			flujoVentaPendiente = hayFlujoCierreVenta();
+			if (flujoVentaPendiente && (!tipoPrecarga || !datos.idCliente)) {
+				toast.info(tipoPrecarga ? 'No se pudo precargar el cliente: emite el comprobante a mano.' : 'Este tipo de comprobante todavía no se emite desde el ERP — regístralo a mano.');
+				volverAlCierreDeVenta();
+				return true;
+			}
+			// Sin pestaña para ese tipo (Recibo por Honorarios, Comprobante de Venta) o sin cliente: solo se abre
+			// el módulo (en su pestaña, o en "Todos"), sin "Nuevo Comprobante".
+			activeTab = tipoPrecarga ?? 'todos';
+			vistaTx = 'pendientes';
 			await fetchTab();
+			if (!tipoPrecarga || !datos.idCliente) return true;
+			tipoModal = tipoPrecarga;
 			modalMode = 'create';
 			editingFactura = null;
 			editingDetalle = [];
-			preseleccion = { idCliente: datos.idCliente, idTransaccion: datos.idTransaccion };
+			preseleccion = { idCliente: datos.idCliente, idTransaccion: datos.idTransaccion, idTransacciones: Array.isArray(datos.idTransacciones) ? datos.idTransacciones : undefined };
 			modalOpen = true;
 			return true;
 		} catch (err) {
@@ -395,7 +408,29 @@ function irAPaginaTransacciones(nueva: number) {
 		modalOpen = true;
 	}
 
+	/** ¿Hay un cierre de venta esperando a que se emita su comprobante? (ver abrirDesdeTransaccionPrefill) */
+	let flujoVentaPendiente = false;
+	function hayFlujoCierreVenta(): boolean {
+		try {
+			return !!sessionStorage.getItem(CLAVE_FLUJO_CIERRE_VENTA);
+		} catch {
+			return false;
+		}
+	}
+	function volverAlCierreDeVenta() {
+		flujoVentaPendiente = false;
+		let idCuenta: number | null = null;
+		try {
+			idCuenta = JSON.parse(sessionStorage.getItem(CLAVE_FLUJO_CIERRE_VENTA) ?? '{}').idCuentaCobrar ?? null;
+			sessionStorage.removeItem(CLAVE_FLUJO_CIERRE_VENTA);
+		} catch {
+			/* sin flujo guardado */
+		}
+		if (idCuenta) goto(`/finanzas/cuentas-cobrar?resumenCuenta=${idCuenta}`);
+	}
+
 	function closeModal() {
+		if (flujoVentaPendiente) volverAlCierreDeVenta();
 		modalOpen = false;
 		editingFactura = null;
 		editingDetalle = [];

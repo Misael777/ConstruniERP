@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency } from '$lib/shared/fieldConfig';
 import { nombreCuota, contarArmadasAdelanto } from '$lib/shared/acuerdoDePago';
+import { nombreDetraccion } from '$lib/shared/detraccion';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -1461,13 +1462,18 @@ async function calcularNumeroCuota(
 	idCuenta: number,
 	idFila: number
 ): Promise<number | null> {
-	const { data } = await client
+	const { data: crudo } = await client
 		.from(tabla)
-		.select(`${columnaPk}, ${columnaFecha}${tabla === 'cobros' ? ', referencia' : ''}`)
+		.select('*')
 		.eq(columnaFk, idCuenta)
 		.order(columnaFecha, { ascending: true })
 		.order(columnaPk, { ascending: true });
-	if (!data) return null;
+	if (!crudo) return null;
+	// Detracción (ver detraccion.service.ts): las cuotas de detracción no son una cuota más; la de una detracción es
+	// el número de su cuota de origen.
+	const fila = (crudo as any[]).find((row) => row[columnaPk] === idFila);
+	if (fila?.es_detraccion && fila.id_cobro_origen) idFila = fila.id_cobro_origen;
+	const data = (crudo as any[]).filter((row) => !row.es_detraccion);
 	const index = (data as any[]).findIndex((row) => row[columnaPk] === idFila);
 	if (index === -1) return null;
 	// Ticket #102: si el adelanto se cobró en varias armadas, todas cuentan como la cuota 1 ("Adelanto") y la
@@ -1645,17 +1651,23 @@ forma_pago: formaPagoParaTransaccion(cuentaCobrar.forma_pago),
 /** Finanzas de Obras (ver cobranzaObra.service.ts): concepto y categoría de una cuota agrupada — "Adelanto 2" o
  * "Valorización 2 - Pago 5 (partida)", con Pago N correlativo en toda la obra. null si la cuota no tiene grupo. */
 async function etiquetaCobroObra(client: SupabaseClient, idCobro: number): Promise<{ categoria: string; concepto: string } | null> {
+	// Una detracción lleva el concepto de su cuota ("Detracción – Valorización 2 - Pago 5") y la categoría Detracción.
+	const { data: propia } = await client.from('cobros').select('*').eq('id_cobro', idCobro).maybeSingle();
+	if ((propia as any)?.es_detraccion && (propia as any).id_cobro_origen) {
+		const origen = await etiquetaCobroObra(client, (propia as any).id_cobro_origen);
+		return origen ? { categoria: 'Detracción', concepto: nombreDetraccion(origen.concepto) } : null;
+	}
 	const { data: c } = await client.from('cobros').select('id_grupo, partida, id_cuenta_cobrar, cobro_grupo(tipo, numero)').eq('id_cobro', idCobro).maybeSingle();
 	const grupo = (c as any)?.cobro_grupo;
 	if (!c?.id_grupo || !grupo) return null;
 	if (grupo.tipo === 'adelanto') return { categoria: 'Adelanto', concepto: grupo.numero > 1 ? `Adelanto ${grupo.numero}` : 'Adelanto' };
 	const { data: pagos } = await client
 		.from('cobros')
-		.select('id_cobro, fecha_cobro, cobro_grupo!inner(tipo, numero)')
+		.select('*, cobro_grupo!inner(tipo, numero)')
 		.eq('id_cuenta_cobrar', c.id_cuenta_cobrar)
 		.eq('cobro_grupo.tipo', 'valorizacion')
 		.neq('estado_cobro', 'cancelado');
-	const orden = [...(pagos ?? [])].sort(
+	const orden = [...(pagos ?? [])].filter((x: any) => !x.es_detraccion).sort(
 		(a: any, b: any) => a.cobro_grupo.numero - b.cobro_grupo.numero || (a.fecha_cobro < b.fecha_cobro ? -1 : a.fecha_cobro > b.fecha_cobro ? 1 : 0) || a.id_cobro - b.id_cobro
 	);
 	const numeroPago = orden.findIndex((x: any) => x.id_cobro === idCobro) + 1;

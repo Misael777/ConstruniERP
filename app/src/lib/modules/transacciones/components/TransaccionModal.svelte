@@ -89,7 +89,8 @@
 		confirmButtonLabel = null,
 		lockedFields = [],
 		initialComprobanteFile = null,
-		forceReadOnly = false
+		forceReadOnly = false,
+		onGenerarComprobante = null
 	}: {
 		open: boolean;
 		mode: 'create' | 'edit';
@@ -123,6 +124,9 @@
 		 * con todos los campos deshabilitados y sin botón de Guardar, igual que una transacción aprobada
 		 * (ver bloqueadaPorAprobacion), pero sin depender de que `transaccion.aprobado` sea real. */
 		forceReadOnly?: boolean;
+		/** Flujo de cierre de venta (ver ventas/+page.svelte): con "Generar Comprobante" = Sí no se redirige al
+		 * guardar; se avisa al padre, que emite UN comprobante con todas las transacciones del cierre al final. */
+		onGenerarComprobante?: ((info: { idTransaccion: number; tipoDocumento: string; idCentroCostoOrigen: string; yaEmitido: boolean }) => void) | null;
 	} = $props();
 
 	const formFields = FIELDS_CONFIG.filter((f) => f.showInForm);
@@ -145,9 +149,10 @@
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
-	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. Solo los que
-	 * tienen pestaña en Gestión de Comprobantes (COMPROBANTE_POR_TIPO_DOCUMENTO) se pueden "Generar" desde acá;
-	 * Recibo por Honorarios y Comprobante de Venta todavía no se emiten desde el ERP. */
+	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. "Generar
+	 * Comprobante" está disponible para TODOS (a pedido del usuario) y siempre lleva a Gestión de Comprobantes:
+	 * los que tienen pestaña ahí (COMPROBANTE_POR_TIPO_DOCUMENTO) abren "Nuevo Comprobante" precargado; Recibo
+	 * por Honorarios y Comprobante de Venta (sin pestaña todavía) abren el módulo en "Todos". */
 	const TIPOS_COMPROBANTE_INGRESO = [
 		{ value: '1', label: 'Factura' },
 		{ value: '3', label: 'Recibo por Honorarios' },
@@ -159,7 +164,6 @@
 	const tipoComprobanteEmitible = (tipo: string) => tipo in COMPROBANTE_POR_TIPO_DOCUMENTO;
 	function onTipoComprobanteErpChange(v: string) {
 		handleInput('tipo_documento', v);
-		if (!tipoComprobanteEmitible(v)) generarComprobanteErp = 'no';
 	}
 
 	function buildInitialValues(): Record<string, string> {
@@ -571,6 +575,8 @@
 			// disparador de una sola vez, no una columna real de `transaccion` — arranca en 'no' siempre,
 			// también al editar (nunca se guarda, así que no hay valor previo que recuperar).
 			generarComprobanteErp = 'no';
+			idOrigenDetraccion = (transaccion as any)?.id_transaccion_origen ? String((transaccion as any).id_transaccion_origen) : '';
+			origenesCargadosPara = '';
 			claseDestino = '';
 			ocrConfianza = null;
 			otrosCamposAbierto = false;
@@ -1480,7 +1486,8 @@
 		{ value: 'G. Operativos', label: 'G. Operativos' },
 		{ value: 'G. Administrativos', label: 'G. Administrativos' },
 		{ value: 'Servicio', label: 'Servicio' },
-		{ value: 'Materiales', label: 'Materiales' }
+		{ value: 'Materiales', label: 'Materiales' },
+		{ value: 'Detracción', label: 'Detracción' }
 	];
 
 	// "Categoría" cuando el Centro de Costo del proyecto (Destino en Ingreso, Origen en Egreso — el
@@ -1683,14 +1690,21 @@
 	 * Origen (mismo criterio que getTransaccionesFacturables en facturacion.service.ts) — si ese
 	 * origen no es un centro de cliente (ej. Corporativo/Socio o Banca), no hay cliente que precargar
 	 * y se avisa en vez de redirigir a medias. */
-	async function redirigirANuevoComprobanteErp(idTransaccion: number, idCentroCostoOrigen: string, tipoDocumento: string): Promise<void> {
+	async function redirigirANuevoComprobanteErp(idTransaccion: number, idCentroCostoOrigen: string, tipoDocumento: string, yaEmitido = false): Promise<void> {
 		try {
-			const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(idCentroCostoOrigen)).maybeSingle();
-			if (!centro?.id_cliente) {
-				toast.info('No se pudo identificar un cliente para generar el comprobante automáticamente — créalo a mano en Gestión de Comprobantes.');
-				return;
+			// Siempre se llega a Gestión de Comprobantes (a pedido del usuario); el "Nuevo Comprobante" precargado
+			// solo se abre si el tipo tiene pestaña, hay cliente y la transacción aún no tiene comprobante.
+			let idCliente: number | null = null;
+			if (!yaEmitido && tipoComprobanteEmitible(tipoDocumento) && idCentroCostoOrigen) {
+				const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(idCentroCostoOrigen)).maybeSingle();
+				idCliente = centro?.id_cliente ?? null;
+				if (!idCliente) toast.info('No se pudo identificar un cliente para precargar el comprobante — créalo a mano en Gestión de Comprobantes.');
+			} else if (yaEmitido) {
+				toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
+			} else if (!tipoComprobanteEmitible(tipoDocumento)) {
+				toast.info('Este tipo de comprobante todavía no se emite desde el ERP — regístralo en Gestión de Comprobantes.');
 			}
-			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente: centro.id_cliente, idTransaccion, tipoDocumento }));
+			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente, idTransaccion, tipoDocumento }));
 			goto('/finanzas/facturacion?nuevoComprobanteDesdeTransaccion=1');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo preparar el nuevo comprobante:', err);
@@ -2069,8 +2083,47 @@
 	// una adenda ya lo dice su grupo (cobro_grupo) y su concepto ("Adelanto 2 - Armada 1").
 	const CATEGORIA_OBRA_INGRESO: FieldOption[] = [
 		{ value: 'Adelanto', label: 'Adelanto' },
-		{ value: 'Valorización', label: 'Valorización' }
+		{ value: 'Valorización', label: 'Valorización' },
+		{ value: 'Detracción', label: 'Detracción' }
 	];
+
+	// ── Categoría "Detracción" (a pedido del usuario): la transacción queda relacionada a la que genera la detracción
+	// (transaccion.id_transaccion_origen) — un ingreso del mismo Proyecto. Se elige acá y se guarda tras guardar. ──
+	const esDetraccion = $derived(formValues.tipo === 'ingreso' && formValues.categoria === 'Detracción');
+	let idOrigenDetraccion = $state('');
+	let origenesDetraccion = $state<(FieldOption & { monto: number })[]>([]);
+	let origenesCargadosPara = '';
+	$effect(() => {
+		const destino = String(formValues.id_centro_costo_destino ?? '');
+		if (!esDetraccion || !destino) return;
+		const clave = `${destino}|${transaccion?.id_transaccion ?? ''}`;
+		if (clave === origenesCargadosPara) return;
+		origenesCargadosPara = clave;
+		void (async () => {
+			const { data } = await supabase
+				.from('transaccion')
+				.select('id_transaccion, fecha, categoria, descripcion, monto_total')
+				.eq('tipo', 'ingreso')
+				.eq('estado', 'activo')
+				.eq('id_centro_costo_destino', Number(destino))
+				.order('fecha', { ascending: false })
+				.limit(100);
+			origenesDetraccion = (data ?? [])
+				.filter((t: any) => t.categoria !== 'Detracción' && t.id_transaccion !== transaccion?.id_transaccion)
+				.map((t: any) => ({
+					value: String(t.id_transaccion),
+					label: `#${t.id_transaccion} · ${t.categoria ?? 'Ingreso'} · ${formatCurrency(Number(t.monto_total))} · ${t.fecha}`,
+					monto: Number(t.monto_total)
+				}));
+		})();
+	});
+	/** Monto de la transacción que genera la detracción y el % que representa esta detracción sobre su total (neto + detracción). */
+	const origenDetraccionElegido = $derived(origenesDetraccion.find((o) => o.value === idOrigenDetraccion) ?? null);
+	const pctDetraccionSobreOrigen = $derived.by(() => {
+		const monto = Number(formValues.monto_total) || 0;
+		const base = (origenDetraccionElegido?.monto ?? 0) + monto;
+		return origenDetraccionElegido && base > 0 ? Number(((monto / base) * 100).toFixed(2)) : null;
+	});
 	const CATEGORIA_OBRA_EGRESO: FieldOption[] = [
 		{ value: 'Sub Contrata', label: 'Sub Contrata' },
 		{ value: 'Material', label: 'Material' },
@@ -2787,6 +2840,10 @@
 			toast.error('Revisa los campos marcados en rojo antes de guardar.');
 			return;
 		}
+		if (esDetraccion && !idOrigenDetraccion) {
+			toast.error('Elige la transacción que genera esta detracción.');
+			return;
+		}
 
 		// A pedido explícito del usuario: al CREAR una transacción Ingreso donde el Proyecto (Destino) es
 		// Corporativo y la Categoría elegida es "Préstamo" (ver CATEGORIA_CORPORATIVO_INGRESO), la
@@ -3005,6 +3062,13 @@
 			}
 
 			if (result.success) {
+				// Categoría Detracción: relación con la transacción que la genera (fn_crear_transaccion inserta columnas fijas).
+				const idGuardada = Number((result.data as any)?.id_transaccion ?? transaccion?.id_transaccion ?? 0);
+				const origenNuevo = esDetraccion && idOrigenDetraccion ? Number(idOrigenDetraccion) : null;
+				if (idGuardada && origenNuevo !== ((transaccion as any)?.id_transaccion_origen ?? null)) {
+					const { error: errOrigen } = await supabase.from('transaccion').update({ id_transaccion_origen: origenNuevo }).eq('id_transaccion', idGuardada);
+					if (errOrigen) toast.error(`No se pudo relacionar la detracción con su transacción: ${errOrigen.message}`);
+				}
 				// Se guardó — la próxima llamada (siguiente ítem de la cola, o un guardado manual nuevo)
 				// necesita su PROPIA idempotency key; un reintento tras un error, en cambio, reutiliza la
 				// key de arriba sin pasar por acá (ver comentario en su declaración).
@@ -3103,6 +3167,12 @@
 					cargarDraft(colaIndex);
 				} else {
 					toast.success(result.message ?? 'Operación realizada con éxito');
+					const idParaComprobante = (result.data as any)?.id_transaccion ?? transaccion?.id_transaccion;
+					const pedirComprobante = generarComprobanteErp === 'si' && mostrarComprobanteErp && !!idParaComprobante;
+					// Antes de onSaved/onClose: el padre decide el siguiente paso al cerrarse este.
+					if (pedirComprobante && onGenerarComprobante) {
+						onGenerarComprobante({ idTransaccion: idParaComprobante, tipoDocumento: formValues.tipo_documento, idCentroCostoOrigen: formValues.id_centro_costo_origen, yaEmitido: !!transaccion?.id_factura });
+					}
 					onSaved({ transaccion: (result.data as Transaccion | undefined) ?? null, creada: mode === 'create' });
 					onClose();
 					// Ver editandoPrestamo/redirigirAEditarCuentaPrestamo más arriba — la transacción ya se
@@ -3111,13 +3181,8 @@
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
 					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
-					if (generarComprobanteErp === 'si' && mostrarComprobanteErp && tipoComprobanteEmitible(formValues.tipo_documento)) {
-						if (transaccion?.id_factura) {
-							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
-						} else {
-							const idParaComprobante = (result.data as any)?.id_transaccion ?? transaccion?.id_transaccion;
-							if (idParaComprobante) await redirigirANuevoComprobanteErp(idParaComprobante, formValues.id_centro_costo_origen, formValues.tipo_documento);
-						}
+					if (pedirComprobante && !onGenerarComprobante) {
+						await redirigirANuevoComprobanteErp(idParaComprobante, formValues.id_centro_costo_origen, formValues.tipo_documento, !!transaccion?.id_factura);
 					}
 				}
 			} else {
@@ -3379,6 +3444,26 @@
 									</div>
 								{:else}
 									{@render fieldBlock(categoriaField)}
+								{/if}
+								{#if esDetraccion}
+									<div>
+										<label for="tr-origen-detraccion" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Transacción que la genera <span class="text-red-500">*</span></label>
+										<SelectConSaldo
+											id="tr-origen-detraccion"
+											value={idOrigenDetraccion}
+											options={origenesDetraccion}
+											placeholder={formValues.id_centro_costo_destino ? 'Selecciona la transacción…' : 'Elige primero el Proyecto'}
+											disabled={bloqueadaPorAprobacion}
+											onchange={(v) => (idOrigenDetraccion = v)}
+										/>
+										<p class="mt-1 text-xs text-slate-400">
+											{#if origenDetraccionElegido}
+												Monto que la genera: {formatCurrency(origenDetraccionElegido.monto)}{#if pctDetraccionSobreOrigen != null} · esta detracción es el {pctDetraccionSobreOrigen} % del total (monto + detracción){/if}
+											{:else}
+												Ingreso del mismo Proyecto del que sale esta detracción.
+											{/if}
+										</p>
+									</div>
 								{/if}
 								<div class="flex flex-col flex-1">
 								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
@@ -3746,11 +3831,11 @@
 														id="tr-generar-comprobante-erp"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
+														disabled={bloqueadaPorAprobacion}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Si es Sí, al guardar se abre Gestión de Comprobantes.'}</p>
 											</div>
 										{/if}
 									</div>
@@ -3775,11 +3860,11 @@
 														id="tr-generar-comprobante-erp-2"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
+														disabled={bloqueadaPorAprobacion}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Si es Sí, al guardar se abre Gestión de Comprobantes.'}</p>
 											</div>
 										</div>
 									{/if}

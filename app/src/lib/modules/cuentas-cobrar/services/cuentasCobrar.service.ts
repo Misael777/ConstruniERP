@@ -5,6 +5,7 @@
  * servidor embebido. AJUSTAR: la BD no tiene RLS real todavía, ver nota en +page.svelte.
  */
 
+import { getPorcentajeDetraccionCuenta, vincularDetraccionesPorOrden, fraccionesConDetraccion, cobrarDetraccionJuntoSiCorresponde } from './detraccion.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
@@ -390,7 +391,8 @@ export async function createCuentaCobrar(
 	client: SupabaseClient,
 	payload: Record<string, unknown>,
 	usuarioRegistro: string | null,
-	fraccionesPersonalizadas: { fecha: string; monto: number; referencia?: string | null }[] = []
+	fraccionesPersonalizadas: { fecha: string; monto: number; referencia?: string | null; detraccionJunto?: boolean }[] = [],
+	opciones: { sinDetraccion?: boolean } = {}
 ): Promise<ServiceResult<CuentaCobrar>> {
 	const errors = validatePayload(FIELDS_CONFIG, payload);
 	if (Object.keys(errors).length > 0) {
@@ -419,7 +421,7 @@ export async function createCuentaCobrar(
 	const { data, error } = await client.from(TABLE_NAME).insert(insertData).select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').single();
 	if (error) return { success: false, message: `No se pudo crear la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
-	await sincronizarCuotasProgramadas(client, data.id_cuenta_cobrar, fraccionesPersonalizadas);
+	await sincronizarCuotasProgramadas(client, data.id_cuenta_cobrar, fraccionesPersonalizadas, opciones);
 
 	return { success: true, message: 'Cuenta por cobrar creada correctamente', data: data as CuentaCobrar };
 }
@@ -508,18 +510,31 @@ export async function getPrestatarioDeCuentaCobrar(client: SupabaseClient, cuent
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
-	fracciones: { fecha: string; monto: number; referencia?: string | null }[]
+	fracciones: { fecha: string; monto: number; referencia?: string | null; detraccionJunto?: boolean }[],
+	opciones: { sinDetraccion?: boolean } = {}
 ): Promise<{ success: boolean; message: string }> {
 	// Finanzas de Obras: las cuotas de una cuenta de Obra están agrupadas (adelantos/valorizaciones, cobro_grupo) y
 	// se gestionan desde su Resumen de cobro — borrarlas y recrearlas acá perdería los grupos y las partidas.
 	if (await cuentaTieneGrupos(client, idCuentaCobrar)) return { success: true, message: 'Cuenta de obra: las cuotas se gestionan desde el Resumen de cobro' };
+	// Detracción (ver detraccion.service.ts): las fracciones llegan con su monto BRUTO y aquí se parten en cuota neta +
+	// su detracción. Las detracciones pendientes de cuotas YA cobradas se conservan (no son reprogramables) y se
+	// descuentan de lo que hay que repartir.
+	// sinDetraccion: cuentas armadas desde ingresos YA registrados (asegurarCuentaCobrarDeVenta), que no se parten.
+	const porcentaje = opciones.sinDetraccion ? null : await getPorcentajeDetraccionCuenta(client, idCuentaCobrar);
+	const { data: actuales } = await client.from(COBRO_TABLE).select('*').eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
+	const { data: todas } = await client.from(COBRO_TABLE).select('id_cobro, estado_cobro').eq(PARENT_FK_COLUMN, idCuentaCobrar);
+	const estadoDe = new Map((todas ?? []).map((c: any) => [c.id_cobro, c.estado_cobro]));
+	const conservar = (actuales ?? []).filter((c: any) => c.es_detraccion && estadoDe.get(c.id_cobro_origen) !== 'programado');
+	const reservado = conservar.reduce((s: number, c: any) => s + Number(c.monto), 0);
 	if (fracciones.length > 0) {
 		const { data: cuenta } = await client.from(TABLE_NAME).select('monto, monto_cobrado').eq(PK_COLUMN, idCuentaCobrar).single();
-		const pendiente = Math.max(Number(cuenta?.monto ?? 0) - Number(cuenta?.monto_cobrado ?? 0), 0);
+		const pendiente = Math.max(Math.round((Number(cuenta?.monto ?? 0) - Number(cuenta?.monto_cobrado ?? 0) - reservado) * 100) / 100, 0);
 		const errorFracciones = validarSumaFracciones(pendiente, fracciones);
 		if (errorFracciones) return { success: false, message: errorFracciones };
 	}
-	const { error: deleteError } = await client.from(COBRO_TABLE).delete().eq(PARENT_FK_COLUMN, idCuentaCobrar).eq('estado_cobro', 'programado');
+	const idsConservar = new Set(conservar.map((c: any) => c.id_cobro));
+	const idsBorrar = (actuales ?? []).filter((c: any) => !idsConservar.has(c.id_cobro)).map((c: any) => c.id_cobro);
+	const { error: deleteError } = idsBorrar.length ? await client.from(COBRO_TABLE).delete().in('id_cobro', idsBorrar) : { error: null };
 	if (deleteError) {
 		console.error('No se pudieron limpiar las cuotas programadas anteriores (¿falta la migración de cobros.estado_cobro?):', deleteError);
 		return { success: false, message: `No se pudieron guardar las cuotas: ${deleteError.message}` };
@@ -527,17 +542,22 @@ export async function sincronizarCuotasProgramadas(
 	if (fracciones.length === 0) return { success: true, message: 'Cuotas eliminadas' };
 
 	// `referencia` (opcional): concepto de la cuota — ej. el "Hito de cobro" de la Forma de cobranza de Nueva venta.
-	const filas = fracciones.map((f) => ({
+	const filas = fraccionesConDetraccion(fracciones, porcentaje, (f, i) => f.referencia?.trim() || `Cuota ${i + 1}`).map((f) => ({
 		[PARENT_FK_COLUMN]: idCuentaCobrar,
 		monto: f.monto,
 		fecha_cobro: f.fecha,
 		estado_cobro: 'programado',
-		...(f.referencia?.trim() ? { referencia: f.referencia.trim().slice(0, 100) } : {})
+		...(f.referencia?.trim() ? { referencia: f.referencia.trim().slice(0, 100) } : {}),
+		...((f as { detraccionJunto?: boolean }).detraccionJunto ? { detraccion_junto: true } : {})
 	}));
 	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);
 	if (insertError) {
 		console.error('No se pudieron guardar las cuotas programadas (¿falta la migración de cobros.estado_cobro?):', insertError);
 		return { success: false, message: `No se pudieron guardar las cuotas: ${insertError.message}` };
+	}
+	if (porcentaje) {
+		const errorVinculo = await vincularDetraccionesPorOrden(client, idCuentaCobrar);
+		if (errorVinculo) return { success: false, message: `Se guardaron las cuotas, pero no sus detracciones: ${errorVinculo}` };
 	}
 	return { success: true, message: 'Cuotas guardadas' };
 }
@@ -911,6 +931,8 @@ export async function prepararTransaccionDeCuota(client: SupabaseClient, idCobro
 		{ ...cuenta, clienteNombre: (cuenta as any).cliente?.nombre, proyectoCodigo: codigoProyectoDe(cuenta) },
 		{ id_cobro: cobro.id_cobro, monto: Number(cobro.monto), fecha_cobro: cobro.fecha_cobro, medio_cobro: cobro.medio_cobro, cuenta_banco: cobro.cuenta_banco, referencia: cobro.referencia }
 	);
+	// Cuota de detracción: su transacción va con la categoría Detracción (y queda relacionada a la de su cuota al confirmarse).
+	if (payload && (cobro as any).es_detraccion) payload.categoria = 'Detracción';
 	return payload ? { success: true, payload } : { success: false, message: 'No se pudo preparar la transacción del pago.' };
 }
 
@@ -929,7 +951,7 @@ export async function confirmarCobroCobrado(
 	usuarioNombre: string | null = null,
 	idempotencyKey: string | null = null
 ): Promise<ServiceResult<Cobro>> {
-	const { data: cobroActual } = await client.from(COBRO_TABLE).select('id_cuenta_cobrar').eq(COBRO_PK, idCobro).single();
+	const { data: cobroActual } = await client.from(COBRO_TABLE).select('*').eq(COBRO_PK, idCobro).single();
 	if (!cobroActual) return { success: false, message: 'Cobro no encontrado' };
 
 	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
@@ -946,7 +968,15 @@ export async function confirmarCobroCobrado(
 	// rebalancearUltimaCuota puede ajustar el monto de OTRA cuota 'programado' después de que
 	// fn_confirmar_cobro ya recalculó la cuenta — se recalcula una vez más (mismo orden que antes).
 	await rebalancearUltimaCuota(client, data.id_cuenta_cobrar, idCobro);
+	// Cuota de detracción: su transacción queda relacionada a la de la cuota que la genera (si ya se cobró).
+	if ((cobroActual as any).es_detraccion && (cobroActual as any).id_cobro_origen && (data as any).id_transaccion) {
+		const { data: origen } = await client.from(COBRO_TABLE).select('id_transaccion').eq(COBRO_PK, (cobroActual as any).id_cobro_origen).maybeSingle();
+		if (origen?.id_transaccion) await client.from('transaccion').update({ id_transaccion_origen: origen.id_transaccion }).eq('id_transaccion', (data as any).id_transaccion);
+	}
+	// Detracción marcada "junto con la cuota": se registra cobrada ahora, relacionada a esta transacción.
+	const errorDetraccion = await cobrarDetraccionJuntoSiCorresponde(client, data.id_cuenta_cobrar, idCobro, (data as any).id_transaccion);
 	await recalcularCuentaCobrar(client, data.id_cuenta_cobrar);
+	if (errorDetraccion) return { success: true, message: `Cobro confirmado, pero su detracción quedó pendiente: ${errorDetraccion}`, data: data as Cobro };
 
 	return { success: true, message: 'Cobro confirmado como Cobrado', data: data as Cobro };
 }
@@ -1260,7 +1290,8 @@ export async function asegurarCuentaCobrarDeVenta(
 				observaciones: `Cuenta por cobrar de la venta ${venta.proyectoNombre}`.slice(0, 200)
 			},
 			usuarioRegistro,
-			fracciones
+			fracciones,
+			{ sinDetraccion: true }
 		);
 		if (!result.success || !result.data) return { creada: false, mensaje: result.message };
 		const idCuenta = result.data.id_cuenta_cobrar;

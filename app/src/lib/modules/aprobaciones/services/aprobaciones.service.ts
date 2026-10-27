@@ -15,6 +15,7 @@ import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actu
 import { createTransaccion, desaprobarTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { asegurarCuentaCobrarDeVenta } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 import { asegurarCuentaObra, registrarArmadas } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+import { porcentajeDetraccion } from '$lib/shared/detraccion';
 import { generarVentasXLSX } from '$lib/modules/ventas/services/ventasExport.service';
 import { generarClientesXLSX } from '$lib/modules/clientes/services/clientesExport.service';
 import { describeError } from '$lib/shared/describeError';
@@ -555,9 +556,9 @@ export interface CerrarVentaParams {
 	comprobanteUrl?: string;
 	/** Ticket #102: el adelanto en varias armadas (depósitos), cada una con su comprobante ya subido. Si viene,
 	 * reemplaza a adelantoMonto/adelantoFecha/comprobanteUrl (que quedan para solicitudes viejas). */
-	adelantos?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null }[];
+	adelantos?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null; detraccionCobrada?: boolean }[];
 	/** Finanzas de Obras: Adelanto 2, 3… (cada uno con sus armadas). Solo para ventas de Obra. */
-	adelantosExtra?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null }[][];
+	adelantosExtra?: { monto: number; fecha: string; comprobanteUrl: string; observacion?: string | null; detraccionCobrada?: boolean }[][];
 	/** Resto de "Información general" + "Características del proyecto" a persistir junto con el cierre
 	 * (ver handleCerrarVenta en NuevaVentaModal.svelte) — mismas columnas que actualiza "Guardar
 	 * cambios", MENOS precio_venta/costo_estima/estado_proyecto, que este servicio ya fija a partir de
@@ -635,9 +636,10 @@ export async function cerrarVentaAprobada(
 						idCuentaCobrar: cta.idCuentaCobrar,
 						idCentroCliente: Number(idCentroCliente),
 						idCentroProyecto: Number(idCentroProyecto),
-						armadas: lista.map((a) => ({ monto: Number(a.monto), fecha: a.fecha, comprobanteUrl: a.comprobanteUrl, observacion: a.observacion ?? null })),
+						armadas: lista.map((a) => ({ monto: Number(a.monto), fecha: a.fecha, comprobanteUrl: a.comprobanteUrl, observacion: a.observacion ?? null, detraccionCobrada: !!(a as any).detraccionCobrada })),
 						usuarioEmail,
-						usuarioNombre
+						usuarioNombre,
+						detraccionPct: porcentajeDetraccion(params.datosProyecto?.detraccion_porcentaje)
 					});
 					if (!r.success) return { success: false, message: r.message };
 					if (!transaccionAdelanto && r.transacciones[0]) {

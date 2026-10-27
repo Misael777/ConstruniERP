@@ -168,6 +168,9 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Adelanto', label: 'Adelanto' },
 			{ value: 'Valorización', label: 'Valorización' },
 			{ value: 'Abonos', label: 'Abonos' },
+			// Detracción (a pedido del usuario): ingreso a la cuenta de detracciones, relacionado a la transacción
+			// que la genera (transaccion.id_transaccion_origen, ver TransaccionModal.svelte).
+			{ value: 'Detracción', label: 'Detracción' },
 			{ value: 'Honorarios', label: 'Honorarios' },
 			{ value: 'Alquileres', label: 'Alquileres' },
 			{ value: 'Servicios', label: 'Servicios' },
@@ -356,7 +359,8 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 				return [
 					{ value: 'Adelanto', label: 'Adelanto' },
 					{ value: 'Valorización', label: 'Valorización' },
-					{ value: 'Abonos', label: 'Abonos' }
+					{ value: 'Abonos', label: 'Abonos' },
+					{ value: 'Detracción', label: 'Detracción' }
 				];
 			}
 			if (tipo === 'egreso') {

@@ -1,3 +1,13 @@
+<script lang="ts" module>
+	/** Contexto que la venta pasa al padre al cerrarse (ver onTransaccionSugerida y el flujo de cierre en ventas/+page.svelte). */
+	export interface ContextoCierreVenta {
+		clienteNombre: string;
+		proyectoCodigo: string;
+		idProyecto?: number;
+		idCliente?: number;
+	}
+</script>
+
 <script lang="ts">
 	import { fade, scale } from 'svelte/transition';
 	import { onMount, onDestroy, untrack, tick } from 'svelte';
@@ -13,6 +23,8 @@
 	import { createCuentaCobrar, confirmarCobroCobrado, deleteCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { permisosState, isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { asegurarCuentaObra, registrarArmadas, getResumenCobroObra, type GrupoObra } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+	import { partirDetraccion, porcentajeDetraccion, sumarDiasHabiles } from '$lib/shared/detraccion';
+	import { cobrarDetraccionConSuArmada } from '$lib/modules/cuentas-cobrar/services/detraccion.service';
 	import { listarContratos, registrarContrato, marcarContratoVigente, type DocumentoContrato, type TipoContrato } from '$lib/modules/cobranza-obra/services/documentosVenta.service';
 	import { crearSolicitud, cerrarVentaAprobada } from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
@@ -49,8 +61,11 @@
 		 * resueltos acá (frescos, no lo que haya quedado guardado en `centro_costo.nombre`, que puede
 		 * estar desactualizado) — a pedido del usuario, el padre los usa para que el <select> de Origen
 		 * muestre el centro de costo + nombre del CLIENTE, y el de Destino el centro de costo + código
-		 * del PROYECTO de esta misma venta, en vez de lo que sea que diga la etiqueta genérica. */
-		onTransaccionSugerida?: (transaccion: Transaccion, contexto: { clienteNombre: string; proyectoCodigo: string }) => void;
+		 * del PROYECTO de esta misma venta, en vez de lo que sea que diga la etiqueta genérica.
+		 * Flujo de cierre (a pedido del usuario): se llama SIEMPRE al cerrar (transaccion = null si el cierre no
+		 * creó una nueva): el padre muestra en orden las transacciones del adelanto/detracción, el comprobante (si
+		 * en la transacción se eligió "Generar Comprobante" = Sí) y la Cuenta por Cobrar (ver ventas/+page.svelte). */
+		onTransaccionSugerida?: (transaccion: Transaccion | null, contexto: ContextoCierreVenta) => void;
 	}>();
 
 	// Opciones de "Tipo de proyecto", "Estado del predio" y "Tipo de edificación" (Consultoría) — a
@@ -140,6 +155,39 @@
 	let valorVenta = $state('15000.00');
 	let comisionPorcentaje = $state('10');
 	let direccionPredio = $state('');
+	// Detracción (a pedido del usuario): Sí/No + porcentaje. Cada cuota de la venta (armadas, pagos de valorización,
+	// cuotas del plan de pagos) se parte en su neto + su detracción, que vence 5 días hábiles después (ver
+	// $lib/shared/detraccion.ts). Se guarda en proyecto.detraccion_porcentaje (null = sin detracción).
+	let detraccion = $state<'no' | 'si'>('no');
+	let detraccionPorcentaje = $state('');
+	const detraccionPct = $derived(detraccion === 'si' ? porcentajeDetraccion(detraccionPorcentaje) : null);
+	/** % guardado al abrir la venta (para poder quitarlo al editar). */
+	let detraccionOriginal = $state<number | null>(null);
+	/** detraccion_porcentaje solo se envía si la venta tiene (o tenía) detracción: así una venta SIN detracción se guarda
+	 * igual aunque la base todavía no tenga la migración detraccion_venta. */
+	const camposDetraccion = () => (detraccionPct != null || detraccionOriginal != null ? { detraccion_porcentaje: detraccionPct } : {});
+	/** ¿La base ya tiene la migración detraccion_venta? Se consulta al abrir el formulario (una vez). Sin ella, "Sí"
+	 * no se puede guardar (faltan las columnas): se avisa en el campo y al guardar, en vez del error de la base. */
+	let detraccionDisponible = $state<boolean | null>(null);
+	async function verificarDetraccionDisponible() {
+		if (detraccionDisponible !== null) return;
+		const { error } = await supabase.from('proyecto').select('detraccion_porcentaje').limit(1);
+		detraccionDisponible = !error;
+	}
+	const AVISO_SIN_MIGRACION =
+		'La detracción todavía no está habilitada en la base de datos (falta aplicar la migración detraccion_venta). Elige Detracción = No para guardar esta venta, o pide que se aplique la migración.';
+	const contextoCierre = (idProyecto: number, idCliente: number, clienteNombre: string): ContextoCierreVenta => ({
+		clienteNombre,
+		proyectoCodigo: proyectoNombre,
+		idProyecto,
+		idCliente
+	});
+	const detraccionMonto = $derived(detraccionPct ? partirDetraccion(Number(valorVenta) || 0, detraccionPct).detraccion : 0);
+	/** Casilla de la detracción de la fila ADELANTO (Forma de cobranza) = la de todas sus armadas. */
+	const detraccionAdelantoJunto = $derived.by(() => armadasUsadas(armadas).length > 0 && armadasUsadas(armadas).every((a) => a.detraccionCobrada));
+	function marcarDetraccionArmadas(valor: boolean) {
+		armadas = armadas.map((a) => ({ ...a, detraccionCobrada: valor }));
+	}
 
 	let contratoFile = $state<File | null>(null);
 	let proformaFiles = $state<File[]>([]);
@@ -279,7 +327,8 @@
 					idCentroProyecto: Number(cuentaObra.idCentro),
 					armadas: subidas,
 					usuarioEmail: basicos.sessionEmail,
-					usuarioNombre: permisosState.userName || basicos.asesorFinal
+					usuarioNombre: permisosState.userName || basicos.asesorFinal,
+					detraccionPct
 				});
 				if (!r.success) {
 					saveError = r.message;
@@ -359,6 +408,8 @@
 		/** "Hito de cobro" (a pedido del usuario): concepto por el que se cobra esta cuota, texto libre. Se guarda
 		 * en cobros.referencia de la cuota. */
 		concepto: string;
+		/** Detracción: casilla bajo el N.° de su fila de detracción — se cobra junto con la cuota (cobros.detraccion_junto). */
+		detraccionJunto?: boolean;
 	}
 	let hitosCobranza = $state<HitoCobranza[]>([]);
 	let siguienteHitoCobranzaId = 1;
@@ -664,6 +715,10 @@
 				valorVenta = '';
 				comisionPorcentaje = '';
 				direccionPredio = '';
+				detraccion = 'no';
+				detraccionOriginal = null;
+				void verificarDetraccionDisponible();
+				detraccionPorcentaje = '';
 				tipoProyecto = '';
 				estadoPredio = '';
 				tipoEdificacion = '';
@@ -728,6 +783,10 @@
 			valorVenta = data.precio_venta != null ? String(data.precio_venta) : '';
 			comisionPorcentaje = data.comision_asesor != null ? String(data.comision_asesor) : '';
 			direccionPredio = data.direccion_predio || '';
+			detraccionOriginal = porcentajeDetraccion(data.detraccion_porcentaje);
+			void verificarDetraccionDisponible();
+			detraccion = porcentajeDetraccion(data.detraccion_porcentaje) ? 'si' : 'no';
+			detraccionPorcentaje = porcentajeDetraccion(data.detraccion_porcentaje) ? String(Number(data.detraccion_porcentaje)) : '';
 			// tip_proyecto/estado_predio se guardan como letras unidas por "+" (ej. "L+O") cuando el
 			// usuario marcó varios checkboxes — se separan de vuelta acá para precargar la selección.
 			tipoProyecto = data.tip_proyecto || '';
@@ -1299,6 +1358,8 @@ async function copiarCodigoGenerado() {
 		falta(!fechaVenta, 'fechaVenta', 'Fecha de venta');
 		falta(!(Number(valorVenta) > 0), 'valorVenta', 'Valor venta');
 		falta(comisionPorcentaje === '' || Number.isNaN(Number(comisionPorcentaje)), 'comision', 'Comisión (%)');
+		falta(detraccion === 'si' && !detraccionPct, 'detraccion', 'Porcentaje de detracción (mayor a 0 y menor a 100)');
+		falta(detraccion === 'si' && detraccionDisponible === false, 'detraccion', 'Detracción (falta aplicar la migración detraccion_venta en la base de datos)');
 		if (mode === 'create') {
 			falta(proformaFiles.length === 0, 'proformas', 'Proformas (agrega al menos una)');
 			falta(proformaFiles.length > 0 && selectedFinalFileIndex === null, 'proformas', 'Proforma final (marca una)');
@@ -1345,11 +1406,11 @@ async function copiarCodigoGenerado() {
 
 	/** Ticket #102: sube el comprobante de cada armada a Drive (en orden) y devuelve los datos para registrar
 	 * sus transacciones. */
-	async function subirArmadas(idProyecto: number, lista: ArmadaAdelanto[] = armadasConDatos): Promise<{ monto: number; fecha: string; comprobanteUrl: string; observacion: string }[]> {
-		const subidas: { monto: number; fecha: string; comprobanteUrl: string; observacion: string }[] = [];
+	async function subirArmadas(idProyecto: number, lista: ArmadaAdelanto[] = armadasConDatos): Promise<{ monto: number; fecha: string; comprobanteUrl: string; observacion: string; detraccionCobrada: boolean }[]> {
+		const subidas: { monto: number; fecha: string; comprobanteUrl: string; observacion: string; detraccionCobrada: boolean }[] = [];
 		for (const a of armadasUsadas(lista)) {
 			const { url } = await uploadProjectDocument(a.file!, { type: 'comprobante', projectId: idProyecto, projectName: proyectoNombre });
-			subidas.push({ monto: redondear2(Number(a.monto)), fecha: a.fecha, comprobanteUrl: url, observacion: a.observacion.trim() });
+			subidas.push({ monto: redondear2(Number(a.monto)), fecha: a.fecha, comprobanteUrl: url, observacion: a.observacion.trim(), detraccionCobrada: !!a.detraccionCobrada });
 		}
 		return subidas;
 	}
@@ -1398,6 +1459,7 @@ async function copiarCodigoGenerado() {
 					nombre_proyecto: proyectoNombre,
 					fecha_inicio_plan: basicos.fechaInicio,
 					comision_asesor: basicos.comision,
+					...camposDetraccion(),
 					responsable: basicos.asesorFinal,
 					tip_proyecto: tipoProyecto,
 					estado_predio: estadoPredio,
@@ -1448,7 +1510,7 @@ async function copiarCodigoGenerado() {
 			// ingreso Y abrir el popup de Transacciones para completar la información que el cierre de
 			// venta no pide — solo si esta llamada creó una transacción nueva (result.data viene undefined
 			// si el adelanto ya estaba registrado de antes, ver cerrarVentaAprobada).
-			if (result.data) onTransaccionSugerida(result.data, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
+			onTransaccionSugerida(result.data ?? null, contextoCierre(Number(ventaId), basicos.clienteId, basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`));
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error cerrando venta:', err);
 			toast.error(`No se pudo cerrar la venta. ${describeError(err)}`);
@@ -1512,6 +1574,11 @@ async function copiarCodigoGenerado() {
 		}
 
 		const precioVenta = Number(valorVenta) || 0;
+
+		if (detraccionPct != null && detraccionDisponible === false) {
+			saveError = AVISO_SIN_MIGRACION;
+			return null;
+		}
 
 		// Ticket #102: el adelanto es opcional para "Guardar venta", pero una armada empezada tiene que estar
 		// completa (monto, fecha y comprobante) — antes de insertar nada.
@@ -1612,6 +1679,7 @@ async function copiarCodigoGenerado() {
 			fecha_inicio_plan: fechaInicio,
 			precio_venta: precioVenta,
 			comision_asesor: comision,
+			...camposDetraccion(),
 			responsable: asesorFinal,
 			asesor_comercial_id: asesorUserId,
 			tip_proyecto: tipoProyecto,
@@ -1639,7 +1707,7 @@ async function copiarCodigoGenerado() {
 		const { data, error } = await supabase.from('proyecto').insert([proyectoPayload]).select('id_proyecto').single();
 		if (error || !data?.id_proyecto) {
 			console.error('[NuevaVentaModal] Error al insertar proyecto:', error);
-			saveError = `Error guardando la venta: ${error?.message ?? 'Error desconocido.'}`;
+			saveError = /detraccion/i.test(error?.message ?? '') ? AVISO_SIN_MIGRACION : `Error guardando la venta: ${error?.message ?? 'Error desconocido.'}`;
 			return null;
 		}
 
@@ -1712,7 +1780,7 @@ async function copiarCodigoGenerado() {
 					const listas = [armadas, ...adelantosExtra.map((x) => x.armadas)].filter((l) => armadasUsadas(l).length > 0);
 					for (const lista of listas) {
 						const subidasObra = await subirArmadas(nuevoProyectoId, lista);
-						const r = await registrarArmadas(supabase, { idCuentaCobrar: cta.idCuentaCobrar, idCentroCliente: Number(idCentroCliente), idCentroProyecto: Number(idCentroCosto), armadas: subidasObra, usuarioEmail: sessionEmail, usuarioNombre: permisosState.userName || asesorFinal });
+						const r = await registrarArmadas(supabase, { idCuentaCobrar: cta.idCuentaCobrar, idCentroCliente: Number(idCentroCliente), idCentroProyecto: Number(idCentroCosto), armadas: subidasObra, usuarioEmail: sessionEmail, usuarioNombre: permisosState.userName || asesorFinal, detraccionPct });
 						if (!r.success) throw new Error(r.message);
 						if (!transaccionAdelanto && r.transacciones[0]) {
 							const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', r.transacciones[0]).single();
@@ -1726,7 +1794,8 @@ async function copiarCodigoGenerado() {
 						id_centro_costo_origen: idCentroCliente,
 						id_centro_costo_destino: idCentroCosto,
 						fecha: a.fecha,
-						monto_total: a.monto,
+						// Detracción: la armada entra por su neto (su detracción es otra cuota, ver sincronizarCuotasProgramadas).
+						monto_total: partirDetraccion(a.monto, detraccionPct).neto,
 						tipo: 'ingreso',
 						// tipo_moneda es obligatorio en `transaccion` (ver transaccion.config.ts) — 'soles'
 						// porque el adelanto siempre se pide en Soles en este formulario. Sin esto,
@@ -1771,7 +1840,7 @@ async function copiarCodigoGenerado() {
 							monto: a.monto,
 							referencia: subidas.length > 1 ? referenciaArmada(i) : filaAdelanto.concepto
 						}));
-						const fraccionesCuotas = hitosCobranza.filter((h) => !h.esAdelanto).map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto }));
+						const fraccionesCuotas = hitosCobranza.filter((h) => !h.esAdelanto).map((h) => ({ fecha: h.fechaEstimada, monto: h.importe, referencia: h.concepto, detraccionJunto: !!h.detraccionJunto }));
 						const fracciones = [...fraccionesArmadas, ...fraccionesCuotas];
 						const fechas = fracciones.map((f) => f.fecha).sort();
 						const cuentaResult = await createCuentaCobrar(
@@ -1803,18 +1872,34 @@ async function copiarCodigoGenerado() {
 						// La cuota de cada armada: misma fecha y monto (la primera libre que calce, en orden de creación).
 						const { data: cuotas, error: cuotasError } = await supabase
 							.from('cobros')
-							.select('id_cobro, monto, fecha_cobro')
+							.select('*')
 							.eq('id_cuenta_cobrar', idCuentaCobrarCreada)
 							.eq('estado_cobro', 'programado')
 							.order('id_cobro', { ascending: true });
 						if (cuotasError) throw cuotasError;
 						const libres = [...(cuotas ?? [])];
 						for (const [i, a] of subidas.entries()) {
-							const indice = libres.findIndex((c: any) => Math.abs(Number(c.monto) - a.monto) < 0.01 && c.fecha_cobro === a.fecha);
+							const { neto: netoArmada, detraccion: detraccionArmada } = partirDetraccion(a.monto, detraccionPct);
+							const indice = libres.findIndex((c: any) => Math.abs(Number(c.monto) - netoArmada) < 0.01 && c.fecha_cobro === a.fecha && !c.es_detraccion);
 							if (indice < 0) throw new Error(`No se encontró la cuota de la ${i + 1}.ª armada del adelanto en la Cuenta por Cobrar recién creada.`);
 							const [cuota] = libres.splice(indice, 1);
 							const cobroResult = await confirmarCobroCobrado(supabase, cuota.id_cobro, payloadArmada(a, i), sessionEmail, permisosState.userName || null);
 							if (!cobroResult.success || !cobroResult.data?.id_transaccion) throw new Error(cobroResult.message || 'No se pudo registrar la transacción del adelanto.');
+							// "Ya depositada": la detracción de esta armada se registra cobrada en el acto (si no, queda pendiente).
+							if (detraccionArmada > 0 && a.detraccionCobrada) {
+								const hija = libres.find((c: any) => c.es_detraccion && c.id_cobro_origen === cuota.id_cobro);
+								if (hija) {
+									const errorDet = await cobrarDetraccionConSuArmada(supabase, {
+										idCuentaCobrar: idCuentaCobrarCreada!,
+										idCobroDetraccion: hija.id_cobro,
+										idTransaccionArmada: cobroResult.data.id_transaccion,
+										monto: detraccionArmada,
+										concepto: subidas.length > 1 ? referenciaArmada(i) : 'Adelanto'
+									});
+									if (errorDet) throw new Error(`No se pudo registrar la detracción de la ${i + 1}.ª armada: ${errorDet}`);
+									libres.splice(libres.indexOf(hija), 1);
+								}
+							}
 							if (!transaccionAdelanto) {
 								const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', cobroResult.data.id_transaccion).single();
 								transaccionAdelanto = (tx as Transaccion) ?? null;
@@ -1888,6 +1973,7 @@ async function copiarCodigoGenerado() {
 				fecha_inicio_plan: basicos.fechaInicio,
 				precio_venta: basicos.precioVenta,
 				comision_asesor: basicos.comision,
+				...camposDetraccion(),
 				responsable: basicos.asesorFinal,
 				tip_proyecto: tipoProyecto,
 				estado_predio: estadoPredio,
@@ -1950,7 +2036,7 @@ async function copiarCodigoGenerado() {
 			isSaving = false;
 			if (error) {
 				console.error('[NuevaVentaModal] Error al actualizar proyecto:', error);
-				saveError = `Error guardando los cambios: ${error.message ?? 'Error desconocido.'}`;
+				saveError = /detraccion/i.test(error.message ?? '') ? AVISO_SIN_MIGRACION : `Error guardando los cambios: ${error.message ?? 'Error desconocido.'}`;
 				return;
 			}
 			onSaved();
@@ -2037,7 +2123,7 @@ async function copiarCodigoGenerado() {
 			// crea acá DENTRO de crearVentaYSubirDocumentos (no en cerrarVentaAprobada, que en este flujo
 			// recibe adelantoYaRegistrado:true y no vuelve a crearla), así que se toma de `resultado`, no
 			// de `result.data`.
-			if (resultado.transaccionAdelanto) onTransaccionSugerida(resultado.transaccionAdelanto, { clienteNombre: basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`, proyectoCodigo: proyectoNombre });
+			onTransaccionSugerida(resultado.transaccionAdelanto ?? null, contextoCierre(resultado.proyectoId, basicos.clienteId, basicos.clienteNombreFinal || `Cliente #${basicos.clienteId}`));
 		} catch (err) {
 			console.error('[NuevaVentaModal] Error creando y cerrando la venta:', err);
 			saveError = `No se pudo cerrar la venta.\n${describeError(err)}`;
@@ -2051,7 +2137,7 @@ async function copiarCodigoGenerado() {
 	{#if caracteristicasTab === 'obra'}
 		<!-- Finanzas de Obras (imagen 1 del Excel del cliente): Adelanto 1, 2… cada uno con sus armadas. -->
 		<div class="space-y-6">
-			<ArmadasAdelanto
+			<ArmadasAdelanto {detraccionPct}
 				bind:armadas
 				modoObra
 				titulo="Adelanto 1"
@@ -2064,7 +2150,7 @@ async function copiarCodigoGenerado() {
 				onAgregarAdelanto={adelantosExtra.length === 0 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
 			/>
 			{#each adelantosExtra as extra, k (extra.id)}
-				<ArmadasAdelanto
+				<ArmadasAdelanto {detraccionPct}
 					bind:armadas={extra.armadas}
 					modoObra
 					titulo={`Adelanto ${k + 2}`}
@@ -2081,7 +2167,7 @@ async function copiarCodigoGenerado() {
 			{/each}
 		</div>
 	{:else}
-		<ArmadasAdelanto bind:armadas valorVenta={valorBase} fechaPorDefecto={fechaVenta || getFechaLocalHoy()} {etiquetaValor} {marcarFaltantes} />
+		<ArmadasAdelanto {detraccionPct} bind:armadas valorVenta={valorBase} fechaPorDefecto={fechaVenta || getFechaLocalHoy()} {etiquetaValor} {marcarFaltantes} />
 	{/if}
 {/snippet}
 
@@ -2324,6 +2410,32 @@ async function copiarCodigoGenerado() {
 								</div>
 							</div>
 							{/if}
+							<!-- Detracción (a pedido del usuario): Sí/No; con Sí, el porcentaje y el monto calculado. -->
+							<div data-campo="detraccion" class="flex flex-col gap-1 md:col-span-1 md:col-start-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Detracción</label>
+								<SelectConSaldo
+									value={detraccion}
+									options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
+									onchange={(v) => (detraccion = v === 'si' ? 'si' : 'no')}
+								/>
+								{#if detraccion === 'si' && detraccionDisponible === false}
+									<span class="text-[10px] font-semibold text-rose-600">Aún no habilitada: falta aplicar la migración detraccion_venta.</span>
+								{/if}
+							</div>
+							{#if detraccion === 'si'}
+								<div data-campo="detraccion" class:campo-faltante={faltaCampo('detraccion')} class="flex flex-col gap-1 md:col-span-1">
+									<label for="venta-detraccion-pct" class="text-xs font-semibold text-[#0f3b5e]">Porcentaje detracción (%) *</label>
+									<input id="venta-detraccion-pct" type="number" min="0.01" max="99.99" step="0.01" inputmode="decimal" bind:value={detraccionPorcentaje} placeholder="Ej. 12" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all text-slate-700" />
+									{#if mode === 'edit'}<span class="text-[10px] text-slate-400">Un cambio aplica a las cuotas nuevas; las ya registradas no cambian.</span>{/if}
+								</div>
+								{#if detraccionPct}
+								<div class="flex flex-col gap-1 md:col-span-1">
+									<label for="venta-detraccion-monto" class="text-xs font-semibold text-[#0f3b5e]">Monto detracción (S/)</label>
+									<input id="venta-detraccion-monto" type="text" readonly value={formatCurrency(detraccionMonto)} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed" />
+									<span class="text-[10px] text-slate-400">Cada cuota se parte en neto + detracción (vence 5 días hábiles después).</span>
+								</div>
+								{/if}
+							{/if}
 						</div>
 						{/if}
 					</section>
@@ -2371,7 +2483,7 @@ async function copiarCodigoGenerado() {
 								</thead>
 								<tbody>
 									{#each hitosCobranza as hito, i (hito.id)}
-										<tr class="border-b border-slate-100">
+										<tr class={detraccionPct ? '' : 'border-b border-slate-100'}>
 											<td class="py-2 pr-2 text-slate-400">{i + 1}</td>
 											<td class="py-2 pr-2">
 												<input type="text" value={nombreHitoCobranza(hito, i)} readonly tabindex="-1" title="El nombre de la cuota es automático" class="w-full min-w-[120px] px-2 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm text-slate-500 font-semibold cursor-not-allowed outline-none">
@@ -2401,7 +2513,10 @@ async function copiarCodigoGenerado() {
 													{#if hito.tipo === 'porcentaje'}<span class="text-xs text-slate-400 shrink-0">%</span>{/if}
 												</div>
 											</td>
-											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">{formatCurrency(hito.importe)}</td>
+											<td class="py-2 pr-2 text-slate-500 whitespace-nowrap">
+												{formatCurrency(hito.importe)}
+												{#if detraccionPct}<span class="block text-[10px] text-slate-400">Neto {formatCurrency(partirDetraccion(hito.importe, detraccionPct).neto)}</span>{/if}
+											</td>
 											<td class="py-2 pr-2">
 												{#if hito.esAdelanto}
 													<!-- Ticket #51 (rechazo de Romina): la fecha del ADELANTO no se edita; es la Fecha de venta. Las demás cuotas sí. -->
@@ -2420,6 +2535,40 @@ async function copiarCodigoGenerado() {
 												{/if}
 											</td>
 										</tr>
+										{#if detraccionPct}
+											<!-- Detracción de esta cuota (a pedido del usuario, como un abono más relacionado a su cuota): la casilla
+											     bajo el N.° = se cobra junto con la cuota (en el ADELANTO marca la de todas sus armadas). -->
+											{@const pd = partirDetraccion(hito.importe, detraccionPct)}
+											<tr class="border-b border-slate-100 bg-amber-50/60">
+												<td class="py-2 pr-2 text-center align-middle">
+													{#if hito.esAdelanto}
+														<input type="checkbox" checked={detraccionAdelantoJunto} onchange={(e) => marcarDetraccionArmadas(e.currentTarget.checked)} class="h-4 w-4 accent-amber-600" title="La detracción del adelanto se canceló junto con sus armadas" aria-label="Detracción del adelanto cancelada junto con el adelanto" />
+													{:else}
+														<input type="checkbox" bind:checked={hito.detraccionJunto} class="h-4 w-4 accent-amber-600" title="La detracción se cobra junto con esta cuota" aria-label={`Detracción de ${nombreHitoCobranza(hito, i)} cobrada junto con la cuota`} />
+													{/if}
+												</td>
+												<td class="py-2 pr-2">
+													<input type="text" value="DETRACCIÓN" readonly tabindex="-1" class="w-full min-w-[120px] px-2 py-1.5 bg-amber-100/70 border border-amber-200 rounded-lg text-sm text-amber-900 font-semibold cursor-not-allowed outline-none" aria-label={`Detracción de ${nombreHitoCobranza(hito, i)}`}>
+												</td>
+												<td class="py-2 pr-2">
+													<input type="text" value={`Detracción ${detraccionPct} % – ${nombreHitoCobranza(hito, i)}`} readonly tabindex="-1" class="w-full min-w-[170px] px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none">
+												</td>
+												<td class="py-2 pr-2">
+													<input type="text" value="Porcentaje" readonly tabindex="-1" class="w-full min-w-[130px] px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none">
+												</td>
+												<td class="py-2 pr-2">
+													<div class="flex items-center gap-1">
+														<input type="text" value={Number(valorVenta) > 0 ? formatearValor((pd.detraccion / Number(valorVenta)) * 100) : ''} readonly tabindex="-1" class="w-24 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none">
+														<span class="text-xs text-slate-400 shrink-0">%</span>
+													</div>
+												</td>
+												<td class="py-2 pr-2 whitespace-nowrap font-semibold text-amber-800">{formatCurrency(pd.detraccion)}</td>
+												<td class="py-2 pr-2">
+													<input type="date" value={hito.fechaEstimada ? sumarDiasHabiles(hito.fechaEstimada) : ''} readonly tabindex="-1" title="Vence 5 días hábiles después de la cuota" class="px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none">
+												</td>
+												<td></td>
+											</tr>
+										{/if}
 									{/each}
 								</tbody>
 							</table>
@@ -2445,6 +2594,12 @@ async function copiarCodigoGenerado() {
 						</div>
 						{#if Math.abs(saldoCobranza) >= 0.01}
 							<p class="text-xs text-rose-500 mt-2">La suma del adelanto y las cuotas debe cuadrar exactamente con el Valor venta (S/) para poder guardar.</p>
+						{/if}
+						{#if detraccionPct}
+							<p class="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+								<i class="fas fa-info-circle mt-px"></i>
+								<span>Detracción {detraccionPct} %: el importe de cada cuota incluye su detracción; en Cuentas por Cobrar se registran por separado su neto y su detracción (vence 5 días hábiles después). Marca la casilla bajo el N.° de la detracción si se cobra junto con su cuota: al registrar el cobro de la cuota, también se registra su detracción, relacionada a esa transacción.</span>
+							</p>
 						{/if}
 					</section>
 					{/if}
@@ -2642,7 +2797,7 @@ async function copiarCodigoGenerado() {
 									{/if}
 								{/if}
 								{#each cuentaObra.adelantos as g, k (g.id_grupo)}
-									<ArmadasAdelanto
+									<ArmadasAdelanto {detraccionPct}
 										bind:armadas={armadasNuevas[g.id_grupo]}
 										modoObra
 										titulo={`Adelanto ${g.numero}`}
@@ -2658,7 +2813,7 @@ async function copiarCodigoGenerado() {
 									/>
 								{/each}
 								{#each adelantosExtra as extra, k (extra.id)}
-									<ArmadasAdelanto
+									<ArmadasAdelanto {detraccionPct}
 										bind:armadas={extra.armadas}
 										modoObra
 										titulo={`Adelanto ${cuentaObra.adelantos.length + k + 1}`}

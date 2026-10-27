@@ -25,6 +25,7 @@
 		type ResumenCobros,
 		type BandejaSortBy
 	} from '$lib/modules/panoramas/services/panoramas.service';
+	import { cuotasEditables } from '$lib/modules/cuentas-cobrar/services/detraccion.service';
 	import { getClienteOptions, getCobros, sincronizarCuotasProgramadas } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { getCentroCostoOptions, getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
@@ -154,13 +155,12 @@
 		cuotasCargandoId = item.id;
 		try {
 			const cobros = await getCobros(supabase, item.id_cuenta_cobrar);
-			cuotasFraccionesIniciales = cobros
-				.filter((c) => c.estado_cobro === 'programado')
-				.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto), referencia: c.referencia ?? null }))
-				.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+			// Detracción: cuotas con su monto bruto; las detracciones de cuotas ya cobradas no se reprograman aquí.
+			const editables = cuotasEditables(cobros);
+			cuotasFraccionesIniciales = editables.fracciones;
 			// FraccionamientoModal solo debe repartir lo que TODAVÍA falta cobrar (saldoPendiente), no el
 			// monto total de la cuenta (item.montoTotal) — mismo fix que en cuentas-pagar/panoramas.
-			cuotasCuentaActual = { id: item.id_cuenta_cobrar, monto: item.saldoPendiente, fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
+			cuotasCuentaActual = { id: item.id_cuenta_cobrar, monto: Math.max(Math.round((item.saldoPendiente - editables.reservado) * 100) / 100, 0), fechaEmision: item.fechaEmision, fechaVencimiento: item.fechaVencimiento };
 			cuotasModalOpen = true;
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudieron cargar las cuotas de esta cuenta');

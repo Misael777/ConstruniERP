@@ -15,6 +15,10 @@
 		editable: boolean;
 		/** "Hito de cobro" de la cuota (cobros.referencia) — se muestra si mostrarHito. */
 		concepto?: string | null;
+		/** Venta con detracción: id de la cuota de la que sale esta detracción (no cuenta como una cuota más). */
+		detraccionDe?: number | null;
+		/** Transacción con la que se registró la cuota (cobros.id_transaccion): se muestra bajo "Cobrado" para ubicarla. */
+		idTransaccion?: number | null;
 	}
 </script>
 
@@ -32,6 +36,7 @@
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	// Adelanto / 1er abono / ... — mismo nombre que la lista de Transacciones (ver acuerdoDePago.ts).
 	import { acuerdoDePago, contarArmadasAdelanto } from '$lib/shared/acuerdoDePago';
+	import { nombreDetraccion } from '$lib/shared/detraccion';
 
 	let {
 		open = false,
@@ -74,7 +79,23 @@
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
 	// Ticket #102: si el adelanto se pagó en varias armadas, todas se llaman "Adelanto (…armada)" y los abonos o
 	// valorizaciones se numeran desde la cuota siguiente.
-	const armadasAdelanto = $derived(contarArmadasAdelanto(cuotasOrdenadas.map((c) => c.concepto)));
+	// Detracción: sus cuotas no corren la numeración; se llaman como su cuota de origen ("Detracción – 1er abono").
+	const principales = $derived(cuotasOrdenadas.filter((c) => !c.detraccionDe));
+	const armadasAdelanto = $derived(contarArmadasAdelanto(principales.map((c) => c.concepto)));
+	const nombreDe = $derived.by(() => {
+		const nombres = new Map<number, string>();
+		principales.forEach((c, i) => nombres.set(c.id, acuerdoDePago(i, principales.length, esObra, armadasAdelanto)));
+		for (const c of cuotasOrdenadas) if (c.detraccionDe) nombres.set(c.id, nombreDetraccion(nombres.get(c.detraccionDe)));
+		return nombres;
+	});
+	// Orden de las filas: cada detracción va justo debajo de su cuota de origen (a pedido del usuario); una
+	// detracción sin su origen en la lista queda al final, por fecha.
+	const filas = $derived.by(() => {
+		const ids = new Set(principales.map((c) => c.id));
+		const out: CuotaResumen[] = [];
+		for (const c of principales) out.push(c, ...cuotasOrdenadas.filter((d) => d.detraccionDe === c.id));
+		return [...out, ...cuotasOrdenadas.filter((d) => d.detraccionDe && !ids.has(d.detraccionDe))];
+	});
 
 
 	function porcentaje(monto: number): string {
@@ -141,9 +162,9 @@
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-slate-100">
-									{#each cuotasOrdenadas as cuota, i (cuota.id)}
+									{#each filas as cuota, i (cuota.id)}
 										<tr>
-											<td class="px-3 py-2 text-slate-700">{acuerdoDePago(i, cuotasOrdenadas.length, esObra, armadasAdelanto)}</td>
+											<td class="px-3 py-2 text-slate-700">{nombreDe.get(cuota.id) ?? ''}</td>
 											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words">{cuota.concepto || '—'}</td>{/if}
 											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
 											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>
@@ -161,6 +182,7 @@
 												{:else}
 													<span class={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_CLASE[cuota.estado]}`} title={cuota.estado === 'pendiente' || cuota.estado === 'vencido' ? 'Se habilita cuando se registre la cuota anterior' : undefined}>{#if cuota.estado === 'pendiente' || cuota.estado === 'vencido'}<Lock size={10} />{/if}{textoEstado(cuota.estado)}</span>
 												{/if}
+												{#if cuota.estado === 'pagado' && cuota.idTransaccion}<span class="block mt-0.5 text-[10px] text-slate-400">Transacción #{cuota.idTransaccion}</span>{/if}
 											</td>
 										</tr>
 									{/each}

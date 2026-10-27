@@ -9,7 +9,9 @@ import VentasKPIs from '$lib/components/comercial/ventas/VentasKPIs.svelte';
 import VentasTable from '$lib/components/comercial/ventas/VentasTable.svelte';
 import VentasCharts from '$lib/components/comercial/ventas/VentasCharts.svelte';
 import VentasSummarySidebar from '$lib/components/comercial/ventas/VentasSummarySidebar.svelte';
-import NuevaVentaModal from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
+import NuevaVentaModal, { type ContextoCierreVenta } from '$lib/components/comercial/ventas/NuevaVentaModal.svelte';
+import { goto } from '$app/navigation';
+import { CLAVE_FLUJO_CIERRE_VENTA, transaccionesDelCierre, asignarTipoComprobante, type FlujoCierreVenta } from '$lib/modules/ventas/services/flujoCierreVenta';
 import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 import type { Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
@@ -289,7 +291,73 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 		transaccionModalOpen = false;
 		transaccionParaCompletar = null;
 		transaccionModalMode = 'edit';
+		// TransaccionModal llama onSaved y onClose: solo el primer cierre de cada paso avanza el flujo.
+		if (pasoFlujoAbierto) {
+			pasoFlujoAbierto = false;
+			void siguientePasoFlujo();
+		}
 	}
+
+	// ── Flujo de cierre de venta (a pedido del usuario): al cerrar la venta, en orden,
+	//   1) las transacciones del cierre (adelanto/armadas y sus detracciones), una tras otra, para revisarlas;
+	//   2) si en alguna se eligió "Generar Comprobante" = Sí → Gestión de Comprobantes con UN comprobante que incluye
+	//      todas esas transacciones (monto + detracción);
+	//   3) la Cuenta por Cobrar de la venta (cliente + proyecto), con su Resumen de cobro abierto.
+	// Todo ya quedó grabado al cerrar la venta; esto solo lo muestra en ese orden. ──
+	let flujoCierre: FlujoCierreVenta | null = null;
+	let flujoActivo = $state(false);
+	let pasoFlujoAbierto = false;
+	let comprobanteFlujo: { tipoDocumento: string; idCentroCostoOrigen: string } | null = null;
+
+	async function handleVentaCerrada(transaccion: Transaccion | null, contexto: ContextoCierreVenta) {
+		const { pasos, idCuentaCobrar } = await transaccionesDelCierre(supabase, contexto.idProyecto ?? null, transaccion?.id_transaccion ?? null);
+		flujoCierre = { pasos: [...pasos], todas: pasos, idCuentaCobrar, clienteNombre: contexto.clienteNombre, proyectoCodigo: contexto.proyectoCodigo };
+		comprobanteFlujo = null;
+		flujoActivo = true;
+		await siguientePasoFlujo();
+	}
+
+	function registrarComprobanteFlujo(info: { tipoDocumento: string; idCentroCostoOrigen: string; yaEmitido: boolean }) {
+		if (info.yaEmitido) {
+			toast.info('Esta transacción ya tiene un comprobante emitido — no se emitirá otro.');
+			return;
+		}
+		comprobanteFlujo = { tipoDocumento: info.tipoDocumento, idCentroCostoOrigen: info.idCentroCostoOrigen };
+	}
+
+	async function siguientePasoFlujo() {
+		const flujo = flujoCierre;
+		if (!flujo) return;
+		const id = flujo.pasos.shift();
+		if (id == null) return terminarFlujo(flujo);
+		const { data: tx } = await supabase.from('transaccion').select('*').eq('id_transaccion', id).maybeSingle();
+		if (!tx) return siguientePasoFlujo();
+		pasoFlujoAbierto = true;
+		await handleTransaccionSugerida(tx as Transaccion, { clienteNombre: flujo.clienteNombre, proyectoCodigo: flujo.proyectoCodigo });
+	}
+
+	async function terminarFlujo(flujo: FlujoCierreVenta) {
+		flujoCierre = null;
+		flujoActivo = false;
+		const pedido = comprobanteFlujo;
+		comprobanteFlujo = null;
+		const irACuenta = () => {
+			if (flujo.idCuentaCobrar) goto(`/finanzas/cuentas-cobrar?resumenCuenta=${flujo.idCuentaCobrar}`);
+		};
+		if (!pedido || !flujo.todas.length) return irACuenta();
+		try {
+			await asignarTipoComprobante(supabase, flujo.todas, pedido.tipoDocumento);
+			const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(pedido.idCentroCostoOrigen)).maybeSingle();
+			sessionStorage.setItem(CLAVE_FLUJO_CIERRE_VENTA, JSON.stringify({ idCuentaCobrar: flujo.idCuentaCobrar }));
+			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente: centro?.id_cliente ?? null, idTransaccion: flujo.todas[0], idTransacciones: flujo.todas, tipoDocumento: pedido.tipoDocumento }));
+			goto('/finanzas/facturacion?nuevoComprobanteDesdeTransaccion=1');
+		} catch (err) {
+			console.error('[Ventas] No se pudo abrir la emisión del comprobante:', err);
+			toast.error('No se pudo abrir Gestión de Comprobantes — emite el comprobante a mano.');
+			irACuenta();
+		}
+	}
+
 
 	// Filtro de fecha del cuadro "Resumen de ventas" (sidebar) — independiente de la tabla/gráficos
 	// de abajo, a pedido del usuario. Por defecto: el año en curso. Se recalcula con una consulta
@@ -1017,7 +1085,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	ventaId={editingVentaId}
 	onClose={closeModal}
 	onSaved={handleVentaGuardada}
-	onTransaccionSugerida={handleTransaccionSugerida}
+	onTransaccionSugerida={handleVentaCerrada}
 />
 
 <!-- Preview de contrato/proforma -->
@@ -1039,6 +1107,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
+	onGenerarComprobante={flujoActivo ? registrarComprobanteFlujo : null}
 />
 
 <ResumenCobroObra open={resumenObraCuenta !== null} idCuentaCobrar={resumenObraCuenta} titulo="Resumen de venta" soloLectura onClose={() => (resumenObraCuenta = null)} onCobrarPago={() => {}} />

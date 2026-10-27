@@ -378,6 +378,7 @@
 		abrirCreacionPrecargadaDesdeTransaccion();
 		abrirEdicionPrecargadaDesdeTransaccion();
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
+		await abrirResumenDesdeCierreVenta();
 	});
 
 	function onSearchInput(value: string) {
@@ -636,6 +637,25 @@
 		handleTransaccionSugerida(r.payload, idCobro);
 	}
 
+	/** Último paso del cierre de una venta (ver flujoCierreVenta.ts): se llega con ?resumenCuenta=<id> y se abre el
+	 * Resumen de cobro de esa cuenta. Si no está en la página actual de la lista, se trae y se agrega arriba. */
+	async function abrirResumenDesdeCierreVenta() {
+		const id = Number(page.url.searchParams.get('resumenCuenta'));
+		if (!id) return;
+		window.history.replaceState({}, '', '/finanzas/cuentas-cobrar');
+		let item = items.find((i) => i.id_cuenta_cobrar === id);
+		if (!item) {
+			const { data } = await supabase.from('cuentas_cobrar').select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').eq('id_cuenta_cobrar', id).maybeSingle();
+			if (!data) {
+				toast.error('No se encontró la Cuenta por Cobrar de la venta.');
+				return;
+			}
+			item = data as CuentaCobrar;
+			items = [item, ...items];
+		}
+		await openResumen(item);
+	}
+
 	async function openResumen(item: CuentaCobrar) {
 		selectedId = item.id_cuenta_cobrar;
 		if (item.proyecto?.tipo_venta === 'obra' && (await cuentaTieneGrupos(supabase, item.id_cuenta_cobrar))) {
@@ -692,7 +712,16 @@
 			const bloqueado = q.id_cobro !== -1 && !!q.transaccion?.aprobado && !isAdmin();
 			const estado: CuotaResumen['estado'] =
 				q.estado_cobro === 'cobrado' ? 'pagado' : q.estado_cobro === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
-			return { id: q.id_cobro, monto: q.monto, fecha: q.fecha_cobro, concepto: q.referencia ?? null, estado, editable: q.estado_cobro === 'programado' && !bloqueado && q.id_cobro === cuotaMasProxima?.id_cobro };
+			return {
+				id: q.id_cobro,
+				monto: q.monto,
+				fecha: q.fecha_cobro,
+				concepto: q.referencia ?? null,
+				estado,
+				editable: q.estado_cobro === 'programado' && !bloqueado && q.id_cobro === cuotaMasProxima?.id_cobro,
+				detraccionDe: (q as any).es_detraccion ? ((q as any).id_cobro_origen ?? null) : null,
+				idTransaccion: q.id_transaccion ?? null
+			};
 		})
 	);
 

@@ -8,6 +8,8 @@
 		fecha: string;
 		file: File | null;
 		observacion: string;
+		/** Venta con detracción: true = el cliente ya depositó la detracción de esta armada (se registra cobrada). */
+		detraccionCobrada: boolean;
 	}
 
 	/** Armada ya registrada (Editar venta de una venta cerrada): se muestra en solo lectura. */
@@ -20,7 +22,7 @@
 
 	let siguienteId = 1;
 	export function nuevaArmada(fecha: string): ArmadaAdelanto {
-		return { id: siguienteId++, monto: '', fecha, file: null, observacion: '' };
+		return { id: siguienteId++, monto: '', fecha, file: null, observacion: '', detraccionCobrada: false };
 	}
 
 	/** Las filas que el usuario empezó a llenar (una fila totalmente vacía no cuenta). */
@@ -44,6 +46,7 @@
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import { ordinalArmada } from '$lib/shared/acuerdoDePago';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import { partirDetraccion, sumarDiasHabiles } from '$lib/shared/detraccion';
 
 	let {
 		armadas = $bindable(),
@@ -59,7 +62,8 @@
 		armadasRegistradas = [],
 		puedeAgregarArmadas = true,
 		onAgregarAdelanto = null,
-		onQuitarAdelanto = null
+		onQuitarAdelanto = null,
+		detraccionPct = null
 	}: {
 		armadas: ArmadaAdelanto[];
 		/** Base del "% sobre el valor de venta" y del saldo (Valor venta al crear; Monto final al cerrar). */
@@ -83,7 +87,11 @@
 		puedeAgregarArmadas?: boolean;
 		onAgregarAdelanto?: (() => void) | null;
 		onQuitarAdelanto?: (() => void) | null;
+		/** % de detracción de la venta (null = sin detracción): muestra la detracción de cada armada y "Ya depositada". */
+		detraccionPct?: number | null;
 	} = $props();
+	const detraccionDe = (monto: unknown) => partirDetraccion(Number(monto) || 0, detraccionPct);
+	const venceDetraccion = (fecha: string) => (fecha ? fmtFecha(sumarDiasHabiles(fecha)) : '—');
 
 	const redondear2 = (n: number) => Math.round(n * 100) / 100;
 	const totalRegistrado = $derived(redondear2(armadasRegistradas.reduce((s, a) => s + Number(a.monto), 0)));
@@ -117,6 +125,15 @@
 	const borde = (mal: boolean) => (mal ? 'border-rose-400 bg-rose-50' : 'border-slate-200');
 	const fmtFecha = (f: string) => (f ? f.split('-').reverse().join('/') : '—');
 </script>
+
+{#snippet infoDetraccion(armada: ArmadaAdelanto, p: { neto: number; detraccion: number })}
+	<div class={`flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg px-3 py-1.5 text-xs ${armada.detraccionCobrada ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-900'}`}>
+		<span class="font-semibold">Detracción {detraccionPct} %: {formatCurrency(p.detraccion)}</span>
+		<span>Neto de la armada: {formatCurrency(p.neto)}</span>
+		<span>Vence: {venceDetraccion(armada.fecha)}</span>
+		<span class="font-semibold">{armada.detraccionCobrada ? '✓ Cancelada junto con la armada' : 'Pendiente de depósito'}</span>
+	</div>
+{/snippet}
 
 <div class="space-y-3">
 	{#if mostrarInfo}
@@ -171,6 +188,13 @@
 					</label>
 				</div>
 				<p class="text-xs text-slate-500">{porcentaje(Number(armada.monto) || 0)} sobre el valor de venta{#if modoObra} · {porcentaje(Number(armada.monto) || 0, total)} del adelanto{/if}</p>
+				{#if detraccionPct}
+					{@const p = detraccionDe(armada.monto)}
+					<div class="flex items-start gap-2">
+						<input type="checkbox" bind:checked={armada.detraccionCobrada} class="mt-2 h-4 w-4 shrink-0 accent-amber-600" aria-label={`Detracción de la armada ${offset + i + 1} cancelada junto con la armada`} />
+						<div class="min-w-0 flex-1">{@render infoDetraccion(armada, p)}</div>
+					</div>
+				{/if}
 				<label class={`cursor-pointer flex items-center gap-1.5 px-2 py-2 border rounded-lg text-xs ${borde(marcar && !armada.file)}`}>
 					<input type="file" accept="image/*,application/pdf" class="hidden" onchange={(e) => elegirArchivo(armada, e)} />
 					{#if armada.file}
@@ -191,8 +215,8 @@
 			<thead>
 				<tr class="bg-slate-50 text-[11px] font-semibold text-slate-500 border-b border-slate-200">
 					<th class="text-center py-2 px-2 w-10">N.°</th>
-					<th class="text-left py-2 px-2">{modoObra ? 'Concepto' : 'Detalle / Concepto'}</th>
-					<th class="text-left py-2 px-2 w-32">Monto (S/)</th>
+					<th class="text-left py-2 px-2 w-28">{modoObra ? 'Concepto' : 'Detalle / Concepto'}</th>
+					<th class="text-left py-2 px-2 w-40">Monto (S/)</th>
 					<th class="text-left py-2 px-2 w-40">Fecha de pago</th>
 					<th class="text-right py-2 px-2 w-24">% sobre valor de venta</th>
 					{#if modoObra}<th class="text-right py-2 px-2 w-24">% sobre valor de armadas</th>{/if}
@@ -205,7 +229,7 @@
 				{#each armadasRegistradas as a, i}
 					<tr class="border-b border-slate-100 bg-slate-50/70 text-slate-600">
 						<td class="py-2 px-2 text-center">{i + 1}</td>
-						<td class="py-2 px-2 whitespace-nowrap">{concepto(i)}</td>
+						<td class="py-2 px-2 text-xs leading-tight">{concepto(i)}</td>
 						<td class="py-2 px-2">{formatCurrency(a.monto)}</td>
 						<td class="py-2 px-2">{fmtFecha(a.fecha)}</td>
 						<td class="py-2 px-2 text-right">{porcentaje(a.monto)}</td>
@@ -221,9 +245,9 @@
 				{/each}
 				{#each armadas as armada, i (armada.id)}
 					{@const marcar = marcarFaltantes && usada(armada)}
-					<tr class="border-b border-slate-100 last:border-b-0">
+					<tr class={detraccionPct ? '' : 'border-b border-slate-100 last:border-b-0'}>
 						<td class="py-2 px-2 text-center text-slate-500">{offset + i + 1}</td>
-						<td class="py-2 px-2 text-slate-700 whitespace-nowrap">{concepto(offset + i)}</td>
+						<td class="py-2 px-2 text-xs leading-tight text-slate-700">{concepto(offset + i)}</td>
 						<td class="py-2 px-2">
 							<input type="number" min="0.01" step="0.01" inputmode="decimal" bind:value={armada.monto} placeholder="0.00" aria-label={`Monto de la armada ${offset + i + 1}`} class={`${inputClase} ${borde(marcar && !(Number(armada.monto) > 0))}`} />
 						</td>
@@ -253,6 +277,31 @@
 							</button>
 						</td>
 					</tr>
+					{#if detraccionPct}
+						{@const p = detraccionDe(armada.monto)}
+						<!-- Detracción de la armada, como una fila más relacionada a ella (a pedido del usuario): la casilla bajo el
+						     N.° = cancelada junto con la armada (se registra también su transacción, relacionada a la de la armada). -->
+						<tr class={`border-b border-slate-100 last:border-b-0 ${armada.detraccionCobrada ? 'bg-emerald-50/60' : 'bg-amber-50/60'}`}>
+							<td class="py-2 px-2 text-center">
+								<input type="checkbox" bind:checked={armada.detraccionCobrada} class="h-4 w-4 accent-amber-600 align-middle" title="Marca si la detracción se canceló junto con la armada" aria-label={`Detracción de la armada ${offset + i + 1} cancelada junto con la armada`} />
+							</td>
+							<td class="py-2 px-2 text-xs leading-tight font-semibold text-amber-800">Detracción {detraccionPct} %</td>
+							<td class="py-2 px-2">
+								<input type="text" value={formatCurrency(p.detraccion)} readonly tabindex="-1" aria-label={`Detracción de la armada ${offset + i + 1}`} class="w-full px-2 py-1.5 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none" />
+							</td>
+							<td class="py-2 px-2">
+								<input type="text" value={venceDetraccion(armada.fecha)} readonly tabindex="-1" title="Vence 5 días hábiles después de la armada" aria-label={`Vencimiento de la detracción de la armada ${offset + i + 1}`} class="w-full px-2 py-1.5 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-900 cursor-not-allowed outline-none" />
+							</td>
+							<td class="py-2 px-2 text-right text-amber-800 whitespace-nowrap">{porcentaje(p.detraccion)}</td>
+							{#if modoObra}<td class="py-2 px-2 text-right text-amber-800 whitespace-nowrap">{porcentaje(p.detraccion, total)}</td>{/if}
+							<td class="py-2 px-2 text-xs text-slate-400">{armada.detraccionCobrada ? 'Mismo comprobante' : '—'}</td>
+							<td class="py-2 px-2 text-xs text-amber-900">
+								Neto de la armada: {formatCurrency(p.neto)}
+								<span class={`block font-semibold ${armada.detraccionCobrada ? 'text-emerald-700' : ''}`}>{armada.detraccionCobrada ? '✓ Cancelada junto con la armada' : 'Pendiente de depósito'}</span>
+							</td>
+							<td></td>
+						</tr>
+					{/if}
 				{/each}
 				{#if armadasRegistradas.length === 0 && armadas.length === 0}
 					<tr><td colspan="9" class="py-3 text-center text-xs text-slate-400">Sin armadas.</td></tr>
@@ -260,6 +309,13 @@
 			</tbody>
 		</table>
 	</div>
+
+	{#if detraccionPct}
+		<p class="flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+			<i class="fas fa-info-circle mt-px"></i>
+			<span>Con detracción de {detraccionPct} %, el monto de cada armada es el total: se registra su <b>neto</b> (lo que entra a la cuenta) y su <b>detracción</b> queda como cuota pendiente en Cuentas por Cobrar, que vence 5 días hábiles después. Marca la casilla bajo el N.° si la detracción se canceló junto con la armada: se registra también su transacción, relacionada a la de la armada.</span>
+		</p>
+	{/if}
 
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="flex flex-wrap gap-2">

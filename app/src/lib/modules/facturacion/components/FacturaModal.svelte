@@ -72,7 +72,8 @@
 		/** Al abrir desde la tabla de "Gestión de Comprobantes" (pestaña Factura/Boleta) marcando el
 		 * check de una transacción — fija el cliente de una vez (sin pasar por el selector) y deja esa
 		 * transacción ya tildada. Solo aplica en mode:'create'. */
-		preseleccion?: { idCliente: number; idTransaccion: number | null } | null;
+		/** idTransacciones: varias ya marcadas (cierre de venta: el adelanto y su detracción van en un solo comprobante). */
+		preseleccion?: { idCliente: number; idTransaccion: number | null; idTransacciones?: number[] } | null;
 		/** Nota de Crédito abierta desde una transacción YA emitida: folio del comprobante que la cubre, que se
 		 * precarga como "Número de FE respecto de la cual se emite la Nota de Crédito". */
 		folioReferenciaInicial?: string | null;
@@ -503,7 +504,9 @@
 				// llegan sus transacciones, se tilda la que originó el check (mismo criterio de "no perder lo
 				// que el usuario ya eligió" que el resto de flujos de preselección del ERP).
 				cargarTransacciones(String(preseleccion.idCliente)).then(() => {
-					seleccion = preseleccion.idTransaccion != null ? [preseleccion.idTransaccion] : [];
+					seleccion = preseleccion.idTransacciones?.length
+						? transacciones.filter((t) => preseleccion.idTransacciones!.includes(t.id_transaccion)).map((t) => t.id_transaccion)
+						: preseleccion.idTransaccion != null ? [preseleccion.idTransaccion] : [];
 				});
 			} else {
 				transacciones = [];

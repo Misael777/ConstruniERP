@@ -10,6 +10,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { construirInsertDataTransaccion } from '$lib/modules/transacciones/services/transacciones.service';
 import { translateRpcError } from '$lib/shared/fieldConfig';
+import { partirDetraccion } from '$lib/shared/detraccion';
+import { crearCuotaDetraccion, actualizarDetraccionDe, getPorcentajeDetraccionCuenta, cobrarDetraccionConSuArmada } from '$lib/modules/cuentas-cobrar/services/detraccion.service';
 
 export type TipoGrupo = 'adelanto' | 'valorizacion';
 export type EstadoPago = 'cobrado' | 'pendiente' | 'vencido';
@@ -25,7 +27,15 @@ export interface PagoObra {
 	observacion: string | null;
 	id_transaccion: number | null;
 	comprobante_url: string | null;
+	/** Detracción de esta cuota (venta con detracción): su propia cuota, que vence 5 días hábiles después. */
+	detraccion?: PagoObra | null;
 }
+
+/** Lo cobrado de un pago: la cuota y/o su detracción, cada una si ya está cobrada. */
+const cobradoDe = (p: PagoObra) => (p.estado === 'cobrado' ? p.monto : 0) + (p.detraccion?.estado === 'cobrado' ? p.detraccion.monto : 0);
+
+/** Monto bruto de un pago (cuota + su detracción). */
+export const montoBruto = (p: PagoObra) => r2(p.monto + (p.detraccion?.monto ?? 0));
 
 export interface GrupoObra {
 	id_grupo: number;
@@ -103,7 +113,7 @@ export async function getResumenCobroObra(client: SupabaseClient, idCuentaCobrar
 		client.from('cobro_grupo').select('*').eq('id_cuenta_cobrar', idCuentaCobrar).order('tipo').order('numero'),
 		client
 			.from('cobros')
-			.select('id_cobro, id_grupo, monto, fecha_cobro, estado_cobro, partida, referencia, id_transaccion, transaccion(comprobante_url)')
+			.select('*, transaccion(comprobante_url)')
 			.eq('id_cuenta_cobrar', idCuentaCobrar)
 			.neq('estado_cobro', 'cancelado')
 			.order('fecha_cobro', { ascending: true })
@@ -126,9 +136,18 @@ export async function getResumenCobroObra(client: SupabaseClient, idCuentaCobrar
 		comprobante_url: c.transaccion?.comprobante_url ?? null
 	});
 
+	// Las detracciones van colgadas de su cuota (no son una armada ni un pago más).
+	const idsCuotas = new Set((cuotas ?? []).map((c: any) => c.id_cobro));
+	const esHija = (c: any) => !!c.es_detraccion && idsCuotas.has(c.id_cobro_origen);
+	const detraccionDe = new Map<number, any>();
+	for (const c of cuotas ?? []) if (esHija(c)) detraccionDe.set((c as any).id_cobro_origen, c);
+	const conDetraccion = (p: PagoObra): PagoObra => {
+		const d = detraccionDe.get(p.id_cobro);
+		return { ...p, detraccion: d ? aPago(d, p.numero) : null };
+	};
 	const porGrupo = new Map<number, any[]>();
 	const sinGrupoCrudo: any[] = [];
-	for (const c of cuotas ?? []) {
+	for (const c of (cuotas ?? []).filter((c: any) => !esHija(c))) {
 		if (c.id_grupo) porGrupo.set(c.id_grupo, [...(porGrupo.get(c.id_grupo) ?? []), c]);
 		else sinGrupoCrudo.push(c);
 	}
@@ -136,9 +155,10 @@ export async function getResumenCobroObra(client: SupabaseClient, idCuentaCobrar
 	let correlativoPago = 0;
 	const armar = (g: any): GrupoObra => {
 		const crudas = porGrupo.get(g.id_grupo) ?? [];
-		const pagos = crudas.map((c, i) => aPago(c, g.tipo === 'valorizacion' ? 0 : i + 1));
-		const programado = r2(pagos.reduce((s, p) => s + p.monto, 0));
-		const cobrado = r2(pagos.filter((p) => p.estado === 'cobrado').reduce((s, p) => s + p.monto, 0));
+		const pagos = crudas.map((c, i) => conDetraccion(aPago(c, g.tipo === 'valorizacion' ? 0 : i + 1)));
+		// Con detracción, cada pago cuenta por su monto bruto (cuota + detracción) y lo cobrado suma cada parte cobrada.
+		const programado = r2(pagos.reduce((s, p) => s + montoBruto(p), 0));
+		const cobrado = r2(pagos.reduce((s, p) => s + cobradoDe(p), 0));
 		const total = g.tipo === 'adelanto' ? programado : Number(g.monto_planificado ?? programado);
 		const avance = pct(cobrado, total);
 		return {
@@ -163,11 +183,9 @@ export async function getResumenCobroObra(client: SupabaseClient, idCuentaCobrar
 
 	const totalAdelantos = r2(adelantos.reduce((s, g) => s + g.total, 0));
 	const totalValorizacionesPlan = r2(valorizaciones.reduce((s, g) => s + g.total, 0));
-	const sinGrupo = sinGrupoCrudo.map((c, i) => aPago(c, i + 1));
-	const programado = r2(totalAdelantos + valorizaciones.reduce((s, g) => s + g.programado, 0) + sinGrupo.reduce((s, p) => s + p.monto, 0));
-	const cobrado = r2(
-		adelantos.reduce((s, g) => s + g.cobrado, 0) + valorizaciones.reduce((s, g) => s + g.cobrado, 0) + sinGrupo.filter((p) => p.estado === 'cobrado').reduce((s, p) => s + p.monto, 0)
-	);
+	const sinGrupo = sinGrupoCrudo.map((c, i) => conDetraccion(aPago(c, i + 1)));
+	const programado = r2(totalAdelantos + valorizaciones.reduce((s, g) => s + g.programado, 0) + sinGrupo.reduce((s, p) => s + montoBruto(p), 0));
+	const cobrado = r2(adelantos.reduce((s, g) => s + g.cobrado, 0) + valorizaciones.reduce((s, g) => s + g.cobrado, 0) + sinGrupo.reduce((s, p) => s + cobradoDe(p), 0));
 	return {
 		id_cuenta_cobrar: cuenta.id_cuenta_cobrar,
 		id_proyecto: cuenta.id_proyecto,
@@ -226,6 +244,8 @@ export interface ArmadaParaRegistrar {
 	fecha: string;
 	comprobanteUrl: string;
 	observacion?: string | null;
+	/** Venta con detracción: true = la detracción de esta armada ya se depositó (se registra cobrada con ella). */
+	detraccionCobrada?: boolean;
 }
 
 /**
@@ -244,6 +264,8 @@ export async function registrarArmadas(
 		armadas: ArmadaParaRegistrar[];
 		usuarioEmail: string | null;
 		usuarioNombre: string | null;
+		/** % de detracción de la venta (null = sin detracción): cada armada se registra por su neto + su detracción. */
+		detraccionPct?: number | null;
 	}
 ): Promise<{ success: true; idGrupo: number; numeroAdelanto: number; transacciones: number[] } | { success: false; message: string }> {
 	if (p.armadas.length === 0) return { success: false, message: 'No hay armadas para registrar.' };
@@ -270,13 +292,15 @@ export async function registrarArmadas(
 		for (const [i, a] of p.armadas.entries()) {
 			const numeroArmada = (previas ?? 0) + i + 1;
 			const concepto = conceptoArmada(numeroAdelanto, numeroArmada, totalArmadas, variosAdelantos);
+			// Detracción: la armada (monto bruto) entra por su neto; la detracción es su propia cuota (ver abajo).
+			const { neto, detraccion } = partirDetraccion(a.monto, p.detraccionPct);
 			const built = construirInsertDataTransaccion(
 				{
 					tipo_alcance: 'externa',
 					id_centro_costo_origen: p.idCentroCliente,
 					id_centro_costo_destino: p.idCentroProyecto,
 					fecha: a.fecha,
-					monto_total: r2(a.monto),
+					monto_total: neto,
 					tipo: 'ingreso',
 					tipo_moneda: 'soles',
 					categoria: 'Adelanto',
@@ -293,7 +317,7 @@ export async function registrarArmadas(
 				p_id_cuenta_cobrar: p.idCuentaCobrar,
 				p_transaccion_payload: built.insertData,
 				p_id_cobro: null,
-				p_cobro_payload: { monto: r2(a.monto), fecha_cobro: a.fecha, id_grupo: idGrupo, referencia: a.observacion?.trim()?.slice(0, 100) || null, usuario_registro: p.usuarioNombre },
+				p_cobro_payload: { monto: neto, fecha_cobro: a.fecha, id_grupo: idGrupo, referencia: a.observacion?.trim()?.slice(0, 100) || null, usuario_registro: p.usuarioNombre },
 				p_idempotency_key: null
 			});
 			if (error) {
@@ -304,6 +328,20 @@ export async function registrarArmadas(
 				return { success: false, message: `No se pudo registrar la ${numeroArmada}.ª armada: ${texto}${ya}` };
 			}
 			transacciones.push((data as any).id_transaccion);
+			if (detraccion > 0) {
+				const errDet = await registrarDetraccionArmada(client, {
+					idCuentaCobrar: p.idCuentaCobrar,
+					idGrupo: idGrupo!,
+					idTransaccionArmada: (data as any).id_transaccion,
+					monto: detraccion,
+					fecha: a.fecha,
+					concepto,
+					cobrada: !!a.detraccionCobrada,
+					transaccionBase: built.insertData,
+					usuarioNombre: p.usuarioNombre
+				});
+				if (errDet) return { success: false, message: `La ${numeroArmada}.ª armada se registró, pero no su detracción: ${errDet}` };
+			}
 		}
 		return { success: true, idGrupo: idGrupo!, numeroAdelanto, transacciones };
 	} catch (err: any) {
@@ -311,13 +349,57 @@ export async function registrarArmadas(
 	}
 }
 
+/** Cuota de detracción de una armada recién registrada: pendiente (vence 5 días hábiles después) o, si ya se depositó,
+ * cobrada en el acto con su propia transacción (mismo comprobante, concepto "Detracción – …"). */
+async function registrarDetraccionArmada(
+	client: SupabaseClient,
+	d: {
+		idCuentaCobrar: number;
+		idGrupo: number;
+		idTransaccionArmada: number;
+		monto: number;
+		fecha: string;
+		concepto: string;
+		cobrada: boolean;
+		transaccionBase: Record<string, unknown>;
+		usuarioNombre: string | null;
+	}
+): Promise<string | null> {
+	const { data: cuota } = await client.from('cobros').select('id_cobro').eq('id_transaccion', d.idTransaccionArmada).maybeSingle();
+	if (!cuota) return 'no se encontró la cuota de la armada';
+	const creada = await crearCuotaDetraccion(client, {
+		idCuentaCobrar: d.idCuentaCobrar,
+		idCobroOrigen: cuota.id_cobro,
+		idGrupo: d.idGrupo,
+		monto: d.monto,
+		fechaOrigen: d.fecha,
+		nombreOrigen: d.concepto,
+		usuario: d.usuarioNombre
+	});
+	if ('error' in creada) return creada.error;
+	if (d.cobrada) {
+		const error = await cobrarDetraccionConSuArmada(client, {
+			idCuentaCobrar: d.idCuentaCobrar,
+			idCobroDetraccion: creada.idCobro,
+			idTransaccionArmada: d.idTransaccionArmada,
+			monto: d.monto,
+			concepto: d.concepto
+		});
+		if (error) return `quedó pendiente (no se pudo marcar cobrada: ${error})`;
+	}
+	await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: d.idCuentaCobrar });
+	return null;
+}
+
 /** Lo comprometido (cuotas no canceladas) frente al monto de la cuenta — para no programar más que el valor de venta. */
 async function disponibleEnCuenta(client: SupabaseClient, idCuentaCobrar: number, excluirCobro?: number): Promise<number> {
 	const [{ data: cuenta }, { data: cuotas }] = await Promise.all([
 		client.from('cuentas_cobrar').select('monto').eq('id_cuenta_cobrar', idCuentaCobrar).single(),
-		client.from('cobros').select('id_cobro, monto').eq('id_cuenta_cobrar', idCuentaCobrar).neq('estado_cobro', 'cancelado')
+		client.from('cobros').select('*').eq('id_cuenta_cobrar', idCuentaCobrar).neq('estado_cobro', 'cancelado')
 	]);
-	const comprometido = (cuotas ?? []).filter((c: any) => c.id_cobro !== excluirCobro).reduce((s: number, c: any) => s + Number(c.monto), 0);
+	const comprometido = (cuotas ?? [])
+		.filter((c: any) => excluirCobro == null || (c.id_cobro !== excluirCobro && c.id_cobro_origen !== excluirCobro))
+		.reduce((s: number, c: any) => s + Number(c.monto), 0);
 	return r2(Number(cuenta?.monto ?? 0) - comprometido);
 }
 
@@ -358,8 +440,10 @@ async function validarPago(client: SupabaseClient, idGrupo: number, monto: numbe
 	if (!(monto > 0)) return { error: 'El monto del pago debe ser mayor a 0.' };
 	const { data: g } = await client.from('cobro_grupo').select('id_cuenta_cobrar, tipo, numero, monto_planificado').eq('id_grupo', idGrupo).single();
 	if (!g || g.tipo !== 'valorizacion') return { error: 'Valorización no encontrada.' };
-	const { data: pagos } = await client.from('cobros').select('id_cobro, monto').eq('id_grupo', idGrupo).neq('estado_cobro', 'cancelado');
-	const suma = r2((pagos ?? []).filter((c: any) => c.id_cobro !== excluirCobro).reduce((s: number, c: any) => s + Number(c.monto), 0));
+	const { data: pagos } = await client.from('cobros').select('*').eq('id_grupo', idGrupo).neq('estado_cobro', 'cancelado');
+	// El pago editado y su detracción no cuentan (el monto nuevo es el bruto: pago + detracción).
+	const fuera = (c: any) => excluirCobro != null && (c.id_cobro === excluirCobro || c.id_cobro_origen === excluirCobro);
+	const suma = r2((pagos ?? []).filter((c: any) => !fuera(c)).reduce((s: number, c: any) => s + Number(c.monto), 0));
 	if (suma + monto - Number(g.monto_planificado ?? 0) > 0.005) {
 		return { error: `La Valorización ${g.numero} es de S/ ${Number(g.monto_planificado).toFixed(2)} y sus pagos ya suman S/ ${suma.toFixed(2)}: este pago la supera.` };
 	}
@@ -372,16 +456,35 @@ export async function agregarPago(client: SupabaseClient, idGrupo: number, p: { 
 	const v = await validarPago(client, idGrupo, p.monto);
 	if ('error' in v) return { success: false as const, message: v.error! };
 	if (!p.fecha) return { success: false as const, message: 'Indica la fecha estimada del pago.' };
-	const { error } = await client.from('cobros').insert({
-		id_cuenta_cobrar: v.grupo.id_cuenta_cobrar,
-		id_grupo: idGrupo,
-		monto: r2(p.monto),
-		fecha_cobro: p.fecha,
-		partida: p.partida?.trim()?.slice(0, 200) || null,
-		estado_cobro: 'programado',
-		usuario_registro: usuario
-	});
+	// Detracción: el monto ingresado es el bruto; el pago queda por su neto y su detracción es otra cuota.
+	const pct = await getPorcentajeDetraccionCuenta(client, v.grupo.id_cuenta_cobrar);
+	const { neto, detraccion } = partirDetraccion(p.monto, pct);
+	const { data: nuevo, error } = await client
+		.from('cobros')
+		.insert({
+			id_cuenta_cobrar: v.grupo.id_cuenta_cobrar,
+			id_grupo: idGrupo,
+			monto: neto,
+			fecha_cobro: p.fecha,
+			partida: p.partida?.trim()?.slice(0, 200) || null,
+			estado_cobro: 'programado',
+			usuario_registro: usuario
+		})
+		.select('id_cobro')
+		.single();
 	if (error) return { success: false as const, message: error.message };
+	if (detraccion > 0 && nuevo) {
+		const d = await crearCuotaDetraccion(client, {
+			idCuentaCobrar: v.grupo.id_cuenta_cobrar,
+			idCobroOrigen: nuevo.id_cobro,
+			idGrupo,
+			monto: detraccion,
+			fechaOrigen: p.fecha,
+			nombreOrigen: `Valorización ${v.grupo.numero}${p.partida?.trim() ? ` (${p.partida.trim()})` : ''}`,
+			usuario
+		});
+		if ('error' in d) return { success: false as const, message: `Se agregó el pago, pero no su detracción: ${d.error}` };
+	}
 	await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: v.grupo.id_cuenta_cobrar });
 	return { success: true as const };
 }
@@ -393,8 +496,19 @@ export async function editarPago(client: SupabaseClient, idCobro: number, p: { m
 	if (c.estado_cobro !== 'programado') return { success: false as const, message: 'El pago ya está cobrado: corrígelo desde su transacción.' };
 	const v = await validarPago(client, c.id_grupo, p.monto, idCobro);
 	if ('error' in v) return { success: false as const, message: v.error! };
-	const { error } = await client.from('cobros').update({ monto: r2(p.monto), fecha_cobro: p.fecha, partida: p.partida?.trim()?.slice(0, 200) || null }).eq('id_cobro', idCobro);
+	const pct = await getPorcentajeDetraccionCuenta(client, c.id_cuenta_cobrar);
+	const { neto, detraccion } = partirDetraccion(p.monto, pct);
+	const { error } = await client.from('cobros').update({ monto: neto, fecha_cobro: p.fecha, partida: p.partida?.trim()?.slice(0, 200) || null }).eq('id_cobro', idCobro);
 	if (error) return { success: false as const, message: error.message };
+	const errDet = await actualizarDetraccionDe(client, {
+		idCuentaCobrar: c.id_cuenta_cobrar,
+		idCobroOrigen: idCobro,
+		idGrupo: c.id_grupo,
+		monto: detraccion,
+		fechaOrigen: p.fecha,
+		nombreOrigen: `Valorización ${v.grupo.numero}${p.partida?.trim() ? ` (${p.partida.trim()})` : ''}`
+	});
+	if (errDet) return { success: false as const, message: `Se actualizó el pago, pero no su detracción: ${errDet}` };
 	await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: c.id_cuenta_cobrar });
 	return { success: true as const };
 }
