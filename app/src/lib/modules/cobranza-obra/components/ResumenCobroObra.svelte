@@ -14,7 +14,7 @@
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import {
 		getResumenCobroObra, crearValorizacion, actualizarValorizacion, eliminarValorizacion, agregarPago, editarPago, eliminarPago,
-		type ResumenCobroObra, type GrupoObra, type PagoObra
+		montoBruto, type ResumenCobroObra, type GrupoObra, type PagoObra
 	} from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 
 	let {
@@ -233,6 +233,16 @@
 																	<td class="py-1 text-right">{pct(a.monto)}</td><td class="py-1 text-right">{pct(a.monto, g.total)}</td><td class="py-1 pl-3 text-slate-600">{a.observacion ?? ''}</td>
 																	<td class="py-1 text-center">{#if a.comprobante_url}<button type="button" onclick={() => verComprobante(a.comprobante_url)} class="text-blue-600" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{:else}—{/if}</td>
 																</tr>
+																{#if a.detraccion}
+																	{@const d = a.detraccion}
+																	<tr class="bg-amber-50/50">
+																		<td></td><td class="py-1 pl-3 text-amber-800">↳ Detracción – Armada {a.numero}</td><td class="py-1 text-right">{formatCurrency(d.monto)}</td>
+																		<td class="py-1 text-center" title="Vence 5 días hábiles después de la armada">{fmtFecha(d.fecha)}</td>
+																		<td class="py-1 text-right">{pct(d.monto)}</td><td class="py-1 text-right">{pct(d.monto, g.total)}</td>
+																		<td class="py-1 pl-3">{@render estadoDetraccion(d)}</td>
+																		<td class="py-1 text-center">{#if d.comprobante_url}<button type="button" onclick={() => verComprobante(d.comprobante_url)} class="text-blue-600" aria-label="Ver comprobante de la detracción"><i class="fas fa-eye"></i></button>{:else}—{/if}</td>
+																	</tr>
+																{/if}
 															{/each}
 														</tbody>
 													</table>
@@ -305,11 +315,21 @@
 																	<td class="py-1 text-center whitespace-nowrap">
 																		{#if p.comprobante_url}<button type="button" onclick={() => verComprobante(p.comprobante_url)} class="p-1 text-slate-500" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{/if}
 																		{#if puedeGestionar && p.estado !== 'cobrado'}
-																			<button type="button" onclick={() => (formPago = { idGrupo: g.id_grupo, idCobro: p.id_cobro, monto: String(p.monto), fecha: p.fecha, partida: p.partida ?? '' })} class="p-1 text-blue-600" aria-label="Editar pago"><i class="fas fa-pen"></i></button>
+																			<button type="button" onclick={() => (formPago = { idGrupo: g.id_grupo, idCobro: p.id_cobro, monto: String(montoBruto(p)), fecha: p.fecha, partida: p.partida ?? '' })} class="p-1 text-blue-600" aria-label="Editar pago"><i class="fas fa-pen"></i></button>
 																			<button type="button" onclick={() => ejecutar(() => eliminarPago(supabase, p.id_cobro), 'Pago eliminado.')} class="p-1 text-rose-500" aria-label="Eliminar pago"><i class="fas fa-trash-alt"></i></button>
 																		{/if}
 																	</td>
 																</tr>
+																{#if p.detraccion}
+																	{@const d = p.detraccion}
+																	<tr class="bg-amber-50/50">
+																		<td></td><td class="py-1 pl-3 text-amber-800">↳ Detracción – Pago {p.numero}</td>
+																		<td class="py-1 text-center" title="Vence 5 días hábiles después del pago">{fmtFecha(d.fecha)}</td><td></td>
+																		<td class="py-1 text-right">{formatCurrency(d.monto)}</td><td class="py-1 text-right">{pct(d.monto)}</td>
+																		<td class="py-1 text-center">{@render estadoDetraccion(d)}</td>
+																		<td class="py-1 text-center">{#if d.comprobante_url}<button type="button" onclick={() => verComprobante(d.comprobante_url)} class="p-1 text-slate-500" aria-label="Ver comprobante de la detracción"><i class="fas fa-eye"></i></button>{/if}</td>
+																	</tr>
+																{/if}
 																{#if formPago?.idCobro === p.id_cobro}<tr><td colspan="8">{@render formularioPago()}</td></tr>{/if}
 															{:else}
 																<tr><td colspan="8" class="py-2 text-center text-slate-400">Sin pagos programados.</td></tr>
@@ -364,6 +384,14 @@
 {/if}
 
 <DocumentPreviewModal open={visorAbierto} documents={documentosVenta} initialIndex={visorInicial} title={`Comprobantes - ${titulo}`} onClose={() => (visorAbierto = false)} />
+
+{#snippet estadoDetraccion(d: PagoObra)}
+	{#if d.estado === 'cobrado' || soloLectura}
+		<span class={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-semibold ${claseEstadoPago[d.estado]}`}>{etiquetaEstadoPago[d.estado]}</span>
+	{:else}
+		<button type="button" onclick={() => onCobrarPago(d.id_cobro)} class={`px-2 py-0.5 rounded-md border text-[11px] font-semibold ${claseEstadoPago[d.estado]}`} title="Registrar el depósito de la detracción">{etiquetaEstadoPago[d.estado]}</button>
+	{/if}
+{/snippet}
 
 {#snippet formularioValorizacion()}
 	{#if formVal}

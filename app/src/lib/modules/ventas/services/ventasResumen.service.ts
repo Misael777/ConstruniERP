@@ -69,7 +69,7 @@ export async function getResumenVenta(client: SupabaseClient, idProyecto: number
 	if (idsCuentas.length > 0) {
 		const { data: cobros, error } = await client
 			.from('cobros')
-			.select('id_cobro, monto, fecha_cobro, estado_cobro, id_transaccion, referencia')
+			.select('*')
 			.in('id_cuenta_cobrar', idsCuentas);
 		if (error) throw error;
 		for (const c of cobros ?? []) {
@@ -80,7 +80,8 @@ export async function getResumenVenta(client: SupabaseClient, idProyecto: number
 				fecha: c.fecha_cobro,
 				concepto: c.referencia ?? null,
 				estado: c.estado_cobro === 'cobrado' ? 'pagado' : c.estado_cobro === 'cancelado' ? 'anulado' : c.fecha_cobro && c.fecha_cobro < hoy ? 'vencido' : 'pendiente',
-				editable: false
+				editable: false,
+				detraccionDe: c.es_detraccion ? (c.id_cobro_origen ?? null) : null
 			});
 		}
 	}

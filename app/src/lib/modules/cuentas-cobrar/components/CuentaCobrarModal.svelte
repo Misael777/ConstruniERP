@@ -4,6 +4,7 @@
 	import { toast } from '$lib/stores/toast';
 	import { validatePayload, applyFieldMask, formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
 	import { FIELDS_CONFIG } from '$lib/modules/cuentas-cobrar/config/cuentaCobrar.config';
+	import { cuotasEditables } from '$lib/modules/cuentas-cobrar/services/detraccion.service';
 	import { createCuentaCobrar, updateCuentaCobrar, getCobros, computeEstadoCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import type { CuentaCobrar, ServiceResult } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { isAdmin, permisosState } from '$lib/stores/permisos.svelte';
@@ -118,19 +119,22 @@
 	let submitting = $state(false);
 	let fracciones = $state<Fraccion[]>([]);
 	let fraccionamientoOpen = $state(false);
+	let detraccionReservada = $state(0);
 
 	$effect(() => {
 		if (!open) return;
 		formValues = buildInitialValues();
 		fieldErrors = {};
 		fracciones = [];
+		detraccionReservada = 0;
 		if (mode === 'edit' && cuenta) {
 			(async () => {
 				const cobros = await getCobros(supabase, cuenta.id_cuenta_cobrar);
-				fracciones = cobros
-					.filter((c) => c.estado_cobro === 'programado')
-					.map((c) => ({ fecha: c.fecha_cobro, monto: Number(c.monto), referencia: c.referencia ?? null }))
-					.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+				// Detracción: cada cuota con su monto bruto (cuota + su detracción); lo reservado son detracciones de
+				// cuotas ya cobradas, que no se reprograman aquí (ver detraccion.service.ts).
+				const editables = cuotasEditables(cobros);
+				fracciones = editables.fracciones;
+				detraccionReservada = editables.reservado;
 			})();
 		}
 	});
@@ -533,7 +537,7 @@
 	open={fraccionamientoOpen}
 	titulo="Cronograma de Cobranza"
 	etiquetaInterruptor="Fraccionar Cobros"
-	montoTotal={saldoPendienteReal}
+	montoTotal={Math.max(Math.round((saldoPendienteReal - detraccionReservada) * 100) / 100, 0)}
 	fechaEmision={formValues.fecha_emision}
 	fechaVencimiento={formValues.fecha_vencimiento || null}
 	fraccionesIniciales={fracciones}
