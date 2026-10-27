@@ -17,6 +17,8 @@
 		concepto?: string | null;
 		/** Venta con detracción: id de la cuota de la que sale esta detracción (no cuenta como una cuota más). */
 		detraccionDe?: number | null;
+		/** Transacción con la que se registró la cuota (cobros.id_transaccion): se muestra bajo "Cobrado" para ubicarla. */
+		idTransaccion?: number | null;
 	}
 </script>
 
@@ -86,6 +88,14 @@
 		for (const c of cuotasOrdenadas) if (c.detraccionDe) nombres.set(c.id, nombreDetraccion(nombres.get(c.detraccionDe)));
 		return nombres;
 	});
+	// Orden de las filas: cada detracción va justo debajo de su cuota de origen (a pedido del usuario); una
+	// detracción sin su origen en la lista queda al final, por fecha.
+	const filas = $derived.by(() => {
+		const ids = new Set(principales.map((c) => c.id));
+		const out: CuotaResumen[] = [];
+		for (const c of principales) out.push(c, ...cuotasOrdenadas.filter((d) => d.detraccionDe === c.id));
+		return [...out, ...cuotasOrdenadas.filter((d) => d.detraccionDe && !ids.has(d.detraccionDe))];
+	});
 
 
 	function porcentaje(monto: number): string {
@@ -152,7 +162,7 @@
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-slate-100">
-									{#each cuotasOrdenadas as cuota, i (cuota.id)}
+									{#each filas as cuota, i (cuota.id)}
 										<tr>
 											<td class="px-3 py-2 text-slate-700">{nombreDe.get(cuota.id) ?? ''}</td>
 											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words">{cuota.concepto || '—'}</td>{/if}
@@ -172,6 +182,7 @@
 												{:else}
 													<span class={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium ${ESTADO_CLASE[cuota.estado]}`} title={cuota.estado === 'pendiente' || cuota.estado === 'vencido' ? 'Se habilita cuando se registre la cuota anterior' : undefined}>{#if cuota.estado === 'pendiente' || cuota.estado === 'vencido'}<Lock size={10} />{/if}{textoEstado(cuota.estado)}</span>
 												{/if}
+												{#if cuota.estado === 'pagado' && cuota.idTransaccion}<span class="block mt-0.5 text-[10px] text-slate-400">Transacción #{cuota.idTransaccion}</span>{/if}
 											</td>
 										</tr>
 									{/each}

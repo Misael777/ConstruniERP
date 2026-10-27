@@ -81,7 +81,8 @@ export async function getResumenVenta(client: SupabaseClient, idProyecto: number
 				concepto: c.referencia ?? null,
 				estado: c.estado_cobro === 'cobrado' ? 'pagado' : c.estado_cobro === 'cancelado' ? 'anulado' : c.fecha_cobro && c.fecha_cobro < hoy ? 'vencido' : 'pendiente',
 				editable: false,
-				detraccionDe: c.es_detraccion ? (c.id_cobro_origen ?? null) : null
+				detraccionDe: c.es_detraccion ? (c.id_cobro_origen ?? null) : null,
+				idTransaccion: c.id_transaccion ?? null
 			});
 		}
 	}

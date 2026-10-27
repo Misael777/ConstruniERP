@@ -145,9 +145,10 @@
 	const medioPagoField = otherFields.find((f) => f.key === 'medio_pago')!;
 	const descripcionField = otherFields.find((f) => f.key === 'descripcion')!;
 
-	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. Solo los que
-	 * tienen pestaña en Gestión de Comprobantes (COMPROBANTE_POR_TIPO_DOCUMENTO) se pueden "Generar" desde acá;
-	 * Recibo por Honorarios y Comprobante de Venta todavía no se emiten desde el ERP. */
+	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. "Generar
+	 * Comprobante" está disponible para TODOS (a pedido del usuario) y siempre lleva a Gestión de Comprobantes:
+	 * los que tienen pestaña ahí (COMPROBANTE_POR_TIPO_DOCUMENTO) abren "Nuevo Comprobante" precargado; Recibo
+	 * por Honorarios y Comprobante de Venta (sin pestaña todavía) abren el módulo en "Todos". */
 	const TIPOS_COMPROBANTE_INGRESO = [
 		{ value: '1', label: 'Factura' },
 		{ value: '3', label: 'Recibo por Honorarios' },
@@ -159,7 +160,6 @@
 	const tipoComprobanteEmitible = (tipo: string) => tipo in COMPROBANTE_POR_TIPO_DOCUMENTO;
 	function onTipoComprobanteErpChange(v: string) {
 		handleInput('tipo_documento', v);
-		if (!tipoComprobanteEmitible(v)) generarComprobanteErp = 'no';
 	}
 
 	function buildInitialValues(): Record<string, string> {
@@ -1683,14 +1683,21 @@
 	 * Origen (mismo criterio que getTransaccionesFacturables en facturacion.service.ts) — si ese
 	 * origen no es un centro de cliente (ej. Corporativo/Socio o Banca), no hay cliente que precargar
 	 * y se avisa en vez de redirigir a medias. */
-	async function redirigirANuevoComprobanteErp(idTransaccion: number, idCentroCostoOrigen: string, tipoDocumento: string): Promise<void> {
+	async function redirigirANuevoComprobanteErp(idTransaccion: number, idCentroCostoOrigen: string, tipoDocumento: string, yaEmitido = false): Promise<void> {
 		try {
-			const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(idCentroCostoOrigen)).maybeSingle();
-			if (!centro?.id_cliente) {
-				toast.info('No se pudo identificar un cliente para generar el comprobante automáticamente — créalo a mano en Gestión de Comprobantes.');
-				return;
+			// Siempre se llega a Gestión de Comprobantes (a pedido del usuario); el "Nuevo Comprobante" precargado
+			// solo se abre si el tipo tiene pestaña, hay cliente y la transacción aún no tiene comprobante.
+			let idCliente: number | null = null;
+			if (!yaEmitido && tipoComprobanteEmitible(tipoDocumento) && idCentroCostoOrigen) {
+				const { data: centro } = await supabase.from('centro_costo').select('id_cliente').eq('id_centro_costo', Number(idCentroCostoOrigen)).maybeSingle();
+				idCliente = centro?.id_cliente ?? null;
+				if (!idCliente) toast.info('No se pudo identificar un cliente para precargar el comprobante — créalo a mano en Gestión de Comprobantes.');
+			} else if (yaEmitido) {
+				toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
+			} else if (!tipoComprobanteEmitible(tipoDocumento)) {
+				toast.info('Este tipo de comprobante todavía no se emite desde el ERP — regístralo en Gestión de Comprobantes.');
 			}
-			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente: centro.id_cliente, idTransaccion, tipoDocumento }));
+			sessionStorage.setItem('comprobantePrefillDesdeTransaccion', JSON.stringify({ idCliente, idTransaccion, tipoDocumento }));
 			goto('/finanzas/facturacion?nuevoComprobanteDesdeTransaccion=1');
 		} catch (err) {
 			console.error('[TransaccionModal] No se pudo preparar el nuevo comprobante:', err);
@@ -3111,13 +3118,9 @@
 					if (editandoPrestamo) await redirigirAEditarCuentaPrestamo();
 					// Ver "Generar comprobante ERP" en el bloque "Tipo de Comprobante de ERP" más arriba — la
 					// transacción ya se guardó, esto solo abre (mejor esfuerzo) "Nuevo Comprobante" precargado.
-					if (generarComprobanteErp === 'si' && mostrarComprobanteErp && tipoComprobanteEmitible(formValues.tipo_documento)) {
-						if (transaccion?.id_factura) {
-							toast.info('Esta transacción ya tiene un comprobante emitido — no se abrió uno nuevo.');
-						} else {
-							const idParaComprobante = (result.data as any)?.id_transaccion ?? transaccion?.id_transaccion;
-							if (idParaComprobante) await redirigirANuevoComprobanteErp(idParaComprobante, formValues.id_centro_costo_origen, formValues.tipo_documento);
-						}
+					if (generarComprobanteErp === 'si' && mostrarComprobanteErp) {
+						const idParaComprobante = (result.data as any)?.id_transaccion ?? transaccion?.id_transaccion;
+						if (idParaComprobante) await redirigirANuevoComprobanteErp(idParaComprobante, formValues.id_centro_costo_origen, formValues.tipo_documento, !!transaccion?.id_factura);
 					}
 				}
 			} else {
@@ -3746,11 +3749,11 @@
 														id="tr-generar-comprobante-erp"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
+														disabled={bloqueadaPorAprobacion}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Si es Sí, al guardar se abre Gestión de Comprobantes.'}</p>
 											</div>
 										{/if}
 									</div>
@@ -3775,11 +3778,11 @@
 														id="tr-generar-comprobante-erp-2"
 														value={generarComprobanteErp}
 														options={[{ value: 'no', label: 'No' }, { value: 'si', label: 'Sí' }]}
-														disabled={bloqueadaPorAprobacion || !tipoComprobanteEmitible(formValues.tipo_documento)}
+														disabled={bloqueadaPorAprobacion}
 														onchange={(v) => ((generarComprobanteErp = v === 'si' ? 'si' : 'no'))}
 													/>
 												</div>
-												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Este tipo de comprobante todavía no se emite desde el ERP.'}</p>
+												<p class="mt-1 text-xs text-slate-400">{tipoComprobanteEmitible(formValues.tipo_documento) ? 'Si es Sí, al guardar se abre "Nuevo Comprobante" ya seleccionada.' : 'Si es Sí, al guardar se abre Gestión de Comprobantes.'}</p>
 											</div>
 										</div>
 									{/if}

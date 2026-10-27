@@ -247,11 +247,14 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 		if (!crudo) return false;
 		try {
 			const datos = JSON.parse(crudo);
-				const tipoPrecarga = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)] ?? 'factura';
-				activeTab = tipoPrecarga;
-				tipoModal = tipoPrecarga;
-				vistaTx = 'pendientes';
+			const tipoPrecarga = COMPROBANTE_POR_TIPO_DOCUMENTO[String(datos.tipoDocumento)];
+			// Sin pestaña para ese tipo (Recibo por Honorarios, Comprobante de Venta) o sin cliente: solo se abre
+			// el módulo (en su pestaña, o en "Todos"), sin "Nuevo Comprobante".
+			activeTab = tipoPrecarga ?? 'todos';
+			vistaTx = 'pendientes';
 			await fetchTab();
+			if (!tipoPrecarga || !datos.idCliente) return true;
+			tipoModal = tipoPrecarga;
 			modalMode = 'create';
 			editingFactura = null;
 			editingDetalle = [];

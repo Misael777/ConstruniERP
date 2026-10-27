@@ -699,7 +699,8 @@
 				concepto: q.referencia ?? null,
 				estado,
 				editable: q.estado_cobro === 'programado' && !bloqueado && q.id_cobro === cuotaMasProxima?.id_cobro,
-				detraccionDe: (q as any).es_detraccion ? ((q as any).id_cobro_origen ?? null) : null
+				detraccionDe: (q as any).es_detraccion ? ((q as any).id_cobro_origen ?? null) : null,
+				idTransaccion: q.id_transaccion ?? null
 			};
 		})
 	);
