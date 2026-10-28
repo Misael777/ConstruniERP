@@ -243,7 +243,16 @@
 		if (!open) return;
 		const cerrar = (e: Event) => {
 			if (panelEl && e.target instanceof Node && panelEl.contains(e.target)) return;
-			if (panelEl && document.activeElement && panelEl.contains(document.activeElement)) return;
+			if (panelEl && document.activeElement && panelEl.contains(document.activeElement)) {
+				// Tickets #108/#109: si lo de atrás se movió con el buscador enfocado, la lista quedaba flotando y el
+				// campo "se iba" con la página. Ahora la lista sigue a su campo; si el campo salió de la vista, se cierra.
+				if (e.type === 'scroll' && buttonEl) {
+					const r = buttonEl.getBoundingClientRect();
+					if (r.bottom < 0 || r.top > window.innerHeight) open = false;
+					else posicionarPanel();
+				}
+				return;
+			}
 			open = false;
 		};
 		window.addEventListener('scroll', cerrar, true);
@@ -290,7 +299,7 @@
 </button>
 
 {#if open}
-	<div bind:this={panelEl} use:alBody style={panelStyle} class="z-[200] flex flex-col rounded-lg border border-slate-200 bg-white shadow-xl overflow-hidden">
+	<div bind:this={panelEl} use:alBody style={panelStyle} class="z-[200] flex flex-col rounded-lg border border-slate-200 bg-white shadow-xl overflow-hidden overscroll-contain">
 		<div class="relative p-1.5 border-b border-slate-100 shrink-0">
 			<Search size={13} class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
 			<input
@@ -308,7 +317,7 @@
 				<span class="text-right border-l border-slate-200 pl-2">Saldo actual</span>
 			</div>
 		{/if}
-		<div role="listbox" class={`flex-1 min-h-0 overflow-y-auto ${conSaldo ? '' : 'py-1'}`}>
+		<div role="listbox" class={`flex-1 min-h-0 overflow-y-auto overscroll-contain ${conSaldo ? '' : 'py-1'}`}>
 			<!-- La clave incluye el índice: dos opciones con el MISMO value (ej. dos cajas de efectivo con numero_cuenta 'EFECTIVO', ticket #32) rompían el each con clave duplicada y la lista dejaba de poder elegirse. -->
 			{#each opcionesFiltradas as opt, i (`${opt.value}::${i}`)}
 				{#if opt.grupo && (i === 0 || opcionesFiltradas[i - 1].grupo !== opt.grupo)}

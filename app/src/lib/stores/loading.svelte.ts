@@ -11,6 +11,8 @@
  * `visible` se retrasa ~180ms al aparecer para no destellar en operaciones que terminan casi al instante
  * (ej. una subida muy rápida en buena conexión) — desaparece al instante, sin retraso.
  */
+import { untrack } from 'svelte';
+
 
 interface Operacion {
 	id: number;
@@ -61,19 +63,25 @@ export interface CargaEnCurso {
 /** Registra el inicio de una espera larga. */
 export function iniciarCarga(mensaje: string): CargaEnCurso {
 	const id = ++contador;
-	operaciones = [...operaciones, { id, mensaje }];
-	sincronizarVisibilidad();
+	// untrack: si se llama dentro de un $effect, leer `operaciones` no debe volverlo dependencia de ese efecto
+	// (ticket #109: eso relanzaba el efecto en bucle).
+	untrack(() => {
+		operaciones = [...operaciones, { id, mensaje }];
+		sincronizarVisibilidad();
+	});
 	let cerrado = false;
 	return {
 		actualizar(nuevoMensaje: string) {
 			if (cerrado) return;
-			operaciones = operaciones.map((o) => (o.id === id ? { ...o, mensaje: nuevoMensaje } : o));
+			untrack(() => (operaciones = operaciones.map((o) => (o.id === id ? { ...o, mensaje: nuevoMensaje } : o))));
 		},
 		cerrar() {
 			if (cerrado) return;
 			cerrado = true;
-			operaciones = operaciones.filter((o) => o.id !== id);
-			sincronizarVisibilidad();
+			untrack(() => {
+				operaciones = operaciones.filter((o) => o.id !== id);
+				sincronizarVisibilidad();
+			});
 		}
 	};
 }

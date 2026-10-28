@@ -594,8 +594,13 @@
 			numeroReciboPagoNoEfectivo = transaccion?.num_recibo_pago_no_efectivo ?? null;
 			numeroReciboPagoProveedor = transaccion?.num_recibo_pago_proveedor ?? null;
 			limpiarCuentaVinculada();
-			if (mode === 'create' && initialComprobanteFile) {
-				processComprobanteFiles([initialComprobanteFile]);
+			// Ticket #109 (Android, imagen compartida desde WhatsApp/Yape): el OCR se lanzaba DENTRO de este efecto y su
+			// parte síncrona lee y escribe estado reactivo (el aviso "Leyendo el comprobante…", el registro de
+			// diagnóstico) — Svelte lo tomaba como dependencia, el efecto se volvía a ejecutar y relanzaba el OCR cada
+			// ~130 ms hasta que Android mataba la app (reporte del modo diagnóstico, 26/10/2026). untrack lo corta.
+			const archivoInicial = initialComprobanteFile;
+			if (mode === 'create' && archivoInicial) {
+				untrack(() => processComprobanteFiles([archivoInicial]));
 			}
 		}
 	});

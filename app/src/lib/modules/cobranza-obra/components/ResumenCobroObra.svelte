@@ -151,10 +151,8 @@
 		<div class="w-full max-w-6xl max-h-[95dvh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
 			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-4 sm:px-6 py-3 border-b border-slate-100">
 				<h2 class="text-xl font-bold text-[#0f3b5e]">{titulo}</h2>
+				<!-- Ticket #106: sin botón "Comprobantes (N)" acá — duplicaba el "Ver" de cada adelanto (mismo visor). -->
 				<div class="ml-auto flex items-center gap-2">
-					{#if documentosVenta.length > 0}
-						<button type="button" onclick={() => { visorInicial = 0; visorAbierto = true; }} class="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-[#0f3b5e] hover:bg-slate-50"><i class="fas fa-eye"></i> Comprobantes ({documentosVenta.length})</button>
-					{/if}
 				<button type="button" onclick={onClose} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Cerrar"><i class="fas fa-times"></i></button>
 				</div>
 			</div>

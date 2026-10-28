@@ -9,6 +9,8 @@
  * mitad de una operación se reporta además a la auditoría (ver reportarDiagnostico en auditoria.ts), así se
  * puede ver en Prod aunque nadie haya abierto el panel.
  */
+import { untrack } from 'svelte';
+
 
 const CLAVE_LOG = 'construni_diag_log';
 const CLAVE_EN_CURSO = 'construni_diag_en_curso';
@@ -66,7 +68,7 @@ export function diag(paso: string, datos?: Record<string, unknown>): void {
 	const log = leerJson<EntradaDiag[]>(CLAVE_LOG, []);
 	log.push(entrada);
 	escribir(CLAVE_LOG, log.slice(-MAX_ENTRADAS));
-	diagState.version++;
+	untrack(() => diagState.version++); // ver ticket #109: nunca volverse dependencia de un $effect
 	console.log(`[diag] ${paso}`, datos ?? '', entrada.memoria ?? '');
 }
 
@@ -98,7 +100,7 @@ export function leerLog(): EntradaDiag[] {
 
 export function limpiarLog(): void {
 	escribir(CLAVE_LOG, null);
-	diagState.version++;
+	untrack(() => diagState.version++); // ver ticket #109: nunca volverse dependencia de un $effect
 }
 
 export function activarDiagnostico(activo: boolean): void {
