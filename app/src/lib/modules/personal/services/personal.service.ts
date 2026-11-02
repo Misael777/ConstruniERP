@@ -1,0 +1,213 @@
+/**
+ * Ficha del personal (tabla `personal`, migración 20261102130000_personal.sql). Incluye obreros de construcción
+ * civil y personal en régimen general; no son usuarios del ERP (eso es Empleados en IAM).
+ * `pin` es el código del trabajador en los huelleros (por defecto su DNI): las marcaciones se enlazan por él.
+ * Los trabajadores registrados primero en un huellero llegan solo con pin y nombre: quedan como "ficha incompleta".
+ * Dar de baja / restaurar / eliminar permanente: skill dar-de-baja-pattern.
+ */
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+export interface Personal {
+	id_personal: number;
+	pin: string;
+	nombre: string | null;
+	tipo_documento: 'DNI' | 'CE' | 'PAS';
+	numero_documento: string | null;
+	nombres: string | null;
+	apellidos: string | null;
+	fecha_nacimiento: string | null;
+	sexo: 'M' | 'F' | null;
+	telefono: string | null;
+	direccion: string | null;
+	contacto_emergencia_nombre: string | null;
+	contacto_emergencia_telefono: string | null;
+	regimen: 'construccion_civil' | 'general' | null;
+	categoria: 'operario' | 'oficial' | 'peon' | null;
+	cargo: string | null;
+	/** Cada cuánto se le paga; `monto_pago` es lo que recibe por ese periodo. */
+	periodicidad_pago: 'diaria' | 'semanal' | 'quincenal' | 'mensual' | null;
+	monto_pago: number | null;
+	id_centro_costo: number | null;
+	id_horario: number | null;
+	fecha_ingreso: string | null;
+	fecha_cese: string | null;
+	motivo_cese: string | null;
+	sistema_pension: string | null;
+	cuspp: string | null;
+	banco: string | null;
+	numero_cuenta: string | null;
+	cci: string | null;
+	sctr_poliza: string | null;
+	sctr_vencimiento: string | null;
+	examen_medico_vencimiento: string | null;
+	/** Firmó el consentimiento para guardar su huella/rostro (Ley 29733); sin él la biometría no sale del huellero. */
+	consentimiento_biometrico: boolean;
+	consentimiento_fecha: string | null;
+	id_empleado: number | null;
+	estado: 'activo' | 'baja';
+	created_at: string;
+	centro_costo?: { codigo: string; nombre: string } | null;
+	horario?: { nombre: string } | null;
+	/** Huelleros donde marca (tabla personal_huellero); no depende de la obra. */
+	personal_huellero?: { id_dispositivo: number }[];
+}
+
+/** Campos editables desde la ficha (todo menos id, estado, fechas de auditoría y lo embebido). */
+export type DatosPersonal = Omit<
+	Personal,
+	'id_personal' | 'nombre' | 'estado' | 'created_at' | 'centro_costo' | 'horario' | 'personal_huellero' | 'id_empleado'
+>;
+
+export const TIPOS_DOCUMENTO = [
+	{ value: 'DNI', label: 'DNI' },
+	{ value: 'CE', label: 'Carné de extranjería' },
+	{ value: 'PAS', label: 'Pasaporte' }
+];
+export const SEXOS = [
+	{ value: 'M', label: 'Masculino' },
+	{ value: 'F', label: 'Femenino' }
+];
+export const REGIMENES = [
+	{ value: 'construccion_civil', label: 'Construcción civil (jornal)' },
+	{ value: 'general', label: 'Régimen general (mensual)' }
+];
+export const CATEGORIAS = [
+	{ value: 'operario', label: 'Operario' },
+	{ value: 'oficial', label: 'Oficial' },
+	{ value: 'peon', label: 'Peón' }
+];
+export const PERIODICIDADES_PAGO = [
+	{ value: 'diaria', label: 'Diario (jornal)' },
+	{ value: 'semanal', label: 'Semanal' },
+	{ value: 'quincenal', label: 'Quincenal' },
+	{ value: 'mensual', label: 'Mensual' }
+];
+/** Texto del monto según el periodo: "Pago semanal", "Jornal diario"… */
+export const etiquetaMonto = (periodicidad: string | null) =>
+	({ diaria: 'Jornal diario', semanal: 'Pago semanal', quincenal: 'Pago quincenal', mensual: 'Sueldo mensual' })[periodicidad ?? ''] ?? 'Monto de pago';
+export const SISTEMAS_PENSION = ['ONP', 'AFP Integra', 'AFP Prima', 'AFP Profuturo', 'AFP Habitat'].map((v) => ({ value: v, label: v }));
+
+export const etiqueta = (lista: { value: string; label: string }[], valor: string | null) =>
+	lista.find((o) => o.value === valor)?.label ?? '';
+
+export function nombreCompleto(p: Pick<Personal, 'nombres' | 'apellidos' | 'nombre' | 'pin'>): string {
+	const erp = [p.apellidos, p.nombres].filter(Boolean).join(', ');
+	return erp || p.nombre || `Código ${p.pin}`;
+}
+
+/** Ficha creada por el huellero (o a medio llenar): faltan los datos obligatorios del formulario. */
+export const fichaIncompleta = (p: Personal) => !p.numero_documento || !p.nombres || !p.apellidos || !p.regimen;
+
+/** Días que faltan para el vencimiento (negativo = vencido), con fechas 'AAAA-MM-DD' en hora de Lima. */
+function diasPara(fecha: string | null, hoy: string): number | null {
+	if (!fecha) return null;
+	return Math.round((Date.parse(fecha) - Date.parse(hoy)) / 86_400_000);
+}
+
+export const DIAS_AVISO_VENCIMIENTO = 30;
+
+/** Avisos de SCTR y examen médico vencidos o por vencer en los próximos 30 días. */
+export function alertasVencimiento(p: Personal, hoy: string): { texto: string; vencido: boolean }[] {
+	const alertas: { texto: string; vencido: boolean }[] = [];
+	for (const [nombre, fecha] of [['SCTR', p.sctr_vencimiento], ['Examen médico', p.examen_medico_vencimiento]] as const) {
+		const dias = diasPara(fecha, hoy);
+		if (dias === null || dias > DIAS_AVISO_VENCIMIENTO) continue;
+		alertas.push(
+			dias < 0
+				? { texto: `${nombre} vencido`, vencido: true }
+				: { texto: dias === 0 ? `${nombre} vence hoy` : `${nombre} vence en ${dias} d`, vencido: false }
+		);
+	}
+	return alertas;
+}
+
+/** Hoy en Lima (UTC-5, sin horario de verano) como 'AAAA-MM-DD'. */
+export const hoyLima = () => new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+
+export async function getPersonal(client: SupabaseClient, soloEliminados = false): Promise<Personal[]> {
+	let query = client.from('personal').select('*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(id_dispositivo)').order('apellidos', { nullsFirst: true }).order('nombre');
+	query = soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
+	const { data, error } = await query;
+	if (error) throw error;
+	return data ?? [];
+}
+
+/** Traduce los choques de índices únicos (código de huellero o documento repetido) a un mensaje claro. */
+function errorAmigable(error: { code?: string; message?: string; details?: string }): Error | typeof error {
+	if (error.code !== '23505') return error;
+	const texto = `${error.message ?? ''} ${error.details ?? ''}`;
+	if (texto.includes('uq_personal_documento')) return new Error('Ya existe un trabajador con ese documento.');
+	if (texto.includes('pin')) return new Error('Ya existe un trabajador con ese número en huellero.');
+	return error;
+}
+
+/** Crea (id null) o actualiza la ficha y sus huelleros. `nombre` (el del huellero) se alinea con nombres +
+ * apellidos del ERP. Vincular o desvincular un huellero encola en la BD el alta o retiro en ese equipo. */
+export async function guardarPersonal(client: SupabaseClient, id: number | null, datos: DatosPersonal, huelleros: number[]): Promise<number> {
+	const fila = {
+		...datos,
+		nombre: [datos.nombres, datos.apellidos].filter(Boolean).join(' ').slice(0, 150) || null,
+		updated_at: new Date().toISOString()
+	};
+	let idPersonal = id;
+	if (idPersonal === null) {
+		const { data, error } = await client.from('personal').insert(fila).select('id_personal').single();
+		if (error) throw errorAmigable(error);
+		idPersonal = data.id_personal as number;
+	} else {
+		const { error } = await client.from('personal').update(fila).eq('id_personal', idPersonal);
+		if (error) throw errorAmigable(error);
+	}
+
+	const { data: actuales, error: errorLectura } = await client.from('personal_huellero').select('id_dispositivo').eq('id_personal', idPersonal);
+	if (errorLectura) throw errorLectura;
+	const antes = new Set((actuales ?? []).map((v) => v.id_dispositivo as number));
+	const quitar = [...antes].filter((d) => !huelleros.includes(d));
+	const agregar = huelleros.filter((d) => !antes.has(d));
+	if (quitar.length) {
+		const { error } = await client.from('personal_huellero').delete().eq('id_personal', idPersonal).in('id_dispositivo', quitar);
+		if (error) throw error;
+	}
+	if (agregar.length) {
+		const { error } = await client.from('personal_huellero').insert(agregar.map((d) => ({ id_personal: idPersonal, id_dispositivo: d })));
+		if (error) throw error;
+	}
+	return idPersonal;
+}
+
+/** Mueve varios trabajadores a otra obra o área. Con `cambiarHuelleros`, quita los huelleros de su obra anterior
+ * y agrega los de la nueva (con su huella/rostro si dieron consentimiento). Devuelve cuántos se movieron. */
+export async function moverPersonal(client: SupabaseClient, ids: number[], idCentroCosto: number, cambiarHuelleros: boolean): Promise<number> {
+	const { data, error } = await client.rpc('fn_personal_mover', {
+		p_ids: ids,
+		p_id_centro_costo: idCentroCosto,
+		p_cambiar_huelleros: cambiarHuelleros
+	});
+	if (error) throw error;
+	return data ?? 0;
+}
+
+/** Huellas y rostros guardados (cifrados) por trabajador; nunca devuelve la plantilla. */
+export async function getBiometriaGuardada(client: SupabaseClient): Promise<Record<number, { huellas: number; rostros: number }>> {
+	const { data, error } = await client.rpc('fn_personal_biometria_resumen');
+	if (error) throw error;
+	const resumen: Record<number, { huellas: number; rostros: number }> = {};
+	for (const r of data ?? []) resumen[r.id_personal] = { huellas: r.huellas, rostros: r.rostros };
+	return resumen;
+}
+
+export async function darDeBajaPersonal(client: SupabaseClient, id: number): Promise<void> {
+	const { error } = await client.from('personal').update({ estado: 'baja', updated_at: new Date().toISOString() }).eq('id_personal', id);
+	if (error) throw error;
+}
+
+export async function restaurarPersonal(client: SupabaseClient, id: number): Promise<void> {
+	const { error } = await client.from('personal').update({ estado: 'activo', updated_at: new Date().toISOString() }).eq('id_personal', id);
+	if (error) throw error;
+}
+
+/** Borra la ficha. Sus marcaciones se conservan (se enlazan por código, no por id). */
+export async function eliminarPersonalPermanente(client: SupabaseClient, id: number): Promise<void> {
+	const { error } = await client.from('personal').delete().eq('id_personal', id);
+	if (error) throw error;
+}
