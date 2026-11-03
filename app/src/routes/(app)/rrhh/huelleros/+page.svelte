@@ -199,6 +199,12 @@
 	{/if}
 {/snippet}
 
+{#snippet destino(h: Huellero)}
+	{#if h.destino === 'desarrollo'}
+		<span class="inline-block mt-1 text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-400 text-[#1a233a]" title="Este huellero envía sus datos a la base de desarrollo (botón Huelleros de la barra superior, rol developer)">ENVÍA A DEV</span>
+	{/if}
+{/snippet}
+
 {#snippet ordenes(h: Huellero)}
 	{#if h.ordenes_pendientes}
 		<div class="text-[11px] text-blue-600 mt-0.5"><i class="fas fa-paper-plane"></i> {h.ordenes_pendientes} {h.ordenes_pendientes === 1 ? 'orden' : 'órdenes'} por enviar</div>
@@ -210,7 +216,8 @@
 
 {#snippet obra(h: Huellero)}
 	{#if h.centro_costo}
-		<span class="text-slate-700">{h.centro_costo.codigo} · {h.centro_costo.nombre}</span>
+		<div class="text-xs font-mono text-slate-400">{h.centro_costo.codigo}</div>
+		<div class="text-slate-700 [overflow-wrap:anywhere]">{h.centro_costo.nombre}</div>
 	{:else}
 		<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">Pendiente: asignar obra o área</span>
 	{/if}
@@ -229,16 +236,23 @@
 			<button
 				onclick={() => sincronizar(h)}
 				disabled={sincronizando === h.id_dispositivo}
-				title="Trae al ERP los usuarios registrados en el huellero y le reenvía los trabajadores vinculados a él"
-				class="px-3 py-1.5 text-xs font-medium rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+				title="Sincronizar: trae al ERP los usuarios registrados en el huellero y le reenvía los trabajadores vinculados a él"
+				aria-label={`Sincronizar ${nombreHuellero(h)}`}
+				class="w-9 h-9 rounded-full text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
 			>
-				<i class={`fas fa-rotate ${sincronizando === h.id_dispositivo ? 'fa-spin' : ''}`}></i> Sincronizar
+				<i class={`fas fa-rotate ${sincronizando === h.id_dispositivo ? 'fa-spin' : ''}`}></i>
 			</button>
-			<button onclick={() => abrirEditar(h)} class="px-3 py-1.5 text-xs font-medium rounded-lg text-blue-600 hover:bg-blue-50">
-				<i class="fas fa-pen"></i> {h.estado === 'pendiente' ? 'Asignar lugar' : 'Editar'}
-			</button>
-			<button onclick={() => (paraDarDeBaja = h)} class="px-3 py-1.5 text-xs font-medium rounded-lg text-rose-600 hover:bg-rose-50">
-				<i class="fas fa-ban"></i> Dar de baja
+			{#if h.estado === 'pendiente'}
+				<button onclick={() => abrirEditar(h)} class="px-3 py-1.5 text-xs font-semibold rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-sm">
+					<i class="fas fa-location-dot"></i> Asignar lugar
+				</button>
+			{:else}
+				<button onclick={() => abrirEditar(h)} title="Editar nombre y obra o área" aria-label={`Editar ${nombreHuellero(h)}`} class="w-9 h-9 rounded-full text-blue-600 hover:bg-blue-50">
+					<i class="fas fa-pen"></i>
+				</button>
+			{/if}
+			<button onclick={() => (paraDarDeBaja = h)} title="Dar de baja" aria-label={`Dar de baja ${nombreHuellero(h)}`} class="w-9 h-9 rounded-full text-rose-600 hover:bg-rose-50">
+				<i class="fas fa-ban"></i>
 			</button>
 		{/if}
 	</div>
@@ -320,19 +334,19 @@
 						{#snippet row(h: Huellero)}
 							<td class="px-5 py-4">
 								<div class="font-semibold text-slate-800">{nombreHuellero(h)}</div>
-								<div class="text-xs text-slate-400">Serie {h.numero_serie}</div>
+								<div class="text-xs font-mono text-slate-400">ID {h.numero_serie}</div>{@render destino(h)}
 							</td>
-							<td class="px-5 py-4">{@render obra(h)}</td>
+							<td class="px-5 py-4 whitespace-normal min-w-[11rem] max-w-[18rem]">{@render obra(h)}</td>
 							<td class="px-5 py-4">{@render estadoConexion(h)}{@render ordenes(h)}</td>
 							<td class="px-5 py-4 text-center font-semibold text-slate-700">{h.marcas_hoy}</td>
-							<td class="px-5 py-4">{@render acciones(h)}</td>
+							<td class="px-5 py-4 whitespace-nowrap">{@render acciones(h)}</td>
 						{/snippet}
 						{#snippet card(h: Huellero)}
 							<div class="p-4 flex flex-col gap-2">
 								<div class="flex items-start justify-between gap-2">
 									<div class="min-w-0">
 										<div class="font-semibold text-slate-800">{nombreHuellero(h)}</div>
-										<div class="text-xs text-slate-400">Serie {h.numero_serie}</div>
+										<div class="text-xs font-mono text-slate-400">ID {h.numero_serie}</div>{@render destino(h)}
 									</div>
 									<div class="text-xs text-slate-500 shrink-0">{h.marcas_hoy} marcas hoy</div>
 								</div>
