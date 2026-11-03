@@ -238,6 +238,8 @@
 	const sinHuella = $derived(personal.filter((p) => huellerosSinBiometria(p).length > 0).length);
 	/** Contador "sin huella" de arriba: al pulsarlo muestra solo a esos trabajadores. */
 	let soloSinHuella = $state(false);
+	/** La base aún no informa huellas (falta la migración 20261103130000): el aviso "sin huella" no puede calcularse. */
+	const revisionHuellaInactiva = $derived(personal.some((p) => p.personal_huellero?.some((v) => v.huellas === undefined)));
 	const conAlertas = $derived(personal.filter((p) => alertasVencimiento(p, hoy).length > 0).length);
 
 	function puesto(p: Personal): string {
@@ -537,6 +539,13 @@
 					{/each}
 					<button onclick={() => (filtros = { ...FILTROS_VACIOS })} class="text-slate-500 hover:text-slate-700 hover:underline ml-1">Limpiar todo</button>
 					<span class="text-slate-400 ml-auto">{filtrados.length} de {personal.length}</span>
+				</div>
+			{/if}
+
+			{#if revisionHuellaInactiva && !verEliminados}
+				<div class="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-2.5 text-sm">
+					<i class="fas fa-triangle-exclamation mt-0.5"></i>
+					<span>La revisión de <b>huella registrada</b> no está activa en esta base: falta aplicar la migración <code class="text-xs">20261103130000_huella_por_huellero</code>. Mientras tanto no se puede avisar quién no tiene huella.</span>
 				</div>
 			{/if}
 
