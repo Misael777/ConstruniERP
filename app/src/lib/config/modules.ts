@@ -69,6 +69,20 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     ]
   },
   {
+    // Personal de obra, horarios y control de asistencia con huelleros ZKTeco (receptor ADMS en
+    // servicios/huellero-adms). El control de asistencia (tareo) se suma aquí.
+    path: '/rrhh',
+    label: 'Personal y Asistencia',
+    icon: 'fas fa-id-badge',
+    permiso: 'ver_rrhh',
+    subItems: [
+      { path: '/rrhh/personal', label: 'Personal', permiso: 'ver_rrhh_personal' },
+      { path: '/rrhh/asistencia', label: 'Asistencia', permiso: 'ver_rrhh_asistencia' },
+      { path: '/rrhh/horarios', label: 'Horarios', permiso: 'ver_rrhh_horarios' },
+      { path: '/rrhh/huelleros', label: 'Huelleros', permiso: 'ver_rrhh_huelleros' }
+    ]
+  },
+  {
     path: '/soporte',
     label: 'Soporte',
     icon: 'fas fa-life-ring',

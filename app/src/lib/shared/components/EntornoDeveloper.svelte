@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * Herramientas de entorno (a pedido del usuario, 22/10/2026):
-	 *  - Para TODOS: si la app está conectada a la base de DESARROLLO, una etiqueta "BASE DEV" bien visible, para que
+	 *  - Para TODOS: la base a la que está conectada la app ("BASE DEV" en ámbar bien visible, "BASE PRD" discreta), para que
 	 *    nadie confunda datos de prueba con datos reales.
 	 *  - Solo rol developer (esDeveloper): cambiar entre PRD y DEV (cambiarEntorno, supabaseClient.ts) y, estando en
 	 *    DEV, "Vaciar base de desarrollo" (RPC dev_vaciar_base, que solo existe en Dev — supabase/dev-only/ — y vuelve
@@ -45,6 +45,9 @@
 
 {#if enDev}
 	<span class="px-2 py-1 rounded-md bg-amber-400 text-[#1a233a] text-[11px] font-black tracking-wide" title="Estás conectado a la base de DESARROLLO (datos de prueba)">BASE DEV</span>
+{:else}
+	<!-- A pedido del usuario (03/11/2026): que siempre se vea con qué base se trabaja, también en Producción. -->
+	<span class="px-2 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold tracking-wide" title="Estás conectado a la base de PRODUCCIÓN (datos reales)">BASE PRD</span>
 {/if}
 
 {#if esDeveloper() && (CAMBIO_ENTORNO_POSIBLE || enDev)}
