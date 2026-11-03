@@ -66,3 +66,31 @@ describe('calcularAsistencia', () => {
 		expect(calcularAsistencia([], civil, '2026-11-01', '2026-11-30', '2026-11-02', sinContrato)).toHaveLength(2);
 	});
 });
+
+describe('calcularAsistencia con horario libre (por horas)', () => {
+	const libre = { tolerancia_min: 0, tipo: 'libre' as const, horario_dia: [] };
+	const marcas = [
+		m('2026-10-26', '10:00'), m('2026-10-26', '13:00'), m('2026-10-26', '15:00'), m('2026-10-26', '18:30'), // 3 h + 3 h 30
+		m('2026-10-27', '09:15'), m('2026-10-27', '09:16'), m('2026-10-27', '11:45'), // 2 h 30 (09:16 repetida)
+		m('2026-10-28', '08:00'), m('2026-10-28', '12:00'), m('2026-10-28', '14:00'), // 4 h y la última sin salida
+		m('2026-11-01', '07:00'), m('2026-11-01', '08:00') // domingo: cuenta igual, sin extra
+	];
+	const dias = calcularAsistencia(marcas, libre, '2026-10-26', '2026-11-02', '2026-11-02', sinContrato);
+	const por = Object.fromEntries(dias.map((d) => [d.fecha, d]));
+
+	it('suma los tramos entre marcas, sin tardanza ni extra', () => {
+		expect(por['2026-10-26']).toMatchObject({ trabajados: 390, tardanza: 0, extra: 0, estado: 'asistio', entrada: 600, salida: 1110 });
+		expect(por['2026-10-27']).toMatchObject({ trabajados: 150, estado: 'asistio' });
+		expect(por['2026-11-01']).toMatchObject({ trabajados: 60, extra: 0, estado: 'asistio' });
+	});
+	it('marca sin pareja: cuenta los tramos completos y el día queda incompleto (hoy, en jornada)', () => {
+		expect(por['2026-10-28']).toMatchObject({ trabajados: 240, salida: null, estado: 'incompleto' });
+		const [hoy] = calcularAsistencia([m('2026-11-02', '08:00')], libre, '2026-11-02', '2026-11-02', '2026-11-02', sinContrato);
+		expect(hoy.estado).toBe('en_curso');
+	});
+	it('día sin marcas no es falta y no hay días laborables', () => {
+		expect(por['2026-10-29'].estado).toBe('sin_marcas');
+		const r = resumirAsistencia(dias);
+		expect(r).toMatchObject({ faltas: 0, laborables: 0, asistidos: 4, minutosTrabajados: 390 + 150 + 240 + 60 });
+	});
+});

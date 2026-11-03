@@ -14,7 +14,7 @@
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { getPersonal, nombreCompleto, hoyLima, type Personal } from '$lib/modules/personal/services/personal.service';
-	import { DIAS_SEMANA, hhmm, resumenHorario, type Horario } from '$lib/modules/personal/services/horarios.service';
+	import { DIAS_SEMANA, esLibre, hhmm, resumenHorario, type Horario } from '$lib/modules/personal/services/horarios.service';
 	import {
 		ESTADOS_DIA,
 		calcularAsistencia,
@@ -151,8 +151,16 @@
 	});
 
 	const fechaCorta = (f: string) => new Date(`${f}T00:00:00`).toLocaleDateString('es-PE', { day: '2-digit', month: '2-digit' });
+	const libre = $derived(esLibre(horario));
 	const programadoTexto = (d: DiaAsistencia) =>
-		d.programado ? `${hhmm(d.programado.hora_entrada)}–${hhmm(d.programado.hora_salida)}` : horario ? 'Descanso' : '—';
+		d.programado ? `${hhmm(d.programado.hora_entrada)}–${hhmm(d.programado.hora_salida)}` : libre ? 'Libre' : horario ? 'Descanso' : '—';
+	/** Horario libre: "08:00–12:00 · 14:00–18:00" (una marca sin pareja queda "14:00–…"). */
+	const tramos = (d: DiaAsistencia) =>
+		d.marcas
+			.filter((_, i) => i % 2 === 0)
+			.map((m, k) => `${reloj(m.minuto)}–${d.marcas[k * 2 + 1] ? reloj(d.marcas[k * 2 + 1].minuto) : '…'}`)
+			.join(' · ');
+	const diasTrabajados = $derived(dias.filter((d) => d.trabajados > 0).length);
 
 	const columnas = [
 		{ label: 'Día' },
@@ -199,8 +207,12 @@
 			<div><div class="text-[11px] text-slate-400">Entrada</div><div class={`font-mono ${d.tardanza ? 'text-amber-700 font-semibold' : 'text-slate-700'}`}>{reloj(d.entrada) || '—'}</div></div>
 			<div><div class="text-[11px] text-slate-400">Salida</div><div class="font-mono text-slate-700">{reloj(d.salida) || '—'}</div></div>
 			<div><div class="text-[11px] text-slate-400">Horas trabajadas</div><div class="text-slate-700">{duracion(d.trabajados)}</div></div>
-			<div><div class="text-[11px] text-slate-400">Tardanza</div><div class={d.tardanza ? 'text-amber-700' : 'text-slate-400'}>{duracion(d.tardanza)}</div></div>
-			<div><div class="text-[11px] text-slate-400">Horas extra</div><div class={d.extra ? 'text-violet-700' : 'text-slate-400'}>{duracion(d.extra)}</div></div>
+			{#if libre}
+				<div class="col-span-2"><div class="text-[11px] text-slate-400">Tramos</div><div class="font-mono text-slate-700">{tramos(d) || '—'}</div></div>
+			{:else}
+				<div><div class="text-[11px] text-slate-400">Tardanza</div><div class={d.tardanza ? 'text-amber-700' : 'text-slate-400'}>{duracion(d.tardanza)}</div></div>
+				<div><div class="text-[11px] text-slate-400">Horas extra</div><div class={d.extra ? 'text-violet-700' : 'text-slate-400'}>{duracion(d.extra)}</div></div>
+			{/if}
 		</div>
 		<div class="text-xs text-slate-500">
 			<span class="font-medium text-slate-600">Marcas:</span>
@@ -255,7 +267,9 @@
 					<span class="font-semibold text-slate-800">{nombreCompleto(trabajador)}</span>
 					<span>N.º en huellero {trabajador.pin}</span>
 					{#if trabajador.centro_costo}<span class="[overflow-wrap:anywhere]">{trabajador.centro_costo.nombre}</span>{/if}
-					{#if horario}
+					{#if libre && horario}
+						<span>Horario: {horario.nombre} · <span class="text-teal-700 font-medium">libre, por horas</span> (se suman las horas entre sus marcas de cada día)</span>
+					{:else if horario}
 						<span>Horario: {horario.nombre} · {resumenHorario(horario)} · tolerancia {horario.tolerancia_min} min</span>
 					{:else}
 						<span class="text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin horario: no se calculan tardanzas, faltas ni horas extra. Asígnale uno en Personal.</span>
@@ -263,12 +277,19 @@
 				</div>
 
 				<div class="bg-white border border-slate-100 rounded-xl shadow-sm px-4 py-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
-					{@render dato('Asistió', horario ? `${resumen.asistidos} de ${resumen.laborables} días` : `${resumen.asistidos} días`)}
-					{@render dato('Faltas', `${resumen.faltas}`, resumen.faltas ? 'text-rose-600' : undefined)}
-					{#if resumen.incompletos}{@render dato('Sin salida', `${resumen.incompletos}`, 'text-orange-600')}{/if}
-					{@render dato('Tardanzas', resumen.tardanzas ? `${resumen.tardanzas} · ${duracion(resumen.minutosTardanza)}` : '0', resumen.tardanzas ? 'text-amber-600' : undefined)}
-					{@render dato('Horas', horario ? `${duracion(resumen.minutosTrabajados)} de ${duracion(programados)}` : duracion(resumen.minutosTrabajados))}
-					{@render dato('Extra', duracion(resumen.minutosExtra), resumen.minutosExtra ? 'text-violet-600' : undefined)}
+					{#if libre}
+						{@render dato('Días trabajados', `${resumen.asistidos}`)}
+						{@render dato('Horas trabajadas', duracion(resumen.minutosTrabajados), 'text-teal-700')}
+						{@render dato('Promedio por día', diasTrabajados ? duracion(Math.round(resumen.minutosTrabajados / diasTrabajados)) : '—')}
+						{#if resumen.incompletos}{@render dato('Sin salida', `${resumen.incompletos}`, 'text-orange-600')}{/if}
+					{:else}
+						{@render dato('Asistió', horario ? `${resumen.asistidos} de ${resumen.laborables} días` : `${resumen.asistidos} días`)}
+						{@render dato('Faltas', `${resumen.faltas}`, resumen.faltas ? 'text-rose-600' : undefined)}
+						{#if resumen.incompletos}{@render dato('Sin salida', `${resumen.incompletos}`, 'text-orange-600')}{/if}
+						{@render dato('Tardanzas', resumen.tardanzas ? `${resumen.tardanzas} · ${duracion(resumen.minutosTardanza)}` : '0', resumen.tardanzas ? 'text-amber-600' : undefined)}
+						{@render dato('Horas', horario ? `${duracion(resumen.minutosTrabajados)} de ${duracion(programados)}` : duracion(resumen.minutosTrabajados))}
+						{@render dato('Extra', duracion(resumen.minutosExtra), resumen.minutosExtra ? 'text-violet-600' : undefined)}
+					{/if}
 					<span class="text-xs text-slate-400 whitespace-nowrap sm:ml-auto">{fechaCorta(desde)} – {fechaCorta(hasta)}{hasta > hoy ? ' · hasta hoy' : ''}</span>
 				</div>
 
@@ -297,9 +318,11 @@
 									<h3 class="text-base font-bold text-slate-800">{mes.titulo}</h3>
 									{#if mes.resumen.asistidos || mes.resumen.faltas || mes.resumen.tardanzas}
 										<div class="flex flex-wrap gap-x-4 text-xs">
-											{@render dato('Asistió', `${mes.resumen.asistidos}`)}
-											{@render dato('Faltas', `${mes.resumen.faltas}`, mes.resumen.faltas ? 'text-rose-600' : undefined)}
-											{@render dato('Tardanzas', `${mes.resumen.tardanzas}`, mes.resumen.tardanzas ? 'text-amber-600' : undefined)}
+											{@render dato(libre ? 'Días trabajados' : 'Asistió', `${mes.resumen.asistidos}`)}
+											{#if !libre}
+												{@render dato('Faltas', `${mes.resumen.faltas}`, mes.resumen.faltas ? 'text-rose-600' : undefined)}
+												{@render dato('Tardanzas', `${mes.resumen.tardanzas}`, mes.resumen.tardanzas ? 'text-amber-600' : undefined)}
+											{/if}
 											{@render dato('Horas', duracion(mes.resumen.minutosTrabajados))}
 										</div>
 									{/if}

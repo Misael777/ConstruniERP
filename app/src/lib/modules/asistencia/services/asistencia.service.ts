@@ -5,10 +5,12 @@
  * Con 4 o más marcas en número par se suman los tramos (salió y volvió del refrigerio); si no, de entrada a salida
  * menos el refrigerio del horario. Tardanza: entrada después de hora de entrada + tolerancia (se cuenta desde la
  * hora de entrada). Horas extra: lo trabajado después de la hora de salida, o todo si el día era de descanso.
+ * Horario libre (por horas): sin entrada ni salida programadas; las marcas se toman en pares (entrada→salida,
+ * entrada→salida…) y se suman los tramos. Sin tardanza, faltas ni horas extra; una marca sin pareja deja el día incompleto.
  * No contempla turnos que pasan la medianoche.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { aMinutos, minutosDelDia, type Horario, type HorarioDia } from '$lib/modules/personal/services/horarios.service';
+import { aMinutos, esLibre, minutosDelDia, type Horario, type HorarioDia } from '$lib/modules/personal/services/horarios.service';
 
 const LIMA_MS = 5 * 3_600_000;
 const MARCA_REPETIDA_MIN = 2;
@@ -111,7 +113,7 @@ const cruce = (a: number, b: number, c: number, d: number) => Math.max(0, Math.m
 /** Día a día de `desde` a `hasta` (sin pasar de hoy). `horario` null = trabajador sin horario asignado. */
 export function calcularAsistencia(
 	marcas: Marca[],
-	horario: Pick<Horario, 'tolerancia_min' | 'horario_dia'> | null,
+	horario: Pick<Horario, 'tolerancia_min' | 'horario_dia' | 'tipo'> | null,
 	desde: string,
 	hasta: string,
 	hoy: string,
@@ -119,19 +121,23 @@ export function calcularAsistencia(
 ): DiaAsistencia[] {
 	const dias: DiaAsistencia[] = [];
 	const fin = hasta < hoy ? hasta : hoy;
+	const libre = esLibre(horario);
 	for (let fecha = desde; fecha <= fin; fecha = sumarDias(fecha, 1)) {
 		const dia = diaSemana(fecha);
-		const programado = horario?.horario_dia.find((d) => d.dia === dia) ?? null;
+		const programado = libre ? null : (horario?.horario_dia.find((d) => d.dia === dia) ?? null);
 		const delDia: Marca[] = [];
 		for (const m of marcas.filter((x) => x.fecha === fecha)) {
 			const anterior = delDia.at(-1);
 			if (!anterior || m.minuto - anterior.minuto >= MARCA_REPETIDA_MIN) delDia.push(m);
 		}
 		const entrada = delDia[0]?.minuto ?? null;
-		const salida = delDia.length > 1 ? delDia.at(-1)!.minuto : null;
+		// Libre: con número impar de marcas la última es una entrada sin salida todavía.
+		const salida = delDia.length > 1 && (!libre || delDia.length % 2 === 0) ? delDia.at(-1)!.minuto : null;
 
 		let trabajados = 0;
-		if (entrada != null && salida != null) {
+		if (libre) {
+			for (let i = 0; i + 1 < delDia.length; i += 2) trabajados += delDia[i + 1].minuto - delDia[i].minuto;
+		} else if (entrada != null && salida != null) {
 			if (delDia.length >= 4 && delDia.length % 2 === 0) {
 				for (let i = 0; i < delDia.length; i += 2) trabajados += delDia[i + 1].minuto - delDia[i].minuto;
 			} else {
@@ -152,13 +158,14 @@ export function calcularAsistencia(
 				extra = Math.max(0, salida - Math.max(horaSalida, entrada));
 				salidaAnticipada = Math.max(0, horaSalida - salida);
 			}
-		} else if (!programado && horario) {
+		} else if (!programado && horario && !libre) {
 			extra = trabajados;
 		}
 
 		let estado: EstadoDia;
 		if ((contrato.ingreso && fecha < contrato.ingreso) || (contrato.cese && fecha > contrato.cese)) estado = delDia.length ? 'asistio' : 'fuera_contrato';
 		else if (!horario) estado = delDia.length ? 'asistio' : 'sin_marcas';
+		else if (libre) estado = !delDia.length ? 'sin_marcas' : salida == null ? (fecha < hoy ? 'incompleto' : 'en_curso') : 'asistio';
 		else if (!programado) estado = delDia.length ? 'descanso_trabajado' : 'descanso';
 		else if (!delDia.length) estado = fecha < hoy ? 'falta' : 'en_curso';
 		else if (salida == null) estado = fecha < hoy ? 'incompleto' : 'en_curso';

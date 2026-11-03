@@ -3,6 +3,7 @@
 	 * Horarios de trabajo: catálogo con entrada/salida/refrigerio por día y tolerancia de tardanza. Cada
 	 * trabajador tiene asignado uno en su ficha (Personal). Dar de baja oculta el horario de la lista de
 	 * opciones; los trabajadores que ya lo tienen lo conservan.
+	 * Horario libre (por horas): sin días ni entrada/salida; Asistencia suma las horas entre marcas de cada día.
 	 */
 	import { onMount } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
@@ -17,6 +18,7 @@
 		hhmm,
 		minutosDelDia,
 		horasSemanales,
+		esLibre,
 		getHorarios,
 		guardarHorario,
 		cambiarEstadoHorario,
@@ -54,6 +56,7 @@
 	let editando = $state<Horario | null>(null);
 	let nombre = $state('');
 	let tolerancia = $state(10);
+	let tipo = $state<'fijo' | 'libre'>('fijo');
 	let filas = $state<FilaDia[]>([]);
 	let guardando = $state(false);
 	let errorEditor = $state('');
@@ -62,6 +65,7 @@
 		editando = h;
 		nombre = h?.nombre ?? '';
 		tolerancia = h?.tolerancia_min ?? 10;
+		tipo = esLibre(h) ? 'libre' : 'fijo';
 		filas = DIAS_SEMANA.map((_, i) => {
 			const d = h?.horario_dia.find((x) => x.dia === i + 1);
 			return d
@@ -93,6 +97,7 @@
 
 	function validar(): string {
 		if (!nombre.trim()) return 'Ponle un nombre al horario.';
+		if (tipo === 'libre') return '';
 		if (!Number.isInteger(tolerancia) || tolerancia < 0 || tolerancia > 120) return 'La tolerancia va de 0 a 120 minutos.';
 		if (!diasEditor.length) return 'Marca al menos un día laborable.';
 		for (const d of diasEditor) {
@@ -112,7 +117,7 @@
 		if (errorEditor) return;
 		guardando = true;
 		try {
-			await guardarHorario(supabase, editando?.id_horario ?? null, { nombre, tolerancia_min: tolerancia, dias: diasEditor });
+			await guardarHorario(supabase, editando?.id_horario ?? null, { nombre, tolerancia_min: tolerancia, tipo, dias: diasEditor });
 			toast.success(editando ? 'Horario actualizado.' : 'Horario creado.');
 			editorAbierto = false;
 			await fetchHorarios();
@@ -191,7 +196,12 @@
 								<div class="min-w-0">
 									<div class="font-semibold text-slate-800">{h.nombre}</div>
 									<div class="text-xs text-slate-500">
-										{formatoHoras(horasSemanales(h))} por semana · tolerancia {h.tolerancia_min} min · {porHorario[h.id_horario] ?? 0} trabajadores
+										{#if esLibre(h)}
+											<span class="inline-block px-1.5 py-0.5 mr-1 rounded-md bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold uppercase tracking-wide">Libre</span>
+											Por horas · {porHorario[h.id_horario] ?? 0} trabajadores
+										{:else}
+											{formatoHoras(horasSemanales(h))} por semana · tolerancia {h.tolerancia_min} min · {porHorario[h.id_horario] ?? 0} trabajadores
+										{/if}
 									</div>
 								</div>
 								<div class="flex gap-1 shrink-0">
@@ -203,6 +213,12 @@
 									{/if}
 								</div>
 							</div>
+							{#if esLibre(h)}
+								<p class="text-xs text-slate-600 leading-relaxed">
+									Sin hora de entrada ni de salida. Cada día se suman las horas entre sus marcas (entrada → salida, entrada → salida…).
+									No cuenta tardanzas, faltas ni horas extra.
+								</p>
+							{:else}
 							<div class="grid grid-cols-[auto_1fr_auto] gap-x-4 gap-y-1 text-xs">
 								{#each DIAS_SEMANA as nombreDia, i}
 									{@const d = h.horario_dia.find((x) => x.dia === i + 1)}
@@ -218,6 +234,7 @@
 									{/if}
 								{/each}
 							</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -236,16 +253,28 @@
 				</button>
 			</div>
 			<div class="p-6 overflow-y-auto flex flex-col gap-4">
-				<div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-4">
+				<div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tipo de horario">
+					{#each [{ v: 'fijo', t: 'Horario fijo', d: 'Entrada y salida por día; cuenta tardanzas, faltas y horas extra.', i: 'fa-calendar-week' }, { v: 'libre', t: 'Horario libre', d: 'Por horas: sin entrada ni salida; suma las horas entre sus marcas.', i: 'fa-hourglass-half' }] as op}
+						<button type="button" role="radio" aria-checked={tipo === op.v} onclick={() => (tipo = op.v as 'fijo' | 'libre')}
+							class={`text-left p-3 rounded-xl border transition-colors ${tipo === op.v ? 'border-blue-500 bg-blue-50/60 ring-2 ring-blue-500/20' : 'border-slate-200 hover:bg-slate-50'}`}>
+							<div class={`text-sm font-semibold flex items-center gap-2 ${tipo === op.v ? 'text-blue-700' : 'text-slate-700'}`}><i class={`fas ${op.i}`}></i> {op.t}</div>
+							<div class="text-xs text-slate-500 mt-0.5">{op.d}</div>
+						</button>
+					{/each}
+				</div>
+				<div class={`grid grid-cols-1 gap-4 ${tipo === 'fijo' ? 'sm:grid-cols-[1fr_auto]' : ''}`}>
 					<label class="flex flex-col gap-1.5">
 						<span class="text-sm font-medium text-slate-700">Nombre *</span>
 						<input bind:value={nombre} maxlength="80" placeholder="Ej. Obra turno mañana" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" />
 					</label>
+					{#if tipo === 'fijo'}
 					<label class="flex flex-col gap-1.5">
 						<span class="text-sm font-medium text-slate-700">Tolerancia (min)</span>
 						<input type="number" min="0" max="120" bind:value={tolerancia} class="w-full sm:w-32 px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" />
 					</label>
+					{/if}
 				</div>
+				{#if tipo === 'fijo'}
 				<p class="text-xs text-slate-500 -mt-2">La tolerancia son los minutos después de la hora de entrada que todavía no cuentan como tardanza.</p>
 
 				<div class="flex items-center justify-between">
@@ -280,6 +309,13 @@
 					{/each}
 				</div>
 				<div class="text-sm text-slate-600">Total: <b>{formatoHoras(horasSemanales({ horario_dia: diasEditor }))}</b> por semana</div>
+				{:else}
+				<div class="text-sm text-slate-600 bg-teal-50/60 border border-teal-100 rounded-xl px-4 py-3 leading-relaxed">
+					<i class="fas fa-hourglass-half text-teal-600 mr-1"></i>
+					El trabajador marca cuando entra y cuando sale, sin horario fijo. En Asistencia verás por día sus entradas, salidas y
+					el total de horas trabajadas (se suman todos los tramos: si marca 08:00, 12:00, 14:00 y 18:00, son 8 h).
+				</div>
+				{/if}
 				{#if errorEditor}
 					<div class="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{errorEditor}</div>
 				{/if}

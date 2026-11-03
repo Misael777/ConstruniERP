@@ -3,6 +3,7 @@
  * Cada horario define por día de la semana (1 = lunes … 7 = domingo) entrada, salida y refrigerio opcional;
  * un día sin registro es de descanso. Cada trabajador tiene su horario (personal.id_horario).
  * Es un catálogo: se da de baja (deja de ofrecerse), no se borra; los trabajadores que lo tenían lo conservan.
+ * Tipo 'libre' (migración 20261103150000): por horas, sin días ni entrada/salida; Asistencia suma los tramos entre marcas.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -20,6 +21,8 @@ export interface Horario {
 	id_horario: number;
 	nombre: string;
 	tolerancia_min: number;
+	/** fijo: jornada por día; libre: por horas, sin entrada ni salida (sin horario_dia). Sin la migración llega undefined = fijo. */
+	tipo?: 'fijo' | 'libre';
 	estado: 'activo' | 'baja';
 	horario_dia: HorarioDia[];
 }
@@ -36,12 +39,15 @@ export const hhmm = (hora: string | null) => (hora ? hora.slice(0, 5) : '');
 export const minutosDelDia = (d: HorarioDia) =>
 	aMinutos(d.hora_salida) - aMinutos(d.hora_entrada) - (d.refrigerio_inicio && d.refrigerio_fin ? aMinutos(d.refrigerio_fin) - aMinutos(d.refrigerio_inicio) : 0);
 
+export const esLibre = (h: Pick<Horario, 'tipo'> | null | undefined) => h?.tipo === 'libre';
+
 export function horasSemanales(h: Pick<Horario, 'horario_dia'>): number {
 	return h.horario_dia.reduce((total, d) => total + minutosDelDia(d), 0) / 60;
 }
 
 /** "L-V 07:30–17:00 · S 07:30–13:00": agrupa días consecutivos con el mismo horario. */
-export function resumenHorario(h: Pick<Horario, 'horario_dia'>): string {
+export function resumenHorario(h: Pick<Horario, 'horario_dia' | 'tipo'>): string {
+	if (esLibre(h)) return 'Libre, por horas';
 	const dias = [...h.horario_dia].sort((a, b) => a.dia - b.dia);
 	const grupos: { desde: number; hasta: number; texto: string }[] = [];
 	for (const d of dias) {
@@ -66,25 +72,27 @@ export async function getHorarios(client: SupabaseClient, soloEliminados = false
 export async function guardarHorario(
 	client: SupabaseClient,
 	id: number | null,
-	datos: { nombre: string; tolerancia_min: number; dias: HorarioDia[] }
+	datos: { nombre: string; tolerancia_min: number; tipo: 'fijo' | 'libre'; dias: HorarioDia[] }
 ): Promise<number> {
 	let idHorario = id;
+	const fila = { nombre: datos.nombre.trim(), tolerancia_min: datos.tipo === 'libre' ? 0 : datos.tolerancia_min, tipo: datos.tipo };
+	const dias = datos.tipo === 'libre' ? [] : datos.dias;
 	if (idHorario === null) {
 		const { data, error } = await client
 			.from('horario')
-			.insert({ nombre: datos.nombre.trim(), tolerancia_min: datos.tolerancia_min })
+			.insert(fila)
 			.select('id_horario')
 			.single();
 		if (error) throw nombreRepetido(error);
 		idHorario = data.id_horario as number;
 	} else {
-		const { error } = await client.from('horario').update({ nombre: datos.nombre.trim(), tolerancia_min: datos.tolerancia_min }).eq('id_horario', idHorario);
+		const { error } = await client.from('horario').update(fila).eq('id_horario', idHorario);
 		if (error) throw nombreRepetido(error);
 		const { error: errorBorrado } = await client.from('horario_dia').delete().eq('id_horario', idHorario);
 		if (errorBorrado) throw errorBorrado;
 	}
-	if (datos.dias.length) {
-		const { error } = await client.from('horario_dia').insert(datos.dias.map((d) => ({ ...d, id_horario: idHorario })));
+	if (dias.length) {
+		const { error } = await client.from('horario_dia').insert(dias.map((d) => ({ ...d, id_horario: idHorario })));
 		if (error) throw error;
 	}
 	return idHorario;
