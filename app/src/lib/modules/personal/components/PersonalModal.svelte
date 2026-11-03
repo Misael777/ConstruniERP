@@ -100,6 +100,13 @@
 		if (!open) return;
 		const base: DatosPersonal = { ...VACIO };
 		if (personal) for (const k of Object.keys(VACIO) as (keyof DatosPersonal)[]) (base as any)[k] = personal[k] ?? VACIO[k];
+		// Llegó desde el huellero (solo trae su nombre en un texto): se propone primera palabra = nombres, resto =
+		// apellidos, para no volver a escribirlo. Se revisa y corrige antes de guardar.
+		if (personal?.nombre && !personal.nombres && !personal.apellidos) {
+			const [primero, ...resto] = personal.nombre.trim().split(/\s+/);
+			base.nombres = primero ?? '';
+			base.apellidos = resto.join(' ');
+		}
 		form = base;
 		errores = {};
 		pinManual = !!personal?.pin && personal.pin !== personal.numero_documento;
