@@ -48,8 +48,9 @@ export interface Personal {
 	created_at: string;
 	centro_costo?: { codigo: string; nombre: string } | null;
 	horario?: { nombre: string } | null;
-	/** Huelleros donde marca (tabla personal_huellero); no depende de la obra. */
-	personal_huellero?: { id_dispositivo: number }[];
+	/** Huelleros donde marca (tabla personal_huellero); no depende de la obra. huellas/rostros: cuántos tiene
+	 * registrados en ese huellero (solo el número; biometria_at null = el huellero aún no lo ha informado). */
+	personal_huellero?: { id_dispositivo: number; huellas?: number; rostros?: number; biometria_at?: string | null }[];
 }
 
 /** Campos editables desde la ficha (todo menos id, estado, fechas de auditoría y lo embebido). */
@@ -98,6 +99,10 @@ export function nombreCompleto(p: Pick<Personal, 'nombres' | 'apellidos' | 'nomb
 /** Ficha creada por el huellero (o a medio llenar): faltan los datos obligatorios del formulario. */
 export const fichaIncompleta = (p: Personal) => !p.numero_documento || !p.nombres || !p.apellidos || !p.regimen;
 
+/** Huelleros donde debe marcar pero no tiene huella ni rostro registrado (aviso de alta prioridad: no podrá marcar). */
+export const huellerosSinBiometria = (p: Personal) =>
+	(p.personal_huellero ?? []).filter((v) => !(v.huellas ?? 0) && !(v.rostros ?? 0)).map((v) => v.id_dispositivo);
+
 /** Días que faltan para el vencimiento (negativo = vencido), con fechas 'AAAA-MM-DD' en hora de Lima. */
 function diasPara(fecha: string | null, hoy: string): number | null {
 	if (!fecha) return null;
@@ -125,7 +130,7 @@ export function alertasVencimiento(p: Personal, hoy: string): { texto: string; v
 export const hoyLima = () => new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
 
 export async function getPersonal(client: SupabaseClient, soloEliminados = false): Promise<Personal[]> {
-	let query = client.from('personal').select('*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(id_dispositivo)').order('apellidos', { nullsFirst: true }).order('nombre');
+	let query = client.from('personal').select('*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(id_dispositivo, huellas, rostros, biometria_at)').order('apellidos', { nullsFirst: true }).order('nombre');
 	query = soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	const { data, error } = await query;
 	if (error) throw error;

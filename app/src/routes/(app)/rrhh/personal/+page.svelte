@@ -31,6 +31,7 @@
 		etiqueta,
 		nombreCompleto,
 		fichaIncompleta,
+		huellerosSinBiometria,
 		alertasVencimiento,
 		hoyLima,
 		getPersonal,
@@ -207,6 +208,7 @@
 		const q = normalizar(busqueda.trim());
 		const f = filtros;
 		return personal.filter((p) => {
+			if (soloSinHuella && !huellerosSinBiometria(p).length) return false;
 			if (q && !normalizar([nombreCompleto(p), p.numero_documento, p.pin, p.cargo, p.centro_costo?.nombre].filter(Boolean).join(' ')).includes(q)) return false;
 			if (f.obra && (f.obra === NINGUNO ? p.id_centro_costo : String(p.id_centro_costo) !== f.obra)) return false;
 			const suyos = p.personal_huellero ?? [];
@@ -233,6 +235,9 @@
 	const huellerosDe = (p: Personal) => huelleros.filter((h) => p.personal_huellero?.some((v) => v.id_dispositivo === h.id_dispositivo));
 	const todosVisiblesSeleccionados = $derived(filtrados.length > 0 && filtrados.every((p) => seleccionados.includes(p.id_personal)));
 	const incompletas = $derived(personal.filter(fichaIncompleta).length);
+	const sinHuella = $derived(personal.filter((p) => huellerosSinBiometria(p).length > 0).length);
+	/** Contador "sin huella" de arriba: al pulsarlo muestra solo a esos trabajadores. */
+	let soloSinHuella = $state(false);
 	const conAlertas = $derived(personal.filter((p) => alertasVencimiento(p, hoy).length > 0).length);
 
 	function puesto(p: Personal): string {
@@ -320,6 +325,12 @@
 
 {#snippet avisos(p: Personal)}
 	<div class="flex flex-wrap gap-1">
+		{#if !verEliminados && huellerosSinBiometria(p).length}
+			<!-- Alta prioridad (pedido del usuario): sin huella ni rostro no puede marcar asistencia. -->
+			<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-rose-600 text-white shadow-sm" title="Debe registrar su huella o rostro en el huellero; si no, no podrá marcar">
+				<i class="fas fa-triangle-exclamation"></i> Falta registrar huella{huellerosSinBiometria(p).length > 1 ? ` (${huellerosSinBiometria(p).length} huelleros)` : ''}
+			</span>
+		{/if}
 		{#if fichaIncompleta(p)}
 			<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">Ficha incompleta</span>
 		{/if}
@@ -344,6 +355,7 @@
 		<div class="flex flex-col gap-1.5">
 			{#each suyos as h (h.id_dispositivo)}
 				{@const envio = ESTADO_ENVIO[enHuelleros[claveEnHuellero(p.pin, h.id_dispositivo)] ?? 'sin_orden']}
+				{@const bio = p.personal_huellero?.find((v) => v.id_dispositivo === h.id_dispositivo)}
 				<div class="min-w-0 rounded-lg border border-slate-100 bg-slate-50/60 px-2 py-1.5 flex flex-col gap-1" title={h.lugar}>
 					<span class="text-xs font-semibold text-slate-700 truncate">{h.nombre}</span>
 					<span class="text-[10px] font-mono text-slate-400 truncate" title="Identificador del huellero (número de serie)">ID {h.numero_serie}</span>
@@ -357,6 +369,15 @@
 							</span>
 						{/if}
 					</div>
+					{#if bio?.huellas || bio?.rostros}
+						<span class="text-[10px] font-semibold text-slate-600" title="Registrado en este huellero (solo se guarda cuántos, no la huella)">
+							{#if bio.huellas}<i class="fas fa-fingerprint text-emerald-600"></i> {bio.huellas} {bio.huellas === 1 ? 'huella' : 'huellas'}{/if}{#if bio.huellas && bio.rostros}&nbsp;·&nbsp;{/if}{#if bio.rostros}<i class="fas fa-face-smile text-emerald-600"></i> rostro{/if}
+						</span>
+					{:else}
+						<span class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-600 text-white w-fit" title={bio?.biometria_at ? 'El huellero informó que no tiene huella ni rostro: no podrá marcar' : 'El huellero aún no informa su huella: pulsa Sincronizar en Huelleros para revisarlo'}>
+							<i class="fas fa-triangle-exclamation"></i> Sin huella
+						</span>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -461,6 +482,15 @@
 				{#if !verEliminados}
 					<div class="flex flex-wrap gap-2 text-xs">
 						<span class="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600">{personal.length} trabajadores</span>
+						{#if sinHuella || soloSinHuella}
+							<button
+								onclick={() => (soloSinHuella = !soloSinHuella)}
+								title={soloSinHuella ? 'Mostrar a todos' : 'Mostrar solo a quienes les falta registrar su huella o rostro'}
+								class={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shadow-sm ${soloSinHuella ? 'bg-rose-700 text-white ring-2 ring-rose-300' : 'bg-rose-600 text-white hover:bg-rose-700'}`}
+							>
+								<i class="fas fa-fingerprint"></i> {sinHuella} sin huella {#if soloSinHuella}<i class="fas fa-xmark"></i>{/if}
+							</button>
+						{/if}
 						{#if incompletas}<span class="px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700">{incompletas} fichas incompletas</span>{/if}
 						{#if conAlertas}<span class="px-3 py-1.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-700">{conAlertas} con SCTR/examen por vencer</span>{/if}
 					</div>
