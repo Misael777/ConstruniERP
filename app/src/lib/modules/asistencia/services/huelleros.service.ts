@@ -24,6 +24,8 @@ export interface Huellero {
 	ultima_conexion: string | null;
 	ultima_ip: string | null;
 	info: string | null;
+	/** Base a la que el receptor envía sus datos; la cambia solo el rol developer (migración 20261103120000). */
+	destino: 'produccion' | 'desarrollo';
 	created_at: string;
 	centro_costo: { codigo: string; nombre: string } | null;
 	/** Marcaciones recibidas hoy (hora de Lima). */
@@ -221,4 +223,11 @@ export async function getHuellerosElegibles(client: SupabaseClient): Promise<Hue
 		numero_serie: h.numero_serie,
 		en_linea: estaEnLinea(h)
 	}));
+}
+
+/** Envía los datos del huellero a Producción o a Desarrollo (solo rol developer; la base lo vuelve a verificar).
+ * El receptor lo toma en menos de un minuto. */
+export async function cambiarDestinoHuellero(client: SupabaseClient, id: number, destino: Huellero['destino']): Promise<void> {
+	const { error } = await client.from('asistencia_dispositivo').update({ destino }).eq('id_dispositivo', id);
+	if (error) throw error;
 }

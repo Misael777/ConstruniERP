@@ -26,6 +26,7 @@
 	import { diag, revisarCaidaAnterior, leerLog, formatearEntrada, infoEquipo, diagState, activarDiagnostico } from '$lib/shared/diagnostico.svelte';
 	import DiagnosticoPanel from '$lib/shared/components/DiagnosticoPanel.svelte';
 	import EntornoDeveloper from '$lib/shared/components/EntornoDeveloper.svelte';
+	import EntornoHuelleros from '$lib/shared/components/EntornoHuelleros.svelte';
 
 	let { children } = $props();
 
@@ -278,6 +279,7 @@
 						<button type="button" onclick={tocarVersion} class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</button>
 					{/if}
 					<EntornoDeveloper />
+					<EntornoHuelleros />
 					<button
 						type="button"
 						onclick={sincronizarTodo}

@@ -11,6 +11,9 @@
 //   SUPABASE_URL       (texto)   https://<ref>.supabase.co
 //   SUPABASE_ANON_KEY  (texto)   anon key pública del proyecto
 //   INGESTA_TOKEN      (secreto) token cuyo SHA-256 está en asistencia_config.token_ingesta_sha256
+// Opcionales, para enviar un huellero a la base de desarrollo (botón "Huelleros PRD/DEV" del rol developer,
+// migración 20261103120000_huellero_destino.sql). Sin ellas todo va a la base de arriba:
+//   DEV_SUPABASE_URL, DEV_SUPABASE_ANON_KEY (texto) y DEV_INGESTA_TOKEN (secreto), los mismos tres datos de Dev.
 //
 // Configuración en el huellero (Red → Conf. Srvr. de Nube): Modo ADMS, Habilitar Nombre de Dominio = Sí,
 // Dirección = <worker>.workers.dev (puerto 80), Proxy = No.
@@ -170,14 +173,37 @@ async function rpc(env, funcion, datos) {
 
 const ingesta = (env, datos) => rpc(env, 'fn_asistencia_ingesta', datos);
 
+// Producción decide a qué base va cada huellero (asistencia_dispositivo.destino; lo cambia el rol developer desde
+// el ERP). Con 'desarrollo' todo se envía a Dev con las variables DEV_*; sin ellas, o si la consulta falla, a
+// Producción. Se recuerda 60 s por equipo para no consultarlo en cada latido.
+const destinos = new Map();
+async function baseDelHuellero(env, sn) {
+  if (!env.DEV_SUPABASE_URL || !env.DEV_SUPABASE_ANON_KEY || !env.DEV_INGESTA_TOKEN) return env;
+  let guardado = destinos.get(sn);
+  if (!guardado || guardado.hasta < Date.now()) {
+    let destino = 'produccion';
+    try {
+      destino = await rpc(env, 'fn_asistencia_destino', { p_sn: sn });
+    } catch (e) {
+      console.error('No se pudo leer el destino del huellero', sn, e.message);
+    }
+    guardado = { destino, hasta: Date.now() + 60_000 };
+    destinos.set(sn, guardado);
+  }
+  return guardado.destino === 'desarrollo'
+    ? { SUPABASE_URL: env.DEV_SUPABASE_URL, SUPABASE_ANON_KEY: env.DEV_SUPABASE_ANON_KEY, INGESTA_TOKEN: env.DEV_INGESTA_TOKEN }
+    : env;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, envGeneral) {
     const url = new URL(request.url);
     const ruta = url.pathname.replace(/\/+$/, '').toLowerCase();
     const sn = url.searchParams.get('SN') ?? '';
 
     if (!ruta.startsWith('/iclock/')) return texto('Receptor de asistencia Construni');
     if (!/^[A-Za-z0-9_-]{1,40}$/.test(sn)) return texto('SN requerido', 400);
+    const env = await baseDelHuellero(envGeneral, sn);
 
     const cuerpo = request.method === 'POST' ? await request.text() : '';
     const base = { p_sn: sn, p_ip: request.headers.get('CF-Connecting-IP') };
