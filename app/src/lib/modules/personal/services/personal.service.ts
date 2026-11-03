@@ -101,7 +101,7 @@ export const fichaIncompleta = (p: Personal) => !p.numero_documento || !p.nombre
 
 /** Huelleros donde debe marcar pero no tiene huella ni rostro registrado (aviso de alta prioridad: no podrá marcar). */
 export const huellerosSinBiometria = (p: Personal) =>
-	(p.personal_huellero ?? []).filter((v) => !(v.huellas ?? 0) && !(v.rostros ?? 0)).map((v) => v.id_dispositivo);
+	(p.personal_huellero ?? []).filter((v) => v.huellas !== undefined && !v.huellas && !v.rostros).map((v) => v.id_dispositivo);
 
 /** Días que faltan para el vencimiento (negativo = vencido), con fechas 'AAAA-MM-DD' en hora de Lima. */
 function diasPara(fecha: string | null, hoy: string): number | null {
@@ -130,11 +130,15 @@ export function alertasVencimiento(p: Personal, hoy: string): { texto: string; v
 export const hoyLima = () => new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
 
 export async function getPersonal(client: SupabaseClient, soloEliminados = false): Promise<Personal[]> {
-	let query = client.from('personal').select('*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(id_dispositivo, huellas, rostros, biometria_at)').order('apellidos', { nullsFirst: true }).order('nombre');
-	query = soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
-	const { data, error } = await query;
+	const consultar = (huelleros: string) => {
+		const query = client.from('personal').select(`*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(${huelleros})`).order('apellidos', { nullsFirst: true }).order('nombre');
+		return soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
+	};
+	let { data, error } = await consultar('id_dispositivo, huellas, rostros, biometria_at');
+	// Base sin la migración 20261103130000 (columna inexistente, 42703): se carga igual, sin el aviso de huella.
+	if (error?.code === '42703') ({ data, error } = await consultar('id_dispositivo'));
 	if (error) throw error;
-	return data ?? [];
+	return (data ?? []) as unknown as Personal[];
 }
 
 /** Traduce los choques de índices únicos (código de huellero o documento repetido) a un mensaje claro. */

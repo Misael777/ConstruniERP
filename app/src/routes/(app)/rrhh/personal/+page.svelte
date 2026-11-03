@@ -373,7 +373,7 @@
 						<span class="text-[10px] font-semibold text-slate-600" title="Registrado en este huellero (solo se guarda cuántos, no la huella)">
 							{#if bio.huellas}<i class="fas fa-fingerprint text-emerald-600"></i> {bio.huellas} {bio.huellas === 1 ? 'huella' : 'huellas'}{/if}{#if bio.huellas && bio.rostros}&nbsp;·&nbsp;{/if}{#if bio.rostros}<i class="fas fa-face-smile text-emerald-600"></i> rostro{/if}
 						</span>
-					{:else}
+					{:else if bio?.huellas !== undefined}
 						<span class="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-600 text-white w-fit" title={bio?.biometria_at ? 'El huellero informó que no tiene huella ni rostro: no podrá marcar' : 'El huellero aún no informa su huella: pulsa Sincronizar en Huelleros para revisarlo'}>
 							<i class="fas fa-triangle-exclamation"></i> Sin huella
 						</span>
