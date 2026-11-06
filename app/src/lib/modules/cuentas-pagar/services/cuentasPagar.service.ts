@@ -733,11 +733,25 @@ export async function createCuentasPagarRecurrentes(
  * revertir el guardado de la cuenta por esto — pero el popup de cuotas standalone (donde esto es la
  * ÚNICA acción) SÍ necesita saber si falló para no decirle al usuario "guardado" cuando no se guardó.
  */
+/**
+ * CxP de planilla (tareo semanal por obra, migración 20261106120000): sus cuotas programadas son los envíos del
+ * tareo más la "Proyección de planilla", y su monto lo recalcula la base (fn_planilla_recalcular). El calendario
+ * genérico de cuotas no debe borrarlas ni el formulario reescribir el monto. Sin la migración (tabla inexistente)
+ * responde false.
+ */
+export async function esCuentaPlanilla(client: SupabaseClient, idCuentaPagar: number): Promise<boolean> {
+	const { data, error } = await client.from('planilla').select('id_planilla').eq('id_cuenta_pagar', idCuentaPagar).limit(1);
+	return !error && (data?.length ?? 0) > 0;
+}
+
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaPagar: number,
 	fracciones: { fecha: string; monto: number }[]
 ): Promise<{ success: boolean; message: string }> {
+	if (await esCuentaPlanilla(client, idCuentaPagar)) {
+		return { success: false, message: 'Las cuotas de una planilla se generan desde RRHH → Asistencia → Tareo semanal.' };
+	}
 	if (fracciones.length > 0) {
 		const { data: cuenta } = await client.from(TABLE_NAME).select('monto_comprometido, monto_pagado').eq(PK_COLUMN, idCuentaPagar).single();
 		const pendiente = Math.max(Number(cuenta?.monto_comprometido ?? 0) - Number(cuenta?.monto_pagado ?? 0), 0);
@@ -777,6 +791,13 @@ export async function updateCuentaPagar(
 	}
 
 	const updateData = buildWritablePayload(FIELDS_CONFIG, payload);
+	const planilla = await esCuentaPlanilla(client, id);
+	if (planilla) {
+		// Monto y cuotas los maneja el tareo; se pueden editar los demás campos (categoría, observación, etc.).
+		delete updateData.monto_comprometido;
+		delete updateData.monto_imponible;
+		delete updateData.monto_dolares;
+	}
 	const { data: current } = await client.from(TABLE_NAME).select('monto_pagado, monto_comprometido, condicion_pago').eq(PK_COLUMN, id).single();
 	const pagado = Number(current?.monto_pagado ?? 0);
 	const comprometido = typeof updateData.monto_comprometido === 'number' ? updateData.monto_comprometido : Number(current?.monto_comprometido ?? 0);
@@ -786,7 +807,7 @@ export async function updateCuentaPagar(
 	const { data: cuotasActuales } = await client.from(PAGO_TABLE).select('fecha_pago, monto').eq(PARENT_FK_COLUMN, id).eq('estado_pago', 'programado');
 	const firma = (xs: { fecha: string; monto: number }[]) => JSON.stringify(xs.map((x) => [x.fecha, Number(x.monto)]).sort());
 	const sinCambios = firma((cuotasActuales ?? []).map((c: any) => ({ fecha: c.fecha_pago, monto: c.monto }))) === firma(fraccionesPersonalizadas);
-	const errorFracciones = sinCambios ? null : validarSumaFracciones(saldo, fraccionesPersonalizadas);
+	const errorFracciones = sinCambios || planilla ? null : validarSumaFracciones(saldo, fraccionesPersonalizadas);
 	if (errorFracciones) return { success: false, message: errorFracciones };
 	updateData.saldo_pendiente = saldo;
 	updateData.estado = computeEstadoCuentaPagar(saldo, (updateData.fecha_vencimiento as string) || null, (updateData.fecha_pago_programada as string) || null);
@@ -802,7 +823,7 @@ export async function updateCuentaPagar(
 	// El calendario de cuotas se sustituye siempre por lo que traiga `fraccionesPersonalizadas` — el
 	// modal hidrata ese arreglo desde las cuotas 'programado' actuales cuando el usuario no tocó nada
 	// (ver CuentaPagarModal.svelte), así que esto es efectivamente un no-op si no hubo cambios reales.
-	await sincronizarCuotasProgramadas(client, id, fraccionesPersonalizadas);
+	if (!planilla) await sincronizarCuotasProgramadas(client, id, fraccionesPersonalizadas);
 
 	return { success: true, message: 'Cuenta por pagar actualizada correctamente', data: data as CuentaPagar };
 }

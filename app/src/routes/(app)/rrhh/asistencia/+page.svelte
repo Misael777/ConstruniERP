@@ -3,6 +3,7 @@
 	 * Asistencia por trabajador: eliges trabajador y periodo y se ve el día a día (entrada, salida, horas,
 	 * tardanza, horas extra, faltas) contra su horario, con los totales del periodo. El periodo por defecto
 	 * sigue su periodicidad de pago. Se abre también desde Personal (?p=id_personal).
+	 * Pestaña "Tareo semanal por obra" (?tab=tareo): ver TareoSemanal.svelte.
 	 */
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -13,6 +14,7 @@
 	import { describeError } from '$lib/shared/describeError';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
+	import TareoSemanal from '$lib/modules/asistencia/components/TareoSemanal.svelte';
 	import { getPersonal, nombreCompleto, hoyLima, type Personal } from '$lib/modules/personal/services/personal.service';
 	import { DIAS_SEMANA, esLibre, hhmm, resumenHorario, type Horario } from '$lib/modules/personal/services/horarios.service';
 	import {
@@ -29,6 +31,14 @@
 	} from '$lib/modules/asistencia/services/asistencia.service';
 
 	const hoy = hoyLima();
+	let tab = $state<'trabajador' | 'tareo'>(page.url.searchParams.get('tab') === 'tareo' ? 'tareo' : 'trabajador');
+	function elegirTab(t: 'trabajador' | 'tareo') {
+		tab = t;
+		const q = new URLSearchParams(page.url.searchParams);
+		if (t === 'tareo') q.set('tab', 'tareo');
+		else q.delete('tab');
+		goto(`?${q.toString()}`, { replaceState: true, keepFocus: true, noScroll: true });
+	}
 	let personal = $state<Personal[]>([]);
 	let idPersonal = $state('');
 	let desde = $state(hoy);
@@ -224,10 +234,21 @@
 <div class="flex flex-col md:h-[calc(100vh-80px)] md:overflow-hidden bg-slate-50/50">
 	<div class="flex-shrink-0 px-4 sm:px-6 py-5 border-b border-slate-100 bg-white">
 		<span class="font-bold text-slate-800 text-2xl">Asistencia</span>
-		<p class="text-sm text-slate-500 mt-1">Elige un trabajador y el periodo: verás cada día con su entrada, salida, horas, tardanzas y horas extra según su horario.</p>
+		<p class="text-sm text-slate-500 mt-1">
+			{tab === 'tareo'
+				? 'Tareo de la semana por obra: revisa y corrige las horas de cada trabajador, agrega bonos y envíalo a Cuentas por Pagar.'
+				: 'Elige un trabajador y el periodo: verás cada día con su entrada, salida, horas, tardanzas y horas extra según su horario.'}
+		</p>
+		<div class="mt-3 -mb-5 flex gap-1" role="tablist">
+			<button role="tab" aria-selected={tab === 'trabajador'} onclick={() => elegirTab('trabajador')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'trabajador' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-user-clock mr-1"></i> Por trabajador</button>
+			<button role="tab" aria-selected={tab === 'tareo'} onclick={() => elegirTab('tareo')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'tareo' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-helmet-safety mr-1"></i> Tareo semanal por obra</button>
+		</div>
 	</div>
 
 	<div class="flex-1 overflow-y-auto p-4 sm:p-6">
+		{#if tab === 'tareo'}
+		<div class="max-w-[1400px] mx-auto"><TareoSemanal /></div>
+		{:else}
 		<div class="max-w-[1200px] mx-auto flex flex-col gap-4">
 			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
 				<div class="flex flex-col gap-1.5 min-w-0">
@@ -412,5 +433,6 @@
 				</div>
 			{/if}
 		</div>
+		{/if}
 	</div>
 </div>

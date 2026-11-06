@@ -44,6 +44,7 @@
 	import type { Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
 	import { getResumenPagos, getPagadoEnRango, type ResumenPagos } from '$lib/modules/panoramas/services/panoramas.service';
 	import { generarCodigoProyecto } from '$lib/shared/codigoProyecto';
+	import { proyectarPlanillas } from '$lib/modules/asistencia/services/tareo.service';
 	import CuentaPagarModal from '$lib/modules/cuentas-pagar/components/CuentaPagarModal.svelte';
 	import PagoModal from '$lib/modules/cuentas-pagar/components/PagoModal.svelte';
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
@@ -343,6 +344,8 @@
 		}
 		abrirCreacionPrecargadaDesdeTransaccion();
 		abrirEdicionPrecargadaDesdeTransaccion();
+		// Planilla proyectada del periodo actual de cada obra (tareo semanal, RRHH → Asistencia); idempotente.
+		await proyectarPlanillas(supabase);
 		await Promise.all([fetchList(), fetchMontoFiltrado(), fetchKpis()]);
 	});
 

@@ -1,0 +1,105 @@
+import { describe, it, expect } from 'vitest';
+
+
+import { calcularFila, jornadaMinutos, tarifas, lunesDe, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
+import type { Horario } from '$lib/modules/personal/services/horarios.service';
+import type { Personal } from '$lib/modules/personal/services/personal.service';
+
+// L-V 07:30–17:00 con refrigerio 12–13 (8.5 h), sábado 07:30–13:00 (5.5 h): promedio 8 h 10 min.
+const civil: Horario = {
+	id_horario: 1,
+	nombre: 'Civil',
+	tolerancia_min: 10,
+	tipo: 'fijo',
+	estado: 'activo',
+	horario_dia: [1, 2, 3, 4, 5]
+		.map((dia) => ({ dia, hora_entrada: '07:30', hora_salida: '17:00', refrigerio_inicio: '12:00', refrigerio_fin: '13:00' }))
+		.concat([{ dia: 6, hora_entrada: '07:30', hora_salida: '13:00', refrigerio_inicio: null as unknown as string, refrigerio_fin: null as unknown as string }])
+};
+const persona = (extra: Partial<Personal> = {}): Personal =>
+	({ id_personal: 7, pin: '7', nombres: 'Juan', apellidos: 'Pérez', nombre: null, periodicidad_pago: 'semanal', monto_pago: 700, fecha_ingreso: null, fecha_cese: null, estado: 'activo', ...extra }) as Personal;
+const m = (fecha: string, hora: string, modo = 1): MarcaTareo => {
+	const [h, mi] = hora.split(':').map(Number);
+	return { fecha, minuto: h * 60 + mi, huellero: 'Obra', modo, manual: false };
+};
+// 2026-11-02 es lunes.
+const LUNES = '2026-11-02';
+
+describe('tarifas', () => {
+	it('jornada = promedio de los días del horario; sin horario 8 h', () => {
+		expect(jornadaMinutos(civil)).toBe(Math.round((5 * 510 + 330) / 6));
+		expect(jornadaMinutos(null)).toBe(480);
+		expect(jornadaMinutos({ ...civil, tipo: 'libre', horario_dia: [] })).toBe(480);
+	});
+	it('S/ día sobre días calendario y S/ hora sobre la jornada', () => {
+		expect(tarifas({ monto_pago: 700, periodicidad_pago: 'semanal' }, 480)).toEqual({ tarifaDia: 100, tarifaHora: 12.5 });
+		expect(tarifas({ monto_pago: 3000, periodicidad_pago: 'mensual' }, 480).tarifaDia).toBe(100);
+		expect(tarifas({ monto_pago: 1500, periodicidad_pago: 'quincenal' }, 480).tarifaDia).toBe(100);
+		expect(tarifas({ monto_pago: 120, periodicidad_pago: 'diaria' }, 480).tarifaHora).toBe(15);
+		expect(tarifas({ monto_pago: null, periodicidad_pago: 'diaria' }, 480).tarifaHora).toBe(0);
+	});
+	it('lunesDe', () => {
+		expect(lunesDe('2026-11-08')).toBe(LUNES);
+		expect(lunesDe(LUNES)).toBe(LUNES);
+	});
+});
+
+describe('calcularFila', () => {
+	const marcas = [
+		m('2026-11-02', '07:30'), m('2026-11-02', '17:00'), // 8.5 h
+		m('2026-11-03', '07:30', 15), m('2026-11-03', '17:00', 15), // rostro
+		m('2026-11-04', '07:30') // sin salida
+		// 05: falta
+	];
+	const sinHorario = calcularFila(persona(), null, [m('2026-11-02', '08:00'), m('2026-11-02', '16:00')], [], [], null, LUNES, '2026-11-09');
+
+	it('pago por hora exacta: horas × (monto ÷ 7 ÷ jornada)', () => {
+		expect(sinHorario.minutos).toBe(480);
+		expect(sinHorario.tarifaHora).toBe(12.5);
+		expect(sinHorario.subtotal).toBe(100);
+		expect(sinHorario.dias[0].origen).toBe('huella');
+	});
+
+	const fila = calcularFila(persona(), civil, marcas, [], [], { id_personal: 7, bonos: 50, total: 0, enviado: 30, fecha_cxp: '2026-11-09' }, LUNES, '2026-11-09');
+	it('estados y origen por día', () => {
+		expect(fila.dias.map((d) => d.estado)).toEqual(['asistio', 'asistio', 'pendiente', 'falta', 'falta', 'falta', 'descanso']);
+		expect(fila.dias[1].origen).toBe('rostro');
+		expect(fila.porRevisar).toBe(1);
+		expect(fila.diasTrabajados).toBe(2);
+	});
+	it('total = horas × tarifa + bonos; pendiente descuenta lo enviado', () => {
+		const esperado = Math.round(((17 * 60) / 60) * fila.tarifaHora * 100) / 100;
+		expect(fila.subtotal).toBeCloseTo(esperado, 1);
+		expect(fila.total).toBeCloseTo(fila.subtotal + 50, 2);
+		expect(fila.pendiente).toBeCloseTo(fila.total - 30, 2);
+		expect(fila.fechaCxp).toBe('2026-11-09');
+	});
+
+	it('el ajuste del residente reemplaza al huellero', () => {
+		const ajuste: AjusteTareo = { id_personal: 7, fecha: '2026-11-04', estado: 'asistio', minutos_reconocidos: 240, observacion: 'Medio día', usuario: null };
+		const f = calcularFila(persona(), civil, marcas, [ajuste], [], null, LUNES, '2026-11-09');
+		expect(f.dias[2].estado).toBe('asistio');
+		expect(f.dias[2].minutos).toBe(240);
+		expect(f.dias[2].origen).toBe('modificado');
+		expect(f.porRevisar).toBe(0);
+	});
+
+	it('feriado reconoce la jornada programada del día', () => {
+		const feriado: FeriadoTareo = { id_feriado: 1, fecha: '2026-11-05', id_centro_costo: null, descripcion: 'Feriado' };
+		const f = calcularFila(persona(), civil, marcas, [], [feriado], null, LUNES, '2026-11-09');
+		expect(f.dias[3].estado).toBe('feriado');
+		expect(f.dias[3].minutos).toBe(510);
+		// Trabajador de otra obra: el feriado no le reconoce jornada aquí (lo hace el tareo de su obra).
+		const otra = calcularFila(persona(), civil, marcas, [], [feriado], null, LUNES, '2026-11-09', false);
+		expect(otra.dias[3].estado).toBe('falta');
+		expect(otra.dias[3].minutos).toBe(0);
+	});
+
+	it('días futuros quedan por venir y fuera de contrato no se pagan', () => {
+		const f = calcularFila(persona({ fecha_cese: '2026-11-04' }), civil, marcas, [], [], null, LUNES, '2026-11-09');
+		expect(f.dias[4].estado).toBe('fuera_contrato');
+		expect(f.dias[4].pago).toBe(0);
+		const g = calcularFila(persona(), civil, marcas, [], [], null, LUNES, '2026-11-04');
+		expect(g.dias[5].estado).toBe('por_venir');
+	});
+});
