@@ -1,7 +1,7 @@
 /**
  * Ficha del personal (tabla `personal`, migración 20261102130000_personal.sql). Incluye obreros de construcción
  * civil y personal en régimen general; no son usuarios del ERP (eso es Empleados en IAM).
- * `pin` es el código del trabajador en los huelleros (por defecto su DNI): las marcaciones se enlazan por él.
+ * `pin` es el código del trabajador en los huelleros (correlativo, lo asigna la base: fn_personal_asignar_pin): las marcaciones se enlazan por él.
  * Los trabajadores registrados primero en un huellero llegan solo con pin y nombre: quedan como "ficha incompleta".
  * Dar de baja / restaurar / eliminar permanente: skill dar-de-baja-pattern.
  */
@@ -99,9 +99,13 @@ export function nombreCompleto(p: Pick<Personal, 'nombres' | 'apellidos' | 'nomb
 /** Ficha creada por el huellero (o a medio llenar): faltan los datos obligatorios del formulario. */
 export const fichaIncompleta = (p: Personal) => !p.numero_documento || !p.nombres || !p.apellidos || !p.regimen;
 
-/** Huelleros donde debe marcar pero no tiene huella ni rostro registrado (aviso de alta prioridad: no podrá marcar). */
-export const huellerosSinBiometria = (p: Personal) =>
-	(p.personal_huellero ?? []).filter((v) => v.huellas !== undefined && !v.huellas && !v.rostros).map((v) => v.id_dispositivo);
+/** Huelleros donde debe marcar pero aún no tiene su huella registrada (aviso de alta prioridad). */
+export const huellerosSinHuella = (p: Personal) =>
+	(p.personal_huellero ?? []).filter((v) => v.huellas !== undefined && !v.huellas).map((v) => v.id_dispositivo);
+
+/** Huelleros donde debe marcar pero aún no tiene su rostro registrado (aviso aparte, a pedido del usuario). */
+export const huellerosSinRostro = (p: Personal) =>
+	(p.personal_huellero ?? []).filter((v) => v.rostros !== undefined && !v.rostros).map((v) => v.id_dispositivo);
 
 /** Días que faltan para el vencimiento (negativo = vencido), con fechas 'AAAA-MM-DD' en hora de Lima. */
 function diasPara(fecha: string | null, hoy: string): number | null {
@@ -160,7 +164,10 @@ export async function guardarPersonal(client: SupabaseClient, id: number | null,
 	};
 	let idPersonal = id;
 	if (idPersonal === null) {
-		const { data, error } = await client.from('personal').insert(fila).select('id_personal').single();
+		// El número en huellero lo pone la base (trigger fn_personal_asignar_pin, correlativo). Se omite en vez de
+		// mandarlo vacío: si faltara el trigger, el NOT NULL rechaza el alta en lugar de guardar un número vacío.
+		const { pin: _pin, ...sinPin } = fila;
+		const { data, error } = await client.from('personal').insert(sinPin).select('id_personal').single();
 		if (error) throw errorAmigable(error);
 		idPersonal = data.id_personal as number;
 	} else {

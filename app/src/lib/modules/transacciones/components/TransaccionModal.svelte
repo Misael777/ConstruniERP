@@ -152,7 +152,7 @@
 	/** "Tipo de Comprobante" de un Ingreso — ticket #101: la lista y el orden que pidió el cliente. "Generar
 	 * Comprobante" está disponible para TODOS (a pedido del usuario) y siempre lleva a Gestión de Comprobantes:
 	 * los que tienen pestaña ahí (COMPROBANTE_POR_TIPO_DOCUMENTO) abren "Nuevo Comprobante" precargado; Recibo
-	 * por Honorarios y Comprobante de Venta (sin pestaña todavía) abren el módulo en "Todos". */
+	 * por Honorarios (sin pestaña todavía) abre el módulo en "Todos". */
 	const TIPOS_COMPROBANTE_INGRESO = [
 		{ value: '1', label: 'Factura' },
 		{ value: '3', label: 'Recibo por Honorarios' },

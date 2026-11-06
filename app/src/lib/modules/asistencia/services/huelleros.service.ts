@@ -170,14 +170,11 @@ export async function eliminarHuelleroPermanente(client: SupabaseClient, id: num
 	if (error) throw error;
 }
 
-/** Centros de costo donde puede estar un huellero o trabajar una persona, en el orden en que se agrupan:
- * Corporativo (oficina), áreas, obras, consultoría y otros. */
+/** Centros de costo donde puede estar un huellero o trabajar una persona: solo Corporativo y Obras, a pedido
+ * explícito del usuario (sin consultoría, áreas ni otros). */
 const GRUPOS_LUGAR: { tipos: string[]; grupo: string }[] = [
 	{ tipos: ['bolsa general'], grupo: 'Corporativo / Oficina' },
-	{ tipos: ['area'], grupo: 'Áreas' },
-	{ tipos: ['obra', 'proyecto'], grupo: 'Obras' },
-	{ tipos: ['consultoria'], grupo: 'Consultoría' },
-	{ tipos: ['otro'], grupo: 'Otros' }
+	{ tipos: ['obra', 'proyecto'], grupo: 'Obras' }
 ];
 
 /** Obras y áreas (centros de costo activos) agrupadas para SelectConSaldo. */

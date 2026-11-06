@@ -30,18 +30,20 @@ export interface FacturaDetalle {
 	orden: number;
 }
 
-export type TipoComprobante = 'factura' | 'boleta' | 'nota_credito' | 'nota_debito';
+export type TipoComprobante = 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'comprobante_venta';
 
 /** transaccion.tipo_documento correspondiente a cada pestaña de "Gestión de Comprobantes" — mismo
  * campo/catálogo que ya usa Transacciones (ver transaccion.config.ts): '1'=Factura, '2'=Boleta de
- * venta, '10'=Nota de Crédito, '11'=Nota de Débito. Las 4 pestañas se clasifican EXACTAMENTE igual
+ * venta, '10'=Nota de Crédito, '11'=Nota de Débito, '12'=Comprobante de Venta (migración
+ * 20261104120000, serie CV01). Las pestañas se clasifican EXACTAMENTE igual
  * (a pedido explícito del usuario: "cada pestaña debe mostrar la relación de transacciones tipo
  * ingreso según el tipo de documento") — ninguna es un caso especial. */
 export const TIPO_DOCUMENTO_POR_COMPROBANTE: Record<TipoComprobante, string> = {
 	factura: '1',
 	boleta: '2',
 	nota_credito: '10',
-	nota_debito: '11'
+	nota_debito: '11',
+	comprobante_venta: '12'
 };
 
 /** Inversa de TIPO_DOCUMENTO_POR_COMPROBANTE — para saber a qué pestaña de "Gestión de Comprobantes"
@@ -51,7 +53,8 @@ export const COMPROBANTE_POR_TIPO_DOCUMENTO: Record<string, TipoComprobante> = {
 	'1': 'factura',
 	'2': 'boleta',
 	'10': 'nota_credito',
-	'11': 'nota_debito'
+	'11': 'nota_debito',
+	'12': 'comprobante_venta'
 };
 
 export interface Factura {

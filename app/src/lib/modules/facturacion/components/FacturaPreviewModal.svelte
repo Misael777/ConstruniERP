@@ -20,7 +20,8 @@
 		factura: 'Factura',
 		boleta: 'Boleta',
 		nota_credito: 'Nota de Crédito',
-		nota_debito: 'Nota de Débito'
+		nota_debito: 'Nota de Débito',
+		comprobante_venta: 'Comprobante de Venta'
 	};
 
 	let {

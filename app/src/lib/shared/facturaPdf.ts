@@ -8,7 +8,7 @@
  * ensamblarPdfUnaCopiaMultipagina en vez de "dos copias en una hoja".
  */
 import { montoEnLetras } from './numeroALetras';
-import { EMPRESA_NOMBRE, EMPRESA_RUC, EMPRESA_DIRECCION } from './empresaConstantes';
+import { EMPRESA_NOMBRE, EMPRESA_RUC, EMPRESA_DIRECCION_LINEAS } from './empresaConstantes';
 import { LOGO_ICONO_DATA_URI } from './logoIconoDataUri';
 import { formatearFechaCorta } from './pdfFormatoUtil';
 import { renderHtmlToPngDataUrl, ensamblarPdfUnaCopiaMultipagina } from './pdfHtmlRender';
@@ -31,12 +31,14 @@ export interface DatosFacturaLineaPdf {
 	unidad: string;
 	descripcion: string;
 	valorUnitario: number;
+	/** Importe de la línea CON IGV (monto de la transacción). Lo usa Comprobante de Venta, que no desglosa IGV. */
+	importe?: number;
 }
 
 export interface DatosFacturaPdf {
 	/** Define el rótulo de la caja de cabecera ("FACTURA ELECTRÓNICA"/"BOLETA..."/"NOTA DE CRÉDITO..."/
 	 * "NOTA DE DÉBITO...") y la serie del placeholder de folio en la vista previa. */
-	tipoDocumento: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito';
+	tipoDocumento: 'factura' | 'boleta' | 'nota_credito' | 'nota_debito' | 'comprobante_venta';
 	/** null = todavía sin número (vista previa antes de autorizar) — se imprime "____-________". */
 	folio: string | null;
 	fechaEmision: string; // 'YYYY-MM-DD'
@@ -73,6 +75,11 @@ export interface DatosFacturaPdf {
 	marcaAgua?: string | null;
 }
 
+/** Dirección de la empresa en sus dos líneas, separadas con <br />. */
+function direccionEmpresaHtml(): string {
+	return EMPRESA_DIRECCION_LINEAS.map(escapeHtml).join('<br />');
+}
+
 function simbolo(moneda: 'PEN' | 'USD'): string {
 	return moneda === 'USD' ? 'US$' : 'S/';
 }
@@ -89,7 +96,9 @@ const TITULO_CAJA: Record<DatosFacturaPdf['tipoDocumento'], string> = {
 	factura: 'FACTURA ELECTRÓNICA',
 	boleta: 'BOLETA DE VENTA ELECTRÓNICA',
 	nota_credito: 'NOTA DE CRÉDITO ELECTRÓNICA',
-	nota_debito: 'NOTA DE DÉBITO ELECTRÓNICA'
+	nota_debito: 'NOTA DE DÉBITO ELECTRÓNICA',
+	// Documento interno: no es un comprobante electrónico de SUNAT.
+	comprobante_venta: 'COMPROBANTE DE VENTA'
 };
 
 const ESTILOS = `
@@ -196,6 +205,46 @@ const ESTILOS = `
 	.fs-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #1e3a6d; padding-top: 6px; margin-top: auto; font-size: 9.5px; color: #555; }
 	.fs-footer-logo { color: #f26a21; font-weight: 800; font-size: 11px; }
 	.fs-bottom-line { height: 5px; background: #f26a21; margin: 6px -26px 0; }
+
+	/* Plantilla Comprobante de Venta — copia del formato entregado por el usuario: marco redondeado navy,
+	   cabecera logo / emisor / caja (título, RUC, N° CV01), datos sobre líneas (no cajas), tabla de 6
+	   columnas, recuadro "SON:" a la izquierda y totales Valor venta / Pago a cuenta / Saldo pendiente con
+	   la franja naranja "Importe total pagado". */
+	.cv { position: relative; min-height: 276mm; padding: 7mm 7mm 6mm; background: #fff; border: 0.6mm solid #1e3a6d; border-radius: 4mm; color: #1e3a6d; font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; overflow: hidden; }
+	.cv * { box-sizing: border-box; }
+	.cv-head { display: flex; align-items: center; gap: 3mm; margin-bottom: 9mm; }
+	.cv-logo { display: flex; flex-direction: column; align-items: center; width: 34mm; flex-shrink: 0; }
+	.cv-logo img { width: 17mm; height: auto; display: block; }
+	.cv-logo-txt { margin-top: 1.5mm; font-weight: 800; font-size: 19pt; letter-spacing: -0.03em; line-height: 1; color: #1e3a6d; }
+	.cv-emisor { flex: 1; min-width: 0; text-align: center; }
+	.cv-emisor-nombre { font-weight: 800; font-size: 11pt; white-space: nowrap; line-height: 1.15; text-transform: uppercase; }
+	.cv-emisor-dir { margin-top: 2mm; font-size: 6pt; line-height: 1.6; letter-spacing: 0.02em; color: #475569; }
+	.cv-caja { width: 58mm; flex-shrink: 0; border: 0.5mm solid #1e3a6d; border-radius: 2.5mm; overflow: hidden; text-align: center; }
+	.cv-caja-tit { margin: 1.2mm 1.2mm 0; padding: 2.2mm 1mm; background: #1e3a6d; border-radius: 1.5mm; color: #fff; font-weight: 800; font-size: 9pt; white-space: nowrap; }
+	.cv-caja-ruc { padding: 2mm 1mm 0.5mm; font-weight: 800; font-size: 12pt; }
+	.cv-caja-nro { display: flex; align-items: flex-end; justify-content: center; gap: 1.5mm; padding: 0 3mm 2.4mm; font-weight: 800; font-size: 11pt; }
+	.cv-caja-nro .cv-linea { flex: 1; width: auto; min-height: 5mm; font-size: 10pt; text-align: center; }
+	.cv-datos { margin-bottom: 7mm; }
+	.cv-fila { display: flex; align-items: flex-end; margin-bottom: 2.6mm; }
+	.cv-lbl { width: 30mm; flex-shrink: 0; font-weight: 700; font-size: 9pt; }
+	.cv-dp { width: 4mm; flex-shrink: 0; font-weight: 700; font-size: 9pt; }
+	.cv-linea { width: 80mm; min-height: 4.6mm; padding: 0 1mm 0.4mm; border-bottom: 0.3mm solid #1e3a6d; font-size: 8.5pt; color: #0f172a; }
+	.cv-sep { height: 4mm; }
+	.cv-tabla { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 7mm; }
+	.cv-tabla th { height: 9mm; background: #1e3a6d; color: #fff; font-size: 7.5pt; font-weight: 700; text-align: center; border: 0.25mm solid #1e3a6d; }
+	.cv-tabla td { height: 6mm; padding: 0 1.5mm; font-size: 8pt; color: #0f172a; border: 0.25mm solid #2b4a7a; overflow: hidden; }
+	.cv-c { text-align: center; }
+	.cv-r { text-align: right; white-space: nowrap; }
+	.cv-bajo { display: flex; align-items: stretch; gap: 6mm; }
+	.cv-son { flex: 1; min-width: 0; padding: 3mm; border: 0.3mm solid #1e3a6d; border-radius: 2mm; }
+	.cv-son-fila { display: flex; align-items: flex-end; gap: 2mm; }
+	.cv-son-fila b { font-size: 11pt; }
+	.cv-son-fila .cv-linea { flex: 1; width: auto; }
+	.cv-tot { width: 72mm; flex-shrink: 0; padding: 3mm 0 0; border: 0.3mm solid #1e3a6d; border-radius: 2mm; overflow: hidden; }
+	.cv-tot-fila { display: flex; align-items: flex-end; justify-content: flex-end; gap: 1.5mm; padding: 0 3mm; margin-bottom: 2.4mm; font-size: 8pt; white-space: nowrap; }
+	.cv-tot-fila .cv-linea { width: 21mm; text-align: right; font-size: 8pt; }
+	.cv-tot-final { margin: 1mm 2mm 2mm; padding: 2mm; background: #f26a21; border-radius: 1.2mm; color: #fff; font-weight: 800; font-size: 9pt; }
+	.cv-tot-final .cv-linea { border-bottom-color: #fff; color: #fff; font-weight: 800; }
 `;
 
 function filaTot(etiqueta: string, valor: string, sim: string): string {
@@ -246,7 +295,7 @@ function construirHtml(d: DatosFacturaPdf): string {
 				<div class="fa-logo"><img src="${LOGO_ICONO_DATA_URI}" alt="" /><span class="fa-logo-txt">construni</span></div>
 				<div class="fa-emisor">
 					<div class="fa-emisor-nombre">${escapeHtml(EMPRESA_NOMBRE)}</div>
-					<div class="fa-emisor-dir">${escapeHtml(EMPRESA_DIRECCION)}</div>
+					<div class="fa-emisor-dir">${direccionEmpresaHtml()}</div>
 				</div>
 				<div class="fa-ruc">
 					<div class="fa-ruc-tit">${escapeHtml(TITULO_CAJA.factura)}</div>
@@ -310,7 +359,8 @@ const SERIE_POR_TIPO: Record<DatosFacturaPdf['tipoDocumento'], string> = {
 	factura: 'E001',
 	boleta: 'B001',
 	nota_credito: 'NC01',
-	nota_debito: 'ND01'
+	nota_debito: 'ND01',
+	comprobante_venta: 'CV01'
 };
 function serieYCorrelativo(d: DatosFacturaPdf): { serie: string; correlativo: string } {
 	if (!d.folio) return { serie: SERIE_POR_TIPO[d.tipoDocumento], correlativo: '________' };
@@ -351,7 +401,7 @@ function construirHtmlSimple(d: DatosFacturaPdf): string {
 					<img class="fs-logo-img" src="${LOGO_ICONO_DATA_URI}" alt="" />
 					<div class="fs-company-info">
 						<h1>${escapeHtml(EMPRESA_NOMBRE)}</h1>
-						<p>${escapeHtml(EMPRESA_DIRECCION)}</p>
+						<p>${direccionEmpresaHtml()}</p>
 						<p>RUC: ${escapeHtml(EMPRESA_RUC)}</p>
 					</div>
 				</div>
@@ -409,6 +459,84 @@ function construirHtmlSimple(d: DatosFacturaPdf): string {
 	`;
 }
 
+/** Plantilla Comprobante de Venta (formato entregado por el usuario). Documento interno sin desglose de IGV:
+ * el valor unitario y el importe de cada línea van CON IGV (el monto de la transacción). Pago a cuenta =
+ * todo el importe si la forma de pago es contado, nada si es crédito; el saldo pendiente es la diferencia. */
+function construirHtmlComprobanteVenta(d: DatosFacturaPdf): string {
+	const sim = simbolo(d.moneda);
+	const { serie, correlativo } = serieYCorrelativo(d);
+	const nombreMoneda = d.moneda === 'USD' ? 'DÓLARES' : 'SOLES';
+	const son = montoEnLetras(d.importeTotal, nombreMoneda);
+	const pagoACuenta = d.formaPago === 'credito' ? 0 : d.importeTotal;
+	const saldo = d.importeTotal - pagoACuenta;
+
+	const filas = d.lineas.map((l) => {
+		const importe = l.importe ?? l.cantidad * l.valorUnitario;
+		const unitario = l.cantidad ? importe / l.cantidad : importe;
+		return `<tr>
+			<td class="cv-c">${fmtCantidad(l.cantidad)}</td>
+			<td class="cv-c">${escapeHtml(l.unidad)}</td>
+			<td>${escapeHtml(l.descripcion)}</td>
+			<td class="cv-r">${sim} ${fmt(unitario)}</td>
+			<td class="cv-r">${sim} ${fmt(0)}</td>
+			<td class="cv-r">${sim} ${fmt(importe)}</td>
+		</tr>`;
+	});
+	while (filas.length < 6) filas.push('<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>');
+
+	const fila = (etiqueta: string, valor: string) =>
+		`<div class="cv-fila"><span class="cv-lbl">${escapeHtml(etiqueta)}</span><span class="cv-dp">:</span><span class="cv-linea">${valor}</span></div>`;
+	const continuacion = '<div class="cv-fila"><span class="cv-lbl"></span><span class="cv-dp"></span><span class="cv-linea"></span></div>';
+	const tot = (etiqueta: string, valor: number, extra = '') =>
+		`<div class="cv-tot-fila ${extra}"><span>${escapeHtml(etiqueta)}</span><span>:</span><span>${sim}</span><span class="cv-linea">${fmt(valor)}</span></div>`;
+	const doc = d.clienteDocumentoLabel === 'RUC' ? 'RUC' : 'DNI / CE';
+
+	return `
+		<div class="cv">
+			${d.marcaAgua ? `<div class="fx-agua"><span>${escapeHtml(d.marcaAgua)}</span></div>` : ''}
+			<div class="cv-head">
+				<div class="cv-logo"><img src="${LOGO_ICONO_DATA_URI}" alt="" /><span class="cv-logo-txt">construni</span></div>
+				<div class="cv-emisor">
+					<div class="cv-emisor-nombre">${escapeHtml(EMPRESA_NOMBRE)}</div>
+					<div class="cv-emisor-dir">${direccionEmpresaHtml()}</div>
+				</div>
+				<div class="cv-caja">
+					<div class="cv-caja-tit">${escapeHtml(TITULO_CAJA.comprobante_venta)}</div>
+					<div class="cv-caja-ruc">RUC: ${escapeHtml(EMPRESA_RUC)}</div>
+					<div class="cv-caja-nro"><span>N° ${escapeHtml(serie)} -</span><span class="cv-linea">${d.folio ? escapeHtml(correlativo) : ''}</span></div>
+				</div>
+			</div>
+
+			<div class="cv-datos">
+				${fila('Fecha de Emisión', formatearFechaCorta(d.fechaEmision))}
+				${fila('Señor(es)', escapeHtml(d.clienteNombre))}
+				${continuacion}
+				<div class="cv-sep"></div>
+				${fila(doc, escapeHtml(d.clienteDocumento))}
+				${fila('Tipo de Moneda', nombreMoneda)}
+				${fila('Observación', escapeHtml(d.observacion))}
+				${continuacion}
+			</div>
+
+			<table class="cv-tabla">
+				<colgroup><col style="width:21mm" /><col style="width:26mm" /><col /><col style="width:28mm" /><col style="width:26mm" /><col style="width:28mm" /></colgroup>
+				<thead><tr><th>Cantidad</th><th>Unidad Medida</th><th>Descripción</th><th>Valor Unitario</th><th>Descuento</th><th>Importe de Venta</th></tr></thead>
+				<tbody>${filas.join('')}</tbody>
+			</table>
+
+			<div class="cv-bajo">
+				<div class="cv-son"><div class="cv-son-fila"><b>SON:</b><span class="cv-linea">${escapeHtml(son)}</span></div></div>
+				<div class="cv-tot">
+					${tot('Valor venta', d.importeTotal)}
+					${tot('Pago a cuenta', pagoACuenta)}
+					${tot('Saldo pendiente', saldo)}
+					${tot('Importe total pagado', pagoACuenta, 'cv-tot-final')}
+				</div>
+			</div>
+		</div>
+	`;
+}
+
 /** Renderiza la plantilla a PNG y la ensambla en un PDF paginado. Devuelve tanto el data URL PNG (vista
  * previa dentro del modal y archivo que se guarda en Drive) como el PDF ya listo en base64. Factura usa
  * su propia plantilla (sin cambios); Boleta/Nota de Crédito/Nota de Débito usan el formato "simple"
@@ -421,7 +549,7 @@ export async function generarFacturaPdf(datos: DatosFacturaPdf) {
 }
 
 async function generarFacturaPdfInterno(datos: DatosFacturaPdf): Promise<{ pngDataUrl: string; pdfBase64: string }> {
-	const html = `<style>${ESTILOS}</style>${datos.tipoDocumento === 'factura' ? construirHtml(datos) : construirHtmlSimple(datos)}`;
+	const html = `<style>${ESTILOS}</style>${datos.tipoDocumento === 'factura' ? construirHtml(datos) : datos.tipoDocumento === 'comprobante_venta' ? construirHtmlComprobanteVenta(datos) : construirHtmlSimple(datos)}`;
 	const render = await renderHtmlToPngDataUrl(html, ANCHO_PLANTILLA_PX);
 	const pdfBase64 = ensamblarPdfUnaCopiaMultipagina(render, {
 		anchoMm: ANCHO_CONTENIDO_MM,

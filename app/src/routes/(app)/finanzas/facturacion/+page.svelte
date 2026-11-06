@@ -69,6 +69,7 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 		{ value: 'todos', label: 'Comprobantes', plural: 'Comprobantes', filtro: 'Todas', icon: FileText },
 		{ value: 'factura', label: 'Factura', plural: 'Facturas', filtro: 'Facturas', icon: FileText },
 		{ value: 'boleta', label: 'Boleta', plural: 'Boletas', filtro: 'Boletas de venta', icon: Receipt },
+		{ value: 'comprobante_venta', label: 'Comprobante de Venta', plural: 'Comprobantes de Venta', filtro: 'Comprobantes de venta', icon: Receipt },
 		{ value: 'nota_credito', label: 'Nota de Crédito', plural: 'Notas de Crédito', filtro: 'Notas de crédito', icon: FileMinus },
 		{ value: 'nota_debito', label: 'Nota de Débito', plural: 'Notas de Débito', filtro: 'Notas de débito', icon: FilePlus }
 	];
@@ -83,12 +84,14 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	let vistaTx = $state<VistaTx>('pendientes');
 
 		// Desplegable POR FILA — a pedido explícito del usuario: en el tab "sin emisión de comprobantes" (columna
-	// "Tipo de documento") solo Emitir Factura / Emitir Boleta, con el tipo registrado como valor por defecto
-	// (Boleta de venta→Emitir Boleta; cualquier otro o sin tipo→Emitir Factura). En el tab "con comprobantes
+	// "Tipo de documento") Emitir Factura / Emitir Boleta / Emitir Comprobante de Venta, con el tipo registrado como
+	// valor por defecto (Boleta de venta→Emitir Boleta; Comprobante de Venta→Emitir Comprobante de Venta; cualquier
+	// otro o sin tipo→Emitir Factura). En el tab "con comprobantes
 	// emitidos" (columna "Emitir nota") solo Nota de Crédito / Nota de Débito.
 	const ACCIONES_EMISION: { value: TipoComprobante; label: string }[] = [
 		{ value: 'factura', label: 'Emitir Factura' },
-		{ value: 'boleta', label: 'Emitir Boleta' }
+		{ value: 'boleta', label: 'Emitir Boleta' },
+		{ value: 'comprobante_venta', label: 'Comprobante de venta' }
 	];
 	const ACCIONES_NOTA: { value: TipoComprobante; label: string }[] = [
 		{ value: 'nota_credito', label: 'Nota de Crédito' },
@@ -97,7 +100,7 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 	let accionFila = $state<Record<number, TipoComprobante>>({});
 	function accionDeFila(t: TransaccionFacturable): TipoComprobante {
 		const registrado = t.tipo_documento ? COMPROBANTE_POR_TIPO_DOCUMENTO[t.tipo_documento] : undefined;
-		return accionFila[t.id_transaccion] ?? (registrado === 'boleta' ? 'boleta' : 'factura');
+		return accionFila[t.id_transaccion] ?? (registrado === 'boleta' || registrado === 'comprobante_venta' ? registrado : 'factura');
 	}
 // Tipo de comprobante con el que se abre el formulario (Nueva Factura/Boleta/Nota…).
 	let tipoModal = $state<TipoComprobante>('factura');
@@ -258,7 +261,7 @@ import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaP
 				volverAlCierreDeVenta();
 				return true;
 			}
-			// Sin pestaña para ese tipo (Recibo por Honorarios, Comprobante de Venta) o sin cliente: solo se abre
+			// Sin pestaña para ese tipo (Recibo por Honorarios) o sin cliente: solo se abre
 			// el módulo (en su pestaña, o en "Todos"), sin "Nuevo Comprobante".
 			activeTab = tipoPrecarga ?? 'todos';
 			vistaTx = 'pendientes';
@@ -566,7 +569,7 @@ function irAPaginaTransacciones(nueva: number) {
 {#snippet tablaTx(lista: TransaccionFacturable[], cargando: boolean, vacio: string)}
 	<div class="overflow-x-auto">
 		<div class="min-w-[1000px]">
-			<div class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_1fr_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
+			<div class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_minmax(10.5rem,1fr)_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase">
 				<span class="w-4"></span>
 				<span>Fecha</span>
 				<span>Cliente</span>
@@ -584,7 +587,7 @@ function irAPaginaTransacciones(nueva: number) {
 					tabindex="0"
 					onclick={() => clickTransaccion(t)}
 					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && clickTransaccion(t)}
-					class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_1fr_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2.5 border-b last:border-b-0 text-sm cursor-pointer"
+					class="grid grid-cols-[auto_0.9fr_1.3fr_1fr_minmax(10.5rem,1fr)_1.6fr_1.2fr_1fr_auto] gap-3 items-center px-4 py-2.5 border-b last:border-b-0 text-sm cursor-pointer"
 					style={`background:${facturada ? COLOR_FACTURADA.bg : COLOR_SIN_FACTURA.bg};border-color:${facturada ? COLOR_FACTURADA.border : COLOR_SIN_FACTURA.border}`}
 				>
 					{#if facturada}
@@ -694,36 +697,37 @@ function irAPaginaTransacciones(nueva: number) {
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<!-- KPIs -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Total Emitido' : `Total Emitido en ${nombreTab}`} (Mes Actual)</span>
+	<!-- KPIs: compactos (ícono a la izquierda, etiqueta y monto a la derecha) y cada uno con su color — a pedido
+	     explícito del usuario, para que no ocupen tanto espacio. -->
+	<div class="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-3">
+		<div class="flex items-center gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 min-w-0">
+			<div class="w-7 h-7 rounded-md bg-blue-500 text-white flex items-center justify-center shrink-0"><TrendingUp size={14} /></div>
+			<div class="min-w-0">
+				<p class="text-[11px] font-medium text-blue-700 truncate">{activeTab === 'todos' ? 'Total Emitido' : `Total Emitido en ${nombreTab}`} (Mes Actual)</p>
+				<p class="text-base font-bold text-blue-900 leading-tight">{formatCurrency(kpis.totalFacturadoMes)}</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.totalFacturadoMes)}</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4" style="background:#eef4fb;border-color:#b7cce6">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-white text-blue-700 flex items-center justify-center shrink-0"><Inbox size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Por Emitir' : `Por Emitir (${nombreTab})`}</span>
+		<div class="flex items-center gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 min-w-0">
+			<div class="w-7 h-7 rounded-md bg-amber-500 text-white flex items-center justify-center shrink-0"><Inbox size={14} /></div>
+			<div class="min-w-0">
+				<p class="text-[11px] font-medium text-amber-700 truncate">{activeTab === 'todos' ? 'Por Emitir' : `Por Emitir (${nombreTab})`}</p>
+				<p class="text-base font-bold text-amber-900 leading-tight">{formatCurrency(kpis.porFacturar)}</p>
+				<p class="text-[10px] text-amber-600 truncate">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin comprobante</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.porFacturar)}</p>
-			<p class="text-[11px] text-slate-400 mt-1">{kpis.porFacturarCount} transacción{kpis.porFacturarCount === 1 ? '' : 'es'} sin comprobante</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center shrink-0"><Percent size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">Detracciones Acumuladas</span>
+		<div class="flex items-center gap-2.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 min-w-0">
+			<div class="w-7 h-7 rounded-md bg-purple-500 text-white flex items-center justify-center shrink-0"><Percent size={14} /></div>
+			<div class="min-w-0">
+				<p class="text-[11px] font-medium text-purple-700 truncate">Detracciones Acumuladas</p>
+				<p class="text-base font-bold text-purple-900 leading-tight">{formatCurrency(kpis.detraccionesAcumuladas)}</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{formatCurrency(kpis.detraccionesAcumuladas)}</p>
 		</div>
-		<div class="bg-white rounded-xl border border-slate-200 p-4">
-			<div class="flex items-center gap-2 mb-2">
-				<div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0"><CheckCircle2 size={16} /></div>
-				<span class="text-xs font-medium text-slate-500">{activeTab === 'todos' ? 'Comprobantes Emitidos' : `${pluralTab} Emitidas`}</span>
+		<div class="flex items-center gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 min-w-0">
+			<div class="w-7 h-7 rounded-md bg-emerald-500 text-white flex items-center justify-center shrink-0"><CheckCircle2 size={14} /></div>
+			<div class="min-w-0">
+				<p class="text-[11px] font-medium text-emerald-700 truncate">{activeTab === 'todos' ? 'Comprobantes Emitidos' : `${pluralTab} Emitidas`}</p>
+				<p class="text-base font-bold text-emerald-900 leading-tight">{kpis.facturasEmitidas}</p>
 			</div>
-			<p class="text-xl font-bold text-slate-800">{kpis.facturasEmitidas}</p>
 		</div>
 	</div>
 

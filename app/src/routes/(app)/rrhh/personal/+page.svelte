@@ -31,7 +31,8 @@
 		etiqueta,
 		nombreCompleto,
 		fichaIncompleta,
-		huellerosSinBiometria,
+		huellerosSinHuella,
+		huellerosSinRostro,
 		alertasVencimiento,
 		hoyLima,
 		getPersonal,
@@ -208,7 +209,8 @@
 		const q = normalizar(busqueda.trim());
 		const f = filtros;
 		return personal.filter((p) => {
-			if (soloSinHuella && !huellerosSinBiometria(p).length) return false;
+			if (soloSinHuella && !huellerosSinHuella(p).length) return false;
+			if (soloSinRostro && !huellerosSinRostro(p).length) return false;
 			if (q && !normalizar([nombreCompleto(p), p.numero_documento, p.pin, p.cargo, p.centro_costo?.nombre].filter(Boolean).join(' ')).includes(q)) return false;
 			if (f.obra && (f.obra === NINGUNO ? p.id_centro_costo : String(p.id_centro_costo) !== f.obra)) return false;
 			const suyos = p.personal_huellero ?? [];
@@ -235,9 +237,11 @@
 	const huellerosDe = (p: Personal) => huelleros.filter((h) => p.personal_huellero?.some((v) => v.id_dispositivo === h.id_dispositivo));
 	const todosVisiblesSeleccionados = $derived(filtrados.length > 0 && filtrados.every((p) => seleccionados.includes(p.id_personal)));
 	const incompletas = $derived(personal.filter(fichaIncompleta).length);
-	const sinHuella = $derived(personal.filter((p) => huellerosSinBiometria(p).length > 0).length);
-	/** Contador "sin huella" de arriba: al pulsarlo muestra solo a esos trabajadores. */
+	const sinHuella = $derived(personal.filter((p) => huellerosSinHuella(p).length > 0).length);
+	const sinRostro = $derived(personal.filter((p) => huellerosSinRostro(p).length > 0).length);
+	/** Contadores "sin huella" / "sin rostro" de arriba: al pulsar uno muestra solo a esos trabajadores. */
 	let soloSinHuella = $state(false);
+	let soloSinRostro = $state(false);
 	/** La base aún no informa huellas (falta la migración 20261103130000): el aviso "sin huella" no puede calcularse. */
 	const revisionHuellaInactiva = $derived(personal.some((p) => p.personal_huellero?.some((v) => v.huellas === undefined)));
 	const conAlertas = $derived(personal.filter((p) => alertasVencimiento(p, hoy).length > 0).length);
@@ -327,10 +331,15 @@
 
 {#snippet avisos(p: Personal)}
 	<div class="flex flex-wrap gap-1">
-		{#if !verEliminados && huellerosSinBiometria(p).length}
-			<!-- Alta prioridad (pedido del usuario): sin huella ni rostro no puede marcar asistencia. -->
-			<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-rose-600 text-white shadow-sm" title="Debe registrar su huella o rostro en el huellero; si no, no podrá marcar">
-				<i class="fas fa-triangle-exclamation"></i> Falta registrar huella{huellerosSinBiometria(p).length > 1 ? ` (${huellerosSinBiometria(p).length} huelleros)` : ''}
+		{#if !verEliminados && huellerosSinHuella(p).length}
+			<!-- Alta prioridad (pedido del usuario): huella y rostro se avisan por separado. -->
+			<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-rose-600 text-white shadow-sm" title="Debe registrar su huella en el huellero">
+				<i class="fas fa-fingerprint"></i> Falta registrar huella{huellerosSinHuella(p).length > 1 ? ` (${huellerosSinHuella(p).length} huelleros)` : ''}
+			</span>
+		{/if}
+		{#if !verEliminados && huellerosSinRostro(p).length}
+			<span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-orange-500 text-white shadow-sm" title="Debe registrar su rostro en el huellero">
+				<i class="fas fa-face-smile"></i> Falta tomar el rostro{huellerosSinRostro(p).length > 1 ? ` (${huellerosSinRostro(p).length} huelleros)` : ''}
 			</span>
 		{/if}
 		{#if fichaIncompleta(p)}
@@ -487,10 +496,19 @@
 						{#if sinHuella || soloSinHuella}
 							<button
 								onclick={() => (soloSinHuella = !soloSinHuella)}
-								title={soloSinHuella ? 'Mostrar a todos' : 'Mostrar solo a quienes les falta registrar su huella o rostro'}
+								title={soloSinHuella ? 'Mostrar a todos' : 'Mostrar solo a quienes les falta registrar su huella'}
 								class={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shadow-sm ${soloSinHuella ? 'bg-rose-700 text-white ring-2 ring-rose-300' : 'bg-rose-600 text-white hover:bg-rose-700'}`}
 							>
 								<i class="fas fa-fingerprint"></i> {sinHuella} sin huella {#if soloSinHuella}<i class="fas fa-xmark"></i>{/if}
+							</button>
+						{/if}
+						{#if sinRostro || soloSinRostro}
+							<button
+								onclick={() => (soloSinRostro = !soloSinRostro)}
+								title={soloSinRostro ? 'Mostrar a todos' : 'Mostrar solo a quienes les falta tomar el rostro'}
+								class={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shadow-sm ${soloSinRostro ? 'bg-orange-600 text-white ring-2 ring-orange-300' : 'bg-orange-500 text-white hover:bg-orange-600'}`}
+							>
+								<i class="fas fa-face-smile"></i> {sinRostro} sin rostro {#if soloSinRostro}<i class="fas fa-xmark"></i>{/if}
 							</button>
 						{/if}
 						{#if incompletas}<span class="px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700">{incompletas} fichas incompletas</span>{/if}

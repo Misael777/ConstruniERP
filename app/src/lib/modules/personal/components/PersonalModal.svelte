@@ -92,8 +92,6 @@
 	);
 	let errores = $state<Record<string, string>>({});
 	let guardando = $state(false);
-	/** El código de huellero sigue al DNI hasta que el usuario lo edite a mano. */
-	let pinManual = $state(false);
 	let huellerosElegidos = $state<number[]>([]);
 
 	$effect(() => {
@@ -109,7 +107,6 @@
 		}
 		form = base;
 		errores = {};
-		pinManual = !!personal?.pin && personal.pin !== personal.numero_documento;
 		huellerosElegidos = (personal?.personal_huellero ?? []).map((v) => v.id_dispositivo);
 	});
 
@@ -141,10 +138,6 @@
 		huellerosElegidos = huellerosElegidos.includes(id) ? huellerosElegidos.filter((x) => x !== id) : [...huellerosElegidos, id];
 	}
 
-	function onDocumentoInput() {
-		if (!pinManual && form.tipo_documento === 'DNI') form.pin = (form.numero_documento ?? '').replace(/\D/g, '').slice(0, 9);
-	}
-
 	const texto = (v: string | null | undefined) => (v ?? '').trim() || null;
 
 	function validar(): boolean {
@@ -156,7 +149,6 @@
 		if (!texto(form.nombres)) e.nombres = 'Ingresa los nombres.';
 		if (!texto(form.apellidos)) e.apellidos = 'Ingresa los apellidos.';
 		if (!form.regimen) e.regimen = 'Elige el régimen.';
-		if (!/^\d{1,9}$/.test(form.pin.trim())) e.pin = 'Solo números, máximo 9 dígitos (así lo acepta el huellero).';
 		if (form.monto_pago && !form.periodicidad_pago) e.periodicidad_pago = 'Elige cada cuánto se le paga ese monto.';
 		if (form.cci && !/^\d{20}$/.test(form.cci.trim())) e.cci = 'El CCI tiene 20 dígitos.';
 		if (form.fecha_cese && form.fecha_ingreso && form.fecha_cese < form.fecha_ingreso) e.fecha_cese = 'No puede ser anterior al ingreso.';
@@ -248,11 +240,11 @@
 			<div class="p-6 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
 				{@render seccion('Datos personales', 'fa-user')}
 				{#snippet ctlTipoDoc()}
-					<SelectConSaldo id="tipo_documento" value={form.tipo_documento} options={TIPOS_DOCUMENTO} encabezadoNombre="Documento" onchange={(v) => { form.tipo_documento = v as DatosPersonal['tipo_documento']; onDocumentoInput(); }} />
+					<SelectConSaldo id="tipo_documento" value={form.tipo_documento} options={TIPOS_DOCUMENTO} encabezadoNombre="Documento" onchange={(v) => (form.tipo_documento = v as DatosPersonal['tipo_documento'])} />
 				{/snippet}
 				{@render campo('tipo_documento', 'Tipo de documento', true, ctlTipoDoc)}
 				{#snippet ctlDoc()}
-					<input id="numero_documento" bind:value={form.numero_documento} oninput={onDocumentoInput} maxlength="12" inputmode={form.tipo_documento === 'DNI' ? 'numeric' : 'text'} class={inputClase('numero_documento')} />
+					<input id="numero_documento" bind:value={form.numero_documento} maxlength="12" inputmode={form.tipo_documento === 'DNI' ? 'numeric' : 'text'} class={inputClase('numero_documento')} />
 				{/snippet}
 				{@render campo('numero_documento', 'Número de documento', true, ctlDoc)}
 				{#snippet ctlNombres()}<input id="nombres" bind:value={form.nombres} maxlength="100" class={inputClase('nombres')} />{/snippet}
@@ -276,9 +268,10 @@
 
 				{@render seccion('Datos laborales', 'fa-hard-hat')}
 				{#snippet ctlPin()}
-					<input id="pin" bind:value={form.pin} oninput={() => (pinManual = true)} maxlength="9" inputmode="numeric" class={inputClase('pin')} />
+					<!-- Autogenerado y correlativo (trigger fn_personal_asignar_pin, a pedido del usuario): no se edita. -->
+					<input id="pin" value={form.pin || 'Se asigna al guardar'} readonly tabindex="-1" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-100 cursor-not-allowed {form.pin ? 'font-mono text-slate-700' : 'text-slate-400 italic'}" />
 				{/snippet}
-				{@render campo('pin', 'Número en huellero', true, ctlPin, personal ? 'Si lo cambias, regístralo igual en el huellero; sus marcas anteriores quedan con el número antiguo.' : 'Se llena con el DNI. Es el ID de usuario en el huellero.')}
+				{@render campo('pin', 'Número en huellero', false, ctlPin, personal ? 'Es el ID de usuario en el huellero. No se cambia: sus marcas se enlazan por este número.' : 'Correlativo automático: el siguiente número libre. Es el ID de usuario en el huellero.')}
 				{#snippet ctlRegimen()}
 					<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={REGIMENES} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
 				{/snippet}
