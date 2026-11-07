@@ -332,7 +332,7 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 		lista.push({
 			fecha: lima.toISOString().slice(0, 10),
 			minuto: lima.getUTCHours() * 60 + lima.getUTCMinutes(),
-			huellero: (Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre) ?? (m.id_dispositivo ? 'Huellero' : 'Manual'),
+			huellero: (Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre) ?? (m.id_dispositivo ? 'Huellero' : 'ERP (Mi asistencia)'),
 			modo: m.modo_verificacion ?? null,
 			manual: m.id_dispositivo == null
 		});

@@ -8,7 +8,8 @@
 		TIPOS_DOCUMENTO,
 		SEXOS,
 		REGIMENES,
-		CATEGORIAS,
+		usaCategoria,
+		etiquetaCategoria,
 		PERIODICIDADES_PAGO,
 		etiqueta,
 		etiquetaMonto,
@@ -16,6 +17,7 @@
 		type Personal
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	let {
 		personal,
@@ -39,7 +41,7 @@
 	const secciones = $derived.by((): { titulo: string; icono: string; filas: Fila[] }[] => {
 		const p = personal;
 		if (!p) return [];
-		const esCivil = p.regimen === 'construccion_civil';
+		const esCivil = usaCategoria(p.regimen);
 		const susHuelleros = huelleros.filter((h) => p.personal_huellero?.some((v) => v.id_dispositivo === h.id_dispositivo));
 		return [
 			{
@@ -61,12 +63,13 @@
 					['Número en huellero', p.pin],
 					['Régimen', etiqueta(REGIMENES, p.regimen)],
 					...((esCivil
-						? [['Categoría', etiqueta(CATEGORIAS, p.categoria)]]
+						? [['Categoría', etiquetaCategoria(p.categoria)]]
 						: [['Cargo', p.cargo]]) as Fila[]),
 					['Periodicidad de pago', etiqueta(PERIODICIDADES_PAGO, p.periodicidad_pago)],
 					[etiquetaMonto(p.periodicidad_pago), soles(p.monto_pago)],
 					['Obra o área', p.centro_costo ? `${p.centro_costo.codigo} · ${p.centro_costo.nombre}` : null],
 					['Horario', p.horario?.nombre],
+					['Referente', [p.referente_nombre, p.referente_cargo].filter(Boolean).join(' · ')],
 					['Fecha de ingreso', fecha(p.fecha_ingreso)],
 					['Fecha de cese', p.fecha_cese ? `${fecha(p.fecha_cese)}${p.motivo_cese ? ` · ${p.motivo_cese}` : ''}` : null]
 				]
@@ -104,9 +107,18 @@
 	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" transition:fade={{ duration: 200 }}>
 		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" transition:scale={{ duration: 250, start: 0.95 }}>
 			<div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3 shrink-0">
-				<div class="min-w-0">
-					<h2 class="text-xl font-bold text-slate-800 truncate">{nombreCompleto(personal)}</h2>
-					<p class="text-xs text-slate-500">Resumen de la ficha · solo lectura</p>
+				<div class="flex items-center gap-3 min-w-0">
+					<div class="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
+						{#if personal.foto_url}
+							<img src={toDriveThumbnailUrl(personal.foto_url, 200)} alt="Foto del trabajador" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+						{:else}
+							<i class="fas fa-user text-slate-300 text-2xl"></i>
+						{/if}
+					</div>
+					<div class="min-w-0">
+						<h2 class="text-xl font-bold text-slate-800 truncate">{nombreCompleto(personal)}</h2>
+						<p class="text-xs text-slate-500">Resumen de la ficha · solo lectura</p>
+					</div>
 				</div>
 				<button onclick={onClose} aria-label="Cerrar" class="text-slate-400 hover:text-slate-600 p-2 rounded-full hover:bg-slate-100">
 					<i class="fas fa-times"></i>

@@ -21,8 +21,9 @@ export interface Personal {
 	direccion: string | null;
 	contacto_emergencia_nombre: string | null;
 	contacto_emergencia_telefono: string | null;
-	regimen: 'construccion_civil' | 'general' | null;
-	categoria: 'operario' | 'oficial' | 'peon' | null;
+	regimen: 'construccion_civil' | 'contrata' | 'subcontrata' | 'general' | null;
+	/** Especialidad (CATEGORIAS) si el régimen es de obreros; ver usaCategoria. */
+	categoria: string | null;
 	cargo: string | null;
 	/** Cada cuánto se le paga; `monto_pago` es lo que recibe por ese periodo. */
 	periodicidad_pago: 'diaria' | 'semanal' | 'quincenal' | 'mensual' | null;
@@ -44,6 +45,11 @@ export interface Personal {
 	consentimiento_biometrico: boolean;
 	consentimiento_fecha: string | null;
 	id_empleado: number | null;
+	/** Foto del trabajador (enlace de Google Drive; ver personalFoto.ts). */
+	foto_url: string | null;
+	/** Referente: quién lo trajo o responde por él en obra (p. ej. su subcontratista). */
+	referente_nombre: string | null;
+	referente_cargo: string | null;
 	estado: 'activo' | 'baja';
 	created_at: string;
 	centro_costo?: { codigo: string; nombre: string } | null;
@@ -56,8 +62,15 @@ export interface Personal {
 /** Campos editables desde la ficha (todo menos id, estado, fechas de auditoría y lo embebido). */
 export type DatosPersonal = Omit<
 	Personal,
-	'id_personal' | 'nombre' | 'estado' | 'created_at' | 'centro_costo' | 'horario' | 'personal_huellero' | 'id_empleado'
+	'id_personal' | 'nombre' | 'estado' | 'created_at' | 'centro_costo' | 'horario' | 'personal_huellero'
 >;
+
+/** Usuarios activos del ERP, para vincular una ficha con quien registra su asistencia en "Mi asistencia". */
+export async function getUsuariosErp(client: SupabaseClient): Promise<{ value: string; label: string }[]> {
+	const { data, error } = await client.from('empleados').select('id, nombre, correo').eq('estado', 'activo').order('nombre');
+	if (error) throw error;
+	return (data ?? []).map((e) => ({ value: String(e.id), label: `${e.nombre}${e.correo ? ` · ${e.correo}` : ''}` }));
+}
 
 export const TIPOS_DOCUMENTO = [
 	{ value: 'DNI', label: 'DNI' },
@@ -69,14 +82,33 @@ export const SEXOS = [
 	{ value: 'F', label: 'Femenino' }
 ];
 export const REGIMENES = [
-	{ value: 'construccion_civil', label: 'Construcción civil (jornal)' },
-	{ value: 'general', label: 'Régimen general (mensual)' }
+	{ value: 'construccion_civil', label: 'Construcción civil' },
+	{ value: 'contrata', label: 'Contrata' },
+	{ value: 'subcontrata', label: 'Subcontrata' },
+	{ value: 'general', label: 'Régimen general' }
 ];
-export const CATEGORIAS = [
-	{ value: 'operario', label: 'Operario' },
-	{ value: 'oficial', label: 'Oficial' },
-	{ value: 'peon', label: 'Peón' }
+/** Cargo del referente (a pedido del usuario). Para agregar otro, súmalo aquí. */
+export const CARGOS_REFERENTE = ['Subcontratista', 'Contratista'].map((v) => ({ value: v, label: v }));
+
+/** Regímenes de obreros: llevan categoría (especialidad). Régimen general lleva cargo. */
+export const usaCategoria = (regimen: string | null | undefined) =>
+	regimen === 'construccion_civil' || regimen === 'contrata' || regimen === 'subcontrata';
+
+/** Especialidades: las mismas de Sub Contrata en Transacciones (SUBOPCIONES_SUBCONTRATA en TransaccionModal.svelte),
+ * a pedido del usuario. Se guarda el texto tal cual (migración 20261107130000). */
+const ESPECIALIDADES: [string, string[]][] = [
+	['Operario', ['Operario Carpintero', 'Operario Albañil', 'Operario Fierrero', 'Operario Eléctrico', 'Operario Sanitario', 'Operario Multifuncional']],
+	['Ayudante', ['Ayudante Sanitario', 'Ayudante Carpintero', 'Ayudante Albañil', 'Ayudante Fierrero', 'Ayudante Eléctrico', 'Ayudante General']],
+	['Oficial', ['Oficial Carpintero', 'Oficial Albañil', 'Oficial Fierrero', 'Oficial Eléctrico']],
+	['Otros', ['Vigilante', 'Eléctrico', 'Otras Subcontratos']]
 ];
+export const CATEGORIAS: { value: string; label: string; grupo: string }[] = ESPECIALIDADES.flatMap(([grupo, lista]) =>
+	lista.map((v) => ({ value: v, label: v, grupo }))
+);
+/** Categorías de la versión anterior (sin especialidad): se siguen mostrando hasta que se edite la ficha. */
+const CATEGORIAS_ANTERIORES: Record<string, string> = { operario: 'Operario', oficial: 'Oficial', peon: 'Peón' };
+export const etiquetaCategoria = (valor: string | null | undefined) =>
+	!valor ? '' : (CATEGORIAS.find((c) => c.value === valor)?.label ?? CATEGORIAS_ANTERIORES[valor] ?? valor);
 export const PERIODICIDADES_PAGO = [
 	{ value: 'diaria', label: 'Diario (jornal)' },
 	{ value: 'semanal', label: 'Semanal' },
@@ -150,6 +182,7 @@ function errorAmigable(error: { code?: string; message?: string; details?: strin
 	if (error.code !== '23505') return error;
 	const texto = `${error.message ?? ''} ${error.details ?? ''}`;
 	if (texto.includes('uq_personal_documento')) return new Error('Ya existe un trabajador con ese documento.');
+	if (texto.includes('uq_personal_empleado')) return new Error('Ese usuario del ERP ya está vinculado a otro trabajador.');
 	if (texto.includes('pin')) return new Error('Ya existe un trabajador con ese número en huellero.');
 	return error;
 }

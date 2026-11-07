@@ -27,6 +27,8 @@
 	import { getHorarios, resumenHorario } from '$lib/modules/personal/services/horarios.service';
 	import {
 		CATEGORIAS,
+		usaCategoria,
+		etiquetaCategoria,
 		REGIMENES,
 		etiqueta,
 		nombreCompleto,
@@ -41,9 +43,11 @@
 		eliminarPersonalPermanente,
 		moverPersonal,
 		getBiometriaGuardada,
+		getUsuariosErp,
 		type Personal
 	} from '$lib/modules/personal/services/personal.service';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { fade, scale } from 'svelte/transition';
 
 	let personal = $state<Personal[]>([]);
@@ -51,6 +55,7 @@
 	let biometria = $state<Record<number, { huellas: number; rostros: number }>>({});
 	let obras = $state<{ value: string; label: string; grupo: string }[]>([]);
 	let horarios = $state<{ value: string; label: string }[]>([]);
+	let usuariosErp = $state<{ value: string; label: string }[]>([]);
 	let huelleros = $state<HuelleroElegible[]>([]);
 	let isLoading = $state(true);
 	let verEliminados = $state(false);
@@ -135,6 +140,11 @@
 		} catch (err) {
 			toast.error(`No se pudieron cargar las obras, áreas y horarios. ${describeError(err)}`);
 		}
+		try {
+			usuariosErp = await getUsuariosErp(supabase);
+		} catch (err) {
+			toast.error(`No se pudieron cargar los usuarios del ERP. ${describeError(err)}`);
+		}
 	});
 
 	const normalizar = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -211,7 +221,7 @@
 		return personal.filter((p) => {
 			if (soloSinHuella && !huellerosSinHuella(p).length) return false;
 			if (soloSinRostro && !huellerosSinRostro(p).length) return false;
-			if (q && !normalizar([nombreCompleto(p), p.numero_documento, p.pin, p.cargo, p.centro_costo?.nombre].filter(Boolean).join(' ')).includes(q)) return false;
+			if (q && !normalizar([nombreCompleto(p), p.numero_documento, p.pin, p.cargo, p.centro_costo?.nombre, p.referente_nombre].filter(Boolean).join(' ')).includes(q)) return false;
 			if (f.obra && (f.obra === NINGUNO ? p.id_centro_costo : String(p.id_centro_costo) !== f.obra)) return false;
 			const suyos = p.personal_huellero ?? [];
 			if (f.huellero && (f.huellero === NINGUNO ? suyos.length : !suyos.some((v) => String(v.id_dispositivo) === f.huellero))) return false;
@@ -247,7 +257,7 @@
 	const conAlertas = $derived(personal.filter((p) => alertasVencimiento(p, hoy).length > 0).length);
 
 	function puesto(p: Personal): string {
-		if (p.regimen === 'construccion_civil') return etiqueta(CATEGORIAS, p.categoria) || 'Construcción civil';
+		if (usaCategoria(p.regimen)) return etiquetaCategoria(p.categoria) || etiqueta(REGIMENES, p.regimen);
 		if (p.regimen === 'general') return p.cargo || 'Régimen general';
 		return '';
 	}
@@ -413,6 +423,16 @@
 	{#each columnas as col}
 		<th class={`sticky top-0 z-10 bg-slate-50 px-5 py-4 ${col.align === 'right' ? 'text-right' : 'text-left'} ${col.class ?? ''}`}>{col.label}</th>
 	{/each}
+{/snippet}
+
+{#snippet foto(p: Personal, tam: string)}
+	<div class={`${tam} rounded-full bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center`}>
+		{#if p.foto_url}
+			<img src={toDriveThumbnailUrl(p.foto_url, 120)} alt="" loading="lazy" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+		{:else}
+			<i class="fas fa-user text-slate-300"></i>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet acciones(p: Personal)}
@@ -600,8 +620,13 @@
 								</td>
 							{/if}
 							<td class="px-5 py-4">
-								<div class="font-semibold text-slate-800">{nombreCompleto(p)}</div>
-								<div class="text-xs text-slate-400">{p.numero_documento ? `${p.tipo_documento} ${p.numero_documento}` : 'Sin documento'}</div>
+								<div class="flex items-center gap-3">
+									{@render foto(p, 'w-10 h-10')}
+									<div class="min-w-0">
+										<div class="font-semibold text-slate-800">{nombreCompleto(p)}</div>
+										<div class="text-xs text-slate-400">{p.numero_documento ? `${p.tipo_documento} ${p.numero_documento}` : 'Sin documento'}</div>
+									</div>
+								</div>
 							</td>
 							<td class="px-3 py-4 w-28 font-mono text-slate-700 text-center">{p.pin}</td>
 							<td class="px-5 py-4 text-slate-700">
@@ -624,6 +649,7 @@
 									{#if !verEliminados}
 										<input type="checkbox" checked={seleccionados.includes(p.id_personal)} onchange={() => alternarSeleccion(p.id_personal)} aria-label={`Seleccionar a ${nombreCompleto(p)}`} class="w-5 h-5 mt-0.5 accent-blue-600 shrink-0" />
 									{/if}
+									{@render foto(p, 'w-12 h-12')}
 									<div class="min-w-0">
 										<div class="font-semibold text-slate-800">{nombreCompleto(p)}</div>
 										<div class="text-xs text-slate-400">{p.numero_documento ? `${p.tipo_documento} ${p.numero_documento}` : 'Sin documento'} · N.º huellero {p.pin}</div>
@@ -648,6 +674,7 @@
 	{obras}
 	{horarios}
 	{huelleros}
+	{usuariosErp}
 	biometria={enEdicion ? biometria[enEdicion.id_personal] : null}
 	onClose={() => (fichaAbierta = false)}
 	onSaved={fetchPersonal}
