@@ -17,6 +17,7 @@
 	import { DIAS_SEMANA } from '$lib/modules/personal/services/horarios.service';
 	import { nombreCompleto, hoyLima, etiquetaMonto } from '$lib/modules/personal/services/personal.service';
 	import { sumarDias, duracion, reloj } from '../services/asistencia.service';
+	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import {
 		ESTADOS_AJUSTE,
 		ESTADOS_CELDA,
@@ -54,7 +55,32 @@
 
 	const obra = $derived(obras.find((o) => String(o.id_centro_costo) === idObra) ?? null);
 	const fechas = $derived(Array.from({ length: 7 }, (_, i) => sumarDias(lunes, i)));
-	const filas = $derived(datos?.filas ?? []);
+	const todasFilas = $derived(datos?.filas ?? []);
+
+	// Filtro por referente (a pedido del usuario): la tabla, los totales, la exportación y el envío a CxP se limitan a
+	// los trabajadores de ese referente (p. ej. para pagar a un subcontratista). '' = todos.
+	const SIN_REFERENTE = '__sin__';
+	let referente = $state('');
+	const nombreRef = (f: FilaTareo) => (f.personal.referente_nombre ?? '').trim();
+	const opcionesReferente = $derived.by(() => {
+		const nombres = [...new Set(todasFilas.map(nombreRef).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+		const cargo = (n: string) => todasFilas.find((f) => nombreRef(f) === n)?.personal.referente_cargo;
+		return [
+			{ value: '', label: 'Todos los referentes' },
+			...nombres.map((n) => ({ value: n, label: cargo(n) ? `${n} · ${cargo(n)}` : n })),
+			...(todasFilas.some((f) => !nombreRef(f)) ? [{ value: SIN_REFERENTE, label: 'Sin referente' }] : [])
+		];
+	});
+	const filas = $derived(
+		!referente ? todasFilas : todasFilas.filter((f) => (referente === SIN_REFERENTE ? !nombreRef(f) : nombreRef(f) === referente))
+	);
+	/** Cajas de filtro con color propio (a pedido del usuario): Obra azul, Referente violeta, Semana verde. */
+	const TONOS_CAJA = {
+		blue: 'bg-blue-50 border-blue-200 text-blue-900 hover:border-blue-300 focus:ring-blue-200',
+		violet: 'bg-violet-50 border-violet-200 text-violet-900 hover:border-violet-300 focus:ring-violet-200'
+	};
+	const cajaColor = (tono: keyof typeof TONOS_CAJA) => `rounded-xl border px-3 py-2 text-sm focus:ring-2 disabled:opacity-60 ${TONOS_CAJA[tono]}`;
+	const opcionesObra = $derived(obras.map((o) => ({ value: String(o.id_centro_costo), label: `${o.codigo} · ${o.nombre}` })));
 
 	// ── Lo que el residente escribe por fila (bonos, Fecha CxP, monto a enviar) ──
 	let bonos = $state<Record<number, string>>({});
@@ -113,6 +139,7 @@
 
 	function elegirObra(v: string) {
 		idObra = v;
+		referente = '';
 		try {
 			localStorage.setItem(CLAVE_OBRA, v);
 		} catch {
@@ -268,7 +295,7 @@
 		if (!edicion || !obra || guardandoDia) return;
 		guardandoDia = true;
 		try {
-			const ids = edTodos ? filas.map((f) => f.personal.id_personal) : [edicion.fila.personal.id_personal];
+			const ids = edTodos ? todasFilas.map((f) => f.personal.id_personal) : [edicion.fila.personal.id_personal];
 			await guardarAjuste(supabase, ids, obra.id_centro_costo, edicion.dia.fecha, { estado: edEstado, minutos: minutosEditados, observacion: edObservacion }, usuario());
 			toast.success(edTodos ? `Día aplicado a los ${ids.length} trabajadores de la obra.` : 'Día actualizado.');
 			edicion = null;
@@ -359,20 +386,23 @@
 	<!-- Filtros -->
 	<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 flex flex-col gap-3">
 		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
-			<div class="flex flex-col gap-1.5 min-w-0">
-				<label for="tareo-obra" class="text-sm font-medium text-slate-700">Obra</label>
-				<select id="tareo-obra" value={idObra} onchange={(e) => elegirObra((e.currentTarget as HTMLSelectElement).value)} class="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white min-w-0">
-					<option value="">Elige la obra…</option>
-					{#each obras as o}<option value={String(o.id_centro_costo)}>{o.codigo} · {o.nombre}</option>{/each}
-				</select>
+			<div class="grid grid-cols-1 sm:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-3 min-w-0">
+				<div class="flex flex-col gap-1.5 min-w-0">
+					<label for="tareo-obra" class="text-sm font-semibold text-blue-700 flex items-center gap-1.5"><i class="fas fa-helmet-safety text-blue-500 text-xs"></i> Obra</label>
+					<SelectConSaldo id="tareo-obra" value={idObra} options={opcionesObra} placeholder="Elige la obra…" encabezadoNombre="Obra" claseBoton={cajaColor('blue')} onchange={elegirObra} />
+				</div>
+				<div class="flex flex-col gap-1.5 min-w-0">
+					<label for="tareo-referente" class="text-sm font-semibold text-violet-700 flex items-center gap-1.5"><i class="fas fa-user-tie text-violet-500 text-xs"></i> Referente</label>
+					<SelectConSaldo id="tareo-referente" value={referente} options={opcionesReferente} placeholder="Todos los referentes" encabezadoNombre="Referente" claseBoton={cajaColor('violet')} disabled={!obra || !todasFilas.length} onchange={(v) => (referente = v)} />
+				</div>
 			</div>
 			<div class="flex flex-wrap items-end gap-2">
 				<div class="flex flex-col gap-1.5">
-					<span class="text-sm font-medium text-slate-700">Semana</span>
+					<span class="text-sm font-semibold text-emerald-700 flex items-center gap-1.5"><i class="fas fa-calendar-week text-emerald-500 text-xs"></i> Semana</span>
 					<div class="flex items-center gap-1">
-						<button type="button" onclick={() => moverSemana(-7)} disabled={!obra} class="px-2.5 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40" aria-label="Semana anterior"><i class="fas fa-chevron-left"></i></button>
-						<input type="date" value={lunes} onchange={(e) => elegirFechaSemana((e.currentTarget as HTMLInputElement).value)} disabled={!obra} class="px-3 py-2 border border-slate-200 rounded-xl text-sm disabled:bg-slate-50" aria-label="Cualquier día de la semana" />
-						<button type="button" onclick={() => moverSemana(7)} disabled={!obra} class="px-2.5 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40" aria-label="Semana siguiente"><i class="fas fa-chevron-right"></i></button>
+						<button type="button" onclick={() => moverSemana(-7)} disabled={!obra} class="px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40" aria-label="Semana anterior"><i class="fas fa-chevron-left"></i></button>
+						<input type="date" value={lunes} onchange={(e) => elegirFechaSemana((e.currentTarget as HTMLInputElement).value)} disabled={!obra} class="px-3 py-2 border border-emerald-200 bg-emerald-50 text-emerald-900 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-200 disabled:opacity-60" aria-label="Cualquier día de la semana" />
+						<button type="button" onclick={() => moverSemana(7)} disabled={!obra} class="px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40" aria-label="Semana siguiente"><i class="fas fa-chevron-right"></i></button>
 					</div>
 				</div>
 				{#if puedeAprobar}
@@ -424,7 +454,7 @@
 		</div>
 
 		{#if !filas.length}
-			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">Esta obra no tiene trabajadores activos ni marcas en la semana.</div>
+			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">{todasFilas.length ? 'Ningún trabajador de esta obra tiene ese referente.' : 'Esta obra no tiene trabajadores activos ni marcas en la semana.'}</div>
 		{:else}
 			<!-- Escritorio: tabla -->
 			<div class="hidden md:block bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
@@ -550,7 +580,7 @@
 				{#if puedeAprobar}
 					<div class="flex flex-wrap gap-2">
 						<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !seleccionados.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40">Enviar seleccionados a CxP</button>
-						<button type="button" onclick={() => enviar(filas, true)} disabled={enviando || saldoPendiente <= 0} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : 'Enviar total de la obra'}</button>
+						<button type="button" onclick={() => enviar(filas, true)} disabled={enviando || saldoPendiente <= 0} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : referente ? 'Enviar total del referente' : 'Enviar total de la obra'}</button>
 					</div>
 				{/if}
 			</div>
@@ -593,7 +623,7 @@
 				<input type="text" bind:value={edObservacion} maxlength="200" placeholder="Ej.: lluvia, se paró la obra a mediodía" class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal" />
 			</label>
 			<div class="text-sm text-slate-600">Importe del día: <b class="text-slate-800">{formatCurrency(Math.round((minutosEditados / 60) * e.fila.tarifaHora * 100) / 100)}</b> <span class="text-xs text-slate-400">({horas(minutosEditados)} h × {formatCurrency(e.fila.tarifaHora)})</span></div>
-			<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" bind:checked={edTodos} /> Aplicar a todos los trabajadores de esta obra ({filas.length})</label>
+			<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" bind:checked={edTodos} /> Aplicar a todos los trabajadores de esta obra ({todasFilas.length})</label>
 			<div class="flex flex-wrap justify-between gap-2 pt-1">
 				{#if e.dia.ajuste}
 					<button type="button" onclick={restaurarDia} class="px-3 py-2 rounded-lg text-sm text-slate-600 hover:bg-slate-50 border border-slate-200"><i class="fas fa-rotate-left"></i> Volver al huellero</button>

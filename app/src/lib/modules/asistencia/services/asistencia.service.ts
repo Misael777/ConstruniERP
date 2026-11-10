@@ -20,8 +20,24 @@ const EVENTO_RECHAZO = 20;
 export interface Marca {
 	fecha: string;
 	minuto: number;
+	/** Nombre del huellero, o "ERP" si la registró el propio empleado en Mi asistencia. */
 	huellero: string;
+	origen?: 'huellero' | 'erp';
 }
+
+/** Fila de asistencia_marcacion → Marca en hora de Lima. */
+export function aMarca(m: { marcado_en: string; origen?: string | null; huellero?: string | null }): Marca {
+	const lima = new Date(Date.parse(m.marcado_en) - LIMA_MS);
+	const origen = m.origen === 'erp' ? 'erp' : 'huellero';
+	return {
+		fecha: lima.toISOString().slice(0, 10),
+		minuto: lima.getUTCHours() * 60 + lima.getUTCMinutes(),
+		huellero: origen === 'erp' ? 'ERP' : (m.huellero ?? 'Huellero'),
+		origen
+	};
+}
+
+export const marcaValida = (m: { evento?: number | null }) => m.evento == null || m.evento < EVENTO_RECHAZO;
 
 export type EstadoDia = 'puntual' | 'tarde' | 'falta' | 'incompleto' | 'en_curso' | 'descanso' | 'descanso_trabajado' | 'asistio' | 'sin_marcas' | 'fuera_contrato';
 
@@ -86,24 +102,23 @@ export const reloj = (min: number | null) =>
 
 /** Marcas válidas del código `pin` entre dos fechas (inclusive, hora de Lima). */
 export async function getMarcas(client: SupabaseClient, pin: string, desde: string, hasta: string): Promise<Marca[]> {
-	const { data, error } = await client
-		.from('asistencia_marcacion')
-		.select('marcado_en, evento, asistencia_dispositivo(nombre)')
-		.eq('pin', pin)
-		.gte('marcado_en', `${desde}T00:00:00-05:00`)
-		.lt('marcado_en', `${sumarDias(hasta, 1)}T00:00:00-05:00`)
-		.order('marcado_en');
+	const consultar = (columnas: string) =>
+		client
+			.from('asistencia_marcacion')
+			.select(columnas)
+			.eq('pin', pin)
+			.gte('marcado_en', `${desde}T00:00:00-05:00`)
+			.lt('marcado_en', `${sumarDias(hasta, 1)}T00:00:00-05:00`)
+			.order('marcado_en');
+	let { data, error } = await consultar('marcado_en, evento, origen, asistencia_dispositivo(nombre)');
+	// Base sin la migración 20261106130000 (no existe la columna origen): se carga igual, todo como huellero.
+	if (error?.code === '42703') ({ data, error } = await consultar('marcado_en, evento, asistencia_dispositivo(nombre)'));
 	if (error) throw error;
-	return (data ?? [])
-		.filter((m) => m.evento == null || m.evento < EVENTO_RECHAZO)
+	return ((data ?? []) as unknown as { marcado_en: string; evento: number | null; origen?: string; asistencia_dispositivo: { nombre: string | null } | { nombre: string | null }[] | null }[])
+		.filter(marcaValida)
 		.map((m) => {
-			const lima = new Date(Date.parse(m.marcado_en) - LIMA_MS);
-			const disp = m.asistencia_dispositivo as { nombre: string | null } | { nombre: string | null }[] | null;
-			return {
-				fecha: lima.toISOString().slice(0, 10),
-				minuto: lima.getUTCHours() * 60 + lima.getUTCMinutes(),
-				huellero: (Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre) ?? 'Huellero'
-			};
+			const disp = m.asistencia_dispositivo;
+			return aMarca({ ...m, huellero: Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre });
 		});
 }
 

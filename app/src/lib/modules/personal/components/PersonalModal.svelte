@@ -16,6 +16,9 @@
 		SEXOS,
 		REGIMENES,
 		CATEGORIAS,
+		CARGOS_REFERENTE,
+		usaCategoria,
+		etiquetaCategoria,
 		SISTEMAS_PENSION,
 		PERIODICIDADES_PAGO,
 		etiquetaMonto,
@@ -24,6 +27,8 @@
 		type DatosPersonal
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
+	import { reducirFoto, subirFotoPersonal, FOTO_MAX_BYTES } from '$lib/modules/personal/services/personalFoto';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	let {
 		open,
@@ -31,10 +36,13 @@
 		obras,
 		horarios,
 		huelleros,
+		usuariosErp = [],
 		biometria = null,
 		onClose,
 		onSaved
 	}: {
+		/** Usuarios activos del ERP (para "Mi asistencia"). */
+		usuariosErp?: { value: string; label: string }[];
 		open: boolean;
 		/** null = nuevo trabajador. */
 		personal?: Personal | null;
@@ -79,7 +87,11 @@
 		sctr_vencimiento: null,
 		examen_medico_vencimiento: null,
 		consentimiento_biometrico: false,
-		consentimiento_fecha: null
+		consentimiento_fecha: null,
+		id_empleado: null,
+		foto_url: null,
+		referente_nombre: '',
+		referente_cargo: null
 	};
 
 	let form = $state<DatosPersonal>({ ...VACIO });
@@ -89,6 +101,12 @@
 		personal?.id_horario && !horarios.some((h) => h.value === String(personal.id_horario))
 			? [...horarios, { value: String(personal.id_horario), label: `${personal.horario?.nombre ?? 'Horario'} (dado de baja)` }]
 			: horarios
+	);
+	/** Si la ficha tiene una categoría antigua (sin especialidad), se muestra igual para no perderla sin querer. */
+	const opcionesCategoria = $derived(
+		form.categoria && !CATEGORIAS.some((c) => c.value === form.categoria)
+			? [...CATEGORIAS, { value: form.categoria, label: `${etiquetaCategoria(form.categoria)} (anterior, elige la especialidad)`, grupo: 'Anterior' }]
+			: CATEGORIAS
 	);
 	let errores = $state<Record<string, string>>({});
 	let guardando = $state(false);
@@ -108,7 +126,46 @@
 		form = base;
 		errores = {};
 		huellerosElegidos = (personal?.personal_huellero ?? []).map((v) => v.id_dispositivo);
+		quitarFotoNueva();
 	});
+
+	// Foto: se reduce al elegirla (vista previa inmediata) y se sube recién al guardar, así cancelar no deja
+	// archivos sueltos en Drive. accept="image/*" en Android ofrece cámara o galería; en PC, el explorador.
+	let fotoNueva = $state<Blob | null>(null);
+	let fotoNuevaUrl = $state<string | null>(null);
+	let procesandoFoto = $state(false);
+	const fotoVista = $derived(fotoNuevaUrl ?? (form.foto_url ? toDriveThumbnailUrl(form.foto_url, 300) : null));
+
+	function quitarFotoNueva() {
+		if (fotoNuevaUrl) URL.revokeObjectURL(fotoNuevaUrl);
+		fotoNueva = null;
+		fotoNuevaUrl = null;
+	}
+
+	async function elegirFoto(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = ''; // permite volver a elegir el mismo archivo
+		if (!file) return;
+		if (!file.type.startsWith('image/')) return void toast.error('Elige una imagen (JPG o PNG).');
+		if (file.size > FOTO_MAX_BYTES) return void toast.error('La imagen pesa más de 20 MB.');
+		procesandoFoto = true;
+		try {
+			const reducida = await reducirFoto(file);
+			quitarFotoNueva();
+			fotoNueva = reducida;
+			fotoNuevaUrl = URL.createObjectURL(reducida);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'No se pudo leer la imagen.');
+		} finally {
+			procesandoFoto = false;
+		}
+	}
+
+	function quitarFoto() {
+		quitarFotoNueva();
+		form.foto_url = null;
+	}
 
 	/** Al cambiar de obra o área: marca sus huelleros y desmarca los de la anterior. */
 	function cambiarLugar(valor: string) {
@@ -123,7 +180,7 @@
 	/** Al elegir el régimen se propone su periodicidad usual (civil: semanal; general: mensual) si aún no tiene. */
 	function elegirRegimen(v: string) {
 		form.regimen = (v || null) as DatosPersonal['regimen'];
-		if (!form.periodicidad_pago) form.periodicidad_pago = form.regimen === 'construccion_civil' ? 'semanal' : form.regimen === 'general' ? 'mensual' : null;
+		if (!form.periodicidad_pago) form.periodicidad_pago = usaCategoria(form.regimen) ? 'semanal' : form.regimen === 'general' ? 'mensual' : null;
 	}
 
 	/** Huelleros que aún no tiene, agrupados por obra o área (punto verde = en línea). */
@@ -162,7 +219,7 @@
 			toast.error('Revisa los campos marcados en rojo.');
 			return;
 		}
-		const esCivil = form.regimen === 'construccion_civil';
+		const esCivil = usaCategoria(form.regimen);
 		const datos: DatosPersonal = {
 			...form,
 			pin: form.pin.trim(),
@@ -173,6 +230,8 @@
 			direccion: texto(form.direccion),
 			contacto_emergencia_nombre: texto(form.contacto_emergencia_nombre),
 			contacto_emergencia_telefono: texto(form.contacto_emergencia_telefono),
+			referente_nombre: texto(form.referente_nombre),
+			referente_cargo: form.referente_cargo || null,
 			// Solo se guardan los datos del régimen elegido.
 			categoria: esCivil ? form.categoria : null,
 			cargo: esCivil ? null : texto(form.cargo),
@@ -192,8 +251,17 @@
 		};
 		guardando = true;
 		try {
+			if (fotoNueva) {
+				try {
+					datos.foto_url = await subirFotoPersonal(fotoNueva, datos.numero_documento ?? '');
+				} catch (err) {
+					toast.error(`No se pudo subir la foto. ${describeError(err)}`);
+					return;
+				}
+			}
 			await guardarPersonal(supabase, personal?.id_personal ?? null, datos, huellerosElegidos);
 			toast.success(personal ? 'Ficha actualizada.' : 'Trabajador registrado.');
+			quitarFotoNueva();
 			onSaved();
 			onClose();
 		} catch (err) {
@@ -239,6 +307,32 @@
 
 			<div class="p-6 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
 				{@render seccion('Datos personales', 'fa-user')}
+				<div class="sm:col-span-2 flex items-center gap-4">
+					<div class="w-24 h-24 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
+						{#if procesandoFoto}
+							<i class="fas fa-spinner fa-spin text-slate-400 text-xl"></i>
+						{:else if fotoVista}
+							<img src={fotoVista} alt="Foto del trabajador" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
+						{:else}
+							<i class="fas fa-user text-slate-300 text-4xl"></i>
+						{/if}
+					</div>
+					<div class="flex flex-col gap-2 min-w-0">
+						<span class="text-sm font-medium text-slate-700">Foto del trabajador</span>
+						<div class="flex flex-wrap gap-2">
+							<label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 {procesandoFoto || guardando ? 'opacity-50 pointer-events-none' : ''}">
+								<input type="file" accept="image/*" class="hidden" onchange={elegirFoto} disabled={procesandoFoto || guardando} />
+								<i class="fas fa-camera"></i> {fotoVista ? 'Cambiar foto' : 'Tomar o subir foto'}
+							</label>
+							{#if fotoVista}
+								<button type="button" onclick={quitarFoto} disabled={procesandoFoto || guardando} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 disabled:opacity-50">
+									<i class="fas fa-trash-alt text-rose-500"></i> Quitar
+								</button>
+							{/if}
+						</div>
+						<span class="text-xs text-slate-400">{fotoNueva ? 'Se guardará al pulsar Guardar.' : 'En el celular puedes tomarla con la cámara.'}</span>
+					</div>
+				</div>
 				{#snippet ctlTipoDoc()}
 					<SelectConSaldo id="tipo_documento" value={form.tipo_documento} options={TIPOS_DOCUMENTO} encabezadoNombre="Documento" onchange={(v) => (form.tipo_documento = v as DatosPersonal['tipo_documento'])} />
 				{/snippet}
@@ -276,9 +370,9 @@
 					<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={REGIMENES} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
 				{/snippet}
 				{@render campo('regimen', 'Régimen', true, ctlRegimen)}
-				{#if form.regimen === 'construccion_civil'}
+				{#if usaCategoria(form.regimen)}
 					{#snippet ctlCat()}
-						<SelectConSaldo id="categoria" value={form.categoria ?? ''} options={CATEGORIAS} placeholder="Selecciona la categoría" encabezadoNombre="Categoría" onchange={(v) => (form.categoria = v as DatosPersonal['categoria'])} />
+						<SelectConSaldo id="categoria" value={form.categoria ?? ''} options={opcionesCategoria} placeholder="Selecciona la categoría" encabezadoNombre="Categoría" onchange={(v) => (form.categoria = v as DatosPersonal['categoria'])} />
 					{/snippet}
 					{@render campo('categoria', 'Categoría', false, ctlCat)}
 				{:else if form.regimen === 'general'}
@@ -299,6 +393,16 @@
 					<SelectConSaldo id="id_horario" value={form.id_horario ? String(form.id_horario) : ''} options={opcionesHorario} placeholder="Sin horario" encabezadoNombre="Horario" onchange={(v) => (form.id_horario = v ? Number(v) : null)} />
 				{/snippet}
 				{@render campo('id_horario', 'Horario', false, ctlHorario, 'Con él se calculan tardanzas, faltas y horas extra. Se crean en Horarios.')}
+				{#snippet ctlRefNombre()}<input id="referente_nombre" bind:value={form.referente_nombre} maxlength="150" placeholder="Ej. Juan Pérez" class={inputClase('referente_nombre')} />{/snippet}
+				{@render campo('referente_nombre', 'Nombre del referente', false, ctlRefNombre, 'Quién lo trajo o responde por él en obra.')}
+				{#snippet ctlRefCargo()}
+					<SelectConSaldo id="referente_cargo" value={form.referente_cargo ?? ''} options={[{ value: '', label: 'Sin cargo' }, ...CARGOS_REFERENTE]} placeholder="Selecciona el cargo" encabezadoNombre="Cargo del referente" onchange={(v) => (form.referente_cargo = v || null)} />
+				{/snippet}
+				{@render campo('referente_cargo', 'Cargo del referente', false, ctlRefCargo)}
+				{#snippet ctlUsuarioErp()}
+					<SelectConSaldo id="id_empleado" value={form.id_empleado ? String(form.id_empleado) : ''} options={[{ value: '', label: 'Sin usuario (no marca desde el ERP)' }, ...usuariosErp]} placeholder="Sin usuario" encabezadoNombre="Usuario del ERP" onchange={(v) => (form.id_empleado = v ? Number(v) : null)} />
+				{/snippet}
+				{@render campo('id_empleado', 'Usuario del ERP', false, ctlUsuarioErp, 'Si lo eliges y su horario es libre o mixto, esa persona registra su ingreso y salida desde Inicio → «Mi asistencia», sin huellero.')}
 				{#snippet ctlIngreso()}<input id="fecha_ingreso" type="date" bind:value={form.fecha_ingreso} class={inputClase('fecha_ingreso')} />{/snippet}
 				{@render campo('fecha_ingreso', 'Fecha de ingreso', false, ctlIngreso)}
 				{#snippet ctlCese()}<input id="fecha_cese" type="date" bind:value={form.fecha_cese} class={inputClase('fecha_cese')} />{/snippet}

@@ -9,6 +9,7 @@
 	import AnuncioModal from '$lib/modules/anuncios/components/AnuncioModal.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
+	import MiAsistenciaBoton from '$lib/components/MiAsistenciaBoton.svelte';
 
 	// Landing temática de Dashboard — a pedido explícito del usuario: el panel financiero que vivía acá
 	// se movió a Finanzas → Control Financiero (ver finanzas/control-financiero/+page.svelte); este módulo pasó a
@@ -138,7 +139,8 @@
 			<Megaphone class="text-[#0f3b5e]" size={22} />
 			<h2 class="text-lg font-bold text-[#0f3b5e]">Anuncios Corporativos</h2>
 		</div>
-		<div class="flex items-center gap-2">
+		<div class="flex items-center gap-2 flex-wrap">
+			<MiAsistenciaBoton />
 			<button type="button" onclick={fetchAnuncios} disabled={loading} class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
 				<RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Actualizar
 			</button>
