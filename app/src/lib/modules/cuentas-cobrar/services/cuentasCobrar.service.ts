@@ -5,6 +5,7 @@
  * servidor embebido. AJUSTAR: la BD no tiene RLS real todavía, ver nota en +page.svelte.
  */
 
+import { recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import { getPorcentajeDetraccionCuenta, vincularDetraccionesPorOrden, fraccionesConDetraccion, cobrarDetraccionJuntoSiCorresponde } from './detraccion.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
@@ -652,7 +653,12 @@ export async function deleteCuentaCobrar(client: SupabaseClient, id: number, esA
 	if (error) return { success: false, message: `No se pudo eliminar la cuenta por cobrar: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
 
 	if (idsTransaccion.length > 0) {
+		const { data: txs } = await client.from('transaccion').select('cuente_origen, cuente_destino').in('id_transaccion', idsTransaccion);
 		await client.from('transaccion').delete().in('id_transaccion', idsTransaccion);
+		// La base ya recalcula el saldo al borrar (trigger de 20261107120000_saldo_bancario_blindado.sql); esto es un
+		// respaldo por si el trigger faltara, como pasó en Producción (reclamo del 07/11/2026).
+		const cuentas = new Set((txs ?? []).flatMap((t: any) => [t.cuente_origen, t.cuente_destino]).filter(Boolean));
+		await Promise.all([...cuentas].map((c) => recalcularSaldoCuentaBanco(client, c as string)));
 	}
 
 	return { success: true, message: 'Cuenta por cobrar eliminada correctamente' };

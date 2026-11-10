@@ -83,7 +83,39 @@ async function checkIntegridadMovimientos(client: SupabaseClient): Promise<Resul
 	};
 }
 
+/** Saldo guardado vs saldo calculado por la base con la MISMA fórmula que lo mantiene (última Apertura + transacciones
+ * activas posteriores; sin Apertura, saldo inicial + todas) — fn_verificar_saldos_bancarios, migración
+ * 20261107120000_saldo_bancario_blindado.sql. También avisa si falta el trigger que recalcula el saldo al crear, borrar
+ * o cambiar transacciones (su ausencia en Producción causó el reclamo del 07/11/2026: transacciones eliminadas cuyo
+ * dinero seguía en Caja Fuerte). Si esa función todavía no existe, usa el cálculo anterior (sin aperturas). */
 async function checkConsistenciaSaldos(client: SupabaseClient): Promise<ResultadoCheck> {
+	const { data: verif, error: errVerif } = await client.rpc('fn_verificar_saldos_bancarios');
+	if (!errVerif && verif) {
+		const filas = ((verif.cuentas ?? []) as any[]).map((c) => ({
+			numero_cuenta: c.numero_cuenta,
+			saldo_actual: Number(c.saldo_actual),
+			saldo_calculado: Number(c.saldo_calculado),
+			diferencia: Number(c.diferencia),
+			apertura: c.apertura ? `${Number(c.apertura.monto).toFixed(2)} al ${c.apertura.fecha_corte}` : '—',
+			saldo_inicial: Number(c.saldo_inicial)
+		}));
+		const conDiferencia = filas.filter((c) => Math.abs(c.diferencia) > 0.01);
+		const detalle = { filas };
+		if (!verif.triggers_ok) {
+			return {
+				estado: 'error',
+				mensaje: 'Falta el recálculo automático de saldos bancarios en la base de datos: al eliminar o cambiar transacciones los saldos pueden quedar desactualizados. Aplica la migración 20261107120000_saldo_bancario_blindado.sql.',
+				detalle
+			};
+		}
+		if (conDiferencia.length === 0) return { estado: 'ok', mensaje: 'El saldo de todas las cuentas bancarias activas coincide con sus transacciones y aperturas.', detalle };
+		return {
+			estado: 'error',
+			mensaje: `${conDiferencia.length} cuenta(s) bancaria(s) con saldo distinto al calculado con sus transacciones y aperturas.`,
+			detalle
+		};
+	}
+
 	const [{ data: cuentas, error: errCuentas }, { data: movimientos, error: errMov }] = await Promise.all([
 		client.from('cuenta_banco').select('id_cuenta_banco, numero_cuenta, saldo_inicial, saldo_actual').eq('activo', true),
 		client.from('transaccion').select('cuente_origen, cuente_destino, monto_total').eq('estado', 'activo')
