@@ -11,47 +11,49 @@
 	import { toast } from '$lib/stores/toast';
 	import { describeError } from '$lib/shared/describeError';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
+	import HistorialAsignaciones from './HistorialAsignaciones.svelte';
 	import {
 		TIPOS_DOCUMENTO,
 		SEXOS,
 		REGIMENES,
 		CATEGORIAS,
 		CARGOS_REFERENTE,
+		VINCULOS,
+		TAMANOS_EMPRESA,
+		vinculoDe,
 		usaCategoria,
 		etiquetaCategoria,
 		SISTEMAS_PENSION,
 		PERIODICIDADES_PAGO,
 		etiquetaMonto,
+		etiqueta,
 		guardarPersonal,
+		getCargosHistorial,
+		guardarCargosHistorial,
+		cargoActual,
+		type CargoHistorial,
 		type Personal,
 		type DatosPersonal
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
 	import { reducirFoto, subirFotoPersonal, FOTO_MAX_BYTES } from '$lib/modules/personal/services/personalFoto';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 
 	let {
 		open,
 		personal = null,
 		obras,
-		horarios,
 		huelleros,
-		usuariosErp = [],
-		biometria = null,
 		onClose,
 		onSaved
 	}: {
-		/** Usuarios activos del ERP (para "Mi asistencia"). */
-		usuariosErp?: { value: string; label: string }[];
 		open: boolean;
 		/** null = nuevo trabajador. */
 		personal?: Personal | null;
 		obras: { value: string; label: string; grupo?: string }[];
+		/** Para proponer, en un alta, los huelleros de la obra o área elegida. */
 		huelleros: HuelleroElegible[];
-		/** Huellas y rostros que el ERP ya tiene guardados de este trabajador (con consentimiento). */
-		biometria?: { huellas: number; rostros: number } | null;
-		/** Horarios activos (Horarios) para asignar. */
-		horarios: { value: string; label: string }[];
 		onClose: () => void;
 		onSaved: () => void;
 	} = $props();
@@ -91,17 +93,16 @@
 		id_empleado: null,
 		foto_url: null,
 		referente_nombre: '',
-		referente_cargo: null
+		referente_cargo: null,
+		vinculo: null,
+		empleador_nombre: '',
+		empleador_ruc: '',
+		empleador_tamano: null,
+		monto_pago_desde: null
 	};
 
 	let form = $state<DatosPersonal>({ ...VACIO });
 
-	/** Si el trabajador tiene un horario ya dado de baja, se muestra igual para no perderlo al guardar. */
-	const opcionesHorario = $derived(
-		personal?.id_horario && !horarios.some((h) => h.value === String(personal.id_horario))
-			? [...horarios, { value: String(personal.id_horario), label: `${personal.horario?.nombre ?? 'Horario'} (dado de baja)` }]
-			: horarios
-	);
 	/** Si la ficha tiene una categoría antigua (sin especialidad), se muestra igual para no perderla sin querer. */
 	const opcionesCategoria = $derived(
 		form.categoria && !CATEGORIAS.some((c) => c.value === form.categoria)
@@ -127,7 +128,55 @@
 		errores = {};
 		huellerosElegidos = (personal?.personal_huellero ?? []).map((v) => v.id_dispositivo);
 		quitarFotoNueva();
+		cargarCargos(personal?.id_personal ?? null);
 	});
+
+	// Historial de cargos (personal_cargo_historial): varios por trabajador, cada uno con sus fechas. El tramo sin
+	// fecha "hasta" es el cargo actual y se copia a personal.cargo al guardar.
+	let cargos = $state<CargoHistorial[]>([]);
+	let cargandoCargos = $state(false);
+	let erroresCargos = $state<Record<number, string>>({});
+	const hoyIso = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+
+	async function cargarCargos(id: number | null) {
+		cargos = [];
+		erroresCargos = {};
+		if (!id) return;
+		cargandoCargos = true;
+		try {
+			const lista = await getCargosHistorial(supabase, id);
+			if (personal?.id_personal === id) cargos = lista;
+		} catch (err) {
+			toast.error(`No se pudo leer el historial de cargos. ${describeError(err)}`);
+		} finally {
+			cargandoCargos = false;
+		}
+	}
+
+	/** Nuevo cargo: cierra el actual el día anterior (si no tenía fecha de fin) y abre uno desde hoy. */
+	function agregarCargo() {
+		const hoy = hoyIso();
+		const ayer = new Date(Date.parse(`${hoy}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+		cargos = [
+			{ cargo: '', fecha_inicio: hoy, fecha_fin: null, observacion: null },
+			...cargos.map((c) => (!c.fecha_fin && c.fecha_inicio <= ayer ? { ...c, fecha_fin: ayer } : c))
+		];
+	}
+
+	function quitarCargo(i: number) {
+		cargos = cargos.filter((_, j) => j !== i);
+		erroresCargos = {};
+	}
+
+	function duracionCargo(c: CargoHistorial): string {
+		if (!c.fecha_inicio) return '';
+		const fin = c.fecha_fin || hoyIso();
+		const dias = Math.round((Date.parse(fin) - Date.parse(c.fecha_inicio)) / 86400000) + 1;
+		if (dias < 1) return '';
+		const meses = Math.floor(dias / 30.44);
+		if (meses >= 12) return `${Math.floor(meses / 12)} a ${meses % 12 ? `${meses % 12} m` : ''}`.trim();
+		return meses ? `${meses} ${meses === 1 ? 'mes' : 'meses'}` : `${dias} ${dias === 1 ? 'día' : 'días'}`;
+	}
 
 	// Foto: se reduce al elegirla (vista previa inmediata) y se sube recién al guardar, así cancelar no deja
 	// archivos sueltos en Drive. accept="image/*" en Android ofrece cámara o galería; en PC, el explorador.
@@ -183,18 +232,6 @@
 		if (!form.periodicidad_pago) form.periodicidad_pago = usaCategoria(form.regimen) ? 'semanal' : form.regimen === 'general' ? 'mensual' : null;
 	}
 
-	/** Huelleros que aún no tiene, agrupados por obra o área (punto verde = en línea). */
-	const opcionesHuellero = $derived(
-		huelleros
-			.filter((h) => !huellerosElegidos.includes(h.id_dispositivo))
-			.sort((a, b) => a.lugar.localeCompare(b.lugar) || a.nombre.localeCompare(b.nombre))
-			.map((h) => ({ value: String(h.id_dispositivo), label: `${h.nombre} (ID ${h.numero_serie})${h.en_linea ? '' : ' · desconectado'}`, grupo: h.lugar, color: h.en_linea ? '#10b981' : '#cbd5e1' }))
-	);
-
-	function alternarHuellero(id: number) {
-		huellerosElegidos = huellerosElegidos.includes(id) ? huellerosElegidos.filter((x) => x !== id) : [...huellerosElegidos, id];
-	}
-
 	const texto = (v: string | null | undefined) => (v ?? '').trim() || null;
 
 	function validar(): boolean {
@@ -208,15 +245,24 @@
 		if (!form.regimen) e.regimen = 'Elige el régimen.';
 		if (form.monto_pago && !form.periodicidad_pago) e.periodicidad_pago = 'Elige cada cuánto se le paga ese monto.';
 		if (form.cci && !/^\d{20}$/.test(form.cci.trim())) e.cci = 'El CCI tiene 20 dígitos.';
+		if (form.empleador_ruc && !/^\d{11}$/.test(form.empleador_ruc.trim())) e.empleador_ruc = 'El RUC tiene 11 dígitos.';
 		if (form.fecha_cese && form.fecha_ingreso && form.fecha_cese < form.fecha_ingreso) e.fecha_cese = 'No puede ser anterior al ingreso.';
-		if (form.consentimiento_biometrico && !form.consentimiento_fecha) e.consentimiento_fecha = 'Indica la fecha en que firmó el consentimiento.';
+		const ec: Record<number, string> = {};
+		cargos.forEach((c, i) => {
+			if (!c.cargo.trim()) ec[i] = 'Escribe el cargo.';
+			else if (!c.fecha_inicio) ec[i] = 'Indica desde cuándo.';
+			else if (c.fecha_fin && c.fecha_fin < c.fecha_inicio) ec[i] = '"Hasta" no puede ser anterior a "Desde".';
+		});
+		if (cargos.filter((c) => !c.fecha_fin).length > 1) e.cargos = 'Solo un cargo puede quedar sin fecha "Hasta" (el actual).';
+		erroresCargos = ec;
 		errores = e;
-		return Object.keys(e).length === 0;
+		return Object.keys(e).length === 0 && Object.keys(ec).length === 0;
 	}
 
 	async function guardar() {
 		if (!validar()) {
 			toast.error('Revisa los campos marcados en rojo.');
+			irAPrimerError();
 			return;
 		}
 		const esCivil = usaCategoria(form.regimen);
@@ -232,9 +278,15 @@
 			contacto_emergencia_telefono: texto(form.contacto_emergencia_telefono),
 			referente_nombre: texto(form.referente_nombre),
 			referente_cargo: form.referente_cargo || null,
+			vinculo: form.vinculo || null,
+			empleador_nombre: texto(form.empleador_nombre),
+			empleador_ruc: texto(form.empleador_ruc),
+			empleador_tamano: form.empleador_tamano || null,
+			monto_pago_desde: form.periodicidad_pago ? form.monto_pago_desde || null : null,
 			// Solo se guardan los datos del régimen elegido.
 			categoria: esCivil ? form.categoria : null,
-			cargo: esCivil ? null : texto(form.cargo),
+			// El cargo actual sale del historial (el tramo sin fecha "Hasta").
+			cargo: cargoActual(cargos),
 			monto_pago: form.periodicidad_pago ? form.monto_pago || null : null,
 			motivo_cese: form.fecha_cese ? texto(form.motivo_cese) : null,
 			cuspp: form.sistema_pension && form.sistema_pension !== 'ONP' ? texto(form.cuspp) : null,
@@ -259,7 +311,21 @@
 					return;
 				}
 			}
-			await guardarPersonal(supabase, personal?.id_personal ?? null, datos, huellerosElegidos);
+			// Al editar, horario, usuario del ERP, consentimiento y huelleros se configuran en Asistencia → Configuración:
+			// no se envían para no pisar lo que se cambió ahí. En un alta van los huelleros de su obra o área.
+			if (personal) for (const k of ['id_horario', 'id_empleado', 'consentimiento_biometrico', 'consentimiento_fecha'] as const) delete (datos as Partial<DatosPersonal>)[k];
+			// Huelleros: en un alta, los de su obra o área; al editar solo si cambió de obra (se cambian los de la anterior
+			// por los de la nueva, igual que «Mover»); si no, se dejan como estén en Asistencia → Configuración.
+			const cambioDeObra = !!personal && (personal.id_centro_costo ?? null) !== (datos.id_centro_costo ?? null);
+			const idGuardado = await guardarPersonal(supabase, personal?.id_personal ?? null, datos, !personal || cambioDeObra ? huellerosElegidos : null);
+			try {
+				await guardarCargosHistorial(supabase, idGuardado, cargos);
+			} catch (err) {
+				toast.error(`La ficha se guardó, pero no el historial de cargos. ${describeError(err)}`);
+				onSaved();
+				onClose();
+				return;
+			}
 			toast.success(personal ? 'Ficha actualizada.' : 'Trabajador registrado.');
 			quitarFotoNueva();
 			onSaved();
@@ -277,11 +343,74 @@
 
 	const inputClase = (campo: string) =>
 		`w-full px-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 ${errores[campo] ? 'border-rose-400' : 'border-slate-200'}`;
+
+	// ── Submenú de la ficha (a pedido del usuario, 11/11/2026): una sección a la vez, como en el diseño de referencia.
+	type Seccion = 'personales' | 'vinculo' | 'cargo' | 'beneficios' | 'pagos';
+	const SECCIONES: { id: Seccion; titulo: string; subtitulo: string; icono: string }[] = [
+		{ id: 'personales', titulo: 'Datos personales', subtitulo: 'Identificación y contacto del trabajador.', icono: 'fa-user' },
+		{ id: 'vinculo', titulo: 'Vínculo laboral', subtitulo: 'Define la relación laboral y su vigencia.', icono: 'fa-briefcase' },
+		{ id: 'cargo', titulo: 'Cargo y remuneración', subtitulo: 'Condiciones vigentes e historial de cargos con sus fechas.', icono: 'fa-coins' },
+		{ id: 'beneficios', titulo: 'Beneficios y proyección', subtitulo: 'Beneficios y anticipo de los próximos pagos.', icono: 'fa-gift' },
+		{ id: 'pagos', titulo: 'Pagos y seguros', subtitulo: 'Abono de remuneraciones y coberturas.', icono: 'fa-shield-halved' }
+	];
+	/** En qué sección está cada campo validado (para saltar a ella y marcarla si tiene errores). */
+	const SECCION_DE: Record<string, Seccion> = {
+		tipo_documento: 'personales',
+		numero_documento: 'personales',
+		nombres: 'personales',
+		apellidos: 'personales',
+		regimen: 'vinculo',
+		empleador_ruc: 'vinculo',
+		fecha_cese: 'vinculo',
+		periodicidad_pago: 'cargo',
+		monto_pago: 'cargo',
+		cargos: 'cargo',
+		cci: 'pagos'
+	};
+	let seccion = $state<Seccion>('personales');
+	$effect(() => {
+		if (open) seccion = 'personales';
+	});
+	const seccionesConError = $derived(
+		new Set<Seccion>([...Object.keys(errores).map((k) => SECCION_DE[k] ?? 'personales'), ...(Object.keys(erroresCargos).length ? ['cargo' as Seccion] : [])])
+	);
+	const seccionInfo = $derived(SECCIONES.find((s) => s.id === seccion) ?? SECCIONES[0]);
+
+	/** Si la validación falla, se abre la primera sección con errores. */
+	function irAPrimerError() {
+		const primera = SECCIONES.find((s) => seccionesConError.has(s.id));
+		if (primera) seccion = primera.id;
+	}
+
+	// Cabecera: nombre · obra o área · régimen de la empresa.
+	const nombreFicha = $derived([form.nombres, form.apellidos].map((v) => (v ?? '').trim()).filter(Boolean).join(' '));
+	const lugarFicha = $derived(obras.find((o) => o.value === String(form.id_centro_costo ?? ''))?.label ?? null);
+	const tamanoFicha = $derived(form.empleador_tamano ? etiqueta(TAMANOS_EMPRESA, form.empleador_tamano) : null);
+
+	// Cargo y remuneración: tarjetas de resumen y estado de cada tramo.
+	const cargoVigente = $derived(cargoActual(cargos));
+	function estadoCargo(c: CargoHistorial): { texto: string; clase: string } {
+		const hoy = hoyIso();
+		if (c.fecha_inicio && c.fecha_inicio > hoy) return { texto: 'Programado', clase: 'bg-orange-50 text-orange-700 border-orange-200' };
+		if (!c.fecha_fin || c.fecha_fin >= hoy) return { texto: 'Vigente', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+		return { texto: 'Cerrado', clase: 'bg-slate-100 text-slate-600 border-slate-200' };
+	}
+	const soles = (n: number | null) => (n == null ? null : `S/ ${Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+	const fechaCorta = (f: string | null) => (f ? new Date(`${f}T00:00:00`).toLocaleDateString('es-PE') : null);
+
+	/** Estado de una cobertura según su vencimiento (aviso 30 días antes, como en la lista). */
+	function estadoVence(f: string | null): { texto: string; clase: string } {
+		if (!f) return { texto: 'Sin registrar', clase: 'bg-slate-100 text-slate-500 border-slate-200' };
+		const dias = Math.round((Date.parse(f) - Date.parse(hoyIso())) / 86400000);
+		if (dias < 0) return { texto: 'Vencido', clase: 'bg-rose-50 text-rose-700 border-rose-200' };
+		if (dias <= 30) return { texto: 'Por vencer', clase: 'bg-amber-50 text-amber-700 border-amber-200' };
+		return { texto: 'Vigente', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+	}
 </script>
 
 {#snippet campo(id: string, etiqueta: string, obligatorio: boolean, control: import('svelte').Snippet, ayuda?: string)}
-	<div class="flex flex-col gap-1.5">
-		<label for={id} class="text-sm font-medium text-slate-700">{etiqueta}{obligatorio ? ' *' : ''}</label>
+	<div class="flex flex-col gap-1">
+		<label for={id} class="text-xs font-semibold text-slate-700">{etiqueta}{#if obligatorio}<span class="text-orange-600"> *</span>{/if}</label>
 		{@render control()}
 		{#if errores[id]}
 			<span class="text-xs text-rose-600">{errores[id]}</span>
@@ -291,218 +420,340 @@
 	</div>
 {/snippet}
 
-{#snippet seccion(titulo: string, icono: string)}
-	<h3 class="text-sm font-bold text-slate-800 flex items-center gap-2 sm:col-span-2 pt-2"><i class={`fas ${icono} text-blue-600`}></i> {titulo}</h3>
+{#snippet subtitulo(titulo: string, accion?: import('svelte').Snippet)}
+	<div class="sm:col-span-2 flex items-center justify-between gap-3 pt-4 mt-1 border-t border-slate-100 first:border-0 first:pt-0 first:mt-0">
+		<h4 class="text-base font-bold text-slate-800">{titulo}</h4>
+		{#if accion}{@render accion()}{/if}
+	</div>
+{/snippet}
+
+{#snippet nota(texto: string)}
+	<p class="sm:col-span-2 flex items-start gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+		<i class="fas fa-circle-info text-blue-500 mt-0.5"></i> <span>{texto}</span>
+	</p>
+{/snippet}
+
+{#snippet insignia(e: { texto: string; clase: string })}
+	<span class={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${e.clase}`}>
+		<span class="w-1.5 h-1.5 rounded-full bg-current opacity-70"></span>{e.texto}
+	</span>
+{/snippet}
+
+{#snippet botonNaranja(texto: string, onclick: () => void)}
+	<button type="button" {onclick} class="shrink-0 px-3 py-1.5 rounded-lg border border-orange-300 bg-white text-orange-600 text-xs font-semibold hover:bg-orange-50 flex items-center gap-1.5">
+		<i class="fas fa-plus"></i> {texto}
+	</button>
 {/snippet}
 
 {#if open}
-	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" transition:fade={{ duration: 200 }}>
-		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" transition:scale={{ duration: 250, start: 0.95 }}>
-			<div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
-				<h2 class="text-xl font-bold text-slate-800">{personal ? 'Editar trabajador' : 'Nuevo trabajador'}</h2>
-				<button onclick={cerrar} disabled={guardando} aria-label="Cerrar" class="text-slate-400 hover:text-slate-600 p-2 rounded-full hover:bg-slate-100 disabled:opacity-50">
-					<i class="fas fa-times"></i>
-				</button>
+	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-2 sm:p-4" transition:fade={{ duration: 200 }}>
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[94vh] sm:h-[90vh] flex flex-col overflow-hidden" transition:scale={{ duration: 250, start: 0.95 }}>
+			<!-- Cabecera -->
+			<div class="px-4 sm:px-6 py-3 border-b border-slate-100 shrink-0">
+				<div class="flex items-center justify-between gap-3">
+					<h2 class="text-lg sm:text-xl font-bold text-slate-800">{personal ? 'Ficha del trabajador' : 'Nuevo trabajador'}</h2>
+					<button onclick={cerrar} disabled={guardando} aria-label="Cerrar" class="text-slate-400 hover:text-slate-600 p-2 rounded-full hover:bg-slate-100 disabled:opacity-50">
+						<i class="fas fa-times"></i>
+					</button>
+				</div>
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm min-w-0">
+					<i class="fas fa-user text-blue-500"></i>
+					<span class="font-bold text-slate-800">{nombreFicha || 'Sin nombre'}</span>
+					{#if lugarFicha}<span class="text-slate-300">•</span><span class="text-slate-600 truncate max-w-[18rem]">{lugarFicha}</span>{/if}
+					{#if tamanoFicha}<span class="text-slate-300">•</span><span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">{tamanoFicha}</span>{/if}
+				</div>
 			</div>
 
-			<div class="p-6 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
-				{@render seccion('Datos personales', 'fa-user')}
-				<div class="sm:col-span-2 flex items-center gap-4">
-					<div class="w-24 h-24 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
-						{#if procesandoFoto}
-							<i class="fas fa-spinner fa-spin text-slate-400 text-xl"></i>
-						{:else if fotoVista}
-							<img src={fotoVista} alt="Foto del trabajador" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
-						{:else}
-							<i class="fas fa-user text-slate-300 text-4xl"></i>
-						{/if}
-					</div>
-					<div class="flex flex-col gap-2 min-w-0">
-						<span class="text-sm font-medium text-slate-700">Foto del trabajador</span>
-						<div class="flex flex-wrap gap-2">
-							<label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 {procesandoFoto || guardando ? 'opacity-50 pointer-events-none' : ''}">
-								<input type="file" accept="image/*" class="hidden" onchange={elegirFoto} disabled={procesandoFoto || guardando} />
-								<i class="fas fa-camera"></i> {fotoVista ? 'Cambiar foto' : 'Tomar o subir foto'}
-							</label>
-							{#if fotoVista}
-								<button type="button" onclick={quitarFoto} disabled={procesandoFoto || guardando} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 disabled:opacity-50">
-									<i class="fas fa-trash-alt text-rose-500"></i> Quitar
+			<div class="flex-1 min-h-0 flex flex-col md:flex-row">
+				<!-- Submenú: columna en PC, tira desplazable en celular -->
+				<nav class="shrink-0 md:w-60 md:border-r border-b md:border-b-0 border-slate-100 bg-white md:p-3 overflow-x-auto md:overflow-y-auto" aria-label="Secciones de la ficha">
+					<ul class="flex md:flex-col gap-1 p-2 md:p-0 min-w-max md:min-w-0">
+						{#each SECCIONES as s (s.id)}
+							{@const activa = seccion === s.id}
+							<li>
+								<button
+									type="button"
+									onclick={() => (seccion = s.id)}
+									aria-current={activa ? 'page' : undefined}
+									class={`w-full flex items-center gap-2.5 px-3 py-2 md:py-2.5 rounded-lg border text-sm font-medium text-left whitespace-nowrap transition-colors ${activa ? 'bg-orange-50 border-orange-200 text-slate-800 md:border-l-4 md:border-l-orange-500' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+								>
+									<i class={`fas ${s.icono} w-4 text-center ${activa ? 'text-orange-500' : 'text-blue-500'}`}></i>
+									<span class="flex-1">{s.titulo}</span>
+									{#if seccionesConError.has(s.id)}<span class="w-2 h-2 rounded-full bg-rose-500" title="Tiene campos por corregir"></span>{/if}
+									<i class={`fas ${activa ? 'fa-chevron-up' : 'fa-chevron-down'} text-[10px] text-slate-400 hidden md:inline`}></i>
 								</button>
+							</li>
+						{/each}
+						<li>
+							{#if personal}
+								<a
+									href={`/rrhh/asistencia?tab=config&p=${personal.id_personal}`}
+									title="Horario, métodos de registro, huelleros y consentimiento biométrico"
+									class="w-full flex items-center gap-2.5 px-3 py-2 md:py-2.5 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:bg-slate-50 whitespace-nowrap"
+								>
+									<i class="fas fa-calendar-days w-4 text-center text-blue-500"></i>
+									<span class="flex-1">Asistencia</span>
+									<i class="fas fa-arrow-up-right-from-square text-[10px] text-slate-400"></i>
+								</a>
+							{:else}
+								<span class="w-full flex items-center gap-2.5 px-3 py-2 md:py-2.5 rounded-lg border border-dashed border-slate-200 text-xs text-slate-400 md:whitespace-normal whitespace-nowrap" title="Se configura en Asistencia → Configuración">
+									<i class="fas fa-calendar-days w-4 text-center"></i>
+									<span class="flex-1">Asistencia: se configura después de guardar</span>
+								</span>
 							{/if}
-						</div>
-						<span class="text-xs text-slate-400">{fotoNueva ? 'Se guardará al pulsar Guardar.' : 'En el celular puedes tomarla con la cámara.'}</span>
+						</li>
+					</ul>
+				</nav>
+
+				<!-- Contenido de la sección -->
+				<div class="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6">
+					<div class="mb-4">
+						<h3 class="text-xl font-bold text-slate-800">{seccionInfo.titulo}</h3>
+						<p class="text-xs text-slate-500">{seccionInfo.subtitulo}</p>
 					</div>
-				</div>
-				{#snippet ctlTipoDoc()}
-					<SelectConSaldo id="tipo_documento" value={form.tipo_documento} options={TIPOS_DOCUMENTO} encabezadoNombre="Documento" onchange={(v) => (form.tipo_documento = v as DatosPersonal['tipo_documento'])} />
-				{/snippet}
-				{@render campo('tipo_documento', 'Tipo de documento', true, ctlTipoDoc)}
-				{#snippet ctlDoc()}
-					<input id="numero_documento" bind:value={form.numero_documento} maxlength="12" inputmode={form.tipo_documento === 'DNI' ? 'numeric' : 'text'} class={inputClase('numero_documento')} />
-				{/snippet}
-				{@render campo('numero_documento', 'Número de documento', true, ctlDoc)}
-				{#snippet ctlNombres()}<input id="nombres" bind:value={form.nombres} maxlength="100" class={inputClase('nombres')} />{/snippet}
-				{@render campo('nombres', 'Nombres', true, ctlNombres)}
-				{#snippet ctlApellidos()}<input id="apellidos" bind:value={form.apellidos} maxlength="100" class={inputClase('apellidos')} />{/snippet}
-				{@render campo('apellidos', 'Apellidos', true, ctlApellidos)}
-				{#snippet ctlNac()}<input id="fecha_nacimiento" type="date" bind:value={form.fecha_nacimiento} class={inputClase('fecha_nacimiento')} />{/snippet}
-				{@render campo('fecha_nacimiento', 'Fecha de nacimiento', false, ctlNac)}
-				{#snippet ctlSexo()}
-					<SelectConSaldo id="sexo" value={form.sexo ?? ''} options={SEXOS} placeholder="Sin especificar" encabezadoNombre="Sexo" onchange={(v) => (form.sexo = (v || null) as DatosPersonal['sexo'])} />
-				{/snippet}
-				{@render campo('sexo', 'Sexo', false, ctlSexo)}
-				{#snippet ctlTel()}<input id="telefono" type="tel" bind:value={form.telefono} maxlength="20" class={inputClase('telefono')} />{/snippet}
-				{@render campo('telefono', 'Teléfono', false, ctlTel)}
-				{#snippet ctlDir()}<input id="direccion" bind:value={form.direccion} maxlength="200" class={inputClase('direccion')} />{/snippet}
-				{@render campo('direccion', 'Dirección', false, ctlDir)}
-				{#snippet ctlEmNom()}<input id="contacto_emergencia_nombre" bind:value={form.contacto_emergencia_nombre} maxlength="100" class={inputClase('contacto_emergencia_nombre')} />{/snippet}
-				{@render campo('contacto_emergencia_nombre', 'Contacto de emergencia', false, ctlEmNom)}
-				{#snippet ctlEmTel()}<input id="contacto_emergencia_telefono" type="tel" bind:value={form.contacto_emergencia_telefono} maxlength="20" class={inputClase('contacto_emergencia_telefono')} />{/snippet}
-				{@render campo('contacto_emergencia_telefono', 'Teléfono de emergencia', false, ctlEmTel)}
 
-				{@render seccion('Datos laborales', 'fa-hard-hat')}
-				{#snippet ctlPin()}
-					<!-- Autogenerado y correlativo (trigger fn_personal_asignar_pin, a pedido del usuario): no se edita. -->
-					<input id="pin" value={form.pin || 'Se asigna al guardar'} readonly tabindex="-1" class="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-100 cursor-not-allowed {form.pin ? 'font-mono text-slate-700' : 'text-slate-400 italic'}" />
-				{/snippet}
-				{@render campo('pin', 'Número en huellero', false, ctlPin, personal ? 'Es el ID de usuario en el huellero. No se cambia: sus marcas se enlazan por este número.' : 'Correlativo automático: el siguiente número libre. Es el ID de usuario en el huellero.')}
-				{#snippet ctlRegimen()}
-					<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={REGIMENES} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
-				{/snippet}
-				{@render campo('regimen', 'Régimen', true, ctlRegimen)}
-				{#if usaCategoria(form.regimen)}
-					{#snippet ctlCat()}
-						<SelectConSaldo id="categoria" value={form.categoria ?? ''} options={opcionesCategoria} placeholder="Selecciona la categoría" encabezadoNombre="Categoría" onchange={(v) => (form.categoria = v as DatosPersonal['categoria'])} />
-					{/snippet}
-					{@render campo('categoria', 'Categoría', false, ctlCat)}
-				{:else if form.regimen === 'general'}
-					{#snippet ctlCargo()}<input id="cargo" bind:value={form.cargo} maxlength="100" class={inputClase('cargo')} />{/snippet}
-					{@render campo('cargo', 'Cargo', false, ctlCargo)}
-				{/if}
-				{#snippet ctlPeriodicidad()}
-					<SelectConSaldo id="periodicidad_pago" value={form.periodicidad_pago ?? ''} options={PERIODICIDADES_PAGO} placeholder="Selecciona la periodicidad" hasError={!!errores.periodicidad_pago} encabezadoNombre="Periodicidad" onchange={(v) => (form.periodicidad_pago = (v || null) as DatosPersonal['periodicidad_pago'])} />
-				{/snippet}
-				{@render campo('periodicidad_pago', 'Periodicidad de pago', false, ctlPeriodicidad)}
-				{#snippet ctlMonto()}<input id="monto_pago" type="number" min="0" step="0.01" bind:value={form.monto_pago} disabled={!form.periodicidad_pago} placeholder={form.periodicidad_pago ? '0.00' : 'Elige primero la periodicidad'} class={`${inputClase('monto_pago')} disabled:bg-slate-50`} />{/snippet}
-				{@render campo('monto_pago', `${etiquetaMonto(form.periodicidad_pago)} (S/)`, false, ctlMonto, form.periodicidad_pago ? 'Monto bruto que recibe en cada periodo de pago.' : undefined)}
-				{#snippet ctlObra()}
-					<SelectConSaldo id="id_centro_costo" value={form.id_centro_costo ? String(form.id_centro_costo) : ''} options={obras} placeholder="Sin obra o área" encabezadoNombre="Obra o área" onchange={cambiarLugar} />
-				{/snippet}
-				{@render campo('id_centro_costo', 'Obra o área', false, ctlObra, 'Para el personal administrativo elige Corporativo o su área.')}
-				{#snippet ctlHorario()}
-					<SelectConSaldo id="id_horario" value={form.id_horario ? String(form.id_horario) : ''} options={opcionesHorario} placeholder="Sin horario" encabezadoNombre="Horario" onchange={(v) => (form.id_horario = v ? Number(v) : null)} />
-				{/snippet}
-				{@render campo('id_horario', 'Horario', false, ctlHorario, 'Con él se calculan tardanzas, faltas y horas extra. Se crean en Horarios.')}
-				{#snippet ctlRefNombre()}<input id="referente_nombre" bind:value={form.referente_nombre} maxlength="150" placeholder="Ej. Juan Pérez" class={inputClase('referente_nombre')} />{/snippet}
-				{@render campo('referente_nombre', 'Nombre del referente', false, ctlRefNombre, 'Quién lo trajo o responde por él en obra.')}
-				{#snippet ctlRefCargo()}
-					<SelectConSaldo id="referente_cargo" value={form.referente_cargo ?? ''} options={[{ value: '', label: 'Sin cargo' }, ...CARGOS_REFERENTE]} placeholder="Selecciona el cargo" encabezadoNombre="Cargo del referente" onchange={(v) => (form.referente_cargo = v || null)} />
-				{/snippet}
-				{@render campo('referente_cargo', 'Cargo del referente', false, ctlRefCargo)}
-				{#snippet ctlUsuarioErp()}
-					<SelectConSaldo id="id_empleado" value={form.id_empleado ? String(form.id_empleado) : ''} options={[{ value: '', label: 'Sin usuario (no marca desde el ERP)' }, ...usuariosErp]} placeholder="Sin usuario" encabezadoNombre="Usuario del ERP" onchange={(v) => (form.id_empleado = v ? Number(v) : null)} />
-				{/snippet}
-				{@render campo('id_empleado', 'Usuario del ERP', false, ctlUsuarioErp, 'Si lo eliges y su horario es libre o mixto, esa persona registra su ingreso y salida desde Inicio → «Mi asistencia», sin huellero.')}
-				{#snippet ctlIngreso()}<input id="fecha_ingreso" type="date" bind:value={form.fecha_ingreso} class={inputClase('fecha_ingreso')} />{/snippet}
-				{@render campo('fecha_ingreso', 'Fecha de ingreso', false, ctlIngreso)}
-				{#snippet ctlCese()}<input id="fecha_cese" type="date" bind:value={form.fecha_cese} class={inputClase('fecha_cese')} />{/snippet}
-				{@render campo('fecha_cese', 'Fecha de cese', false, ctlCese)}
-				{#if form.fecha_cese}
-					{#snippet ctlMotivo()}<input id="motivo_cese" bind:value={form.motivo_cese} maxlength="200" class={inputClase('motivo_cese')} />{/snippet}
-					{@render campo('motivo_cese', 'Motivo del cese', false, ctlMotivo)}
-				{/if}
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3">
+						{#if seccion === 'personales'}
+							{@render subtitulo('Identificación')}
+							<div class="sm:col-span-2 flex items-center gap-4">
+								<div class="w-20 h-20 rounded-2xl bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
+									{#if procesandoFoto}
+										<i class="fas fa-spinner fa-spin text-slate-400 text-xl"></i>
+									{:else if fotoVista}
+										<img src={fotoVista} alt="Foto del trabajador" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
+									{:else}
+										<i class="fas fa-user text-slate-300 text-3xl"></i>
+									{/if}
+								</div>
+								<div class="flex flex-col gap-2 min-w-0">
+									<span class="text-xs font-semibold text-slate-700">Foto del trabajador</span>
+									<div class="flex flex-wrap gap-2">
+										<label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 {procesandoFoto || guardando ? 'opacity-50 pointer-events-none' : ''}">
+											<input type="file" accept="image/*" class="hidden" onchange={elegirFoto} disabled={procesandoFoto || guardando} />
+											<i class="fas fa-camera"></i> {fotoVista ? 'Cambiar foto' : 'Tomar o subir foto'}
+										</label>
+										{#if fotoVista}
+											<button type="button" onclick={quitarFoto} disabled={procesandoFoto || guardando} class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 disabled:opacity-50">
+												<i class="fas fa-trash-alt text-rose-500"></i> Quitar
+											</button>
+										{/if}
+									</div>
+									<span class="text-xs text-slate-400">{fotoNueva ? 'Se guardará al pulsar Guardar cambios.' : 'En el celular puedes tomarla con la cámara.'}</span>
+								</div>
+							</div>
+							{#snippet ctlTipoDoc()}
+								<SelectConSaldo id="tipo_documento" value={form.tipo_documento} options={TIPOS_DOCUMENTO} encabezadoNombre="Documento" onchange={(v) => (form.tipo_documento = v as DatosPersonal['tipo_documento'])} />
+							{/snippet}
+							{@render campo('tipo_documento', 'Tipo de documento', true, ctlTipoDoc)}
+							{#snippet ctlDoc()}
+								<input id="numero_documento" bind:value={form.numero_documento} maxlength="12" inputmode={form.tipo_documento === 'DNI' ? 'numeric' : 'text'} class={inputClase('numero_documento')} />
+							{/snippet}
+							{@render campo('numero_documento', 'Número de documento', true, ctlDoc)}
+							{#snippet ctlNombres()}<input id="nombres" bind:value={form.nombres} maxlength="100" class={inputClase('nombres')} />{/snippet}
+							{@render campo('nombres', 'Nombres', true, ctlNombres)}
+							{#snippet ctlApellidos()}<input id="apellidos" bind:value={form.apellidos} maxlength="100" class={inputClase('apellidos')} />{/snippet}
+							{@render campo('apellidos', 'Apellidos', true, ctlApellidos)}
+							{#snippet ctlNac()}<input id="fecha_nacimiento" type="date" bind:value={form.fecha_nacimiento} class={inputClase('fecha_nacimiento')} />{/snippet}
+							{@render campo('fecha_nacimiento', 'Fecha de nacimiento', false, ctlNac)}
+							{#snippet ctlSexo()}
+								<SelectConSaldo id="sexo" value={form.sexo ?? ''} options={SEXOS} placeholder="Sin especificar" encabezadoNombre="Sexo" onchange={(v) => (form.sexo = (v || null) as DatosPersonal['sexo'])} />
+							{/snippet}
+							{@render campo('sexo', 'Sexo', false, ctlSexo)}
 
-				{@render seccion('Huelleros donde marca', 'fa-fingerprint')}
-				<div class="sm:col-span-2 flex flex-col gap-2">
-					{#if huelleros.length}
-						{#if huellerosElegidos.length}
-							<div class="flex flex-col divide-y divide-slate-100 border border-slate-100 rounded-xl">
-								{#each huelleros.filter((h) => huellerosElegidos.includes(h.id_dispositivo)) as h (h.id_dispositivo)}
-									<div class="flex items-center gap-3 px-3 py-2.5">
-										<span class={`w-2.5 h-2.5 rounded-full shrink-0 ${h.en_linea ? 'bg-emerald-500' : 'bg-slate-300'}`} title={h.en_linea ? 'En línea' : 'Desconectado'}></span>
-										<span class="min-w-0 flex-1">
-											<span class="block text-sm font-medium text-slate-800">{h.nombre} <span class={`text-[11px] font-normal ${h.en_linea ? 'text-emerald-600' : 'text-slate-400'}`}>{h.en_linea ? 'En línea' : 'Desconectado'}</span></span>
-											<span class="block text-xs text-slate-500 [overflow-wrap:anywhere]"><span class="font-mono text-slate-400">ID {h.numero_serie}</span> · {h.lugar}</span>
+							{@render subtitulo('Contacto y domicilio')}
+							{#snippet ctlTel()}<input id="telefono" type="tel" bind:value={form.telefono} maxlength="20" class={inputClase('telefono')} />{/snippet}
+							{@render campo('telefono', 'Teléfono', false, ctlTel)}
+							{#snippet ctlDir()}<input id="direccion" bind:value={form.direccion} maxlength="200" class={inputClase('direccion')} />{/snippet}
+							{@render campo('direccion', 'Dirección', false, ctlDir)}
+
+							{@render subtitulo('Contacto de emergencia')}
+							{#snippet ctlEmNom()}<input id="contacto_emergencia_nombre" bind:value={form.contacto_emergencia_nombre} maxlength="100" class={inputClase('contacto_emergencia_nombre')} />{/snippet}
+							{@render campo('contacto_emergencia_nombre', 'Nombre completo', false, ctlEmNom)}
+							{#snippet ctlEmTel()}<input id="contacto_emergencia_telefono" type="tel" bind:value={form.contacto_emergencia_telefono} maxlength="20" class={inputClase('contacto_emergencia_telefono')} />{/snippet}
+							{@render campo('contacto_emergencia_telefono', 'Teléfono', false, ctlEmTel)}
+						{:else if seccion === 'vinculo'}
+							{@render subtitulo('Asignación y empleador')}
+							{#snippet ctlVinculo()}
+								<SelectConSaldo id="vinculo" value={form.vinculo ?? vinculoDe(form)} options={VINCULOS} placeholder="Selecciona el vínculo" encabezadoNombre="Vínculo" onchange={(v) => (form.vinculo = (v || null) as DatosPersonal['vinculo'])} />
+							{/snippet}
+							{@render campo('vinculo', 'Tipo de vínculo', false, ctlVinculo, 'Planilla propia o personal de un subcontratista.')}
+							{#snippet ctlObra()}
+								<SelectConSaldo id="id_centro_costo" value={form.id_centro_costo ? String(form.id_centro_costo) : ''} options={obras} placeholder="Sin obra o área" encabezadoNombre="Obra o área" onchange={cambiarLugar} />
+							{/snippet}
+							{@render campo('id_centro_costo', 'Área asignada (centro de costo)', false, ctlObra, 'Obra, Consultoría o Corporativo. Al cambiarla se cambian sus huelleros por los de la nueva.')}
+							{#snippet ctlEmpleador()}<input id="empleador_nombre" bind:value={form.empleador_nombre} maxlength="150" placeholder={vinculoDe(form) === 'planilla_propia' ? EMPRESA_NOMBRE : 'Ej. Servicios Marín S.A.C.'} class={inputClase('empleador_nombre')} />{/snippet}
+							{@render campo('empleador_nombre', 'Empleador', false, ctlEmpleador, vinculoDe(form) === 'planilla_propia' ? 'Vacío = la propia empresa.' : 'Empresa del subcontratista que lo emplea.')}
+							{#snippet ctlEmpRuc()}<input id="empleador_ruc" bind:value={form.empleador_ruc} maxlength="11" inputmode="numeric" placeholder="11 dígitos" class={inputClase('empleador_ruc')} />{/snippet}
+							{@render campo('empleador_ruc', 'RUC del empleador', false, ctlEmpRuc)}
+							{#snippet ctlRefNombre()}<input id="referente_nombre" bind:value={form.referente_nombre} maxlength="150" placeholder="Ej. Juan Pérez" class={inputClase('referente_nombre')} />{/snippet}
+							{@render campo('referente_nombre', 'Superior o referente', false, ctlRefNombre, 'Quién lo trajo o responde por él en obra.')}
+							{#snippet ctlRefCargo()}
+								<SelectConSaldo id="referente_cargo" value={form.referente_cargo ?? ''} options={[{ value: '', label: 'Sin cargo' }, ...CARGOS_REFERENTE]} placeholder="Selecciona el cargo" encabezadoNombre="Cargo del referente" onchange={(v) => (form.referente_cargo = v || null)} />
+							{/snippet}
+							{@render campo('referente_cargo', 'Cargo del referente', false, ctlRefCargo)}
+
+							{@render subtitulo('Régimen')}
+							{#snippet ctlRegimen()}
+								<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={REGIMENES} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
+							{/snippet}
+							{@render campo('regimen', 'Régimen laboral', true, ctlRegimen)}
+							{#snippet ctlTamano()}
+								<SelectConSaldo id="empleador_tamano" value={form.empleador_tamano ?? ''} options={[{ value: '', label: 'Sin indicar' }, ...TAMANOS_EMPRESA]} placeholder="Sin indicar" encabezadoNombre="Régimen de la empresa" onchange={(v) => (form.empleador_tamano = (v || null) as DatosPersonal['empleador_tamano'])} />
+							{/snippet}
+							{@render campo('empleador_tamano', 'Régimen de la empresa', false, ctlTamano, 'MYPE (micro o pequeña empresa) o régimen general.')}
+							{#if usaCategoria(form.regimen)}
+								{#snippet ctlCat()}
+									<SelectConSaldo id="categoria" value={form.categoria ?? ''} options={opcionesCategoria} placeholder="Selecciona la categoría" encabezadoNombre="Categoría" onchange={(v) => (form.categoria = v as DatosPersonal['categoria'])} />
+								{/snippet}
+								{@render campo('categoria', 'Categoría (construcción civil)', false, ctlCat)}
+							{/if}
+
+							{@render subtitulo('Fechas y estado')}
+							{#snippet ctlIngreso()}<input id="fecha_ingreso" type="date" bind:value={form.fecha_ingreso} class={inputClase('fecha_ingreso')} />{/snippet}
+							{@render campo('fecha_ingreso', 'Fecha de ingreso', false, ctlIngreso)}
+							{#snippet ctlCese()}<input id="fecha_cese" type="date" bind:value={form.fecha_cese} class={inputClase('fecha_cese')} />{/snippet}
+							{@render campo('fecha_cese', 'Fecha de cese', false, ctlCese)}
+							{#if form.fecha_cese}
+								{#snippet ctlMotivo()}<input id="motivo_cese" bind:value={form.motivo_cese} maxlength="200" class={inputClase('motivo_cese')} />{/snippet}
+								{@render campo('motivo_cese', 'Motivo del cese', false, ctlMotivo)}
+							{/if}
+							<div class="flex flex-col gap-1">
+								<span class="text-xs font-semibold text-slate-700">Estado</span>
+								<div class="py-2">
+									{@render insignia(form.fecha_cese && form.fecha_cese <= hoyIso()
+										? { texto: 'Cesado', clase: 'bg-slate-100 text-slate-600 border-slate-200' }
+										: form.fecha_cese
+											? { texto: `Activo · cesa el ${fechaCorta(form.fecha_cese)}`, clase: 'bg-amber-50 text-amber-700 border-amber-200' }
+											: { texto: 'Activo', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' })}
+								</div>
+								<span class="text-xs text-slate-400">Se calcula con la fecha de cese.</span>
+							</div>
+
+							{@render subtitulo('Historial de obras, huelleros y referentes')}
+							<div class="sm:col-span-2">
+								{#if personal}
+									<HistorialAsignaciones idPersonal={personal.id_personal} />
+								{:else}
+									<span class="text-xs text-slate-400">Se empieza a registrar al guardar el trabajador.</span>
+								{/if}
+							</div>
+						{:else if seccion === 'cargo'}
+							<div class="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
+								{#each [
+									{ icono: 'fa-briefcase', titulo: 'Cargo vigente', valor: cargoVigente || (usaCategoria(form.regimen) && form.categoria ? etiquetaCategoria(form.categoria) : null), extra: null },
+									{ icono: 'fa-coins', titulo: 'Remuneración vigente', valor: form.periodicidad_pago ? soles(form.monto_pago) : null, extra: form.periodicidad_pago ? etiqueta(PERIODICIDADES_PAGO, form.periodicidad_pago) : null },
+									{ icono: 'fa-calendar', titulo: 'Vigencia actual', valor: form.monto_pago_desde ? `Desde ${fechaCorta(form.monto_pago_desde)}` : null, extra: null }
+								] as t}
+									<div class="flex items-center gap-3 rounded-xl border border-slate-200 p-3 min-w-0">
+										<span class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0"><i class={`fas ${t.icono}`}></i></span>
+										<span class="min-w-0">
+											<span class="block text-xs text-slate-500">{t.titulo}</span>
+											<span class={`block font-bold truncate ${t.valor ? 'text-slate-800' : 'text-slate-300'}`}>{t.valor || '—'}</span>
+											{#if t.extra}<span class="block text-xs text-slate-500">{t.extra}</span>{/if}
 										</span>
-										<button type="button" onclick={() => alternarHuellero(h.id_dispositivo)} title="Quitar de este huellero" aria-label={`Quitar ${h.nombre}`} class="w-8 h-8 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 shrink-0">
-											<i class="fas fa-xmark"></i>
-										</button>
 									</div>
 								{/each}
 							</div>
-						{:else}
-							<span class="text-xs text-amber-700"><i class="fas fa-triangle-exclamation"></i> No marca en ningún huellero. Agrega al menos uno.</span>
-						{/if}
-						{#if opcionesHuellero.length}
-							<SelectConSaldo
-								id="agregar_huellero"
-								value=""
-								options={opcionesHuellero}
-								placeholder={`Agregar huellero (${opcionesHuellero.length} disponible${opcionesHuellero.length === 1 ? '' : 's'})`}
-								encabezadoNombre="Huellero"
-								onchange={(v) => v && alternarHuellero(Number(v))}
-							/>
-						{:else}
-							<span class="text-xs text-slate-400">Ya está en todos los huelleros registrados ({huelleros.length}).</span>
-						{/if}
-						<span class="text-xs text-slate-400">Se listan todos los huelleros registrados en Huelleros, agrupados por obra o área (punto verde = en línea). Al guardar se envía a los que agregaste y se retira de los que quitaste; en cada huellero registra su huella o rostro.</span>
-					{:else}
-						<span class="text-xs text-slate-500">Todavía no hay huelleros conectados. Agrégalos en Huelleros.</span>
-					{/if}
-				</div>
-				<div class="sm:col-span-2 flex flex-col gap-2 bg-slate-50 border border-slate-100 rounded-xl p-3">
-					<label class="flex items-start gap-3 cursor-pointer">
-						<input type="checkbox" bind:checked={form.consentimiento_biometrico} class="w-4 h-4 mt-0.5 accent-blue-600" />
-						<span class="text-sm text-slate-700">
-							<b>Firmó el consentimiento</b> para que el ERP guarde su huella y rostro (Ley 29733)
-							<span class="block text-xs text-slate-500">Con él, al cambiar de obra su huella y rostro se copian solos al huellero nuevo. Se guardan cifrados y nadie puede verlos. Sin consentimiento debe registrarse en cada huellero. Si lo desmarcas, se borran del ERP.</span>
-						</span>
-					</label>
-					{#if form.consentimiento_biometrico}
-						<div class="flex flex-wrap items-end gap-4 pl-7">
-							<div class="flex flex-col gap-1">
-								<label for="consentimiento_fecha" class="text-xs font-medium text-slate-600">Fecha de firma *</label>
-								<input id="consentimiento_fecha" type="date" bind:value={form.consentimiento_fecha} class={inputClase('consentimiento_fecha')} />
-								{#if errores.consentimiento_fecha}<span class="text-xs text-rose-600">{errores.consentimiento_fecha}</span>{/if}
-							</div>
-							<span class="text-xs text-slate-600 pb-3">
-								{#if biometria && (biometria.huellas || biometria.rostros)}
-									<i class="fas fa-lock text-emerald-600"></i> Guardado en el ERP: {biometria.huellas} {biometria.huellas === 1 ? 'huella' : 'huellas'}, {biometria.rostros} {biometria.rostros === 1 ? 'rostro' : 'rostros'}
-								{:else}
-									Aún no hay huella ni rostro guardados: se traen de sus huelleros al guardar (o cuando los registre).
-								{/if}
-							</span>
-						</div>
-					{/if}
-				</div>
 
-				{@render seccion('Pagos y seguros', 'fa-shield-halved')}
-				{#snippet ctlPension()}
-					<SelectConSaldo id="sistema_pension" value={form.sistema_pension ?? ''} options={SISTEMAS_PENSION} placeholder="Sin especificar" encabezadoNombre="Sistema" onchange={(v) => (form.sistema_pension = v || null)} />
-				{/snippet}
-				{@render campo('sistema_pension', 'Sistema de pensión', false, ctlPension)}
-				{#if form.sistema_pension && form.sistema_pension !== 'ONP'}
-					{#snippet ctlCuspp()}<input id="cuspp" bind:value={form.cuspp} maxlength="15" class={inputClase('cuspp')} />{/snippet}
-					{@render campo('cuspp', 'CUSPP', false, ctlCuspp)}
-				{/if}
-				{#snippet ctlBanco()}<input id="banco" bind:value={form.banco} maxlength="60" placeholder="Ej. BCP" class={inputClase('banco')} />{/snippet}
-				{@render campo('banco', 'Banco', false, ctlBanco)}
-				{#snippet ctlCuenta()}<input id="numero_cuenta" bind:value={form.numero_cuenta} maxlength="30" class={inputClase('numero_cuenta')} />{/snippet}
-				{@render campo('numero_cuenta', 'Número de cuenta', false, ctlCuenta)}
-				{#snippet ctlCci()}<input id="cci" bind:value={form.cci} maxlength="20" inputmode="numeric" class={inputClase('cci')} />{/snippet}
-				{@render campo('cci', 'CCI', false, ctlCci)}
-				{#snippet ctlSctr()}<input id="sctr_poliza" bind:value={form.sctr_poliza} maxlength="40" class={inputClase('sctr_poliza')} />{/snippet}
-				{@render campo('sctr_poliza', 'Póliza SCTR', false, ctlSctr)}
-				{#snippet ctlSctrVence()}<input id="sctr_vencimiento" type="date" bind:value={form.sctr_vencimiento} class={inputClase('sctr_vencimiento')} />{/snippet}
-				{@render campo('sctr_vencimiento', 'Vencimiento del SCTR', false, ctlSctrVence, 'El ERP avisa 30 días antes.')}
-				{#snippet ctlExamen()}<input id="examen_medico_vencimiento" type="date" bind:value={form.examen_medico_vencimiento} class={inputClase('examen_medico_vencimiento')} />{/snippet}
-				{@render campo('examen_medico_vencimiento', 'Vencimiento del examen médico', false, ctlExamen, 'El ERP avisa 30 días antes.')}
+							{@render subtitulo('Condiciones actuales')}
+							{#snippet ctlPeriodicidad()}
+								<SelectConSaldo id="periodicidad_pago" value={form.periodicidad_pago ?? ''} options={PERIODICIDADES_PAGO} placeholder="Selecciona la periodicidad" hasError={!!errores.periodicidad_pago} encabezadoNombre="Periodicidad" onchange={(v) => (form.periodicidad_pago = (v || null) as DatosPersonal['periodicidad_pago'])} />
+							{/snippet}
+							{@render campo('periodicidad_pago', 'Periodicidad', false, ctlPeriodicidad)}
+							{#snippet ctlMonto()}<input id="monto_pago" type="number" min="0" step="0.01" bind:value={form.monto_pago} disabled={!form.periodicidad_pago} placeholder={form.periodicidad_pago ? '0.00' : 'Elige primero la periodicidad'} class={`${inputClase('monto_pago')} disabled:bg-slate-50`} />{/snippet}
+							{@render campo('monto_pago', `${etiquetaMonto(form.periodicidad_pago)} (S/)`, false, ctlMonto, form.periodicidad_pago ? 'Monto bruto que recibe en cada periodo de pago.' : undefined)}
+							{#snippet ctlMontoDesde()}<input id="monto_pago_desde" type="date" bind:value={form.monto_pago_desde} disabled={!form.periodicidad_pago} class={`${inputClase('monto_pago_desde')} disabled:bg-slate-50`} />{/snippet}
+							{@render campo('monto_pago_desde', 'Vigente desde', false, ctlMontoDesde, 'Desde cuándo rige este monto.')}
+
+							{#snippet accionCargo()}{@render botonNaranja('Registrar cambio de cargo', agregarCargo)}{/snippet}
+							{@render subtitulo('Historial de cargos', accionCargo)}
+							<div class="sm:col-span-2 flex flex-col gap-2">
+								{#if cargandoCargos}
+									<span class="text-xs text-slate-400"><i class="fas fa-spinner fa-spin"></i> Cargando historial…</span>
+								{:else if !cargos.length}
+									<span class="text-xs text-slate-400 italic">Sin cargos registrados. Pulsa «Registrar cambio de cargo».</span>
+								{:else}
+									<div class="border border-slate-200 rounded-xl overflow-hidden">
+										<div class="hidden sm:grid grid-cols-[9rem_9rem_minmax(0,1fr)_6.5rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+											<span>Desde</span><span>Hasta</span><span>Cargo</span><span>Estado</span><span class="sr-only">Acciones</span>
+										</div>
+										{#each cargos as c, i (c.id_cargo_historial ?? `n${i}`)}
+											<div class={`grid grid-cols-2 sm:grid-cols-[9rem_9rem_minmax(0,1fr)_6.5rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 ${erroresCargos[i] ? 'bg-rose-50/50' : ''}`}>
+												<label class="flex flex-col gap-0.5 text-[11px] text-slate-500 sm:contents">
+													<span class="sm:hidden">Desde</span>
+													<input type="date" bind:value={c.fecha_inicio} aria-label="Desde" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
+												</label>
+												<label class="flex flex-col gap-0.5 text-[11px] text-slate-500 sm:contents">
+													<span class="sm:hidden">Hasta</span>
+													<input type="date" value={c.fecha_fin ?? ''} oninput={(e) => (c.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
+												</label>
+												<span class="col-span-2 sm:col-span-1 flex flex-col gap-0.5 min-w-0">
+													<input id={`cargo_${i}`} bind:value={c.cargo} maxlength="100" placeholder="Ej. Maestro de obra" aria-label="Cargo" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400" />
+													<span class="text-[11px] text-slate-400">{duracionCargo(c)}</span>
+												</span>
+												<span>{@render insignia(estadoCargo(c))}</span>
+												<button type="button" onclick={() => quitarCargo(i)} title="Quitar este tramo" aria-label="Quitar este tramo" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+												{#if erroresCargos[i]}<span class="col-span-2 sm:col-span-5 text-xs text-rose-600">{erroresCargos[i]}</span>{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
+								{#if errores.cargos}<span class="text-xs text-rose-600">{errores.cargos}</span>{/if}
+							</div>
+							{@render nota('Cada tramo conserva su cargo, sin fechas superpuestas. El que no tiene fecha «Hasta» es el cargo vigente; si su «Desde» es futuro queda como Programado.')}
+						{:else if seccion === 'beneficios'}
+							<div class="sm:col-span-2 flex flex-col items-center text-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10">
+								<span class="w-12 h-12 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center text-xl"><i class="fas fa-gift"></i></span>
+								<h4 class="font-bold text-slate-800">Aún no hay beneficios configurados</h4>
+								<p class="text-sm text-slate-500 max-w-md">Esta sección queda reservada para gratificaciones, bonos y su proyección en cuentas por pagar. Todavía no se guardan en el ERP.</p>
+							</div>
+						{:else if seccion === 'pagos'}
+							{@render subtitulo('Datos de pago')}
+							{#snippet ctlBanco()}<input id="banco" bind:value={form.banco} maxlength="60" placeholder="Ej. BCP" class={inputClase('banco')} />{/snippet}
+							{@render campo('banco', 'Banco', false, ctlBanco)}
+							{#snippet ctlCuenta()}<input id="numero_cuenta" bind:value={form.numero_cuenta} maxlength="30" class={inputClase('numero_cuenta')} />{/snippet}
+							{@render campo('numero_cuenta', 'Número de cuenta (haberes)', false, ctlCuenta)}
+							{#snippet ctlCci()}<input id="cci" bind:value={form.cci} maxlength="20" inputmode="numeric" class={inputClase('cci')} />{/snippet}
+							{@render campo('cci', 'CCI', false, ctlCci, '20 dígitos.')}
+
+							{@render subtitulo('Afiliación previsional')}
+							{#snippet ctlPension()}
+								<SelectConSaldo id="sistema_pension" value={form.sistema_pension ?? ''} options={SISTEMAS_PENSION} placeholder="Sin especificar" encabezadoNombre="Sistema" onchange={(v) => (form.sistema_pension = v || null)} />
+							{/snippet}
+							{@render campo('sistema_pension', 'Sistema de pensión', false, ctlPension)}
+							{#if form.sistema_pension && form.sistema_pension !== 'ONP'}
+								{#snippet ctlCuspp()}<input id="cuspp" bind:value={form.cuspp} maxlength="15" class={inputClase('cuspp')} />{/snippet}
+								{@render campo('cuspp', 'CUSPP', false, ctlCuspp)}
+							{/if}
+
+							{@render subtitulo('Seguros y salud ocupacional')}
+							<div class="sm:col-span-2 border border-slate-200 rounded-xl overflow-hidden">
+								<div class="hidden sm:grid grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+									<span>Cobertura</span><span>Póliza o documento</span><span>Vencimiento</span><span>Estado</span>
+								</div>
+								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 text-sm">
+									<span class="font-medium text-slate-800">SCTR</span>
+									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.sctr_vencimiento))}</span>
+									<input id="sctr_poliza" bind:value={form.sctr_poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza SCTR" class="col-span-2 sm:col-span-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+									<input id="sctr_vencimiento" type="date" bind:value={form.sctr_vencimiento} aria-label="Vencimiento del SCTR" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
+								</div>
+								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 border-t border-slate-100 text-sm">
+									<span class="font-medium text-slate-800">Examen médico ocupacional</span>
+									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.examen_medico_vencimiento))}</span>
+									<span class="hidden sm:block text-slate-300">—</span>
+									<input id="examen_medico_vencimiento" type="date" bind:value={form.examen_medico_vencimiento} aria-label="Vencimiento del examen médico" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
+								</div>
+							</div>
+							{@render nota('El ERP avisa en la lista de Personal 30 días antes de cada vencimiento.')}
+						{/if}
+					</div>
+				</div>
 			</div>
 
-			<div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-3 shrink-0">
-				<button onclick={cerrar} disabled={guardando} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-50">Cancelar</button>
-				<button onclick={guardar} disabled={guardando} class="px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium text-sm shadow-md shadow-blue-600/20 disabled:opacity-50 flex items-center gap-2">
-					{#if guardando}<i class="fas fa-spinner fa-spin"></i>{/if} Guardar
+			<div class="px-4 sm:px-6 py-3 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
+				<button onclick={cerrar} disabled={guardando} class="px-6 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-sm disabled:opacity-50">Cancelar</button>
+				<button onclick={guardar} disabled={guardando} class="px-6 py-2.5 bg-orange-500 text-white rounded-xl hover:bg-orange-600 font-semibold text-sm shadow-md shadow-orange-500/20 disabled:opacity-50 flex items-center gap-2">
+					{#if guardando}<i class="fas fa-spinner fa-spin"></i>{/if} Guardar cambios
 				</button>
 			</div>
 		</div>

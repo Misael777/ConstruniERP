@@ -14,10 +14,19 @@
 		etiqueta,
 		etiquetaMonto,
 		nombreCompleto,
+		VINCULOS,
+		TAMANOS_EMPRESA,
+		vinculoDe,
+		empleadorDe,
+		getCargosHistorial,
+		type CargoHistorial,
 		type Personal
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import { supabase } from '$lib/supabaseClient';
+	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
+	import HistorialAsignaciones from './HistorialAsignaciones.svelte';
 
 	let {
 		personal,
@@ -36,6 +45,22 @@
 
 	const fecha = (f: string | null) => (f ? new Date(`${f}T00:00:00`).toLocaleDateString('es-PE') : '');
 	const soles = (n: number | null) => (n == null ? '' : `S/ ${Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2 })}`);
+
+	// Historial de cargos (personal_cargo_historial), del más reciente al más antiguo.
+	let cargos = $state<CargoHistorial[]>([]);
+	$effect(() => {
+		const id = personal?.id_personal;
+		cargos = [];
+		if (!id) return;
+		getCargosHistorial(supabase, id)
+			.then((lista) => {
+				if (personal?.id_personal === id) cargos = lista;
+			})
+			.catch(() => {});
+	});
+	const historialCargos = $derived(
+		cargos.map((c) => `${c.cargo} · ${fecha(c.fecha_inicio)} – ${c.fecha_fin ? fecha(c.fecha_fin) : 'actual'}`).join('\n')
+	);
 
 	type Fila = [string, string | null | undefined];
 	const secciones = $derived.by((): { titulo: string; icono: string; filas: Fila[] }[] => {
@@ -57,28 +82,36 @@
 				]
 			},
 			{
-				titulo: 'Datos laborales',
-				icono: 'fa-hard-hat',
+				titulo: 'Vínculo laboral',
+				icono: 'fa-briefcase',
 				filas: [
-					['Número en huellero', p.pin],
-					['Régimen', etiqueta(REGIMENES, p.regimen)],
-					...((esCivil
-						? [['Categoría', etiquetaCategoria(p.categoria)]]
-						: [['Cargo', p.cargo]]) as Fila[]),
-					['Periodicidad de pago', etiqueta(PERIODICIDADES_PAGO, p.periodicidad_pago)],
-					[etiquetaMonto(p.periodicidad_pago), soles(p.monto_pago)],
-					['Obra o área', p.centro_costo ? `${p.centro_costo.codigo} · ${p.centro_costo.nombre}` : null],
-					['Horario', p.horario?.nombre],
-					['Referente', [p.referente_nombre, p.referente_cargo].filter(Boolean).join(' · ')],
+					['Tipo de vínculo', etiqueta(VINCULOS, vinculoDe(p))],
+					['Empleador', [empleadorDe(p, EMPRESA_NOMBRE), p.empleador_ruc ? `RUC ${p.empleador_ruc}` : null, etiqueta(TAMANOS_EMPRESA, p.empleador_tamano)].filter(Boolean).join(' · ')],
+					['Área asignada', p.centro_costo ? `${p.centro_costo.codigo} · ${p.centro_costo.nombre}` : null],
+					['Superior o referente', [p.referente_nombre, p.referente_cargo].filter(Boolean).join(' · ')],
+					['Régimen laboral', etiqueta(REGIMENES, p.regimen)],
+					...((esCivil ? [['Categoría', etiquetaCategoria(p.categoria)]] : []) as Fila[]),
 					['Fecha de ingreso', fecha(p.fecha_ingreso)],
 					['Fecha de cese', p.fecha_cese ? `${fecha(p.fecha_cese)}${p.motivo_cese ? ` · ${p.motivo_cese}` : ''}` : null]
 				]
 			},
 			{
-				titulo: 'Huelleros',
-				icono: 'fa-fingerprint',
+				titulo: 'Cargo y remuneración',
+				icono: 'fa-coins',
 				filas: [
-					['Marca en', susHuelleros.map((h) => `${h.nombre} (${h.lugar})`).join('\n') || 'Ningún huellero'],
+					['Cargo vigente', p.cargo],
+					['Historial de cargos', historialCargos],
+					['Periodicidad de pago', etiqueta(PERIODICIDADES_PAGO, p.periodicidad_pago)],
+					[etiquetaMonto(p.periodicidad_pago), [soles(p.monto_pago), p.monto_pago_desde ? `desde ${fecha(p.monto_pago_desde)}` : null].filter(Boolean).join(' · ')]
+				]
+			},
+			{
+				titulo: 'Asistencia',
+				icono: 'fa-calendar-days',
+				filas: [
+					['Horario', p.horario?.nombre],
+					['ID en el huellero', p.pin],
+					['Huelleros', susHuelleros.map((h) => `${h.nombre} (${h.lugar})`).join('\n') || 'Ningún huellero'],
 					[
 						'Consentimiento biométrico',
 						p.consentimiento_biometrico
@@ -138,6 +171,10 @@
 						</dl>
 					</section>
 				{/each}
+				<section class="sm:col-span-2 min-w-0 flex flex-col gap-2">
+					<h3 class="text-sm font-bold text-slate-800 flex items-center gap-2"><i class="fas fa-clock-rotate-left text-blue-600"></i> Historial de obras, huelleros y referentes</h3>
+					<HistorialAsignaciones idPersonal={personal.id_personal} />
+				</section>
 			</div>
 			<div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-3 shrink-0">
 				<button onclick={onClose} class="px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-medium text-sm">Cerrar</button>

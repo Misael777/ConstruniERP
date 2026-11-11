@@ -305,7 +305,7 @@
 							</div>
 						</li>
 						<li>Si va por <b>WiFi</b>: en <b>Red → Ethernet</b> pon IP <b>10.10.10.201</b>, máscara 255.255.255.0, puerta de enlace 0.0.0.0 y DHCP apagado. De fábrica el puerto de cable usa 192.168.1.201 y choca con las redes WiFi 192.168.1.x: el huellero dice "Conectado" pero no sale a internet. Si va por <b>cable</b> (router de la obra o 4G): Ethernet con DHCP activado.</li>
-						<li>En uno o dos minutos aparece en esta lista como <b>Pendiente</b>. Pulsa <b>Asignar lugar</b> y elige la obra o el área (para la oficina: Corporativo). Los trabajadores de esa obra o área se le envían solos; a los demás agrégalo desde su ficha en Personal.</li>
+						<li>En uno o dos minutos aparece en esta lista como <b>Pendiente</b>. Pulsa <b>Asignar lugar</b> y elige la obra o el área (para la oficina: Corporativo). Los trabajadores de esa obra o área se le envían solos; a los demás agrégalo en Asistencia → Configuración.</li>
 						<li>Revisa que la fecha y hora del huellero sean las de Lima (<b>Sistema → Fecha y Hora</b>).</li>
 					</ol>
 				</div>

@@ -15,6 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { calcularAsistencia, sumarDias, diaSemana, reloj, duracion, type Marca, type DiaAsistencia } from './asistencia.service';
 import { minutosDelDia, esLibre, type Horario } from '$lib/modules/personal/services/horarios.service';
 import { nombreCompleto, type Personal } from '$lib/modules/personal/services/personal.service';
+import { nombreCentro } from './huelleros.service';
 
 const LIMA_MS = 5 * 3_600_000;
 const EVENTO_RECHAZO = 20;
@@ -249,9 +250,10 @@ export async function getObrasTareo(client: SupabaseClient): Promise<ObraTareo[]
 	if (e2) throw e2;
 	const ids = [...new Set([...(per ?? []), ...(disp ?? [])].map((x) => x.id_centro_costo as number))];
 	if (!ids.length) return [];
-	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre').in('id_centro_costo', ids).order('codigo');
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre, proyecto(nombre_proyecto)').in('id_centro_costo', ids).order('codigo');
 	if (error) throw error;
-	return (data ?? []) as ObraTareo[];
+	// El centro de un proyecto se llama solo con su número: se muestra el nombre del proyecto.
+	return (data ?? []).map((c: any) => ({ id_centro_costo: c.id_centro_costo, ...nombreCentro(c)! }));
 }
 
 export interface DatosTareo {
