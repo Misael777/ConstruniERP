@@ -31,6 +31,7 @@ import {
 	validateCentroCostoPayload
 } from '../config/centroCostos.config';
 import { generarCodigoProyecto, type ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
+import { COLUMNAS_MONEDA, montoSoles } from '$lib/shared/moneda';
 
 export interface CentroCosto {
 	id_centro_costo: number;
@@ -727,29 +728,26 @@ export async function getOrCrearCentroCostoCompartido(
  * archivo: un fallo acá es secundario, se loguea y devuelve 0 para todos.
  */
 export async function getSaldosPorCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, number>> {
-	const saldos: Record<number, number> = {};
-	for (const id of ids) saldos[id] = 0;
-	if (ids.length === 0) return saldos;
+	const vigentes = await getSaldosVigentesCentroCosto(client, ids);
+	return Object.fromEntries(Object.entries(vigentes).map(([id, v]) => [Number(id), v.saldo]));
+}
 
-	const { data, error } = await client
-		.from('transaccion')
-		.select('id_centro_costo_origen, id_centro_costo_destino, monto_total')
-		.eq('estado', 'activo')
-		.or(`id_centro_costo_origen.in.(${ids.join(',')}),id_centro_costo_destino.in.(${ids.join(',')})`);
-
+/** Saldo vigente EN SOLES (último punto de corte + movimientos posteriores) y fecha del corte de cada centro en `ids`
+ * — fn_saldos_centros_costo, la MISMA función que usan el bloqueo por saldo, el formulario de transacciones y Control
+ * Financiero (decisión del cliente 12/11/2026: el corte vale en todo el sistema). Nunca lanza: ante un error, 0. */
+export async function getSaldosVigentesCentroCosto(client: SupabaseClient, ids: number[]): Promise<Record<number, { saldo: number; fecha_corte: string | null }>> {
+	const res: Record<number, { saldo: number; fecha_corte: string | null }> = {};
+	for (const id of ids) res[id] = { saldo: 0, fecha_corte: null };
+	if (ids.length === 0) return res;
+	const { data, error } = await client.rpc('fn_saldos_centros_costo');
 	if (error) {
 		console.error('[centroCostos.service] No se pudo calcular el saldo de los centros de costo:', error);
-		return saldos;
+		return res;
 	}
-
-	const idsSet = new Set(ids);
-	for (const row of (data ?? []) as any[]) {
-		const monto = Number(row.monto_total) || 0;
-		if (idsSet.has(row.id_centro_costo_destino)) saldos[row.id_centro_costo_destino] += monto;
-		if (idsSet.has(row.id_centro_costo_origen)) saldos[row.id_centro_costo_origen] -= monto;
+	for (const f of (data ?? []) as any[]) {
+		if (f.id_centro_costo in res) res[f.id_centro_costo] = { saldo: Number(f.saldo), fecha_corte: f.fecha_corte ?? null };
 	}
-
-	return saldos;
+	return res;
 }
 
 /**
@@ -787,7 +785,7 @@ export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: 
 
 		const { data: adelantos, error: errorAdelantos } = await client
 			.from('transaccion')
-			.select('id_centro_costo_destino, monto_total')
+			.select(`id_centro_costo_destino, monto_total, ${COLUMNAS_MONEDA}`)
 			.in('id_centro_costo_destino', ids)
 			.eq('tipo', 'ingreso')
 			.eq('estado', 'activo')
@@ -796,7 +794,7 @@ export async function getSaldosVentaPorCentroCosto(client: SupabaseClient, ids: 
 
 		const adelantoPorCentro: Record<number, number> = {};
 		for (const t of (adelantos ?? []) as any[]) {
-			adelantoPorCentro[t.id_centro_costo_destino] = (adelantoPorCentro[t.id_centro_costo_destino] ?? 0) + (Number(t.monto_total) || 0);
+			adelantoPorCentro[t.id_centro_costo_destino] = (adelantoPorCentro[t.id_centro_costo_destino] ?? 0) + montoSoles(t);
 		}
 
 		// Suma de TODAS las ventas de consultoría cerradas — solo para la fila histórica compartida
@@ -861,7 +859,7 @@ export async function getMontoRecibidoPorCentroCosto(client: SupabaseClient, ids
 
 	const { data, error } = await client
 		.from('transaccion')
-		.select('id_centro_costo_destino, monto_total')
+		.select(`id_centro_costo_destino, monto_total, ${COLUMNAS_MONEDA}`)
 		.in('id_centro_costo_destino', ids)
 		.eq('tipo', 'ingreso')
 		.eq('estado', 'activo');
@@ -872,7 +870,7 @@ export async function getMontoRecibidoPorCentroCosto(client: SupabaseClient, ids
 	}
 
 	for (const row of (data ?? []) as any[]) {
-		montos[row.id_centro_costo_destino] = (montos[row.id_centro_costo_destino] ?? 0) + (Number(row.monto_total) || 0);
+		montos[row.id_centro_costo_destino] = (montos[row.id_centro_costo_destino] ?? 0) + montoSoles(row);
 	}
 
 	return montos;

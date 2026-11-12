@@ -15,7 +15,9 @@
 --   2) Reinstala los triggers en transaccion, apertura_financiera y cuenta_banco (los mismos de 20261023182400).
 --   3) fn_verificar_saldos_bancarios(): Control Financiero la usa para mostrar, cuenta por cuenta, saldo guardado vs
 --      calculado, y avisa si el trigger falta (para que esto no vuelva a pasar en silencio).
---   4) Recalcula TODAS las cuentas una vez (corrige los S/ 307,500.50 de hoy).
+--   NO modifica datos existentes (decisión del usuario, 11/11/2026): los saldos guardados hoy se dejan tal cual para que
+--   el cliente los revise; Control Financiero → Consistencia muestra cada diferencia. Los triggers solo actúan sobre los
+--   cambios que se hagan desde ahora (y, al recalcular una cuenta, la dejan coherente con sus transacciones/aperturas).
 
 -- 1) Fórmula única del saldo ---------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fn_saldo_calculado_cuenta_banco(p_numero_cuenta character varying)
@@ -159,15 +161,5 @@ $$;
 
 REVOKE ALL ON FUNCTION public.fn_saldo_calculado_cuenta_banco(character varying), public.fn_verificar_saldos_bancarios() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_saldo_calculado_cuenta_banco(character varying), public.fn_verificar_saldos_bancarios() TO authenticated;
-
--- 4) Corrige los saldos de hoy: recalcula todas las cuentas una vez ----------------------------------------------------
-DO $$
-DECLARE
-    v_numero text;
-BEGIN
-    FOR v_numero IN SELECT DISTINCT numero_cuenta FROM public.cuenta_banco WHERE numero_cuenta IS NOT NULL LOOP
-        PERFORM public.fn_recalcular_saldo_cuenta_banco(v_numero);
-    END LOOP;
-END $$;
 
 NOTIFY pgrst, 'reload schema';

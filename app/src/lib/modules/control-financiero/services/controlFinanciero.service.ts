@@ -68,24 +68,52 @@ async function checkIntegridadMovimientos(client: SupabaseClient): Promise<Resul
 
 	const pagosHuerfanos = (pagos ?? []).filter((p: any) => !p.transaccion || p.transaccion.estado !== 'activo');
 	const cobrosHuerfanos = (cobros ?? []).filter((c: any) => !c.transaccion || c.transaccion.estado !== 'activo');
-	const total = pagosHuerfanos.length + cobrosHuerfanos.length;
+
+	// Al revés: un pago/cobro que sigue "programado" (pendiente) mientras la transacción que lo respaldaba —y se anuló—
+	// volvió a estar ACTIVA. Ese dinero cuenta en el centro de costo y en la cuenta bancaria, y a la vez la Cuenta por
+	// Pagar/Cobrar sigue debiéndolo: contado dos veces. id_transaccion_anulada existe desde la migración 20261112130000;
+	// si todavía no está, esta parte simplemente no se evalúa.
+	// Dos consultas simples (sin embed): id_transaccion_anulada no tiene FK a propósito — una segunda FK cobros→transaccion
+	// volvería ambiguos los `transaccion(...)` sin columna explícita del resto de la app.
+	const [{ data: pagosPend, error: errPD }, { data: cobrosPend, error: errCD }] = await Promise.all([
+		client.from('pagos').select('id_pago, id_cuenta_pagar, id_transaccion_anulada').eq('estado_pago', 'programado').not('id_transaccion_anulada', 'is', null),
+		client.from('cobros').select('id_cobro, id_cuenta_cobrar, id_transaccion_anulada').eq('estado_cobro', 'programado').not('id_transaccion_anulada', 'is', null)
+	]);
+	// Columna inexistente (migración aún no aplicada) = esta parte no se evalúa. Cualquier OTRO error se propaga: un
+	// chequeo que falla nunca debe verse como "ok".
+	const columnaFalta = (e: any) => e && (e.code === '42703' || /id_transaccion_anulada/.test(e.message ?? ''));
+	if (errPD && !columnaFalta(errPD)) throw errPD;
+	if (errCD && !columnaFalta(errCD)) throw errCD;
+	const idsAnuladas = [...new Set([...(errPD ? [] : pagosPend ?? []), ...(errCD ? [] : cobrosPend ?? [])].map((x: any) => x.id_transaccion_anulada))];
+	let activas = new Set<number>();
+	if (idsAnuladas.length > 0) {
+		const { data: trs, error: errT } = await client.from('transaccion').select('id_transaccion').in('id_transaccion', idsAnuladas).eq('estado', 'activo');
+		if (errT) throw errT;
+		activas = new Set((trs ?? []).map((t: any) => t.id_transaccion));
+	}
+	const pagosContadosDosVeces = (errPD ? [] : pagosPend ?? []).filter((p: any) => activas.has(p.id_transaccion_anulada));
+	const cobrosContadosDosVeces = (errCD ? [] : cobrosPend ?? []).filter((c: any) => activas.has(c.id_transaccion_anulada));
+
+	const total = pagosHuerfanos.length + cobrosHuerfanos.length + pagosContadosDosVeces.length + cobrosContadosDosVeces.length;
 	const detalle = {
 		total_pagos_confirmados: (pagos ?? []).length,
 		total_cobros_confirmados: (cobros ?? []).length,
 		pagos_huerfanos: pagosHuerfanos.map((p: any) => p.id_pago),
-		cobros_huerfanos: cobrosHuerfanos.map((c: any) => c.id_cobro)
+		cobros_huerfanos: cobrosHuerfanos.map((c: any) => c.id_cobro),
+		pagos_pendientes_con_su_transaccion_activa: pagosContadosDosVeces.map((p: any) => ({ id_pago: p.id_pago, id_cuenta_pagar: p.id_cuenta_pagar, id_transaccion: p.id_transaccion_anulada })),
+		cobros_pendientes_con_su_transaccion_activa: cobrosContadosDosVeces.map((c: any) => ({ id_cobro: c.id_cobro, id_cuenta_cobrar: c.id_cuenta_cobrar, id_transaccion: c.id_transaccion_anulada }))
 	};
-	if (total === 0) return { estado: 'ok', mensaje: 'Todo pago/cobro confirmado tiene una transacción de respaldo activa.', detalle };
-	return {
-		estado: 'error',
-		mensaje: `${pagosHuerfanos.length} pago(s) y ${cobrosHuerfanos.length} cobro(s) confirmados sin una transacción de respaldo activa (huérfana o anulada).`,
-		detalle
-	};
+	if (total === 0) return { estado: 'ok', mensaje: 'Todo pago/cobro confirmado tiene una transacción de respaldo activa, y ninguno pendiente tiene su transacción contando ya.', detalle };
+	const partes: string[] = [];
+	if (pagosHuerfanos.length + cobrosHuerfanos.length > 0) partes.push(`${pagosHuerfanos.length} pago(s) y ${cobrosHuerfanos.length} cobro(s) confirmados sin una transacción de respaldo activa (huérfana o anulada)`);
+	if (pagosContadosDosVeces.length + cobrosContadosDosVeces.length > 0)
+		partes.push(`${pagosContadosDosVeces.length} pago(s) y ${cobrosContadosDosVeces.length} cobro(s) siguen pendientes aunque su transacción volvió a estar activa (dinero contado dos veces)`);
+	return { estado: 'error', mensaje: `${partes.join('; ')}.`, detalle };
 }
 
 /** Saldo guardado vs saldo calculado por la base con la MISMA fórmula que lo mantiene (última Apertura + transacciones
  * activas posteriores; sin Apertura, saldo inicial + todas) — fn_verificar_saldos_bancarios, migración
- * 20261107120000_saldo_bancario_blindado.sql. También avisa si falta el trigger que recalcula el saldo al crear, borrar
+ * 20261107150000_saldo_bancario_blindado.sql. También avisa si falta el trigger que recalcula el saldo al crear, borrar
  * o cambiar transacciones (su ausencia en Producción causó el reclamo del 07/11/2026: transacciones eliminadas cuyo
  * dinero seguía en Caja Fuerte). Si esa función todavía no existe, usa el cálculo anterior (sin aperturas). */
 async function checkConsistenciaSaldos(client: SupabaseClient): Promise<ResultadoCheck> {
@@ -104,7 +132,7 @@ async function checkConsistenciaSaldos(client: SupabaseClient): Promise<Resultad
 		if (!verif.triggers_ok) {
 			return {
 				estado: 'error',
-				mensaje: 'Falta el recálculo automático de saldos bancarios en la base de datos: al eliminar o cambiar transacciones los saldos pueden quedar desactualizados. Aplica la migración 20261107120000_saldo_bancario_blindado.sql.',
+				mensaje: 'Falta el recálculo automático de saldos bancarios en la base de datos: al eliminar o cambiar transacciones los saldos pueden quedar desactualizados. Aplica la migración 20261107150000_saldo_bancario_blindado.sql.',
 				detalle
 			};
 		}
@@ -245,7 +273,12 @@ async function checkSaldosConsistentes(client: SupabaseClient): Promise<Resultad
 		saldo_centros_costo: saldoCentros,
 		saldo_cuentas_bancarias: saldoBancos,
 		centros_de_costo: centros.map((c) => ({ centro: c.label, monto: c.monto })),
-		cuentas_bancarias: cuentas.map((c) => ({ cuenta: c.label, monto: c.monto }))
+		// monto = en soles (lo que se suma); las cuentas en dólares muestran además su saldo en US$.
+		cuentas_bancarias: cuentas.map((c) =>
+			c.moneda === 'dolares'
+				? { cuenta: c.label, monto: c.monto, saldo_en_dolares: c.saldo_moneda, ...(c.base_sin_tipo_cambio ? { aviso: 'saldo inicial en US$ sin tipo de cambio para convertirlo' } : {}) }
+				: { cuenta: c.label, monto: c.monto }
+		)
 	};
 
 	if (Math.abs(diferencia) <= 0.01) {
@@ -258,7 +291,37 @@ async function checkSaldosConsistentes(client: SupabaseClient): Promise<Resultad
 	};
 }
 
+/**
+ * Saldos negativos (pedido de la clienta, 12/11/2026: "el sistema no me alerta del saldo en negativo").
+ * - Centro de costo de FONDOS PROPIOS con saldo vigente < 0 → ERROR. fn_crear_transaccion no deja gastar más de lo
+ *   que tiene un centro, así que si aparece uno negativo es porque algo lo dejó así por otra vía (eliminar/anular
+ *   un ingreso ya gastado, editar el monto de una transacción, una apertura mal declarada) — hay que revisarlo.
+ * - Cuenta bancaria con saldo < 0 → ALERTA. Está permitido a propósito (a pedido del usuario, ver
+ *   transaccion_permitir_saldo_negativo_cuenta_banco_migration.sql), pero tiene que verse.
+ * Mismos saldos que muestran Conciliación y el cuadre (getSaldosDetalleCentrosCosto/getSaldosDetalleCuentasBancarias).
+ */
+async function checkSaldosNegativos(client: SupabaseClient): Promise<ResultadoCheck> {
+	const [centros, cuentas] = await Promise.all([getSaldosDetalleCentrosCosto(client), getSaldosDetalleCuentasBancarias(client)]);
+	const centrosNegativos = centros.filter((c) => c.monto < -0.01).map((c) => ({ centro: c.label, saldo: c.monto }));
+	// La cuenta, en SU moneda (saldo_moneda); `monto` es solo su equivalente en soles para el cuadre.
+	const cuentasNegativas = cuentas
+		.filter((c) => (c.saldo_moneda ?? c.monto) < -0.01)
+		.map((c) => ({ cuenta: c.moneda === 'dolares' ? `${c.label} (US$)` : c.label, saldo: c.saldo_moneda ?? c.monto }));
+	const detalle = {
+		centros_evaluados: centros.length,
+		cuentas_evaluadas: cuentas.length,
+		centros_de_costo_en_negativo: centrosNegativos,
+		cuentas_bancarias_en_negativo: cuentasNegativas
+	};
+	const partes: string[] = [];
+	if (centrosNegativos.length > 0) partes.push(`${centrosNegativos.length} centro(s) de costo en negativo (${centrosNegativos.map((c) => `${c.centro}: ${c.saldo.toFixed(2)}`).join('; ')})`);
+	if (cuentasNegativas.length > 0) partes.push(`${cuentasNegativas.length} cuenta(s) bancaria(s) en negativo (${cuentasNegativas.map((c) => `${c.cuenta}: ${c.saldo.toFixed(2)}`).join('; ')})`);
+	if (partes.length === 0) return { estado: 'ok', mensaje: 'Ningún centro de costo ni cuenta bancaria tiene saldo negativo.', detalle };
+	return { estado: centrosNegativos.length > 0 ? 'error' : 'alerta', mensaje: `${partes.join(' y ')}.`, detalle };
+}
+
 export const CHEQUEOS: ChequeoConsistencia[] = [
+	{ id: 'saldos_negativos', label: 'Saldos negativos (centros de costo y cuentas bancarias)', run: checkSaldosNegativos },
 	{ id: 'integridad_transacciones', label: 'Integridad de transacciones', run: checkIntegridadTransacciones },
 	{ id: 'integridad_movimientos', label: 'Integridad de movimientos (pagos/cobros)', run: checkIntegridadMovimientos },
 	{ id: 'consistencia_saldos', label: 'Consistencia de saldos bancarios', run: checkConsistenciaSaldos },
@@ -284,20 +347,7 @@ const TABLE_NAME = 'revision_financiera';
 /** Corre los 6+ chequeos y persiste el resultado agregado — llamado solo por el botón "Ejecutar
  * revisión"/"Ejecutar ahora", nunca en cada carga de página. */
 export async function ejecutarRevision(client: SupabaseClient, usuarioRegistro: string | null): Promise<RevisionFinanciera> {
-	const resultado: ResultadoChequeoConId[] = await Promise.all(
-		CHEQUEOS.map(async (chequeo) => {
-			try {
-				const r = await chequeo.run(client);
-				return { id: chequeo.id, label: chequeo.label, ...r };
-			} catch (err: any) {
-				return { id: chequeo.id, label: chequeo.label, estado: 'error' as const, mensaje: err?.message ?? 'No se pudo ejecutar el chequeo' };
-			}
-		})
-	);
-
-	const controles_ok = resultado.filter((r) => r.estado === 'ok').length;
-	const controles_alerta = resultado.filter((r) => r.estado === 'alerta').length;
-	const controles_error = resultado.filter((r) => r.estado === 'error').length;
+	const { resultado, controles_ok, controles_alerta, controles_error } = await evaluarChequeos(client);
 
 	const { data, error } = await client
 		.from(TABLE_NAME)
@@ -306,6 +356,38 @@ export async function ejecutarRevision(client: SupabaseClient, usuarioRegistro: 
 		.single();
 	if (error) throw error;
 	return data as RevisionFinanciera;
+}
+
+/** Corre los chequeos SIN guardar el resultado (no inserta en revision_financiera) — para consultar el estado en
+ * vivo sin dejar rastro (herramienta MCP de solo lectura, también en Producción). Misma lógica que ejecutarRevision. */
+export async function evaluarChequeos(client: SupabaseClient): Promise<{ resultado: ResultadoChequeoConId[]; controles_ok: number; controles_alerta: number; controles_error: number }> {
+	const resultado: ResultadoChequeoConId[] = await Promise.all(
+		CHEQUEOS.map(async (chequeo) => {
+			try {
+				return { id: chequeo.id, label: chequeo.label, ...(await chequeo.run(client)) };
+			} catch (err: any) {
+				return { id: chequeo.id, label: chequeo.label, estado: 'error' as const, mensaje: err?.message ?? 'No se pudo ejecutar el chequeo' };
+			}
+		})
+	);
+	return {
+		resultado,
+		controles_ok: resultado.filter((r) => r.estado === 'ok').length,
+		controles_alerta: resultado.filter((r) => r.estado === 'alerta').length,
+		controles_error: resultado.filter((r) => r.estado === 'error').length
+	};
+}
+
+/** Semáforo "Estado general" de la tarjeta Salud Financiera del Dashboard — función pura compartida por la pantalla
+ * (DashboardTab.svelte) y la herramienta MCP, para que ambas digan siempre lo mismo. */
+export function calcularEstadoGeneral(p: {
+	incidenciasAbiertas: number;
+	conciliacionesPendientes: number;
+	ultimaRevision: Pick<RevisionFinanciera, 'controles_error' | 'controles_alerta'> | null;
+}): EstadoCheck {
+	if (p.incidenciasAbiertas > 0 || (p.ultimaRevision?.controles_error ?? 0) > 0) return 'error';
+	if (p.conciliacionesPendientes > 0 || (p.ultimaRevision?.controles_alerta ?? 0) > 0) return 'alerta';
+	return 'ok';
 }
 
 export async function getUltimaRevision(client: SupabaseClient): Promise<RevisionFinanciera | null> {

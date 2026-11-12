@@ -123,8 +123,53 @@
 		const noSuman = corte ? movimientos.filter((m) => m.fecha <= corte) : [];
 		const base = corteCuenta ? Number(corteCuenta.monto) : saldoInicial;
 		const total = (l: MovimientoCuenta[]) => l.reduce((s, m) => s + m.monto, 0);
-		return { corte, base, suman, noSuman, totalSuman: total(suman), totalNoSuman: total(noSuman), saldo: base + total(suman) };
+		const ingresos = suman.filter((m) => m.monto > 0);
+		const egresos = suman.filter((m) => m.monto < 0);
+		return {
+			corte, base, suman, noSuman,
+			totalSuman: total(suman), totalNoSuman: total(noSuman), saldo: base + total(suman),
+			ingresos: ingresos.length, totalIngresos: total(ingresos),
+			egresos: egresos.length, totalEgresos: -total(egresos)
+		};
 	});
+
+	// Ingreso / egreso desde el punto de vista de ESTA cuenta (una transferencia entra en una y sale de otra).
+	const claseMov = (m: MovimientoCuenta) =>
+		m.monto >= 0
+			? { etiqueta: m.tipo === 'transferencia' ? 'Transferencia (entra)' : 'Ingreso', css: 'bg-emerald-100 text-emerald-700', signo: '+' }
+			: { etiqueta: m.tipo === 'transferencia' ? 'Transferencia (sale)' : 'Egreso', css: 'bg-red-100 text-red-700', signo: '−' };
+
+	// Cortes de esta cuenta (el que manda y los reemplazados), para mostrarlos como filas propias.
+	const cortesCuenta = $derived(
+		aperturas
+			.filter((a) => String(a.id_cuenta_banco) === cuentaSel)
+			.map((a) => ({ ...a, fecha: String(a.fecha_corte).slice(0, 10), manda: corteCuenta?.id_apertura === a.id_apertura }))
+	);
+
+	// Detalle: cortes y movimientos en orden cronológico, con el saldo que lleva la ERP tras cada uno.
+	// Mismo día: el corte va después de los movimientos de esa fecha (esos ya están incluidos en él).
+	type FilaDetalle =
+		| { clase: 'mov'; fecha: string; mov: MovimientoCuenta; suma: boolean; saldo: number | null }
+		| { clase: 'corte'; fecha: string; monto: number; manda: boolean; saldo: number | null };
+	const detalle = $derived.by(() => {
+		const { corte, base } = analisis;
+		const filas: FilaDetalle[] = [
+			...movimientos.map((m): FilaDetalle => ({ clase: 'mov', fecha: m.fecha, mov: m, suma: !corte || m.fecha > corte, saldo: null })),
+			...cortesCuenta.map((c): FilaDetalle => ({ clase: 'corte', fecha: c.fecha, monto: Number(c.monto), manda: c.manda, saldo: null }))
+		].sort((x, y) => (x.fecha !== y.fecha ? (x.fecha < y.fecha ? -1 : 1) : x.clase === y.clase ? 0 : x.clase === 'corte' ? 1 : -1));
+		let saldo: number | null = corte ? null : saldoInicial;
+		for (const f of filas) {
+			if (f.clase === 'corte') {
+				if (f.manda) saldo = base;
+				f.saldo = f.manda ? saldo : null;
+			} else {
+				if (f.suma && saldo !== null) saldo += f.mov.monto;
+				f.saldo = f.suma ? saldo : null;
+			}
+		}
+		return filas.reverse(); // lo más reciente arriba
+	});
+	let verDetalle = $state(false);
 
 	const chartData = $derived.by(() => {
 		const { corte, base } = analisis;
@@ -142,10 +187,18 @@
 			serieErp.push(corte && f < corte ? null : acumErp);
 		}
 		const tope = Math.max(0, ...serieTodo.map((v) => v ?? 0), ...serieErp.map((v) => v ?? 0));
+		// Color de cada punto: verde si ese día entró más de lo que salió, rojo si salió más, rombo ámbar = corte.
+		const netoDia = fechas.map((f) => movimientos.filter((m) => m.fecha === f).reduce((s, m) => s + m.monto, 0));
+		const esCorte = (f: string) => !!corte && f === corte;
+		const colorPunto = fechas.map((f, i) => (esCorte(f) ? '#d97706' : netoDia[i] < 0 ? '#dc2626' : '#059669'));
 		return {
+			fechas,
 			labels: fechas.map(fmtFecha),
 			datasets: [
-				{ type: 'line' as const, label: 'Saldo en la ERP (desde el corte)', data: serieErp, borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.12)', fill: true, tension: 0.25, pointRadius: 3, spanGaps: false },
+				{ type: 'line' as const, label: 'Saldo en la ERP (desde el corte)', data: serieErp, borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.12)', fill: true, tension: 0.25, spanGaps: false,
+					pointBackgroundColor: colorPunto, pointBorderColor: colorPunto,
+					pointRadius: fechas.map((f) => (esCorte(f) ? 7 : 4)),
+					pointStyle: fechas.map((f) => (esCorte(f) ? 'rectRot' : 'circle')) },
 				{ type: 'line' as const, label: 'Todos los movimientos (sin corte)', data: serieTodo, borderColor: '#94a3b8', borderDash: [6, 4], pointRadius: 2, tension: 0.25, fill: false },
 				...(corte ? [{ type: 'bar' as const, label: `Corte vigente (${fmtFecha(corte)})`, data: fechas.map((f) => (f === corte ? tope || 1 : null)), backgroundColor: 'rgba(217,119,6,0.55)', barThickness: 4 }] : [])
 			]
@@ -287,6 +340,10 @@
 				<p class="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Suman al saldo</p>
 				<p class="text-base font-black text-emerald-800">{formatCurrency(analisis.totalSuman)}</p>
 				<p class="text-[11px] text-emerald-700">{analisis.suman.length} movimiento{analisis.suman.length === 1 ? '' : 's'} posteriores al corte</p>
+				<p class="mt-1 text-[11px] font-semibold leading-snug">
+					<span class="text-emerald-700">▲ {analisis.ingresos} ingreso{analisis.ingresos === 1 ? '' : 's'}: +{formatCurrency(analisis.totalIngresos)}</span><br />
+					<span class="text-red-600">▼ {analisis.egresos} egreso{analisis.egresos === 1 ? '' : 's'}: −{formatCurrency(analisis.totalEgresos)}</span>
+				</p>
 			</div>
 			<div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
 				<p class="text-[10px] font-bold uppercase tracking-wide text-slate-500">No suman (ya incluidos en el corte)</p>
@@ -325,13 +382,77 @@
 						interaction: { mode: 'index', intersect: false },
 						plugins: {
 							legend: { position: 'top', labels: { boxWidth: 12, font: { size: 10, weight: 'bold' } } },
-							tooltip: { callbacks: { label: (ctx: any) => (ctx.dataset.type === 'bar' ? ctx.dataset.label : `${ctx.dataset.label}: ${formatCurrency(Number(ctx.parsed.y))}`) } }
+							tooltip: {
+							callbacks: {
+								label: (ctx: any) => (ctx.dataset.type === 'bar' ? ctx.dataset.label : `${ctx.dataset.label}: ${formatCurrency(Number(ctx.parsed.y))}`),
+								afterBody: (items: any[]) => {
+									const f = chartData.fechas[items[0]?.dataIndex ?? -1];
+									if (!f) return [];
+									const lineas = movimientos
+										.filter((m) => m.fecha === f)
+										.map((m) => `${claseMov(m).signo} ${formatCurrency(Math.abs(m.monto))}  ${claseMov(m).etiqueta}${m.descripcion ? ' · ' + m.descripcion.slice(0, 40) : ''}`);
+									if (analisis.corte === f) lineas.push(`◆ Valor de corte: ${formatCurrency(analisis.base)}`);
+									return lineas.length ? ['', ...lineas] : [];
+								}
+							}
+						}
 						},
 						scales: { y: { ticks: { callback: (v: any) => formatCurrency(Number(v)) } } }
 					}}
 				/>
 			{/if}
 		</div>
+		<div class="mt-2 flex flex-wrap gap-4 text-[11px] text-slate-600">
+			<span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-600"></span> Día con más ingresos</span>
+			<span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-600"></span> Día con más egresos</span>
+			<span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rotate-45 bg-amber-600"></span> Valor de corte (apertura)</span>
+		</div>
+
+		{#if movimientos.length + cortesCuenta.length > 0}
+			{@const nIng = movimientos.filter((m) => m.monto > 0).length}
+			{@const nEgr = movimientos.filter((m) => m.monto < 0).length}
+			<button type="button" onclick={() => (verDetalle = !verDetalle)} class="mt-4 flex items-center gap-1 text-xs font-semibold text-[#0f3b5e] hover:underline">
+				{#if verDetalle}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
+				{verDetalle ? 'Ocultar' : 'Ver'} detalle: {nIng} ingreso{nIng === 1 ? '' : 's'} · {nEgr} egreso{nEgr === 1 ? '' : 's'} · {cortesCuenta.length} corte{cortesCuenta.length === 1 ? '' : 's'}
+			</button>
+			{#if verDetalle}
+				<div class="mt-2 max-h-96 overflow-auto rounded-xl border border-slate-100">
+					<table class="w-full text-xs text-left">
+						<thead class="sticky top-0 bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide text-[10px]">
+							<tr>
+								<th class="px-3 py-2">Fecha</th>
+								<th class="px-3 py-2">Tipo</th>
+								<th class="px-3 py-2">Descripción</th>
+								<th class="px-3 py-2 text-right">Monto</th>
+								<th class="px-3 py-2 text-right">Saldo ERP</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-slate-100">
+							{#each detalle as f, i (f.clase === 'mov' ? `m${f.mov.id_transaccion}` : `c${f.fecha}-${i}`)}
+								{#if f.clase === 'corte'}
+									<tr class={f.manda ? 'bg-amber-50' : 'bg-slate-50 text-slate-400'}>
+										<td class="px-3 py-2 whitespace-nowrap font-semibold">{fmtFecha(f.fecha)}</td>
+										<td class="px-3 py-2 whitespace-nowrap"><span class={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${f.manda ? 'bg-amber-200 text-amber-800' : 'bg-slate-200 text-slate-500'}`}>◆ Valor de corte</span></td>
+										<td class="px-3 py-2">{f.manda ? 'Saldo declarado a esta fecha: el saldo parte de aquí' : 'Corte reemplazado por uno más reciente (no se usa)'}</td>
+										<td class="px-3 py-2 text-right whitespace-nowrap font-semibold">= {formatCurrency(f.monto)}</td>
+										<td class="px-3 py-2 text-right whitespace-nowrap">{f.saldo === null ? '—' : formatCurrency(f.saldo)}</td>
+									</tr>
+								{:else}
+									{@const c = claseMov(f.mov)}
+									<tr class={f.suma ? '' : 'text-slate-400'}>
+										<td class="px-3 py-2 whitespace-nowrap">{fmtFecha(f.fecha)}</td>
+										<td class="px-3 py-2 whitespace-nowrap"><span class={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${f.suma ? c.css : 'bg-slate-100 text-slate-400'}`}>{c.signo === '+' ? '▲' : '▼'} {c.etiqueta}</span></td>
+										<td class="px-3 py-2"><span class="text-slate-400">#{f.mov.id_transaccion}</span> {f.mov.descripcion ?? ''}{f.suma ? '' : ' · ya incluido en el corte'}</td>
+										<td class={`px-3 py-2 text-right whitespace-nowrap font-semibold ${f.suma ? (c.signo === '+' ? 'text-emerald-700' : 'text-red-600') : ''}`}>{c.signo}{formatCurrency(Math.abs(f.mov.monto))}</td>
+										<td class="px-3 py-2 text-right whitespace-nowrap">{f.saldo === null ? '—' : formatCurrency(f.saldo)}</td>
+									</tr>
+								{/if}
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		{/if}
 	</div>
 </div>
 

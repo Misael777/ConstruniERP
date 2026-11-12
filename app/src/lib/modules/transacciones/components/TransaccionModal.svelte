@@ -3,12 +3,12 @@
 	import { goto } from '$app/navigation';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import { supabase } from '$lib/supabaseClient';
-	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye } from '@lucide/svelte';
+	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye, Paperclip } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
-	import { FIELDS_CONFIG } from '$lib/modules/transacciones/config/transaccion.config';
+	import { FIELDS_CONFIG, necesitaTipoCambio } from '$lib/modules/transacciones/config/transaccion.config';
 	import {
 		createTransaccion,
 		updateTransaccion,
@@ -432,7 +432,7 @@
 	// varios comprobantes) — ver condición de render en el template. registrarPagoDesdeTransaccion/
 	// registrarCobroDesdeTransaccion (cuentasPagar/cuentasCobrar.service.ts) hacen el trabajo real:
 	// crean la transacción Y un pago/cobro 'pagado'/'cobrado' ya vinculado, en el mismo paso.
-	type CuentaVinculadaOpcion = { id: number; label: string; saldo: number };
+	type CuentaVinculadaOpcion = { id: number; label: string; saldo: number; idCentroCosto: number | null; centro: string | null; idProveedor?: number | null };
 	let cuentaVinculadaBusqueda = $state('');
 	let cuentaVinculadaResultados = $state<CuentaVinculadaOpcion[]>([]);
 	let cuentaVinculadaSeleccionada = $state<CuentaVinculadaOpcion | null>(null);
@@ -446,7 +446,31 @@
 		cuentaVinculadaResultados = [];
 	}
 
-	function seleccionarCuentaVinculada(opcion: CuentaVinculadaOpcion) {
+	async function seleccionarCuentaVinculada(opcion: CuentaVinculadaOpcion) {
+		// Rediseño 11/11/2026: "Vincular" va antes que el centro de costo. Si todavía no se eligió, se
+		// fija el de la cuenta (vía handleInput, que limpia lo que dependa de él) ANTES de guardar la
+		// selección — handleInput borra el vínculo al cambiar el centro de costo.
+		if (!idCentroCostoParaVinculo && opcion.idCentroCosto) {
+			handleInput(formValues.tipo === 'egreso' ? 'id_centro_costo_origen' : 'id_centro_costo_destino', String(opcion.idCentroCosto));
+		}
+		// Ticket #111: en Egreso, el proveedor de la cuenta por pagar define Clase (Proveedores/Subcontratista)
+		// y Centro de costo destino (el centro de costo de ese proveedor). También antes de guardar la selección,
+		// porque cambiar el destino limpia el vínculo (ver handleInput).
+		if (formValues.tipo === 'egreso' && opcion.idProveedor) {
+			const { data: cc } = await supabase
+				.from('centro_costo')
+				.select('id_centro_costo, tipo')
+				.eq('id_proveedor', opcion.idProveedor)
+				.in('tipo', ['proveedor', 'subcontratista'])
+				.order('id_centro_costo')
+				.limit(1)
+				.maybeSingle();
+			if (cc) {
+				const clase = cc.tipo === 'subcontratista' ? 'subcontratista' : 'proveedores';
+				if (claseDestino !== clase) handleClaseDestinoChange(clase);
+				if (String(formValues.id_centro_costo_destino) !== String(cc.id_centro_costo)) handleInput('id_centro_costo_destino', String(cc.id_centro_costo));
+			}
+		}
 		cuentaVinculadaSeleccionada = opcion;
 		cuentaVinculadaAbierta = false;
 		cuentaVinculadaBusqueda = '';
@@ -466,7 +490,7 @@
 	);
 
 	async function ejecutarBusquedaCuentaVinculada(query: string) {
-		if (!idCentroCostoParaVinculo) {
+		if (formValues.tipo !== 'egreso' && formValues.tipo !== 'ingreso') {
 			cuentaVinculadaResultados = [];
 			return;
 		}
@@ -477,14 +501,19 @@
 				cuentaVinculadaResultados = items.map((it) => ({
 					id: it.id_cuenta_pagar,
 					label: `${it.proveedorNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
-					saldo: it.saldo_pendiente
+					saldo: it.saldo_pendiente,
+					idCentroCosto: it.id_centro_costo,
+					centro: it.centroCostoNombre,
+					idProveedor: it.id_proveedor
 				}));
 			} else if (formValues.tipo === 'ingreso') {
 				const items = await buscarCuentasCobrarVinculables(supabase, query, idCentroCostoParaVinculo);
 				cuentaVinculadaResultados = items.map((it) => ({
 					id: it.id_cuenta_cobrar,
 					label: `${it.clienteNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
-					saldo: it.saldo_pendiente
+					saldo: it.saldo_pendiente,
+					idCentroCosto: it.id_centro_costo,
+					centro: it.centroCostoNombre
 				}));
 			} else {
 				cuentaVinculadaResultados = [];
@@ -504,13 +533,13 @@
 	// no había nada que vincular) la cuenta existente quedaba sin mostrarse pese a que sí existía.
 	// Precarga los resultados apenas hay un Centro de Costo válido, sin esperar el foco.
 	$effect(() => {
-		if (!idCentroCostoParaVinculo) return;
+		idCentroCostoParaVinculo;
+		if (!muestraVinculo) return;
 		ejecutarBusquedaCuentaVinculada('');
 	});
 
 	function onCuentaVinculadaFocus() {
 		cuentaVinculadaAbierta = true;
-		if (!idCentroCostoParaVinculo) return;
 		if (cuentaVinculadaResultados.length === 0 && !cuentaVinculadaBuscando) ejecutarBusquedaCuentaVinculada(cuentaVinculadaBusqueda);
 	}
 
@@ -533,6 +562,8 @@
 	// a medio llenar de cada índice todavía no guardado; colaOcrCache evita repetir la llamada de OCR
 	// al volver a un índice ya visitado.
 	let colaArchivos = $state<File[]>([]);
+	// "Vincular con Cuenta por Pagar/Cobrar" solo en el alta libre de una sola transacción.
+	const muestraVinculo = $derived(mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso'));
 	let colaIndex = $state(0);
 	let colaDrafts = $state<Record<number, Record<string, string>>>({});
 	let colaOcrCache = $state<Record<number, ReconocerComprobanteResult>>({});
@@ -1900,6 +1931,24 @@
 	// formateaba en Soles (ver formatCurrency), sin importar la moneda real. Ver getMonedasCuentaBanco/
 	// simboloMonedaCuenta más abajo.
 	let monedasCuentaBanco = $state<Record<string, string>>({});
+	// Decisión del cliente (12/11/2026): si una cuenta elegida está en otra moneda que la transacción, se pide el tipo
+	// de cambio (como en el banco). La regla vive en transaccion.config.ts (necesitaTipoCambio), que lee estas dos
+	// claves — no son columnas: buildWritablePayload solo guarda las de FIELDS_CONFIG.
+	$effect(() => {
+		const origen = formValues.cuente_origen ? (monedasCuentaBanco[formValues.cuente_origen] ?? '') : '';
+		const destino = formValues.cuente_destino ? (monedasCuentaBanco[formValues.cuente_destino] ?? '') : '';
+		if (formValues.moneda_cuenta_origen !== origen) formValues.moneda_cuenta_origen = origen;
+		if (formValues.moneda_cuenta_destino !== destino) formValues.moneda_cuenta_destino = destino;
+	});
+	const pideTipoCambio = $derived(necesitaTipoCambio(formValues));
+	/** Soles que llegan a / salen de una cuenta en dólares: cuánto es en US$ con el tipo de cambio ingresado. */
+	const conversionADolares = $derived.by(() => {
+		if (formValues.tipo_moneda === 'dolares') return null;
+		if (formValues.moneda_cuenta_origen !== 'dolares' && formValues.moneda_cuenta_destino !== 'dolares') return null;
+		const monto = Number(formValues.monto_total);
+		const tc = Number(formValues.tipo_cambio);
+		return monto > 0 && tc > 0 ? Math.round((monto / tc) * 100) / 100 : null;
+	});
 	// Ticket #90: Apertura Financiera vigente por cuenta bancaria (ver avisoApertura).
 	let aperturasCuentaBanco = $state<Record<string, { monto: number; fecha_corte: string }>>({});
 	async function cargarSaldos() {
@@ -3202,6 +3251,65 @@
 	}
 </script>
 
+<!-- "Vincular con Cuenta por Pagar/Cobrar" — rediseño 11/11/2026: va junto a Tipo (antes vivía escondido en
+     "Otros campos"). Busca en todos los centros de costo mientras no haya uno elegido; al elegir una cuenta
+     se fija su centro de costo (ver seleccionarCuentaVinculada). -->
+{#snippet vinculoBlock()}
+	{@const lado = formValues.tipo === 'egreso' ? 'Pagar' : 'Cobrar'}
+	<div class="relative">
+		<label for="tr-cuenta-vinculada" class="block text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1">Vincular con cuenta por {lado.toLowerCase()}</label>
+		{#if cuentaVinculadaSeleccionada}
+			<div class="flex items-center justify-between gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm">
+				<div class="min-w-0">
+					<p class="font-medium text-blue-800 truncate">{cuentaVinculadaSeleccionada.label}</p>
+					<p class="text-xs text-blue-600 truncate">Saldo: {formatCurrency(cuentaVinculadaSeleccionada.saldo)}{cuentaVinculadaSeleccionada.centro ? ` · ${cuentaVinculadaSeleccionada.centro}` : ''}</p>
+				</div>
+				<button type="button" onclick={limpiarCuentaVinculada} class="shrink-0 p-1 rounded-full text-blue-600 hover:bg-blue-100" aria-label="Quitar vínculo" title="Quitar vínculo">
+					<X size={14} />
+				</button>
+			</div>
+		{:else}
+			<input
+				id="tr-cuenta-vinculada"
+				type="text"
+				value={cuentaVinculadaBusqueda}
+				oninput={onCuentaVinculadaInput}
+				onfocus={onCuentaVinculadaFocus}
+				onblur={onCuentaVinculadaBlur}
+				disabled={bloqueadaPorAprobacion}
+				placeholder="Seleccionar (opcional)"
+				autocomplete="off"
+				class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
+			/>
+			{#if cuentaVinculadaAbierta}
+				<div class="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+					{#if cuentaVinculadaBuscando}
+						<p class="px-3 py-2 text-xs text-slate-400 flex items-center gap-1.5"><Loader2 size={12} class="animate-spin" /> Buscando…</p>
+					{:else if cuentaVinculadaResultados.length === 0}
+						<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas por {lado.toLowerCase()} con saldo pendiente{idCentroCostoParaVinculo ? ' en ese centro de costo' : ''}.</p>
+					{:else}
+						{#each cuentaVinculadaResultados as opcion (opcion.id)}
+							<button type="button" onclick={() => seleccionarCuentaVinculada(opcion)} class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0">
+								<p class="font-medium text-slate-700 truncate">{opcion.label}</p>
+								<p class="text-xs text-slate-400 truncate">Saldo: {formatCurrency(opcion.saldo)}{opcion.centro ? ` · ${opcion.centro}` : ''}</p>
+							</button>
+						{/each}
+					{/if}
+				</div>
+			{/if}
+			<p class={`hidden sm:block mt-1 text-xs ${!cuentaVinculadaBuscando && cuentaVinculadaResultados.length > 0 ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+				{#if cuentaVinculadaBuscando}
+					Buscando cuentas…
+				{:else if cuentaVinculadaResultados.length > 0}
+					✓ {cuentaVinculadaResultados.length} cuenta{cuentaVinculadaResultados.length === 1 ? '' : 's'} con saldo pendiente{idCentroCostoParaVinculo ? ' en este centro de costo' : ''}.
+				{:else}
+					Opcional — registra el pago/cobro contra esa cuenta.
+				{/if}
+			</p>
+		{/if}
+	</div>
+{/snippet}
+
 {#snippet fieldBlock(field: (typeof formFields)[number])}
 	{@const isLocked = lockedFields.includes(field.key)}
 	{@const isBloqueadoInterna = bloqueadoPorInterna && CAMPOS_BLOQUEADOS_POR_INTERNA.has(field.key)}
@@ -3210,7 +3318,7 @@
 		(field.key === 'cuente_origen' || field.key === 'cuente_destino') && (medioPagoBloqueaAmbasCuentas || (medioPagoEsEfectivo && !esCuentaPropiaBancaria))}
 	{@const isDisabled = bloqueadaPorAprobacion || isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}
 	<div>
-		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+		<label for={`tr-${field.key}`} class="flex items-center gap-1 text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1">
 			{labelFor(field)}
 			{#if field.required}<span class="text-red-500">*</span>{/if}
 			{#if isLocked || isBloqueadoInterna || isBloqueadoPorMedioPago}<Lock size={12} class="text-slate-400" />{/if}
@@ -3271,31 +3379,31 @@
 		{#if fieldErrors[field.key]}
 			<p class="mt-1 text-xs text-red-600">{fieldErrors[field.key]}</p>
 		{:else if isLocked}
-			<p class="mt-1 text-xs text-slate-400">Ya lo determina la cuenta — no se puede cambiar aquí.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Ya lo determina la cuenta — no se puede cambiar aquí.</p>
 		{:else if field.key === 'tipo' && isBloqueadoInterna}
-			<p class="mt-1 text-xs text-slate-400">Se fija en "Transferencia" porque el alcance es Transacción Interna.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se fija en "Transferencia" porque el alcance es Transacción Interna.</p>
 		{:else if field.key === 'estado' && isBloqueadoInterna}
-			<p class="mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se fija en "Consulta" porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoInterna}
-			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se bloquea porque el alcance es Transacción Interna.</p>
 		{:else if isBloqueadoPorMedioPago}
-			<p class="mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se bloquea porque el Medio de Pago no pasa por una cuenta bancaria.</p>
 {:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
-			<p class="mt-1 text-xs text-slate-400">Primero las cuentas de Efectivo; si eliges una cuenta bancaria, el Medio de pago pasa a "Transferencia bancaria".</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Primero las cuentas de Efectivo; si eliges una cuenta bancaria, el Medio de pago pasa a "Transferencia bancaria".</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
-			<p class="mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
-			<p class="mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
 		{:else if field.helpText}
-			<p class="mt-1 text-xs text-slate-400">{field.helpText}</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">{field.helpText}</p>
 		{/if}
 	</div>
 {/snippet}
 
 {#if open}
-	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-			<div class="sticky top-0 flex items-center justify-between bg-white px-6 py-4 border-b border-slate-200 z-10">
+	<div class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
+		<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[94dvh] sm:max-h-[90vh] overflow-y-auto overflow-x-hidden">
+			<div class="sticky top-0 flex items-center justify-between bg-white px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200 z-10">
 				<h2 class="text-lg font-semibold text-[#0f3b5e]">{title}</h2>
 				<div class="flex items-center gap-2">
 					<button type="button" onclick={onClose} class="p-1 hover:bg-slate-100 rounded-full text-slate-500" aria-label="Cerrar">
@@ -3305,7 +3413,7 @@
 			</div>
 
 			<form onsubmit={handleSubmit}>
-				<div class="p-6 flex flex-col gap-5">
+				<div class="p-3 sm:p-6 flex flex-col gap-3 sm:gap-5">
 					{#if mode === 'edit' && transaccion}
 						{#if transaccion.aprobado}
 							<div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 flex items-center justify-between gap-3 flex-wrap">
@@ -3345,12 +3453,12 @@
 
 					<!-- Alcance de la Transacción -->
 					<div>
-						<span class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+						<span class="flex items-center gap-1 text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1">
 							Alcance de la Transacción <span class="text-red-500">*</span>
 						</span>
 						<div class="grid grid-cols-2 gap-2">
 							<label
-								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'interna' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+								class={`flex items-center gap-2 px-2.5 sm:px-3 py-2.5 rounded-lg border text-[13px] sm:text-sm leading-tight font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'interna' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
 							>
 								<input
 									type="radio"
@@ -3364,7 +3472,7 @@
 								Transacción Interna
 							</label>
 							<label
-								class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'externa' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+								class={`flex items-center gap-2 px-2.5 sm:px-3 py-2.5 rounded-lg border text-[13px] sm:text-sm leading-tight font-semibold transition-colors cursor-pointer ${bloqueadaPorAprobacion || alcanceForzadoExterna ? 'opacity-60 cursor-not-allowed' : ''} ${formValues.tipo_alcance === 'externa' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
 							>
 								<input
 									type="radio"
@@ -3393,9 +3501,9 @@
 					     abajo, cada fila de campos ya colapsa a 1 columna con sm:grid-cols-3), flex-row desde
 					     md: con el dropzone a la izquierda con ancho fijo y alto estirado a la misma altura
 					     que la columna de campos (items-stretch, default de flexbox). -->
-					<div class="rounded-2xl border border-slate-200 p-5">
-						<div class="flex items-center justify-between mb-4">
-							<h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Datos de la Transacción</h3>
+					<div class="rounded-2xl border border-slate-200 p-3 sm:p-5">
+						<div class="flex items-center justify-between gap-2 mb-3 sm:mb-4">
+							<h3 class="text-[11px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Datos de la Transacción</h3>
 							<!-- N° de transacción — a pedido explícito del usuario, arriba del área de datos de la
 							     transacción, solo lectura, visible en TODAS las circunstancias (Nueva y Editar). En
 							     modo 'create' el id real todavía no existe (recién se genera al guardar, lo asigna
@@ -3407,21 +3515,20 @@
 									N° {transaccion.id_transaccion}
 								</span>
 							{:else}
-								<span class="px-2 py-1 rounded-full bg-slate-100 text-slate-400 text-xs font-medium italic" title="El número se asigna automáticamente al guardar">
-									N° se asignará al guardar
+								<span class="px-2 py-0.5 sm:py-1 rounded-full bg-slate-100 text-slate-400 text-[11px] sm:text-xs font-medium italic whitespace-nowrap" title="El número se asigna automáticamente al guardar">
+									<span class="sm:hidden">N° al guardar</span><span class="hidden sm:inline">N° se asignará al guardar</span>
 								</span>
 							{/if}
 						</div>
-						<div class="flex flex-col md:flex-row gap-5">
-							<!-- Tipo + Adjuntar boucher de pago — a pedido explícito del usuario: el campo Tipo
-							     se muestra junto al comprobante, antes que el resto de los campos núcleo. -->
-							<div class="md:w-56 shrink-0 flex flex-col gap-4">
+						<!-- Rediseño 11/11/2026 (maqueta del cliente): en filas de dos columnas — Tipo | Vincular,
+						     Categoría | Clase, Ver comprobante | Adjuntar nuevo comprobante — y debajo los centros
+						     de costo. En celular todo baja a una columna (los dos botones siguen lado a lado). -->
+						<div class="flex flex-col gap-3 sm:gap-4">
+							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
 								{@render fieldBlock(tipoField)}
-								<!-- Categoría — a pedido explícito del usuario, se movió acá (antes vivía dentro de
-								     "Otros campos", más abajo): ahora queda debajo de Tipo y arriba de "Adjuntar
-								     boucher de pago". flex-col en vez de grid-cols-2 (a diferencia de su posición
-								     anterior): esta columna es angosta (md:w-56 ≈ 224px), 2 selects lado a lado no
-								     entrarían cómodos. -->
+								{#if muestraVinculo}{@render vinculoBlock()}{/if}
+							</div>
+							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
 								{#if catalogoDetalleActual.length > 0}
 									<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
 									     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
@@ -3430,7 +3537,7 @@
 									     la Categoría (no agrega una fila a Detalle, a diferencia de elegir allá, ver
 									     agregarFilaDesdeCatalogo). -->
 									<div>
-										<label for="tr-categoria-otros-grupo" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
+										<label for="tr-categoria-otros-grupo" class="flex items-center gap-1 text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1">
 											Categoría<span class="text-red-500">*</span>
 										</label>
 										<div class="flex flex-col gap-2">
@@ -3450,6 +3557,23 @@
 								{:else}
 									{@render fieldBlock(categoriaField)}
 								{/if}
+									{#if formValues.tipo === 'egreso'}
+										<div>
+											<label for="tr-clase-destino" class="text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1 block">Clase</label>
+											<div class="relative">
+												<SelectConSaldo
+													id="tr-clase-destino"
+													value={claseDestino}
+													options={[...OPCIONES_CLASE_DESTINO.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
+													placeholder="Seleccionar"
+													disabled={bloqueadaPorAprobacion}
+													onchange={(v) => (handleClaseDestinoChange(v))}
+												/>
+											</div>
+											<p class="hidden sm:block mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
+										</div>
+									{/if}
+							</div>
 								{#if esDetraccion}
 									<div>
 										<label for="tr-origen-detraccion" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Transacción que la genera <span class="text-red-500">*</span></label>
@@ -3470,50 +3594,37 @@
 										</p>
 									</div>
 								{/if}
-								<div class="flex flex-col flex-1">
-								<label class="block text-sm font-bold text-[#0f3b5e] mb-1">
-									Adjuntar boucher de pago
+							<div>
+								<p class="block text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1">
+									Comprobante de pago
 									{#if formValues.tipo_alcance !== 'interna' && !mostrarBotonReciboPago && !mostrarBotonReciboPagoProveedor}<span class="text-red-500">*</span>{/if}
-								</label>
-								<label
-									for="tr-comprobante"
-									ondragover={(e) => e.preventDefault()}
-									ondrop={onComprobanteDrop}
-									class={`relative flex flex-col items-center justify-center gap-2 w-full h-36 md:h-auto md:flex-1 min-h-[9rem] rounded-xl border-2 border-dashed text-center overflow-hidden transition-colors p-3${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed bg-slate-50' : 'cursor-pointer hover:bg-slate-50'} ${comprobanteError ? 'border-red-400' : 'border-slate-300'}`}
-								>
-									{#if localPreviewUrl}
-										<img src={localPreviewUrl} alt="Vista previa del comprobante" class="absolute inset-0 w-full h-full object-cover" />
-										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1">
-											<CloudUpload size={12} class="shrink-0" /> Nuevo archivo seleccionado
-										</div>
-									{:else if comprobanteUrl && !comprobanteFile}
-										<img
-											src={comprobanteThumbUrl}
-											alt="Comprobante actual"
-											class="absolute inset-0 w-full h-full object-cover"
-											onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-										/>
-										<div class="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[11px] font-medium px-2 py-1.5 flex items-center justify-center gap-1 text-center">
-											<CloudUpload size={12} class="shrink-0" /> Haz clic o arrastra para reemplazar
-										</div>
-									{:else if comprobanteFile}
-										<CloudUpload size={28} class="text-blue-400" />
-										<span class="text-xs font-medium text-slate-700 leading-tight px-1 line-clamp-2 break-all">{comprobanteFile.name}</span>
-									{:else}
-										<CloudUpload size={32} class="text-blue-400" />
-										<span class="text-sm font-medium text-slate-600 leading-tight">Arrastra o selecciona un archivo</span>
-										<span class="text-xs text-slate-400">JPG, PNG o PDF (máx. 5MB)</span>
-									{/if}
-								</label>
+								</p>
+								<div class="grid grid-cols-2 gap-3">
+									<button
+										type="button"
+										disabled={!comprobanteFile && !comprobanteUrl}
+										onclick={() => (comprobanteFile ? (showComprobanteNuevoPreview = true) : (showComprobantePreview = true))}
+										class="flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border border-slate-300 px-2 sm:px-3 py-2 sm:py-2.5 text-[13px] sm:text-sm leading-tight whitespace-nowrap font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+									>
+										<Eye size={16} class="shrink-0" /> Ver comprobante
+									</button>
+									<label
+										for="tr-comprobante"
+										ondragover={(e) => e.preventDefault()}
+										ondrop={onComprobanteDrop}
+										class={`flex items-center justify-center gap-1.5 sm:gap-2 rounded-xl border px-2 sm:px-3 py-2 sm:py-2.5 text-[13px] sm:text-sm leading-tight whitespace-nowrap font-semibold text-blue-700 text-center ${comprobanteError ? 'border-red-400' : 'border-slate-300'} ${bloqueadaPorAprobacion ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-blue-50'}`}
+									>
+										<Paperclip size={16} class="shrink-0" />
+										<!-- En celular, texto corto para que el botón quede en una sola línea (pedido de la clienta). -->
+										<span class="sm:hidden">{comprobanteFile || comprobanteUrl ? 'Adjuntar nuevo' : 'Adjuntar'}</span>
+										<span class="hidden sm:inline">{comprobanteFile || comprobanteUrl ? 'Adjuntar nuevo comprobante' : 'Adjuntar comprobante'}</span>
+									</label>
+								</div>
 								<div class="flex flex-col gap-1 mt-1.5">
 									{#if comprobanteFile}
-										<button type="button" onclick={() => (showComprobanteNuevoPreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Ver comprobante
-										</button>
+										<p class="text-xs font-medium text-emerald-700 truncate">✓ {comprobanteFile.name}</p>
 									{:else if comprobanteUrl}
-										<button type="button" onclick={() => (showComprobantePreview = true)} class="text-xs text-blue-600 hover:underline text-left w-fit">
-											Ver comprobante actual
-										</button>
+										<p class="text-xs font-medium text-emerald-700">✓ Comprobante guardado</p>
 									{/if}
 									{#if comprobanteError}
 										<p class="text-xs text-red-600">{comprobanteError}</p>
@@ -3523,7 +3634,7 @@
 										     de transferencia interna, guardado aparte (comprobanteAutogeneradoUrl). -->
 										<p class="text-xs text-slate-400">Opcional: adjunta el boucher de la transferencia; el ERP también genera su propio comprobante interno.</p>
 									{:else if comprobanteFile || comprobanteUrl}
-										<p class="text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
+										<p class="hidden sm:block text-xs text-slate-400">Toda transacción debe tener un comprobante de respaldo.</p>
 									{:else if mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
 										<p class="text-xs text-slate-400">Opcional: esta transacción ya emite su propio comprobante (ver botón abajo).</p>
 									{/if}
@@ -3537,39 +3648,27 @@
 									disabled={bloqueadaPorAprobacion}
 									onchange={onComprobanteChange}
 								/>
-								</div>
 							</div>
 
 							<!-- Campos núcleo: Centro de costo origen/destino, Cuenta origen/destino,
 							     Fecha/Monto (reconocidos) — Tipo se movió junto al comprobante, ver arriba. -->
-							<div class="flex-1 flex flex-col gap-4 min-w-0">
+							<div class="flex-1 flex flex-col gap-3 sm:gap-4 min-w-0">
 								<!-- grid-cols-2 (no -3): estas dos filas siempre traen exactamente un par de
 								     campos — a diferencia de la fila de abajo (3 reconocidos), forzarlas a 3
 								     columnas dejaba un hueco vacío a la derecha, ver pedido del usuario. -->
-								<div class={`grid grid-cols-1 gap-4 ${formValues.tipo === 'egreso' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+								<!-- Rediseño 11/11/2026 (maqueta del cliente): Centro de costo origen y destino a lo ancho,
+								     uno debajo del otro; "Clase" pasó junto a Categoría, arriba. -->
+								<div class="grid grid-cols-1 gap-3 sm:gap-4">
 									{@render fieldBlock(origenField)}
-									{#if formValues.tipo === 'egreso'}
-										<div>
-											<label for="tr-clase-destino" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Clase</label>
-											<div class="relative">
-												<SelectConSaldo
-													id="tr-clase-destino"
-													value={claseDestino}
-													options={[...OPCIONES_CLASE_DESTINO.map((opt) => ({ value: String(opt.value), label: `${opt.label}` }))]}
-													placeholder="Selecciona una opción"
-													disabled={bloqueadaPorAprobacion}
-													onchange={(v) => (handleClaseDestinoChange(v))}
-												/>
-											</div>
-											<p class="mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
-										</div>
-									{/if}
 									{@render fieldBlock(destinoField)}
 								</div>
 
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<!-- 11/11/2026 (maqueta del cliente): cuando Cuenta destino es texto libre (la cuenta/CCI del
+								     tercero, ej. un Egreso a proveedor) va en "Otros campos (opcionales)". Si es una cuenta
+								     bancaria propia (Ingreso, Transferencia interna) se queda acá: mueve el saldo del banco. -->
+								<div class={`grid grid-cols-1 ${cuentaDestinoEsBancaria ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} gap-3 sm:gap-4`}>
 									{@render fieldBlock(cuentaOrigenField)}
-									{@render fieldBlock(cuentaDestinoField)}
+									{#if cuentaDestinoEsBancaria}{@render fieldBlock(cuentaDestinoField)}{/if}
 									<!-- "Tipo de Moneda" movido acá arriba (a pedido explícito del usuario) — siempre
 									     visible (Soles por defecto); "Tipo de Cambio"/"Monto Convertido" siguen más
 									     abajo, junto a Fecha/Monto/N° de Operación (ver el $effect que calcula
@@ -3588,7 +3687,7 @@
 									</div>
 								</div>
 
-								<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+								<div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
 									<div>
 										<label for="tr-fecha" class="flex items-center gap-1 text-sm font-bold text-[#0f3b5e] mb-1">
 											Fecha (reconocida) <span class="text-red-500">*</span>
@@ -3690,7 +3789,7 @@
 										{:else if numOperacionLocked}
 											<p class="mt-1 text-xs text-slate-400">Valor reconocido automáticamente. Edita si hay algún error.</p>
 										{:else}
-											<p class="mt-1 text-xs text-slate-400">Opcional — se completa sola si el boucher lo muestra.</p>
+											<p class="hidden sm:block mt-1 text-xs text-slate-400">Opcional — se completa sola si el boucher lo muestra.</p>
 										{/if}
 									</div>
 								</div>
@@ -3699,7 +3798,7 @@
 								     Cuenta origen/Cuenta destino (a pedido explícito del usuario). Estos dos
 								     (calculado solo el segundo, ver el $effect mas arriba) SOLO aparecen si se
 								     elige Dólares. -->
-								{#if formValues.tipo_moneda === 'dolares'}
+								{#if pideTipoCambio}
 									<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 										<div>
 											<label for="tr-tipo-cambio" class="text-sm font-bold text-[#0f3b5e] mb-1 block">
@@ -3721,6 +3820,7 @@
 												<p class="mt-1 text-xs text-slate-400">Tipo de cambio del día (S/ por US$).</p>
 											{/if}
 										</div>
+										{#if formValues.tipo_moneda === 'dolares'}
 										<div>
 											<label for="tr-monto-convertido" class="text-sm font-bold text-[#0f3b5e] mb-1 block">Monto Convertido</label>
 											<!-- A pedido explícito del usuario: siempre con el símbolo de Soles ('S/.') — este campo es
@@ -3737,6 +3837,14 @@
 											</div>
 											<p class="mt-1 text-xs text-slate-400">Se calcula solo: Monto (reconocido) × Tipo de Cambio.</p>
 										</div>
+										{:else}
+											<!-- Soles hacia/desde una cuenta en dólares: la cuenta se mueve en US$ (monto ÷ tipo de cambio), como en el banco. -->
+											<div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 self-start">
+												{formValues.moneda_cuenta_destino === 'dolares' ? 'La cuenta destino está en dólares: recibe' : 'La cuenta origen está en dólares: salen'}
+												<strong>{conversionADolares !== null ? `US$ ${conversionADolares.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'US$ —'}</strong>
+												(Monto ÷ Tipo de Cambio).
+											</div>
+										{/if}
 									</div>
 								{/if}
 
@@ -3887,7 +3995,7 @@
 					     editables acá mismo (se prellenan solos), y la firma es opcional vía "Firmar
 					     Comprobante", nunca bloquea el guardado. -->
 					{#if formValues.tipo_alcance === 'interna' || mostrarBotonReciboPago || mostrarBotonReciboPagoProveedor}
-						<div class="rounded-2xl border border-slate-200 p-5">
+						<div class="rounded-2xl border border-slate-200 px-3 py-2.5 sm:p-5">
 							<button
 								type="button"
 								onclick={() => (comprobanteAutoAbierto = !comprobanteAutoAbierto)}
@@ -4022,7 +4130,7 @@
 					{/if}
 
 					<!-- Otros campos (opcionales) -->
-					<div class="rounded-2xl border border-slate-200 p-5">
+					<div class="rounded-2xl border border-slate-200 px-3 py-2.5 sm:p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
 								type="button"
@@ -4065,84 +4173,10 @@
 								<!-- grid-cols-2 salvo que el tercer campo (Vincular con Cuenta por Pagar/Cobrar)
 								     vaya a aparecer — igual que Origen/Clase/Destino más arriba, forzar 3 columnas
 								     cuando ese campo no se muestra deja un hueco vacío a la derecha. -->
-								<div class={`grid grid-cols-1 gap-4 ${mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso') ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 									{@render fieldBlock(formaPagoField)}
 									{@render fieldBlock(medioPagoField)}
-									{#if mode === 'create' && !onConfirm && colaArchivos.length <= 1 && (formValues.tipo === 'egreso' || formValues.tipo === 'ingreso')}
-										<div class="relative">
-											<label for="tr-cuenta-vinculada" class="block text-sm font-bold text-[#0f3b5e] mb-1">
-												Vincular con Cuenta por {formValues.tipo === 'egreso' ? 'Pagar' : 'Cobrar'}
-											</label>
-											{#if cuentaVinculadaSeleccionada}
-												<div class="flex items-center justify-between gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm">
-													<div class="min-w-0">
-														<p class="font-medium text-blue-800 truncate">{cuentaVinculadaSeleccionada.label}</p>
-														<p class="text-xs text-blue-600">Saldo: {formatCurrency(cuentaVinculadaSeleccionada.saldo)}</p>
-													</div>
-													<button
-														type="button"
-														onclick={limpiarCuentaVinculada}
-														class="shrink-0 p-1 rounded-full text-blue-600 hover:bg-blue-100"
-														aria-label="Quitar vínculo"
-														title="Quitar vínculo"
-													>
-														<X size={14} />
-													</button>
-												</div>
-											{:else}
-												<input
-													id="tr-cuenta-vinculada"
-													type="text"
-													value={cuentaVinculadaBusqueda}
-													oninput={onCuentaVinculadaInput}
-													onfocus={onCuentaVinculadaFocus}
-													onblur={onCuentaVinculadaBlur}
-													disabled={!idCentroCostoParaVinculo}
-													placeholder={idCentroCostoParaVinculo ? 'Buscar proveedor/cliente, N° doc. o ID…' : `Elige primero el Centro de costo ${formValues.tipo === 'egreso' ? 'origen' : 'destino'}`}
-													autocomplete="off"
-													class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:opacity-60 disabled:bg-slate-50"
-												/>
-												{#if cuentaVinculadaAbierta && idCentroCostoParaVinculo}
-													<div class="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-														{#if cuentaVinculadaBuscando}
-															<p class="px-3 py-2 text-xs text-slate-400 flex items-center gap-1.5">
-																<Loader2 size={12} class="animate-spin" /> Buscando…
-															</p>
-														{:else if cuentaVinculadaResultados.length === 0}
-															<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas con saldo pendiente en ese centro de costo.</p>
-														{:else}
-															{#each cuentaVinculadaResultados as opcion (opcion.id)}
-																<button
-																	type="button"
-																	onclick={() => seleccionarCuentaVinculada(opcion)}
-																	class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0"
-																>
-																	<p class="font-medium text-slate-700 truncate">{opcion.label}</p>
-																	<p class="text-xs text-slate-400">Saldo: {formatCurrency(opcion.saldo)}</p>
-																</button>
-															{/each}
-														{/if}
-													</div>
-												{/if}
-												<!-- A pedido explícito del usuario: si el centro de costo elegido YA tiene cuenta(s)
-												     con saldo pendiente (ver el $effect junto a ejecutarBusquedaCuentaVinculada, que
-												     las precarga apenas hay un centro de costo válido), debe notarse SIN que el
-												     usuario tenga que hacer clic para abrir el desplegable — antes esta pista era el
-												     mismo texto genérico sin importar si había algo encontrado o no. -->
-												<p class={`mt-1 text-xs ${idCentroCostoParaVinculo && !cuentaVinculadaBuscando && cuentaVinculadaResultados.length > 0 ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
-													{#if !idCentroCostoParaVinculo}
-														Solo se muestran cuentas del centro de costo {formValues.tipo === 'egreso' ? 'origen' : 'destino'} elegido arriba.
-													{:else if cuentaVinculadaBuscando}
-														Buscando cuentas de este centro de costo…
-													{:else if cuentaVinculadaResultados.length > 0}
-														✓ {cuentaVinculadaResultados.length} cuenta{cuentaVinculadaResultados.length === 1 ? '' : 's'} con saldo pendiente encontrada{cuentaVinculadaResultados.length === 1 ? '' : 's'} — haz clic para elegirla.
-													{:else}
-														Opcional — registra un pago/cobro real contra esa cuenta.
-													{/if}
-												</p>
-											{/if}
-										</div>
-									{/if}
+									{#if !cuentaDestinoEsBancaria}{@render fieldBlock(cuentaDestinoField)}{/if}
 								</div>
 								<!-- Para Consultoría + Egreso, el desglose "Tipo de Gasto" (7 dropdowns) fue
 								     REEMPLAZADO por Categoría en cascada (ver el bloque de Categoría más arriba,
@@ -4242,7 +4276,7 @@
 				     detalle de línea por línea no tiene sentido ahí. Ver detalleCategoria/
 				     agregarFilaDetalleCategoria más arriba. -->
 				{#if (formValues.categoria || catalogoDetalleActual.length > 0) && formValues.tipo !== 'ingreso' && !categoriaEsPrestamoOtorgado}
-					<div class="rounded-2xl border border-slate-200 p-5">
+					<div class="rounded-2xl border border-slate-200 p-3 sm:p-5">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<button
 								type="button"
@@ -4443,7 +4477,7 @@
 				     único "Adjuntar factura o boleta de venta". Egreso = comprobantes de pago; Ingreso =
 				     comprobantes de recepción de dinero de Construni — mismo mecanismo, distinto rótulo (ver
 				     comprobantesPago/agregarComprobantesPago más arriba). -->
-				<div class="rounded-2xl border border-slate-200 p-5">
+				<div class="rounded-2xl border border-slate-200 p-3 sm:p-5">
 					<span class="block text-sm font-bold text-[#0f3b5e] mb-4">
 						{formValues.tipo === 'ingreso' ? 'Comprobantes de recepción de dinero de Construni' : 'Comprobantes de pago'}
 					</span>

@@ -28,6 +28,7 @@
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
 	import { reducirFoto, subirFotoPersonal, FOTO_MAX_BYTES } from '$lib/modules/personal/services/personalFoto';
+	import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	let {
@@ -259,7 +260,10 @@
 					return;
 				}
 			}
+			const fotoAnterior = personal?.foto_url ?? null;
 			await guardarPersonal(supabase, personal?.id_personal ?? null, datos, huellerosElegidos);
+			// Ticket #123: la foto reemplazada o quitada se borra también de Drive.
+			if (fotoAnterior && datos.foto_url !== fotoAnterior) void borrarArchivosDriveHuerfanos(supabase, [fotoAnterior]);
 			toast.success(personal ? 'Ficha actualizada.' : 'Trabajador registrado.');
 			quitarFotoNueva();
 			onSaved();

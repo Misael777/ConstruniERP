@@ -16,7 +16,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
-import { getUltimasAperturasPorCentroCosto } from './conciliacion.service';
+import { getUltimasAperturasPorCentroCosto, getUltimasAperturasPorCuentaBanco } from './conciliacion.service';
+import { COLUMNAS_MONEDA, montoSoles, montoEnMonedaCuenta } from '$lib/shared/moneda';
 
 export interface PuntoTrayectoria {
 	fecha: string;
@@ -45,7 +46,7 @@ export async function getTrayectoriaCentrosCosto(client: SupabaseClient): Promis
 		getUltimasAperturasPorCentroCosto(client),
 		client
 			.from('transaccion')
-			.select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha')
+			.select(`id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, ${COLUMNAS_MONEDA}, fecha`)
 			.eq('estado', 'activo')
 			.order('fecha', { ascending: true })
 	]);
@@ -57,7 +58,7 @@ export async function getTrayectoriaCentrosCosto(client: SupabaseClient): Promis
 	for (const id of ids) eventosPorCentro.set(id, []);
 
 	for (const t of (transacciones ?? []) as any[]) {
-		const monto = Number(t.monto_total);
+		const monto = montoSoles(t); // el centro de costo se lleva en soles
 		const origen = t.id_centro_costo_origen;
 		const destino = t.id_centro_costo_destino;
 		if (origen != null && idsSet.has(origen) && (t.tipo === 'egreso' || t.tipo === 'transferencia')) {
@@ -106,13 +107,14 @@ export async function getTrayectoriaCentrosCosto(client: SupabaseClient): Promis
  * saldo real. Luego, cada transacción real que la toca como origen (debita) o destino (acredita), sin
  * filtro de tipo — mismo criterio que recalcularSaldoCuentaBanco (cuentaBanco.service.ts). */
 export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Promise<TrayectoriaResultado> {
-	const [{ data: cuentas, error: errCuentas }, { data: transacciones, error: errTrans }] = await Promise.all([
-		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta, saldo_inicial, fecha_autorizacion').eq('activo', true),
+	const [{ data: cuentas, error: errCuentas }, { data: transacciones, error: errTrans }, aperturas] = await Promise.all([
+		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta, tipo_moneda, saldo_inicial, fecha_autorizacion').eq('activo', true),
 		client
 			.from('transaccion')
-			.select('cuente_origen, cuente_destino, monto_total, fecha')
+			.select(`cuente_origen, cuente_destino, monto_total, ${COLUMNAS_MONEDA}, fecha`)
 			.eq('estado', 'activo')
-			.order('fecha', { ascending: true })
+			.order('fecha', { ascending: true }),
+		getUltimasAperturasPorCuentaBanco(client)
 	]);
 	if (errCuentas) throw errCuentas;
 	if (errTrans) throw errTrans;
@@ -122,12 +124,16 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 	const hoy = new Date().toISOString().slice(0, 10);
 
 	for (const c of (cuentas ?? []) as any[]) {
-		let saldo = Number(c.saldo_inicial);
-		const fechaInicio = c.fecha_autorizacion || hoy;
+		// Mismo criterio que fn_saldo_calculado_cuenta_banco: con punto de corte, parte de lo declarado en esa fecha y
+		// solo suma lo posterior; montos en la moneda de la cuenta.
+		const corte = aperturas[c.numero_cuenta];
+		let saldo = corte ? corte.monto : Number(c.saldo_inicial);
+		const fechaInicio = corte ? corte.fecha_corte : c.fecha_autorizacion || hoy;
 		const puntos: PuntoTrayectoria[] = [{ fecha: fechaInicio, saldo }];
 		fechasSet.add(fechaInicio);
 		for (const t of (transacciones ?? []) as any[]) {
-			const monto = Number(t.monto_total);
+			if (corte && String(t.fecha).slice(0, 10) <= corte.fecha_corte) continue;
+			const monto = montoEnMonedaCuenta(t, c.tipo_moneda);
 			let delta = 0;
 			if (t.cuente_origen === c.numero_cuenta) delta -= monto;
 			if (t.cuente_destino === c.numero_cuenta) delta += monto;

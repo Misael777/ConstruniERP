@@ -4,7 +4,8 @@
  * centros de costo, ver saldos de cuentas bancarias, y crear/listar transacciones sueltas.
  */
 import type { AgentTool } from '../registry.ts';
-import { crearTransaccionSistema } from '$lib/modules/transacciones/services/transacciones.service';
+import { crearTransaccionSistema, getSaldosCentroCosto } from '$lib/modules/transacciones/services/transacciones.service';
+import { getSaldosVigentesCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 import { NOMBRE_AGENTE, USUARIO_AGENTE, desempaquetar, exigirNumero, exigirObjeto, limiteDe } from './_util.ts';
 
 const listarProveedores: AgentTool = {
@@ -61,17 +62,17 @@ const listarCuentasBancarias: AgentTool = {
 const listarTransacciones: AgentTool = {
 	name: 'listar_transacciones',
 	description:
-		'Lista transacciones (el movimiento REAL de dinero), más recientes primero. Filtros opcionales: id_centro_costo (como origen o destino), tipo (ingreso|egreso|financiamiento|transferencia), limit (default 50, máx 200).',
+		'Lista transacciones (el movimiento REAL de dinero), más recientes primero. Filtros opcionales: id_centro_costo (como origen o destino), tipo (ingreso|egreso|financiamiento|transferencia), estado (activo|anulado), cuenta_contiene (texto en la cuenta bancaria de origen o destino), limit (default 50, máx 200).',
 	inputSchema: {
 		type: 'object',
-		properties: { id_centro_costo: { type: 'number' }, tipo: { type: 'string' }, limit: { type: 'number' } },
+		properties: { id_centro_costo: { type: 'number' }, tipo: { type: 'string' }, estado: { type: 'string' }, cuenta_contiene: { type: 'string' }, limit: { type: 'number' } },
 		additionalProperties: false
 	},
 	permiso: 'ver_transacciones',
 	async handler(input, ctx) {
 		let q = ctx.client
 			.from('transaccion')
-			.select('id_transaccion, fecha, tipo, tipo_alcance, categoria, monto_total, tipo_moneda, tipo_cambio, estado, aprobado, id_centro_costo_origen, id_centro_costo_destino, descripcion, documento_pendiente, id_factura')
+			.select('id_transaccion, fecha, tipo, tipo_alcance, categoria, monto_total, tipo_moneda, tipo_cambio, estado, aprobado, id_centro_costo_origen, id_centro_costo_destino, cuente_origen, cuente_destino, descripcion, documento_pendiente, id_factura')
 			.order('id_transaccion', { ascending: false })
 			.limit(limiteDe(input.limit));
 		if (input.id_centro_costo !== undefined) {
@@ -79,6 +80,12 @@ const listarTransacciones: AgentTool = {
 			q = q.or(`id_centro_costo_origen.eq.${c},id_centro_costo_destino.eq.${c}`);
 		}
 		if (input.tipo !== undefined) q = q.eq('tipo', String(input.tipo));
+		if (input.estado !== undefined) q = q.eq('estado', String(input.estado));
+		if (input.cuenta_contiene !== undefined) {
+			// Solo letras, números, guiones y espacios: el texto va dentro de un filtro .or() de PostgREST.
+			const t = String(input.cuenta_contiene).replace(/[^A-Za-z0-9 _-]/g, '');
+			if (t) q = q.or(`cuente_origen.ilike.*${t}*,cuente_destino.ilike.*${t}*`);
+		}
 		const { data, error } = await q;
 		if (error) throw new Error(error.message);
 		return data ?? [];
@@ -97,4 +104,32 @@ const crearTransaccion: AgentTool = {
 	}
 };
 
-export const catalogosTools: AgentTool[] = [listarProveedores, listarClientes, listarCentrosCosto, listarCuentasBancarias, listarTransacciones, crearTransaccion];
+const saldosCentrosCosto: AgentTool = {
+	name: 'saldos_centros_costo',
+	description:
+		'Saldo de centros de costo tal como lo muestran el formulario de transacciones ("Saldo actual", getSaldosCentroCosto) y la pantalla Centros de Costo (getSaldosVigentesCentroCosto + Monto Actual escrito a mano en los manuales sin corte). En soles, desde el último punto de corte. Filtro opcional: ids (array).',
+	inputSchema: { type: 'object', properties: { ids: { type: 'array' } }, additionalProperties: false },
+	permiso: 'ver_centro_costos',
+	async handler(input, ctx) {
+		const form = await getSaldosCentroCosto(ctx.client);
+		const ids = Array.isArray(input.ids) ? (input.ids as unknown[]).map((x) => exigirNumero(x, 'ids')) : Object.keys(form).map(Number);
+		const [vig, { data: centros }] = await Promise.all([
+			getSaldosVigentesCentroCosto(ctx.client, ids),
+			ctx.client.from('centro_costo').select('id_centro_costo, monto_actual, id_proyecto, id_cliente, id_proveedor, id_empleado').in('id_centro_costo', ids)
+		]);
+		return (centros ?? []).map((c: any) => {
+			const manual = !c.id_proyecto && !c.id_cliente && !c.id_proveedor && !c.id_empleado;
+			const v = vig[c.id_centro_costo];
+			return {
+				id_centro_costo: c.id_centro_costo,
+				saldo_formulario: form[String(c.id_centro_costo)] ?? 0,
+				saldo_vigente: v?.saldo ?? 0,
+				fecha_corte: v?.fecha_corte ?? null,
+				// Mismo cálculo que la columna "Monto Actual" de Centros de Costo para un centro manual (+page.svelte).
+				monto_actual_lista: manual ? (v?.fecha_corte ? 0 : Number(c.monto_actual) || 0) + (v?.saldo ?? 0) : null
+			};
+		});
+	}
+};
+
+export const catalogosTools: AgentTool[] = [listarProveedores, listarClientes, listarCentrosCosto, listarCuentasBancarias, listarTransacciones, crearTransaccion, saldosCentrosCosto];

@@ -70,52 +70,56 @@
 </script>
 
 {#if open}
-	<div class="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="detalle-tx-titulo">
-		<div class="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
-			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-5 py-4 border-b border-slate-100">
-				<div class="flex items-center gap-2.5">
-					<ReceiptText class="text-[#0f3b5e]" size={24} />
-					<h2 id="detalle-tx-titulo" class="text-lg font-bold text-[#0f3b5e]">Detalle de Transacción</h2>
+	<!-- Ticket #83: en el celular la ventana se salía por la izquierda (los códigos largos sin espacios del
+	     mensaje, ej. "LNM5_0926_San_Juan_de_…", ensanchaban todo) y había que desplazarse para verla entera.
+	     Ahora el texto largo se corta, nada se sale de lo ancho y todo cabe en una sola vista: encabezado y
+	     márgenes más compactos, los dos botones lado a lado y la captura con un alto máximo. -->
+	<div class="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-2 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="detalle-tx-titulo">
+		<div class="w-full max-w-lg max-h-[96dvh] overflow-y-auto overflow-x-hidden rounded-2xl bg-white shadow-2xl">
+			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-4 py-2.5 border-b border-slate-100">
+				<div class="flex items-center gap-2 min-w-0">
+					<ReceiptText class="text-[#0f3b5e] shrink-0" size={20} />
+					<h2 id="detalle-tx-titulo" class="text-base font-bold text-[#0f3b5e] truncate">Detalle de Transacción</h2>
 				</div>
-				<button type="button" onclick={onClose} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Cerrar"><X size={20} /></button>
+				<button type="button" onclick={onClose} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0" aria-label="Cerrar"><X size={20} /></button>
 			</div>
 
-			<div class="p-4 sm:p-5 space-y-4">
-				<div class="rounded-xl bg-slate-50 border border-slate-100 p-4 flex flex-col sm:flex-row sm:items-center gap-4">
+			<div class="p-3 sm:p-4 space-y-3">
+				<div class="rounded-xl bg-slate-50 border border-slate-100 p-3 flex flex-col sm:flex-row sm:items-center gap-3">
 					<div class="flex-1 min-w-0">
-						<p class="flex items-center gap-2 font-semibold text-emerald-700">
-							<CheckCircle2 size={20} class="text-emerald-600" />
+						<p class="flex items-center gap-1.5 text-sm font-semibold text-emerald-700">
+							<CheckCircle2 size={17} class="text-emerald-600 shrink-0" />
 							{tipo === 'egreso' ? 'Egreso registrado' : 'Ingreso registrado'}
 						</p>
-						<p class="mt-1 text-3xl font-bold text-[#0f3b5e]">{formatCurrency(monto)}</p>
-						<p class="mt-1 flex items-center gap-1.5 text-sm text-slate-600"><CalendarDays size={15} /> {fechaHora}</p>
+						<p class="text-2xl sm:text-3xl font-bold text-[#0f3b5e] leading-tight">{formatCurrency(monto)}</p>
+						<p class="flex items-center gap-1.5 text-xs sm:text-sm text-slate-600"><CalendarDays size={14} class="shrink-0" /> {fechaHora}</p>
 					</div>
-					<div class="flex flex-col gap-2 sm:w-52">
-						<button type="button" onclick={() => compartir('propio')} disabled={!!compartiendo} class="flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60">
-							{#if compartiendo === 'propio'}<Loader2 size={16} class="animate-spin" />{:else}<Share2 size={16} />{/if}
+					<div class="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:w-52">
+						<button type="button" onclick={() => compartir('propio')} disabled={!!compartiendo} class="flex items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-2 text-[13px] sm:text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60">
+							{#if compartiendo === 'propio'}<Loader2 size={15} class="animate-spin shrink-0" />{:else}<Share2 size={15} class="shrink-0" />{/if}
 							Compartir
 						</button>
-						<button type="button" onclick={() => compartir('tercero')} disabled={!!compartiendo} class="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60">
-							{#if compartiendo === 'tercero'}<Loader2 size={16} class="animate-spin" />{:else}<Share2 size={16} />{/if}
+						<button type="button" onclick={() => compartir('tercero')} disabled={!!compartiendo} class="flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-2 py-2 text-[13px] sm:text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60 leading-tight">
+							{#if compartiendo === 'tercero'}<Loader2 size={15} class="animate-spin shrink-0" />{:else}<Share2 size={15} class="shrink-0" />{/if}
 							{tercero === 'proveedor' ? 'Compartir a proveedor' : 'Compartir a cliente'}
 						</button>
 					</div>
 				</div>
 
 				<div>
-					<h3 class="mb-2 font-semibold text-[#0f3b5e]">Captura de la transacción</h3>
-					<div class="flex justify-center rounded-xl bg-slate-50 border border-slate-100 p-3">
+					<h3 class="mb-1.5 text-sm font-semibold text-[#0f3b5e]">Captura de la transacción</h3>
+					<div class="flex justify-center rounded-xl bg-slate-50 border border-slate-100 p-2">
 						{#if comprobanteUrl && !imagenFallo}
-							<img src={toDriveThumbnailUrl(comprobanteUrl, 900)} alt="Comprobante de la transacción" class="max-h-[45dvh] w-auto rounded-lg shadow-sm bg-white" onerror={() => (imagenFallo = true)} />
+							<img src={toDriveThumbnailUrl(comprobanteUrl, 900)} alt="Comprobante de la transacción" class="max-h-[42dvh] max-w-full w-auto object-contain rounded-lg shadow-sm bg-white" onerror={() => (imagenFallo = true)} />
 						{:else}
-							<p class="py-8 text-sm text-slate-400">{comprobanteUrl ? 'No se pudo mostrar la vista previa del comprobante.' : 'Esta transacción no tiene comprobante adjunto.'}</p>
+							<p class="py-6 text-sm text-slate-400 text-center">{comprobanteUrl ? 'No se pudo mostrar la vista previa del comprobante.' : 'Esta transacción no tiene comprobante adjunto.'}</p>
 						{/if}
 					</div>
 				</div>
 
-				<div class="flex gap-3 rounded-xl bg-blue-50 border border-blue-100 p-4">
-					<Info size={20} class="shrink-0 text-blue-600 mt-0.5" />
-					<p class="text-sm text-slate-700 whitespace-pre-line">{mensaje}</p>
+				<div class="flex gap-2.5 rounded-xl bg-blue-50 border border-blue-100 p-3 min-w-0">
+					<Info size={18} class="shrink-0 text-blue-600 mt-0.5" />
+					<p class="min-w-0 text-[13px] sm:text-sm text-slate-700 whitespace-pre-line [overflow-wrap:anywhere]">{mensaje}</p>
 				</div>
 			</div>
 		</div>

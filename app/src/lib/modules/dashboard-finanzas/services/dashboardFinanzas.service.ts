@@ -44,6 +44,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { CENTRO_COSTO_EMBEDS_NOMBRE, centroCostoNombreVisible } from '$lib/modules/transacciones/services/transacciones.service';
+import { COLUMNAS_MONEDA, montoSoles } from '$lib/shared/moneda';
 
 export interface ConcentracionCategoria {
 	categoria: string;
@@ -249,7 +250,7 @@ export async function getRendimientoPorCentroCosto(
 	const idsCentroFinal = centrosFinal.map((c: any) => c.id_centro_costo);
 
 	// 3. Transacciones activas vinculadas a estos CdC (como origen o como destino)
-	const cols = 'id_transaccion, id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha, estado';
+	const cols = `id_transaccion, id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha, estado, ${COLUMNAS_MONEDA}`;
 	const [{ data: transOrigen }, { data: transDestino }] = await Promise.all([
 		client.from('transaccion').select(cols).in('id_centro_costo_origen', idsCentroFinal).eq('estado', 'activo'),
 		client.from('transaccion').select(cols).in('id_centro_costo_destino', idsCentroFinal).eq('estado', 'activo')
@@ -297,11 +298,18 @@ export async function getRendimientoPorCentroCosto(
 		const transDelCentro = transacciones.filter(
 			(t) => t.id_centro_costo_origen === c.id_centro_costo || t.id_centro_costo_destino === c.id_centro_costo
 		);
+		// Entradas y salidas del CENTRO (mismo criterio que su saldo en Centros de Costo y en el formulario de
+		// transacciones): también cuentan las transferencias entre centros y los financiamientos. Antes solo se
+		// contaban tipo 'ingreso'/'egreso', y una Transferencia Interna obra -> CORPORATIVO dejaba a CORPORATIVO con
+		// flujo -500 tras pagar con ese dinero (reclamo 12/11/2026, transacciones #452/#453).
 		const ingresos = transDelCentro
-			.filter((t) => t.tipo === 'ingreso' && t.id_centro_costo_destino === c.id_centro_costo)
-			.reduce((s, t) => s + Number(t.monto_total), 0);
-		const egresosTx = transDelCentro.filter((t) => t.tipo === 'egreso' && t.id_centro_costo_origen === c.id_centro_costo);
-		const egresos = egresosTx.reduce((s, t) => s + Number(t.monto_total), 0);
+			.filter((t) => (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia') && t.id_centro_costo_destino === c.id_centro_costo)
+			.reduce((s, t) => s + montoSoles(t), 0);
+		const salidasTx = transDelCentro.filter((t) => (t.tipo === 'egreso' || t.tipo === 'transferencia') && t.id_centro_costo_origen === c.id_centro_costo);
+		const egresos = salidasTx.reduce((s, t) => s + montoSoles(t), 0);
+		// "Concentración de salidas" es por categoría de GASTO: solo egresos reales (una transferencia no es gasto).
+		const egresosTx = salidasTx.filter((t) => t.tipo === 'egreso');
+		const gastoReal = egresosTx.reduce((s, t) => s + montoSoles(t), 0);
 		const flujoCajaNeto = ingresos - egresos;
 		const autosuficiencia = egresos > 0 ? (ingresos / egresos) * 100 : null;
 
@@ -324,10 +332,10 @@ export async function getRendimientoPorCentroCosto(
 		for (const t of egresosTx) {
 			const cat = categoriaPorTransaccion.get(t.id_transaccion);
 			const label = cat ? (CATEGORIA_GASTO_LABELS[cat] ?? `Categoría ${cat}`) : 'Sin categorizar';
-			montoPorCategoria.set(label, (montoPorCategoria.get(label) ?? 0) + Number(t.monto_total));
+			montoPorCategoria.set(label, (montoPorCategoria.get(label) ?? 0) + montoSoles(t));
 		}
 		const concentracion: ConcentracionCategoria[] = [...montoPorCategoria.entries()]
-			.map(([categoria, monto]) => ({ categoria, monto, pct: egresos > 0 ? (monto / egresos) * 100 : 0 }))
+			.map(([categoria, monto]) => ({ categoria, monto, pct: gastoReal > 0 ? (monto / gastoReal) * 100 : 0 }))
 			.sort((a, b) => b.monto - a.monto);
 
 		return {
@@ -357,6 +365,51 @@ export async function getRendimientoPorCentroCosto(
 	});
 }
 
+export interface TotalesRendimiento {
+	ingresos: number;
+	egresos: number;
+	presupuesto: number;
+	flujoCajaNeto: number;
+	autosuficiencia: number | null;
+	desviacion: number;
+	desviacionPct: number | null;
+	burnRate: number;
+	burnRatePct: number | null;
+	roc: number | null;
+	margenPositivo: number;
+	coberturaCorporativa: number | null;
+}
+
+/** Tarjetas de totales de "Rendimiento por Centro de Costo" sobre el set filtrado — función pura compartida por la
+ * pantalla (DashboardTab.svelte) y la herramienta MCP, para que ambas muestren exactamente los mismos números. */
+export function calcularTotalesRendimiento(items: CentroCostoRendimiento[], gastosCorporativos: number): TotalesRendimiento {
+	const ingresos = items.reduce((s, i) => s + i.ingresos, 0);
+	const egresos = items.reduce((s, i) => s + i.egresos, 0);
+	const presupuesto = items.reduce((s, i) => s + i.presupuesto, 0);
+	const flujoCajaNeto = ingresos - egresos;
+	const autosuficiencia = egresos > 0 ? (ingresos / egresos) * 100 : null;
+	const desviacion = egresos - presupuesto;
+	const desviacionPct = presupuesto > 0 ? (desviacion / presupuesto) * 100 : null;
+	const burnRate = items.reduce((s, i) => s + i.burnRate, 0);
+	const burnRatePct = presupuesto > 0 ? (burnRate / presupuesto) * 100 : null;
+	const roc = presupuesto > 0 ? (flujoCajaNeto / presupuesto) * 100 : null;
+	const margenPositivo = items.filter((i) => i.flujoCajaNeto > 0).reduce((s, i) => s + i.flujoCajaNeto, 0);
+	const coberturaCorporativa = gastosCorporativos > 0 ? (margenPositivo / gastosCorporativos) * 100 : null;
+	return { ingresos, egresos, presupuesto, flujoCajaNeto, autosuficiencia, desviacion, desviacionPct, burnRate, burnRatePct, roc, margenPositivo, coberturaCorporativa };
+}
+
+/** "Concentración de Salidas de Caja" (todas las categorías de gasto del set filtrado) — compartida igual que la de arriba. */
+export function calcularConcentracionGlobal(items: CentroCostoRendimiento[]): ConcentracionCategoria[] {
+	const map = new Map<string, number>();
+	for (const item of items) {
+		for (const c of item.concentracion) map.set(c.categoria, (map.get(c.categoria) ?? 0) + c.monto);
+	}
+	const total = [...map.values()].reduce((s, v) => s + v, 0);
+	return [...map.entries()]
+		.map(([categoria, monto]) => ({ categoria, monto, pct: total > 0 ? (monto / total) * 100 : 0 }))
+		.sort((a, b) => b.monto - a.monto);
+}
+
 /**
  * Egresos activos de centros de costo "de estructura" (obra/consultoria/area/otro/bolsa general — ni
  * de proyecto, ni de cliente/proveedor) — la base contra la que se mide el Margen de Contribución
@@ -364,19 +417,24 @@ export async function getRendimientoPorCentroCosto(
  * corporativa.
  */
 export async function getGastosCorporativosGlobales(client: SupabaseClient): Promise<number> {
+	// Solo los centros "de estructura" que describe el comentario de arriba: tipos creados a mano y SIN proyecto
+	// vinculado (antes `NOT IN (proyecto, cliente, proveedor)` también metía los centros de cada venta de
+	// Consultoría — tipo 'consultoria' CON id_proyecto —, empleados, subcontratistas, préstamos y centros de baja).
 	const { data: centros } = await client
 		.from('centro_costo')
 		.select('id_centro_costo, codigo, tipo')
-		.not('tipo', 'in', '(proyecto,cliente,proveedor)');
+		.in('tipo', ['obra', 'consultoria', 'area', 'otro', 'bolsa general'])
+		.is('id_proyecto', null)
+		.neq('estado', 'baja');
 	const ids = (centros ?? []).filter((c: any) => !esCentroExterno(c.codigo)).map((c: any) => c.id_centro_costo);
 	if (ids.length === 0) return 0;
 	const { data: trans } = await client
 		.from('transaccion')
-		.select('monto_total')
+		.select(`monto_total, ${COLUMNAS_MONEDA}`)
 		.in('id_centro_costo_origen', ids)
 		.eq('tipo', 'egreso')
 		.eq('estado', 'activo');
-	return (trans ?? []).reduce((s: number, t: any) => s + Number(t.monto_total), 0);
+	return (trans ?? []).reduce((s: number, t: any) => s + montoSoles(t), 0);
 }
 
 export interface NodoFlujo {
@@ -419,7 +477,7 @@ export async function getFlujoDeNodos(client: SupabaseClient): Promise<FlujoDeNo
 
 	const { data: trans, error: tError } = await client
 		.from('transaccion')
-		.select('id_centro_costo_origen, id_centro_costo_destino, monto_total')
+		.select(`id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, ${COLUMNAS_MONEDA}`)
 		.eq('estado', 'activo')
 		.or(`id_centro_costo_origen.in.(${ids.join(',')}),id_centro_costo_destino.in.(${ids.join(',')})`);
 	if (tError) throw tError;
@@ -429,15 +487,16 @@ export async function getFlujoDeNodos(client: SupabaseClient): Promise<FlujoDeNo
 	const nodosConMovimiento = new Set<number>();
 
 	for (const t of (trans ?? []) as any[]) {
-		const monto = Number(t.monto_total) || 0;
+		const monto = montoSoles(t);
 		const origen = t.id_centro_costo_origen;
 		const destino = t.id_centro_costo_destino;
+		// Mismo criterio por tipo que el saldo en Centros de Costo / formulario de transacciones / Control Financiero.
 		if (idsSet.has(destino)) {
-			saldos.set(destino, (saldos.get(destino) ?? 0) + monto);
+			if (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia') saldos.set(destino, (saldos.get(destino) ?? 0) + monto);
 			nodosConMovimiento.add(destino);
 		}
 		if (idsSet.has(origen)) {
-			saldos.set(origen, (saldos.get(origen) ?? 0) - monto);
+			if (t.tipo === 'egreso' || t.tipo === 'transferencia') saldos.set(origen, (saldos.get(origen) ?? 0) - monto);
 			nodosConMovimiento.add(origen);
 		}
 		if (idsSet.has(origen) && idsSet.has(destino) && origen !== destino) {
@@ -478,15 +537,15 @@ export interface ResumenGeneralDashboard {
  * los que antes venían de las tablas legacy `ventas`/`gastos`/`obras`/`consultorias`. */
 export async function getResumenGeneral(client: SupabaseClient): Promise<ResumenGeneralDashboard> {
 	const [{ data: trans, error: tError }, { count: empleadosActivos }, { data: centrosData, error: cError }] = await Promise.all([
-		client.from('transaccion').select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total').eq('estado', 'activo'),
+		client.from('transaccion').select(`id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, ${COLUMNAS_MONEDA}`).eq('estado', 'activo'),
 		client.from('empleados').select('id', { count: 'exact', head: true }).neq('estado', 'baja'),
 		client.from('centro_costo').select('id_centro_costo, codigo, tipo').eq('estado', 'activo')
 	]);
 	if (tError) throw tError;
 	if (cError) throw cError;
 
-	const totalIngresos = (trans ?? []).filter((t: any) => t.tipo === 'ingreso').reduce((s: number, t: any) => s + Number(t.monto_total), 0);
-	const totalEgresos = (trans ?? []).filter((t: any) => t.tipo === 'egreso').reduce((s: number, t: any) => s + Number(t.monto_total), 0);
+	const totalIngresos = (trans ?? []).filter((t: any) => t.tipo === 'ingreso').reduce((s: number, t: any) => s + montoSoles(t), 0);
+	const totalEgresos = (trans ?? []).filter((t: any) => t.tipo === 'egreso').reduce((s: number, t: any) => s + montoSoles(t), 0);
 
 	const centrosValidos = (centrosData ?? []).filter((c: any) => !esCentroExterno(c.codigo));
 	const idsValidos = new Set(centrosValidos.map((c: any) => c.id_centro_costo));
@@ -524,7 +583,7 @@ export async function getSerieMensualFlujoCaja(client: SupabaseClient, meses = 1
 
 	const { data, error } = await client
 		.from('transaccion')
-		.select('fecha, tipo, monto_total')
+		.select(`fecha, tipo, monto_total, ${COLUMNAS_MONEDA}`)
 		.eq('estado', 'activo')
 		.in('tipo', ['ingreso', 'egreso'])
 		.gte('fecha', inicioIso);
@@ -540,7 +599,7 @@ export async function getSerieMensualFlujoCaja(client: SupabaseClient, meses = 1
 		if (!t.fecha) continue;
 		const clave = claveAnioMes(parseFechaLocal(t.fecha));
 		if (!clavesSet.has(clave)) continue;
-		const monto = Number(t.monto_total) || 0;
+		const monto = montoSoles(t);
 		if (t.tipo === 'ingreso') ingresosPorMes.set(clave, (ingresosPorMes.get(clave) ?? 0) + monto);
 		if (t.tipo === 'egreso') egresosPorMes.set(clave, (egresosPorMes.get(clave) ?? 0) + monto);
 	}

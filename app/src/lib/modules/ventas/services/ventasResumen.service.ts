@@ -91,7 +91,7 @@ export async function getResumenVenta(client: SupabaseClient, idProyecto: number
 	if (idsCentros.length > 0) {
 		const { data: ingresos, error } = await client
 			.from('transaccion')
-			.select('id_transaccion, fecha, monto_total, monto_convertido, tipo_moneda, estado')
+			.select('id_transaccion, fecha, monto_total, monto_convertido, tipo_moneda, estado, comprobante_url')
 			.in('id_centro_costo_destino', idsCentros)
 			.eq('tipo', 'ingreso');
 		if (error) throw error;
@@ -99,8 +99,16 @@ export async function getResumenVenta(client: SupabaseClient, idProyecto: number
 			if (txEnCuotas.has(t.id_transaccion) || t.estado === 'anulado') continue;
 			const monto = t.tipo_moneda === 'dolares' && t.monto_convertido != null ? Number(t.monto_convertido) : Number(t.monto_total);
 			// id negativo: no choca con los id_cobro de las cuotas reales.
-			cuotas.push({ id: -t.id_transaccion, monto: monto || 0, fecha: t.fecha, estado: 'pagado', editable: false });
+			cuotas.push({ id: -t.id_transaccion, monto: monto || 0, fecha: t.fecha, estado: 'pagado', editable: false, idTransaccion: t.id_transaccion, comprobanteUrl: t.comprobante_url ?? null });
 		}
+	}
+
+	// Ticket #106: comprobante de cada cuota cobrada (el de su transacción), para la columna "Comprobante".
+	const idsTx = cuotas.filter((c) => c.idTransaccion && c.comprobanteUrl === undefined).map((c) => c.idTransaccion as number);
+	if (idsTx.length > 0) {
+		const { data: txs } = await client.from('transaccion').select('id_transaccion, comprobante_url').in('id_transaccion', idsTx);
+		const porId = new Map((txs ?? []).map((t: any) => [t.id_transaccion as number, (t.comprobante_url as string | null) ?? null]));
+		for (const c of cuotas) if (c.idTransaccion && c.comprobanteUrl === undefined) c.comprobanteUrl = porId.get(c.idTransaccion) ?? null;
 	}
 
 	const cobrado = cuotas.filter((c) => c.estado === 'pagado').reduce((s, c) => s + c.monto, 0);

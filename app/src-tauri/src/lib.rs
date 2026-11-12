@@ -231,6 +231,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // Ticket #112: ingreso con huella digital (solo Android/iOS).
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_biometric::init());
+
     builder
         .setup(|app| {
             if cfg!(debug_assertions) {

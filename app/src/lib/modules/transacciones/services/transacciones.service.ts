@@ -5,6 +5,7 @@
  * servidor embebido. AJUSTAR: la BD no tiene RLS real todavía, ver nota en +page.svelte.
  */
 
+import { borrarArchivosDriveHuerfanos, enlacesDeTransacciones } from '$lib/shared/borrarArchivosDrive';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption } from '$lib/shared/fieldConfig';
 import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency } from '$lib/shared/fieldConfig';
@@ -33,6 +34,7 @@ import { recalcularCuentaPagar } from '../../cuentas-pagar/services/cuentasPagar
 import { recalcularSaldoCuentaBanco } from '../../cuentas-bancarias/services/cuentaBanco.service';
 import { getOrCrearCentroCostoParaEntidad } from '../../centro-costos/services/centroCostos.service';
 import { generarCodigoProyecto, type ProyectoCodigoFields } from '$lib/shared/codigoProyecto';
+import { montoSoles, type ConMoneda } from '$lib/shared/moneda';
 
 // Embed + label de Centro de Costo reutilizados en TODAS las funciones getCentroCostoOptions* de más
 // abajo — mismo criterio que CENTRO_COSTO_EMBED/centroCostoLabel en cuentasPagar.service.ts: si el
@@ -291,49 +293,29 @@ async function esCentroCostoInterno(client: SupabaseClient, idCentroCosto: numbe
 	return data.id_cliente === null && data.id_proveedor === null && data.id_empleado === null;
 }
 
-/** Saldo disponible de un centro de costo propio: suma de todo lo que entró a su favor (Ingreso o
- * Financiamiento como destino, o Transferencia como destino) menos todo lo que salió (Egreso o
- * Transferencia como origen), entre las transacciones activas. `excluirIdTransaccion` se usa al
- * editar, para no contar dos veces la fila que se está por actualizar. */
-async function saldoDisponibleCentroCosto(client: SupabaseClient, idCentroCosto: number, excluirIdTransaccion?: number): Promise<number> {
-	let query = client
-		.from(TABLE_NAME)
-		.select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total')
-		.eq('estado', 'activo')
-		.or(`id_centro_costo_origen.eq.${idCentroCosto},id_centro_costo_destino.eq.${idCentroCosto}`);
-	if (excluirIdTransaccion) query = query.neq(PK_COLUMN, excluirIdTransaccion);
-
-	const { data, error } = await query;
+/** Saldo disponible de un centro de costo, EN SOLES: su último punto de corte + lo que entró (Ingreso/Financiamiento/
+ * Transferencia como destino) menos lo que salió (Egreso/Transferencia como origen) DESPUÉS de esa fecha. Lo calcula
+ * la base (fn_saldo_centro_costo) — la misma función que usa el bloqueo de fn_crear_transaccion, Centros de Costo y
+ * Control Financiero, para que nunca den cifras distintas. `excluirIdTransaccion`: al editar, no contar la fila que se
+ * está por actualizar. `fecha`: si cae en o antes del corte del centro, devuelve null (esa transacción no afecta el
+ * saldo vigente). */
+async function saldoDisponibleCentroCosto(client: SupabaseClient, idCentroCosto: number, excluirIdTransaccion?: number, fecha?: string | null): Promise<number | null> {
+	const { data, error } = await client.rpc('fn_saldo_centro_costo', {
+		p_id_centro_costo: idCentroCosto,
+		p_excluir: excluirIdTransaccion ?? null,
+		p_fecha: fecha || null
+	});
 	if (error) throw error;
-
-	return (data ?? []).reduce((saldo: number, t: any) => {
-		const monto = Number(t.monto_total);
-		if (t.id_centro_costo_origen === idCentroCosto && (t.tipo === 'egreso' || t.tipo === 'transferencia')) saldo -= monto;
-		if (t.id_centro_costo_destino === idCentroCosto && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) saldo += monto;
-		return saldo;
-	}, 0);
+	return data === null || data === undefined ? null : Number(data);
 }
 
-/** Mapa id_centro_costo (texto) -> saldo disponible de TODOS los centros de costo de un tirón (una sola
- * consulta) — misma fórmula que saldoDisponibleCentroCosto, para mostrar "Monto actual" junto al
- * selector de Centro de Costo Origen/Destino en TransaccionModal.svelte, sin una consulta por opción
- * (a pedido explícito del usuario). */
+/** Mapa id_centro_costo (texto) -> saldo vigente EN SOLES de TODOS los centros de costo de un tirón (fn_saldos_centros_costo:
+ * último corte + movimientos posteriores) — "Saldo actual" junto al selector de Centro de Costo en TransaccionModal.svelte. */
 export async function getSaldosCentroCosto(client: SupabaseClient): Promise<Record<string, number>> {
-	const { data, error } = await client.from(TABLE_NAME).select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total').eq('estado', 'activo');
+	const { data, error } = await client.rpc('fn_saldos_centros_costo');
 	if (error) throw error;
-
 	const saldos: Record<string, number> = {};
-	for (const t of (data ?? []) as any[]) {
-		const monto = Number(t.monto_total);
-		if (t.id_centro_costo_origen != null && (t.tipo === 'egreso' || t.tipo === 'transferencia')) {
-			const key = String(t.id_centro_costo_origen);
-			saldos[key] = (saldos[key] ?? 0) - monto;
-		}
-		if (t.id_centro_costo_destino != null && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) {
-			const key = String(t.id_centro_costo_destino);
-			saldos[key] = (saldos[key] ?? 0) + monto;
-		}
-	}
+	for (const f of (data ?? []) as any[]) saldos[String(f.id_centro_costo)] = Number(f.saldo);
 	return saldos;
 }
 
@@ -372,13 +354,14 @@ export async function validarSaldoSuficiente(
 	const tipo = String(payload.tipo ?? '');
 	if (tipo !== 'egreso' && tipo !== 'transferencia') return { ok: true };
 
-	const monto = Number(payload.monto_total);
-	if (!Number.isFinite(monto) || monto <= 0) return { ok: true }; // validatePayload ya exige > 0 — defensivo
+	if (!(Number(payload.monto_total) > 0)) return { ok: true }; // validatePayload ya exige > 0 — defensivo
+	// El centro de costo se lleva en soles: una transacción en dólares consume monto × tipo de cambio.
+	const monto = montoSoles(payload as unknown as ConMoneda);
 
 	const idOrigen = Number(payload.id_centro_costo_origen);
 	if (Number.isFinite(idOrigen) && (await esCentroCostoInterno(client, idOrigen))) {
-		const saldo = await saldoDisponibleCentroCosto(client, idOrigen, excluirIdTransaccion);
-		if (saldo - monto < -0.01) {
+		const saldo = await saldoDisponibleCentroCosto(client, idOrigen, excluirIdTransaccion, payload.fecha ? String(payload.fecha) : null);
+		if (saldo !== null && saldo - monto < -0.01) {
 			return {
 				ok: false,
 				message: `Saldo insuficiente en el centro de costo de origen: disponible ${formatCurrency(saldo)}, se requieren ${formatCurrency(monto)}. Registra un Financiamiento o Ingreso a ese centro de costo antes de continuar.`
@@ -697,6 +680,8 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 	// .select(PK_COLUMN) sirve para detectar borrados que "no fallan" pero tampoco afectan ninguna fila
 	// (ej. RLS bloqueando en silencio, o un id que ya no existe) — sin esto, Postgrest devuelve
 	// error=null incluso si 0 filas fueron realmente eliminadas.
+	// Ticket #123: enlaces de sus archivos, leídos antes de borrar (después ya no existen).
+	const enlaces = await enlacesDeTransacciones(client, [id]).catch(() => [] as string[]);
 	const { data, error } = await client.from(TABLE_NAME).delete().eq(PK_COLUMN, id).select(PK_COLUMN);
 	if (error) {
 		console.error('[transacciones.service] deleteTransaccion error:', error);
@@ -708,6 +693,7 @@ export async function deleteTransaccion(client: SupabaseClient, id: number, esAd
 	}
 
 	await Promise.all([recalcularSaldoCuentaBanco(client, actual?.cuente_origen), recalcularSaldoCuentaBanco(client, actual?.cuente_destino)]);
+	void borrarArchivosDriveHuerfanos(client, enlaces);
 
 	// Si esta transacción era (o hacía de) el adelanto que cerró la venta de un proyecto, esa venta
 	// vuelve a 'activo' — a pedido explícito del usuario, mismo criterio que anularTransaccion (ver
@@ -779,17 +765,21 @@ export async function anularTransaccion(client: SupabaseClient, id: number, esAd
 	return { success: true, message: 'Transacción anulada', data: data as Transaccion };
 }
 
-/** Reactiva una transacción anulada (por si se anuló por error) — vuelve a 'activo'. No restaura
- * ningún pago/cobro que se haya revertido al anular (habría que confirmarlo de nuevo a mano). Solo un
- * administrador puede llamar a esto. */
+/** Reactiva una transacción anulada (por si se anuló por error) — deshace la anulación COMPLETA y atómica
+ * (fn_reactivar_transaccion, migración 20261112130000): vuelve a 'activo' y, si respaldaba un cobro/pago, ese
+ * cobro/pago vuelve a "cobrado"/"pagado" y su cuenta se recalcula. Antes solo cambiaba el estado: el dinero volvía a
+ * contar en el centro de costo y la cuenta bancaria pero la Cuenta por Cobrar/Pagar seguía debiéndolo (contado dos
+ * veces). Si ese cobro/pago ya se volvió a registrar o cambió, la base de datos no reactiva y explica qué hacer.
+ * Solo un administrador puede llamar a esto. */
 export async function reactivarTransaccion(client: SupabaseClient, id: number, esAdmin: boolean): Promise<ServiceResult<Transaccion>> {
 	if (!esAdmin) return { success: false, message: 'Solo un administrador puede reactivar una transacción anulada.' };
 
-	const { data, error } = await client.from(TABLE_NAME).update({ estado: 'activo' }).eq(PK_COLUMN, id).select('*').single();
-	if (error) return { success: false, message: `No se pudo reactivar la transacción: ${translateSupabaseError(error, FIELDS_CONFIG)}` };
-
-	// Vuelve a contar para el saldo de la cuenta bancaria — mismo criterio que anularTransaccion arriba.
-	await Promise.all([recalcularSaldoCuentaBanco(client, (data as any)?.cuente_origen), recalcularSaldoCuentaBanco(client, (data as any)?.cuente_destino)]);
+	const { data, error } = await client.rpc('fn_reactivar_transaccion', { p_id_transaccion: id });
+	if (error) {
+		// Los motivos de negocio (REACTIVAR_COBRO_CAMBIADO / REACTIVAR_PAGO_CAMBIADO) ya vienen redactados para el usuario.
+		const mensaje = error.hint?.startsWith('REACTIVAR_') ? error.message : translateRpcError(error, FIELDS_CONFIG);
+		return { success: false, message: `No se pudo reactivar la transacción: ${mensaje}` };
+	}
 
 	return { success: true, message: 'Transacción reactivada', data: data as Transaccion };
 }

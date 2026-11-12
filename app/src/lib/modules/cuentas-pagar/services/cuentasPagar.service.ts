@@ -5,6 +5,7 @@
  * servidor embebido. AJUSTAR: la BD no tiene RLS real todavía, ver nota en +page.svelte.
  */
 
+import { borrarArchivosDriveHuerfanos, enlacesDeTransacciones } from '$lib/shared/borrarArchivosDrive';
 import { recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
@@ -859,8 +860,10 @@ export async function deleteCuentaPagar(client: SupabaseClient, id: number, esAd
 
 	if (idsTransaccion.length > 0) {
 		const { data: txs } = await client.from('transaccion').select('cuente_origen, cuente_destino').in('id_transaccion', idsTransaccion);
+		const enlaces = await enlacesDeTransacciones(client, idsTransaccion).catch(() => [] as string[]);
 		await client.from('transaccion').delete().in('id_transaccion', idsTransaccion);
-		// La base ya recalcula el saldo al borrar (trigger de 20261107120000_saldo_bancario_blindado.sql); esto es un
+		void borrarArchivosDriveHuerfanos(client, enlaces); // ticket #123
+		// La base ya recalcula el saldo al borrar (trigger de 20261107150000_saldo_bancario_blindado.sql); esto es un
 		// respaldo por si el trigger faltara, como pasó en Producción (reclamo del 07/11/2026).
 		const cuentas = new Set((txs ?? []).flatMap((t: any) => [t.cuente_origen, t.cuente_destino]).filter(Boolean));
 		await Promise.all([...cuentas].map((c) => recalcularSaldoCuentaBanco(client, c as string)));
@@ -1169,6 +1172,10 @@ export interface CuentaPagarVinculable {
 	num_documento: string | null;
 	saldo_pendiente: number;
 	proveedorNombre: string;
+	id_centro_costo: number | null;
+	centroCostoNombre: string | null;
+	/** Ticket #111: proveedor de la cuenta, para llenar Clase y Centro de costo destino de la transacción. */
+	id_proveedor: number | null;
 }
 
 /**
@@ -1188,21 +1195,25 @@ export async function buscarCuentasPagarVinculables(
 	query: string,
 	idCentroCosto: number | null
 ): Promise<CuentaPagarVinculable[]> {
-	if (!idCentroCosto) return [];
-
-	const { data, error } = await client
+	// Sin centro de costo (rediseño 11/11/2026: "Vincular" va junto a Tipo, antes que el centro de costo):
+	// se buscan las cuentas de TODOS los centros y, al elegir una, el formulario fija el centro de costo
+	// de esa cuenta — así se sigue sin poder vincular contra el presupuesto de otro proyecto.
+	let q0 = client
 		.from(TABLE_NAME)
-		.select('id_cuenta_pagar, num_documento, saldo_pendiente, proveedor(razon_social)')
+		.select('id_cuenta_pagar, num_documento, saldo_pendiente, id_centro_costo, id_proveedor, proveedor(razon_social), centro_costo(nombre)')
 		.eq('activo', true)
-		.eq('id_centro_costo', idCentroCosto)
-		.gt('saldo_pendiente', 0)
-		.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
+		.gt('saldo_pendiente', 0);
+	if (idCentroCosto) q0 = q0.eq('id_centro_costo', idCentroCosto);
+	const { data, error } = await q0.order('fecha_vencimiento', { ascending: true, nullsFirst: false });
 	if (error) throw error;
 
 	const items: CuentaPagarVinculable[] = (data ?? []).map((row: any) => ({
 		id_cuenta_pagar: row.id_cuenta_pagar as number,
 		num_documento: row.num_documento as string | null,
 		saldo_pendiente: Number(row.saldo_pendiente),
+		id_centro_costo: (row.id_centro_costo as number | null) ?? null,
+		centroCostoNombre: row.centro_costo?.nombre ?? null,
+		id_proveedor: (row.id_proveedor as number | null) ?? null,
 		proveedorNombre: row.proveedor?.razon_social ?? `Proveedor #${row.id_cuenta_pagar}`
 	}));
 

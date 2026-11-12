@@ -5,6 +5,7 @@
  * Los trabajadores registrados primero en un huellero llegan solo con pin y nombre: quedan como "ficha incompleta".
  * Dar de baja / restaurar / eliminar permanente: skill dar-de-baja-pattern.
  */
+import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface Personal {
@@ -257,6 +258,8 @@ export async function restaurarPersonal(client: SupabaseClient, id: number): Pro
 
 /** Borra la ficha. Sus marcaciones se conservan (se enlazan por código, no por id). */
 export async function eliminarPersonalPermanente(client: SupabaseClient, id: number): Promise<void> {
+	const { data: antes } = await client.from('personal').select('foto_url').eq('id_personal', id).maybeSingle();
 	const { error } = await client.from('personal').delete().eq('id_personal', id);
 	if (error) throw error;
+	void borrarArchivosDriveHuerfanos(client, [antes?.foto_url]); // ticket #123
 }

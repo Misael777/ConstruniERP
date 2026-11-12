@@ -9,6 +9,7 @@
  * para funcionar igual en web y en Tauri (sin servidor embebido).
  */
 
+import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { permisosState } from '$lib/stores/permisos.svelte';
 import { getOrCrearCentroCostoParaEntidad, getOrCrearCentroCostoCompartido, actualizarSaldoCentroCostoProyecto, darDeBajaCentroCostoDeEntidad, restaurarCentroCostoDeEntidad, getMontoRecibidoPorCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
@@ -285,10 +286,18 @@ export async function eliminarVentaCascade(client: SupabaseClient, idProyecto: n
 		if (error) throw error;
 
 		// El resto de las referencias tienen ON DELETE CASCADE y se borran solas
+		// Ticket #123: contrato y documentos (proformas, etc.) de la venta, leídos antes de borrar.
+		const [{ data: proy }, { data: docs }] = await Promise.all([
+			client.from('proyecto').select('contrato').eq('id_proyecto', idProyecto).maybeSingle(),
+			client.from('documento_proyecto').select('storage_url').eq('id_proyecto', idProyecto)
+		]);
+		const enlaces = [proy?.contrato, ...(docs ?? []).map((d: any) => d.storage_url)];
+
 		step = 'borrar proyecto';
 		({ error } = await client.from('proyecto').delete().eq('id_proyecto', idProyecto));
 		if (error) throw error;
 
+		void borrarArchivosDriveHuerfanos(client, enlaces);
 		return { success: true };
 	} catch (err: any) {
 		return { success: false, message: `Paso: ${step}. ${err?.message || String(err)}` };

@@ -18,11 +18,12 @@ import { cuentasPagarTools } from '../src/lib/server/agent-tools/tools/cuentas-p
 import { cuentasCobrarTools } from '../src/lib/server/agent-tools/tools/cuentas-cobrar.ts';
 import { catalogosTools } from '../src/lib/server/agent-tools/tools/catalogos.ts';
 import { auditoriaTools } from '../src/lib/server/agent-tools/tools/auditoria.ts';
+import { controlFinancieroTools } from '../src/lib/server/agent-tools/tools/control-financiero.ts';
 
 // Sumar un dominio nuevo es agregar su propio archivo en agent-tools/tools/ y pasarlo acá. Las
 // herramientas con `escritura: true` solo se registran cuando el servidor apunta a Dev (ver
 // filtrarPorEntorno) — Tickets es la excepción explícita (escrituraEnProd).
-const TODAS_LAS_TOOLS = crearRegistro(ticketsTools, cuentasPagarTools, cuentasCobrarTools, catalogosTools, auditoriaTools);
+const TODAS_LAS_TOOLS = crearRegistro(ticketsTools, cuentasPagarTools, cuentasCobrarTools, catalogosTools, auditoriaTools, controlFinancieroTools);
 
 // El entorno se deduce de la URL del proyecto Supabase cargada, no de una variable "modo" que se pueda
 // leer mal — mismo criterio que scripts/seed-dev-main.mjs.

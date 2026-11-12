@@ -241,7 +241,7 @@ const RPC_HINT_MESSAGES: Record<string, string> = {
 	SALDO_INSUFICIENTE: 'Saldo insuficiente para completar la operación. Registra un Financiamiento o Ingreso antes de continuar.',
 	MONTO_EXCEDE_COMPROMETIDO: 'El monto supera lo que falta por cubrir de esta cuenta. Revisa las demás cuotas antes de continuar.',
 	MONTO_EXCEDE_CUOTA: 'El monto supera el de la cuota que estás confirmando. Para pagar de más, registra un pago adicional o edita primero el monto de la cuota.',
-	TIPO_CAMBIO_REQUERIDO: 'Una transacción en dólares requiere el tipo de cambio.',
+	TIPO_CAMBIO_REQUERIDO: 'Esta transacción mueve dinero entre soles y dólares: ingresa el tipo de cambio (S/ por US$).',
 	CUENTA_NO_ENCONTRADA: 'No se encontró el registro relacionado. Puede que ya haya sido eliminado o modificado por otra persona — actualiza la página e intenta de nuevo.',
 	TIENE_PAGO_VINCULADO: 'No se puede eliminar: tiene un pago o cobro ya confirmado vinculado. Usa "Anular" en su lugar.'
 };
