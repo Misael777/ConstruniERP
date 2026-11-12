@@ -5,6 +5,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { X, Loader2, ShieldCheck, ShieldOff, Lock, Pencil, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CloudUpload, Info, Trash2, Plus, ListTree, FileText, RefreshCw, User, Eye, Paperclip } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
+	import { conexion, verificarConexion } from '$lib/stores/conexion.svelte';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
 	import { base64ToUint8Array } from '$lib/shared/base64';
 	import { validatePayload, applyFieldMask, formatCurrency, getOptionLabel, type FieldOption } from '$lib/shared/fieldConfig';
@@ -31,6 +32,8 @@
 		type DetalleCategoria,
 		getComprobantesPago,
 		sincronizarComprobantesPago,
+		verificarGuardadoTransaccion,
+		PARTES_TRANSACCION,
 		type ComprobantePago,
 		getSiguienteNumeroComprobanteInterno,
 		getSiguienteNumeroReciboPago,
@@ -2880,6 +2883,38 @@
 		return field.label;
 	}
 
+	/** Verificación posterior al guardado (ver verificarGuardadoTransaccion). Nunca lanza ni deshace nada. */
+	async function reforzarGuardado(
+		id: number,
+		detalleFilas: DetalleCategoriaFila[],
+		comprobantesFilas: ComprobantePago[] | null,
+		idOrigen: number | null | undefined
+	): Promise<void> {
+		const esperado = { detalle: detalleFilas.length, comprobantes: comprobantesFilas?.length ?? null, idOrigen };
+		let faltantes = await verificarGuardadoTransaccion(supabase, id, esperado).catch(() => null);
+		if (faltantes?.length) {
+			try {
+				if (faltantes.includes('detalle')) await sincronizarDetalleCategoria(supabase, id, detalleFilas);
+				if (faltantes.includes('comprobantes') && comprobantesFilas) await sincronizarComprobantesPago(supabase, id, comprobantesFilas);
+				if (faltantes.includes('origen') && idOrigen !== undefined) await supabase.from('transaccion').update({ id_transaccion_origen: idOrigen }).eq('id_transaccion', id);
+			} catch {
+				/* se informa abajo con la segunda verificación */
+			}
+			faltantes = await verificarGuardadoTransaccion(supabase, id, esperado).catch(() => null);
+		}
+		if (faltantes === null) {
+			toast.error(
+				`No se pudo confirmar que la transacción N° ${id} quedó completa (se perdió la conexión).`,
+				'Cuando vuelva la conexión, ábrela y revisa el detalle de la categoría y los comprobantes. Si falta algo, completa y vuelve a guardar.'
+			);
+		} else if (faltantes.length) {
+			toast.error(
+				`La transacción N° ${id} se guardó, pero faltó guardar ${faltantes.map((f) => PARTES_TRANSACCION[f]).join(' y ')}.`,
+				'Ábrela, completa lo que falta y vuelve a guardarla con buena conexión.'
+			);
+		}
+	}
+
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if (bloqueadaPorAprobacion) {
@@ -3014,6 +3049,13 @@
 		if (!reciboAutogeneradoAplica && !comprobanteFile && !comprobanteUrl) {
 			comprobanteError = 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.';
 			toast.error(comprobanteError);
+			return;
+		}
+
+		// Refuerzo (12/11/2026): sin conexión no se empieza — así no queda nada a medias (archivos sueltos en Drive o
+		// transacción sin su detalle/comprobantes). No cambia el guardado: solo evita arrancarlo sin señal.
+		if (!(await verificarConexion(supabase))) {
+			toast.error('Sin conexión a internet: no se guardó nada. Vuelve a intentarlo cuando tengas señal.');
 			return;
 		}
 
@@ -3162,6 +3204,7 @@
 					console.warn('[TransaccionModal] No se pudo guardar el detalle de categoría:', detalleErr);
 				}
 
+				let comprobantesEnviados: ComprobantePago[] | null = null;
 				// Comprobantes de pago (ver comprobantesPago más arriba) — se suben a Drive y se sincronizan
 				// recién acá, ya con el id_transaccion real. Los que existían antes y el usuario quitó en
 				// esta edición se borran de Drive aparte (no solo de la tabla de metadatos), para no dejar
@@ -3199,6 +3242,7 @@
 								});
 							}
 						}
+						comprobantesEnviados = filasFinal;
 						await sincronizarComprobantesPago(supabase, idParaComprobantes, filasFinal);
 					}
 				} catch (comprobantesErr) {
@@ -3206,6 +3250,18 @@
 					toast.error('No se pudieron guardar los comprobantes de la sección "Comprobantes" — revisa la consola (F12) para más detalle.');
 				} finally {
 					uploadingComprobantesPago = false;
+				}
+
+				// Refuerzo (12/11/2026): comprueba que el detalle, los comprobantes y la relación de detracción quedaron
+				// en la base (esos pasos van aparte y, si se corta la conexión, fallan en silencio). Si falta algo, lo
+				// reintenta una vez con las mismas funciones; si sigue faltando, lo avisa con el N° de la transacción.
+				if (idGuardada) {
+					await reforzarGuardado(
+						idGuardada,
+						detalleCategoria.filter((f) => f.subcategoria.trim()),
+						comprobantesEnviados,
+						origenNuevo !== ((transaccion as any)?.id_transaccion_origen ?? null) ? origenNuevo : undefined
+					);
 				}
 
 				// Cola de varios comprobantes: esta transacción ya quedó guardada de verdad, así que se
@@ -4633,9 +4689,11 @@
 						{forceReadOnly ? 'Cerrar' : 'Cancelar'}
 					</button>
 					{#if !bloqueadaPorAprobacion}
-						<button type="submit" disabled={submitting || hasErrors} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
+						<button type="submit" disabled={submitting || hasErrors || !conexion.enLinea} title={conexion.enLinea ? undefined : 'Sin conexión a internet'} class="px-4 py-2 text-sm font-medium rounded-lg bg-[#0f3b5e] text-white hover:bg-[#0c2f4c] disabled:opacity-50 flex items-center gap-2">
 							{#if submitting}<Loader2 size={16} class="animate-spin" />{/if}
-							{#if submitting}
+							{#if !conexion.enLinea && !submitting}
+								Sin conexión…
+							{:else if submitting}
 								{uploadingComprobante || uploadingComprobantesPago ? 'Subiendo archivos…' : 'Guardando…'}
 							{:else if colaArchivos.length > 1 && colaIndex < colaArchivos.length - 1}
 								Guardar y continuar

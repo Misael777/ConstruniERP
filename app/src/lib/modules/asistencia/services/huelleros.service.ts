@@ -50,11 +50,12 @@ function inicioDeHoyLima(): string {
 export async function getHuelleros(client: SupabaseClient, soloEliminados = false): Promise<Huellero[]> {
 	let query = client
 		.from('asistencia_dispositivo')
-		.select('*, centro_costo(codigo, nombre)')
+		.select(`*, ${CENTRO_COSTO_SELECT}`)
 		.order('created_at', { ascending: true });
 	query = soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
-	const { data, error } = await query;
+	const { data: filas, error } = await query;
 	if (error) throw error;
+	const data = (filas ?? []).map((h: any) => ({ ...h, centro_costo: nombreCentro(h.centro_costo) }));
 
 	const ids = (data ?? []).map((h) => h.id_dispositivo);
 	const marcasHoy: Record<number, number> = {};
@@ -170,18 +171,33 @@ export async function eliminarHuelleroPermanente(client: SupabaseClient, id: num
 	if (error) throw error;
 }
 
-/** Centros de costo donde puede estar un huellero o trabajar una persona: solo Corporativo y Obras, a pedido
- * explícito del usuario (sin consultoría, áreas ni otros). */
+/** Centros de costo donde puede estar un huellero o trabajar una persona: Corporativo, Obras y Consultoría
+ * (a pedido del usuario; consultoría se sumó el 10/11/2026). */
 const GRUPOS_LUGAR: { tipos: string[]; grupo: string }[] = [
 	{ tipos: ['bolsa general'], grupo: 'Corporativo / Oficina' },
-	{ tipos: ['obra', 'proyecto'], grupo: 'Obras' }
+	{ tipos: ['obra', 'proyecto'], grupo: 'Obras' },
+	{ tipos: ['consultoria'], grupo: 'Consultoría' }
 ];
+
+/** Embebido de centro_costo con el nombre del proyecto: el centro de un proyecto se llama solo con su número
+ * ("13"), así que se muestra el nombre del proyecto vinculado. Usar junto con nombreCentro(). */
+export const CENTRO_COSTO_SELECT = 'centro_costo(codigo, nombre, tipo, proyecto(nombre_proyecto))';
+
+/** Deja { codigo, nombre } con el nombre del proyecto si el centro está vinculado a uno. */
+export function nombreCentro<T extends { codigo: string; nombre: string; tipo?: string; proyecto?: { nombre_proyecto: string | null } | null }>(
+	cc: T | null | undefined
+): { codigo: string; nombre: string; tipo?: string } | null {
+	if (!cc) return null;
+	const r: { codigo: string; nombre: string; tipo?: string } = { codigo: cc.codigo, nombre: cc.proyecto?.nombre_proyecto?.trim() || cc.nombre };
+	if (cc.tipo) r.tipo = cc.tipo;
+	return r;
+}
 
 /** Obras y áreas (centros de costo activos) agrupadas para SelectConSaldo. */
 export async function getObrasParaHuellero(client: SupabaseClient): Promise<{ value: string; label: string; grupo: string }[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select('id_centro_costo, codigo, nombre, tipo')
+		.select('id_centro_costo, codigo, nombre, tipo, proyecto(nombre_proyecto)')
 		.in('tipo', GRUPOS_LUGAR.flatMap((g) => g.tipos))
 		.eq('estado', 'activo')
 		.order('codigo');
@@ -189,7 +205,7 @@ export async function getObrasParaHuellero(client: SupabaseClient): Promise<{ va
 	return GRUPOS_LUGAR.flatMap(({ tipos, grupo }) =>
 		(data ?? [])
 			.filter((c) => tipos.includes(c.tipo))
-			.map((c) => ({ value: String(c.id_centro_costo), label: `${c.codigo} · ${c.nombre}`, grupo }))
+			.map((c: any) => ({ value: String(c.id_centro_costo), label: `${c.codigo} · ${nombreCentro(c)!.nombre}`, grupo }))
 	);
 }
 
@@ -208,7 +224,7 @@ export interface HuelleroElegible {
 export async function getHuellerosElegibles(client: SupabaseClient): Promise<HuelleroElegible[]> {
 	const { data, error } = await client
 		.from('asistencia_dispositivo')
-		.select('id_dispositivo, numero_serie, nombre, id_centro_costo, ultima_conexion, centro_costo(codigo, nombre)')
+		.select(`id_dispositivo, numero_serie, nombre, id_centro_costo, ultima_conexion, ${CENTRO_COSTO_SELECT}`)
 		.neq('estado', 'baja')
 		.order('created_at');
 	if (error) throw error;
@@ -216,7 +232,7 @@ export async function getHuellerosElegibles(client: SupabaseClient): Promise<Hue
 		id_dispositivo: h.id_dispositivo,
 		nombre: h.nombre || `Huellero ${h.numero_serie}`,
 		id_centro_costo: h.id_centro_costo,
-		lugar: h.centro_costo ? `${h.centro_costo.codigo} · ${h.centro_costo.nombre}` : 'Sin obra o área asignada',
+		lugar: h.centro_costo ? `${h.centro_costo.codigo} · ${nombreCentro(h.centro_costo)!.nombre}` : 'Sin obra o área asignada',
 		numero_serie: h.numero_serie,
 		en_linea: estaEnLinea(h)
 	}));

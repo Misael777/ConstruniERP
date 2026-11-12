@@ -7,6 +7,7 @@
  */
 import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { CENTRO_COSTO_SELECT, nombreCentro } from '$lib/modules/asistencia/services/huelleros.service';
 
 export interface Personal {
 	id_personal: number;
@@ -51,9 +52,18 @@ export interface Personal {
 	/** Referente: quién lo trajo o responde por él en obra (p. ej. su subcontratista). */
 	referente_nombre: string | null;
 	referente_cargo: string | null;
+	/** Vínculo: en planilla propia o personal de un subcontratista (null = según el régimen; ver vinculoDe). */
+	vinculo: 'planilla_propia' | 'subcontratista' | null;
+	/** Empresa empleadora si es de un subcontratista (vacío en planilla propia = la propia empresa). */
+	empleador_nombre: string | null;
+	empleador_ruc: string | null;
+	/** Régimen de la empresa empleadora: micro / pequeña (REMYPE) o general. */
+	empleador_tamano: 'micro' | 'pequena' | 'general' | null;
+	/** Desde cuándo rige el monto de pago actual. */
+	monto_pago_desde: string | null;
 	estado: 'activo' | 'baja';
 	created_at: string;
-	centro_costo?: { codigo: string; nombre: string } | null;
+	centro_costo?: { codigo: string; nombre: string; tipo?: string } | null;
 	horario?: { nombre: string } | null;
 	/** Huelleros donde marca (tabla personal_huellero); no depende de la obra. huellas/rostros: cuántos tiene
 	 * registrados en ese huellero (solo el número; biometria_at null = el huellero aún no lo ha informado). */
@@ -119,6 +129,26 @@ export const PERIODICIDADES_PAGO = [
 /** Texto del monto según el periodo: "Pago semanal", "Jornal diario"… */
 export const etiquetaMonto = (periodicidad: string | null) =>
 	({ diaria: 'Jornal diario', semanal: 'Pago semanal', quincenal: 'Pago quincenal', mensual: 'Sueldo mensual' })[periodicidad ?? ''] ?? 'Monto de pago';
+export const VINCULOS = [
+	{ value: 'planilla_propia', label: 'Planilla propia' },
+	{ value: 'subcontratista', label: 'Personal de subcontratista' }
+];
+export const TAMANOS_EMPRESA = [
+	{ value: 'micro', label: 'MYPE · Microempresa' },
+	{ value: 'pequena', label: 'MYPE · Pequeña empresa' },
+	{ value: 'general', label: 'Régimen general' }
+];
+/** Vínculo efectivo: el elegido en la ficha o, si no se eligió, el que corresponde a su régimen. */
+export const vinculoDe = (p: Pick<Personal, 'vinculo' | 'regimen'>): 'planilla_propia' | 'subcontratista' =>
+	p.vinculo ?? (p.regimen === 'subcontrata' ? 'subcontratista' : 'planilla_propia');
+/** Empresa empleadora a mostrar: la del subcontratista o la propia empresa. */
+export const empleadorDe = (p: Pick<Personal, 'vinculo' | 'regimen' | 'empleador_nombre'>, propia: string): string =>
+	p.empleador_nombre?.trim() || (vinculoDe(p) === 'planilla_propia' ? propia : '');
+/** Unidad corta del monto: "/ día" para jornal diario (el resto se entiende por la periodicidad). */
+export const unidadMonto = (periodicidad: string | null) => (periodicidad === 'diaria' ? '/ día' : '');
+/** Cómo se le paga, para la etiqueta bajo el monto. El jornal diario se paga por semana. */
+export const etiquetaPeriodicidad = (periodicidad: string | null) =>
+	({ diaria: 'Pago semanal', semanal: 'Pago semanal', quincenal: 'Quincenal', mensual: 'Mensual' })[periodicidad ?? ''] ?? '';
 export const SISTEMAS_PENSION = ['ONP', 'AFP Integra', 'AFP Prima', 'AFP Profuturo', 'AFP Habitat'].map((v) => ({ value: v, label: v }));
 
 export const etiqueta = (lista: { value: string; label: string }[], valor: string | null) =>
@@ -168,14 +198,14 @@ export const hoyLima = () => new Date(Date.now() - 5 * 3_600_000).toISOString().
 
 export async function getPersonal(client: SupabaseClient, soloEliminados = false): Promise<Personal[]> {
 	const consultar = (huelleros: string) => {
-		const query = client.from('personal').select(`*, centro_costo(codigo, nombre), horario(nombre), personal_huellero(${huelleros})`).order('apellidos', { nullsFirst: true }).order('nombre');
+		const query = client.from('personal').select(`*, ${CENTRO_COSTO_SELECT}, horario(nombre), personal_huellero(${huelleros})`).order('apellidos', { nullsFirst: true }).order('nombre');
 		return soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	};
 	let { data, error } = await consultar('id_dispositivo, huellas, rostros, biometria_at');
 	// Base sin la migración 20261103130000 (columna inexistente, 42703): se carga igual, sin el aviso de huella.
 	if (error?.code === '42703') ({ data, error } = await consultar('id_dispositivo'));
 	if (error) throw error;
-	return (data ?? []) as unknown as Personal[];
+	return (data ?? []).map((p: any) => ({ ...p, centro_costo: nombreCentro(p.centro_costo) })) as unknown as Personal[];
 }
 
 /** Traduce los choques de índices únicos (código de huellero o documento repetido) a un mensaje claro. */
@@ -190,7 +220,9 @@ function errorAmigable(error: { code?: string; message?: string; details?: strin
 
 /** Crea (id null) o actualiza la ficha y sus huelleros. `nombre` (el del huellero) se alinea con nombres +
  * apellidos del ERP. Vincular o desvincular un huellero encola en la BD el alta o retiro en ese equipo. */
-export async function guardarPersonal(client: SupabaseClient, id: number | null, datos: DatosPersonal, huelleros: number[]): Promise<number> {
+/** Guarda la ficha. `huelleros` = lista completa de huelleros donde marca; null = no se tocan (al editar, los
+ * huelleros, el horario y la biometría se configuran en Asistencia → Configuración). */
+export async function guardarPersonal(client: SupabaseClient, id: number | null, datos: DatosPersonal, huelleros: number[] | null): Promise<number> {
 	const fila = {
 		...datos,
 		nombre: [datos.nombres, datos.apellidos].filter(Boolean).join(' ').slice(0, 150) || null,
@@ -208,7 +240,31 @@ export async function guardarPersonal(client: SupabaseClient, id: number | null,
 		const { error } = await client.from('personal').update(fila).eq('id_personal', idPersonal);
 		if (error) throw errorAmigable(error);
 	}
+	if (huelleros) await sincronizarHuelleros(client, idPersonal, huelleros);
+	return idPersonal;
+}
 
+/** Campos de asistencia que se editan desde Asistencia → Configuración. */
+export type DatosAsistenciaPersonal = Pick<DatosPersonal, 'id_horario' | 'id_empleado' | 'consentimiento_biometrico' | 'consentimiento_fecha'>;
+
+/** Guarda solo la configuración de asistencia (horario, usuario del ERP, consentimiento) y los huelleros donde marca. */
+export async function guardarAsistenciaPersonal(client: SupabaseClient, idPersonal: number, datos: DatosAsistenciaPersonal, huelleros: number[]): Promise<void> {
+	const { error } = await client
+		.from('personal')
+		.update({
+			id_horario: datos.id_horario,
+			id_empleado: datos.id_empleado,
+			consentimiento_biometrico: datos.consentimiento_biometrico,
+			consentimiento_fecha: datos.consentimiento_biometrico ? datos.consentimiento_fecha || null : null,
+			updated_at: new Date().toISOString()
+		})
+		.eq('id_personal', idPersonal);
+	if (error) throw errorAmigable(error);
+	await sincronizarHuelleros(client, idPersonal, huelleros);
+}
+
+/** Deja al trabajador exactamente en `huelleros` (agrega y quita filas de personal_huellero). */
+async function sincronizarHuelleros(client: SupabaseClient, idPersonal: number, huelleros: number[]): Promise<void> {
 	const { data: actuales, error: errorLectura } = await client.from('personal_huellero').select('id_dispositivo').eq('id_personal', idPersonal);
 	if (errorLectura) throw errorLectura;
 	const antes = new Set((actuales ?? []).map((v) => v.id_dispositivo as number));
@@ -222,19 +278,29 @@ export async function guardarPersonal(client: SupabaseClient, id: number | null,
 		const { error } = await client.from('personal_huellero').insert(agregar.map((d) => ({ id_personal: idPersonal, id_dispositivo: d })));
 		if (error) throw error;
 	}
-	return idPersonal;
 }
 
-/** Mueve varios trabajadores a otra obra o área. Con `cambiarHuelleros`, quita los huelleros de su obra anterior
- * y agrega los de la nueva (con su huella/rostro si dieron consentimiento). Devuelve cuántos se movieron. */
-export async function moverPersonal(client: SupabaseClient, ids: number[], idCentroCosto: number, cambiarHuelleros: boolean): Promise<number> {
-	const { data, error } = await client.rpc('fn_personal_mover', {
-		p_ids: ids,
-		p_id_centro_costo: idCentroCosto,
-		p_cambiar_huelleros: cambiarHuelleros
-	});
+/** Un tramo del historial de asignaciones (personal_historial_asignacion; lo llenan triggers, solo lectura). */
+export interface Asignacion {
+	id_historial: number;
+	tipo: 'obra' | 'huellero' | 'referente';
+	detalle: string | null;
+	referente_nombre: string | null;
+	referente_cargo: string | null;
+	fecha_inicio: string;
+	fecha_fin: string | null;
+}
+
+/** Obras, huelleros y referentes que tuvo el trabajador, del más reciente al más antiguo. */
+export async function getHistorialAsignaciones(client: SupabaseClient, idPersonal: number): Promise<Asignacion[]> {
+	const { data, error } = await client
+		.from('personal_historial_asignacion')
+		.select('id_historial, tipo, detalle, referente_nombre, referente_cargo, fecha_inicio, fecha_fin')
+		.eq('id_personal', idPersonal)
+		.order('fecha_inicio', { ascending: false })
+		.order('id_historial', { ascending: false });
 	if (error) throw error;
-	return data ?? 0;
+	return (data ?? []) as Asignacion[];
 }
 
 /** Huellas y rostros guardados (cifrados) por trabajador; nunca devuelve la plantilla. */
@@ -262,4 +328,58 @@ export async function eliminarPersonalPermanente(client: SupabaseClient, id: num
 	const { error } = await client.from('personal').delete().eq('id_personal', id);
 	if (error) throw error;
 	void borrarArchivosDriveHuerfanos(client, [antes?.foto_url]); // ticket #123
+}
+
+/** Un tramo del historial de cargos (personal_cargo_historial). fecha_fin vacía = cargo actual. */
+export interface CargoHistorial {
+	id_cargo_historial?: number;
+	cargo: string;
+	fecha_inicio: string;
+	fecha_fin: string | null;
+	observacion: string | null;
+}
+
+/** Historial de cargos de un trabajador, del más reciente al más antiguo. */
+export async function getCargosHistorial(client: SupabaseClient, idPersonal: number): Promise<CargoHistorial[]> {
+	const { data, error } = await client
+		.from('personal_cargo_historial')
+		.select('id_cargo_historial, cargo, fecha_inicio, fecha_fin, observacion')
+		.eq('id_personal', idPersonal)
+		.order('fecha_inicio', { ascending: false });
+	if (error) throw error;
+	return (data ?? []) as CargoHistorial[];
+}
+
+/** El cargo actual: el tramo sin fecha de fin más reciente (o null si no hay ninguno abierto). */
+export function cargoActual(tramos: CargoHistorial[]): string | null {
+	const abiertos = tramos.filter((t) => !t.fecha_fin && t.cargo.trim()).sort((a, b) => b.fecha_inicio.localeCompare(a.fecha_inicio));
+	return abiertos[0]?.cargo.trim() ?? null;
+}
+
+/** Guarda el historial tal como quedó en la ficha: borra los tramos quitados, actualiza los existentes e inserta los nuevos. */
+export async function guardarCargosHistorial(client: SupabaseClient, idPersonal: number, tramos: CargoHistorial[]): Promise<void> {
+	const { data: actuales, error: errorLectura } = await client.from('personal_cargo_historial').select('id_cargo_historial').eq('id_personal', idPersonal);
+	if (errorLectura) throw errorLectura;
+	const quedan = new Set(tramos.filter((t) => t.id_cargo_historial).map((t) => t.id_cargo_historial));
+	const quitar = (actuales ?? []).map((a) => a.id_cargo_historial as number).filter((id) => !quedan.has(id));
+	if (quitar.length) {
+		const { error } = await client.from('personal_cargo_historial').delete().in('id_cargo_historial', quitar);
+		if (error) throw error;
+	}
+	const fila = (t: CargoHistorial) => ({
+		id_personal: idPersonal,
+		cargo: t.cargo.trim(),
+		fecha_inicio: t.fecha_inicio,
+		fecha_fin: t.fecha_fin || null,
+		observacion: t.observacion?.trim() || null
+	});
+	for (const t of tramos.filter((t) => t.id_cargo_historial)) {
+		const { error } = await client.from('personal_cargo_historial').update(fila(t)).eq('id_cargo_historial', t.id_cargo_historial!);
+		if (error) throw error;
+	}
+	const nuevos = tramos.filter((t) => !t.id_cargo_historial).map(fila);
+	if (nuevos.length) {
+		const { error } = await client.from('personal_cargo_historial').insert(nuevos);
+		if (error) throw error;
+	}
 }

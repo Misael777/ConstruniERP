@@ -1408,6 +1408,43 @@ export async function sincronizarComprobantesPago(client: SupabaseClient, idTran
 	}
 }
 
+/** Lo que el modal acaba de mandar a guardar, para comprobar que quedó en la base (ver verificarGuardadoTransaccion). */
+export interface EsperadoTransaccion {
+	/** Filas del "Detalle de la categoría" enviadas. */
+	detalle: number;
+	/** Comprobantes de pago enviados; null = no se llegó a sincronizarlos (falló la subida a Drive). */
+	comprobantes: number | null;
+	/** id_transaccion_origen esperado (detracción); undefined = no aplica. */
+	idOrigen?: number | null;
+}
+
+/** Refuerzo post-guardado (a pedido del usuario, 12/11/2026): vuelve a leer la transacción y devuelve qué partes
+ * NO quedaron guardadas (el detalle y los comprobantes se graban en pasos aparte que, si se corta la conexión,
+ * fallan en silencio). No cambia nada. null = no se pudo leer (sin conexión): no se sabe si quedó completo. */
+export type ParteTransaccion = 'detalle' | 'comprobantes' | 'origen';
+export const PARTES_TRANSACCION: Record<ParteTransaccion, string> = {
+	detalle: 'el detalle de la categoría',
+	comprobantes: 'los comprobantes de la sección «Comprobantes»',
+	origen: 'la relación de la detracción con su transacción'
+};
+
+export async function verificarGuardadoTransaccion(client: SupabaseClient, idTransaccion: number, esperado: EsperadoTransaccion): Promise<ParteTransaccion[] | null> {
+	const [detalle, comprobantes, trans] = await Promise.all([
+		client.from('transaccion_detalle_categoria').select('id_transaccion', { count: 'exact', head: true }).eq('id_transaccion', idTransaccion),
+		client.from('transaccion_comprobante_pago').select('id_transaccion', { count: 'exact', head: true }).eq('id_transaccion', idTransaccion),
+		esperado.idOrigen !== undefined
+			? client.from(TABLE_NAME).select('id_transaccion_origen').eq(PK_COLUMN, idTransaccion).maybeSingle()
+			: Promise.resolve({ data: null, error: null })
+	]);
+	if (detalle.error || comprobantes.error || trans.error) return null;
+	const faltantes: ParteTransaccion[] = [];
+	if ((detalle.count ?? 0) !== esperado.detalle) faltantes.push('detalle');
+	if (esperado.comprobantes === null || (comprobantes.count ?? 0) !== esperado.comprobantes) faltantes.push('comprobantes');
+	if (esperado.idOrigen !== undefined && ((trans.data as { id_transaccion_origen?: number | null } | null)?.id_transaccion_origen ?? null) !== esperado.idOrigen)
+		faltantes.push('origen');
+	return faltantes;
+}
+
 /** Opciones para el campo "Responsable" (texto libre, no FK) de Cuentas por Pagar/Cobrar — el
  * valor guardado es el NOMBRE del empleado elegido (value === label), no su id, para no cambiar
  * el formato de la columna existente (VARCHAR de texto libre). */

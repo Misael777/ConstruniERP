@@ -8,6 +8,7 @@
 	import NotificacionesBell from '$lib/components/layout/NotificacionesBell.svelte';
 	import ActualizacionBell from '$lib/components/layout/ActualizacionBell.svelte';
 	import Toast from '$lib/components/Toast.svelte';
+	import ConexionAviso from '$lib/shared/components/ConexionAviso.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
 	import { getRequiredPermiso, getFirstAccessiblePath } from '$lib/config/modules';
 	import { consumePendingSharedFile } from '$lib/shareTarget';
@@ -351,5 +352,6 @@
 	{/if}
 
 	<Toast />
+	<ConexionAviso />
 	<ConfirmDialogHost />
 {/if}
