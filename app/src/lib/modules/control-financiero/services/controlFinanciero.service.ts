@@ -258,6 +258,71 @@ async function checkSaldosConsistentes(client: SupabaseClient): Promise<Resultad
 	};
 }
 
+/** Lee TODAS las filas (PostgREST corta en 1000 por consulta). */
+async function leerTodo<T>(consulta: (desde: number, hasta: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
+	const filas: T[] = [];
+	for (let desde = 0; ; desde += 1000) {
+		const { data, error } = await consulta(desde, desde + 999);
+		if (error) throw error;
+		filas.push(...(data ?? []));
+		if (!data || data.length < 1000) return filas;
+	}
+}
+
+/** Refuerzo (a pedido del usuario, 12/11/2026): partes de una transacción que se guardan en pasos aparte y pueden
+ * quedar a medias si se corta la conexión. Solo lectura, no corrige nada:
+ *  - pago/cobro vinculado cuyo monto no coincide ni con el total ni con el monto convertido de su transacción
+ *    (editar la transacción actualiza su pago/cobro en un paso aparte);
+ *  - cuenta por pagar/cobrar cuyo pagado/cobrado no es la suma de sus pagos/cobros confirmados;
+ *  - detracción (Ingreso · categoría Detracción) sin la transacción que la genera.
+ * Las diferencias de FECHA entre pago y transacción no cuentan: pueden ser legítimas. */
+async function checkTransaccionesIncompletas(client: SupabaseClient): Promise<ResultadoCheck> {
+	const [trans, pagos, cobros, cxp, cxc] = await Promise.all([
+		leerTodo<any>((a, b) => client.from('transaccion').select('id_transaccion, monto_total, monto_convertido, tipo, categoria, id_transaccion_origen').eq('estado', 'activo').order('id_transaccion').range(a, b)),
+		leerTodo<any>((a, b) => client.from('pagos').select('id_pago, id_transaccion, id_cuenta_pagar, monto, estado_pago').order('id_pago').range(a, b)),
+		leerTodo<any>((a, b) => client.from('cobros').select('id_cobro, id_transaccion, id_cuenta_cobrar, monto, estado_cobro').order('id_cobro').range(a, b)),
+		leerTodo<any>((a, b) => client.from('cuentas_pagar').select('id_cuenta_pagar, monto_pagado').order('id_cuenta_pagar').range(a, b)),
+		leerTodo<any>((a, b) => client.from('cuentas_cobrar').select('id_cuenta_cobrar, monto_cobrado').order('id_cuenta_cobrar').range(a, b))
+	]);
+	const porId = new Map(trans.map((t) => [t.id_transaccion, t]));
+	const difiere = (a: unknown, b: unknown) => Math.abs(Number(a ?? 0) - Number(b ?? 0)) > 0.01;
+	const montoNoCoincide = (monto: unknown, t: any) => difiere(monto, t.monto_total) && difiere(monto, t.monto_convertido ?? t.monto_total);
+
+	const pagosDescuadrados = pagos
+		.filter((p) => p.id_transaccion && porId.has(p.id_transaccion) && montoNoCoincide(p.monto, porId.get(p.id_transaccion)))
+		.map((p) => ({ id_pago: p.id_pago, id_transaccion: p.id_transaccion, monto_pago: Number(p.monto), monto_transaccion: Number(porId.get(p.id_transaccion).monto_total) }));
+	const cobrosDescuadrados = cobros
+		.filter((c) => c.id_transaccion && porId.has(c.id_transaccion) && montoNoCoincide(c.monto, porId.get(c.id_transaccion)))
+		.map((c) => ({ id_cobro: c.id_cobro, id_transaccion: c.id_transaccion, monto_cobro: Number(c.monto), monto_transaccion: Number(porId.get(c.id_transaccion).monto_total) }));
+
+	const sumar = (filas: any[], clave: string, estado: string, campoEstado: string) => {
+		const m = new Map<number, number>();
+		for (const f of filas) if (f[campoEstado] === estado) m.set(f[clave], (m.get(f[clave]) ?? 0) + Number(f.monto));
+		return m;
+	};
+	const pagado = sumar(pagos, 'id_cuenta_pagar', 'pagado', 'estado_pago');
+	const cobrado = sumar(cobros, 'id_cuenta_cobrar', 'cobrado', 'estado_cobro');
+	const cxpDescuadradas = cxp
+		.filter((c) => difiere(c.monto_pagado, pagado.get(c.id_cuenta_pagar)))
+		.map((c) => ({ id_cuenta_pagar: c.id_cuenta_pagar, monto_pagado: Number(c.monto_pagado ?? 0), suma_pagos: pagado.get(c.id_cuenta_pagar) ?? 0 }));
+	const cxcDescuadradas = cxc
+		.filter((c) => difiere(c.monto_cobrado, cobrado.get(c.id_cuenta_cobrar)))
+		.map((c) => ({ id_cuenta_cobrar: c.id_cuenta_cobrar, monto_cobrado: Number(c.monto_cobrado ?? 0), suma_cobros: cobrado.get(c.id_cuenta_cobrar) ?? 0 }));
+
+	const detraccionesSinOrigen = trans.filter((t) => t.tipo === 'ingreso' && t.categoria === 'Detracción' && !t.id_transaccion_origen).map((t) => t.id_transaccion);
+
+	const partes = [
+		pagosDescuadrados.length && `${pagosDescuadrados.length} pago(s) con monto distinto al de su transacción`,
+		cobrosDescuadrados.length && `${cobrosDescuadrados.length} cobro(s) con monto distinto al de su transacción`,
+		cxpDescuadradas.length && `${cxpDescuadradas.length} cuenta(s) por pagar con "pagado" que no suma sus pagos`,
+		cxcDescuadradas.length && `${cxcDescuadradas.length} cuenta(s) por cobrar con "cobrado" que no suma sus cobros`,
+		detraccionesSinOrigen.length && `${detraccionesSinOrigen.length} detracción(es) sin la transacción que la genera`
+	].filter(Boolean);
+	const detalle = { pagos: pagosDescuadrados, cobros: cobrosDescuadrados, cuentas_pagar: cxpDescuadradas, cuentas_cobrar: cxcDescuadradas, detracciones_sin_origen: detraccionesSinOrigen };
+	if (!partes.length) return { estado: 'ok', mensaje: 'Las transacciones, sus pagos/cobros, sus cuentas y sus detracciones están completos y cuadran.', detalle };
+	return { estado: 'alerta', mensaje: `${partes.join('; ')}. Pudo quedar a medias por un corte de conexión: abre la transacción y vuelve a guardarla.`, detalle };
+}
+
 export const CHEQUEOS: ChequeoConsistencia[] = [
 	{ id: 'integridad_transacciones', label: 'Integridad de transacciones', run: checkIntegridadTransacciones },
 	{ id: 'integridad_movimientos', label: 'Integridad de movimientos (pagos/cobros)', run: checkIntegridadMovimientos },
@@ -265,7 +330,8 @@ export const CHEQUEOS: ChequeoConsistencia[] = [
 	{ id: 'saldos_consistentes', label: 'Saldos consistentes (Centros de Costo vs Cuentas Bancarias)', run: checkSaldosConsistentes },
 	{ id: 'posibles_duplicados', label: 'Posibles duplicados', run: checkPosiblesDuplicados },
 	{ id: 'consistencia_centros_costo', label: 'Consistencia de centros de costo', run: checkConsistenciaCentrosCosto },
-	{ id: 'consistencia_cuentas_bancarias', label: 'Consistencia de cuentas bancarias', run: checkConsistenciaCuentasBancarias }
+	{ id: 'consistencia_cuentas_bancarias', label: 'Consistencia de cuentas bancarias', run: checkConsistenciaCuentasBancarias },
+	{ id: 'transacciones_incompletas', label: 'Transacciones completas (pagos, cobros, cuentas y detracciones)', run: checkTransaccionesIncompletas }
 ];
 
 export interface RevisionFinanciera {
