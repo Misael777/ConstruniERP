@@ -3,7 +3,7 @@
 --   personal.id_centro_costo sigue siendo la obra PRINCIPAL (a la que se carga su costo en la planilla y por la que
 --   se agrupa la lista); siempre está también en personal_obra (lo asegura un trigger).
 --   Historial: desde ahora el tipo 'obra' de personal_historial_asignacion se registra con cada alta/baja en
---   personal_obra (antes, con el cambio de personal.id_centro_costo). Requiere 20261112120000_personal_historial_asignacion.
+--   personal_obra (antes, con el cambio de personal.id_centro_costo). Requiere 20261112120100_personal_historial_asignacion.
 -- Idempotente.
 
 CREATE TABLE IF NOT EXISTS public.personal_obra (

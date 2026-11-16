@@ -13,6 +13,7 @@
  * cada visita, nunca se guarda.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { COLUMNAS_MONEDA, montoSoles } from '$lib/shared/moneda';
 
 export interface ServiceResult<T = undefined> {
 	success: boolean;
@@ -81,14 +82,14 @@ function rangoMes(mes: Date): { desde: string; hasta: string } {
 async function sumarVentasCompras(client: SupabaseClient, desde: string, hasta: string): Promise<ResumenMesIgv> {
 	const [{ data: facturas, error: errF }, { data: transacciones, error: errT }] = await Promise.all([
 		client.from('factura').select('valor_venta, monto_igv').eq('estado', 'emitida').eq('activo', true).gte('fecha_emision', desde).lte('fecha_emision', hasta),
-		client.from('transaccion').select('monto_total').eq('tipo', 'egreso').eq('estado', 'activo').eq('tipo_alcance', 'externa').gte('fecha', desde).lte('fecha', hasta)
+		client.from('transaccion').select(`monto_total, ${COLUMNAS_MONEDA}`).eq('tipo', 'egreso').eq('estado', 'activo').eq('tipo_alcance', 'externa').gte('fecha', desde).lte('fecha', hasta)
 	]);
 	if (errF) throw errF;
 	if (errT) throw errT;
 
 	const ventasBase = (facturas ?? []).reduce((s: number, f: any) => s + Number(f.valor_venta ?? 0), 0);
 	const igvVentas = (facturas ?? []).reduce((s: number, f: any) => s + Number(f.monto_igv ?? 0), 0);
-	const comprasBase = (transacciones ?? []).reduce((s: number, t: any) => s + baseImponible(Number(t.monto_total ?? 0)), 0);
+	const comprasBase = (transacciones ?? []).reduce((s: number, t: any) => s + baseImponible(montoSoles(t)), 0);
 	const creditoFiscalCompras = round2(comprasBase * IGV_TASA);
 	const igvEstimado = round2(igvVentas - creditoFiscalCompras);
 
@@ -149,7 +150,7 @@ export async function getComprobantesDelPeriodo(client: SupabaseClient, desde: s
 			.order('fecha_emision', { ascending: false }),
 		client
 			.from('transaccion')
-			.select('id_transaccion, fecha, categoria, descripcion, monto_total')
+			.select(`id_transaccion, fecha, categoria, descripcion, monto_total, ${COLUMNAS_MONEDA}`)
 			.eq('tipo', 'egreso')
 			.eq('estado', 'activo')
 			.eq('tipo_alcance', 'externa')
@@ -169,7 +170,7 @@ export async function getComprobantesDelPeriodo(client: SupabaseClient, desde: s
 		monto_total: Number(f.monto_total ?? 0)
 	}));
 	const compras: MovimientoCompra[] = (transacciones ?? []).map((t: any) => {
-		const montoTotal = Number(t.monto_total ?? 0);
+		const montoTotal = montoSoles(t); // en soles (compras en dólares × tipo de cambio)
 		const base = baseImponible(montoTotal);
 		return {
 			id_transaccion: t.id_transaccion,
@@ -221,13 +222,13 @@ export async function getDatosCrudosPorMes(client: SupabaseClient, anio: number,
 			const { desde, hasta } = rangoMesNum(anio, m);
 			const [{ data: facturas, error: errF }, { data: transacciones, error: errT }] = await Promise.all([
 				client.from('factura').select('valor_venta').eq('estado', 'emitida').eq('activo', true).gte('fecha_emision', desde).lte('fecha_emision', hasta),
-				client.from('transaccion').select('monto_total').eq('tipo', 'egreso').eq('estado', 'activo').eq('tipo_alcance', 'externa').gte('fecha', desde).lte('fecha', hasta)
+				client.from('transaccion').select(`monto_total, ${COLUMNAS_MONEDA}`).eq('tipo', 'egreso').eq('estado', 'activo').eq('tipo_alcance', 'externa').gte('fecha', desde).lte('fecha', hasta)
 			]);
 			if (errF) throw errF;
 			if (errT) throw errT;
 			return {
 				ventasBase: round2((facturas ?? []).reduce((s: number, f: any) => s + Number(f.valor_venta ?? 0), 0)),
-				comprasTotal: round2((transacciones ?? []).reduce((s: number, t: any) => s + Number(t.monto_total ?? 0), 0))
+				comprasTotal: round2((transacciones ?? []).reduce((s: number, t: any) => s + montoSoles(t), 0))
 			};
 		})
 	);

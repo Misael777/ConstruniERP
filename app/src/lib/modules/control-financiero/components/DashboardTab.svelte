@@ -30,6 +30,8 @@
 		TIPO_CENTRO_COSTO_OPTIONS,
 		TIPO_CENTRO_COSTO_LABELS,
 		centroCumpleTipoFiltro,
+		calcularTotalesRendimiento,
+		calcularConcentracionGlobal,
 		type CentroCostoOpcion,
 		type CentroCostoRendimiento,
 		type FlujoDeNodos,
@@ -39,7 +41,7 @@
 	} from '$lib/modules/dashboard-finanzas/services/dashboardFinanzas.service';
 	import { getSaldoTotalCentrosCosto, getSaldoTotalCuentasBancarias, getConciliacionesPendientesCount } from '../services/conciliacion.service';
 	import { getIncidenciasAbiertasCount } from '../services/incidencia.service';
-	import { ejecutarRevision, getUltimaRevision, type RevisionFinanciera } from '../services/controlFinanciero.service';
+	import { ejecutarRevision, getUltimaRevision, calcularEstadoGeneral, type RevisionFinanciera } from '../services/controlFinanciero.service';
 	import { getTrayectoriaCentrosCosto, getTrayectoriaCuentasBancarias, type TrayectoriaResultado } from '../services/trayectoria.service';
 	import {
 		TrendingUp,
@@ -135,11 +137,7 @@
 	const datasetsTrayectoriaCentros = $derived(construirDatasetsTrayectoria(trayectoriaCentros));
 	const datasetsTrayectoriaCuentas = $derived(construirDatasetsTrayectoria(trayectoriaCuentas));
 
-	const estadoGeneral = $derived.by((): 'ok' | 'alerta' | 'error' => {
-		if (incidenciasAbiertas > 0 || (ultimaRevision?.controles_error ?? 0) > 0) return 'error';
-		if (conciliacionesPendientes > 0 || (ultimaRevision?.controles_alerta ?? 0) > 0) return 'alerta';
-		return 'ok';
-	});
+	const estadoGeneral = $derived(calcularEstadoGeneral({ incidenciasAbiertas, conciliacionesPendientes, ultimaRevision }));
 
 	async function cargarSaludFinanciera() {
 		try {
@@ -263,34 +261,9 @@
 	});
 
 	// ── Totales agregados sobre el set filtrado ─────────────────────────────
-	const totales = $derived.by(() => {
-		const ingresos = items.reduce((s, i) => s + i.ingresos, 0);
-		const egresos = items.reduce((s, i) => s + i.egresos, 0);
-		const presupuesto = items.reduce((s, i) => s + i.presupuesto, 0);
-		const flujoCajaNeto = ingresos - egresos;
-		const autosuficiencia = egresos > 0 ? (ingresos / egresos) * 100 : null;
-		const desviacion = egresos - presupuesto;
-		const desviacionPct = presupuesto > 0 ? (desviacion / presupuesto) * 100 : null;
-		const burnRate = items.reduce((s, i) => s + i.burnRate, 0);
-		const burnRatePct = presupuesto > 0 ? (burnRate / presupuesto) * 100 : null;
-		const roc = presupuesto > 0 ? (flujoCajaNeto / presupuesto) * 100 : null;
-		const margenPositivo = items.filter((i) => i.flujoCajaNeto > 0).reduce((s, i) => s + i.flujoCajaNeto, 0);
-		const coberturaCorporativa = gastosCorporativos > 0 ? (margenPositivo / gastosCorporativos) * 100 : null;
-		return { ingresos, egresos, presupuesto, flujoCajaNeto, autosuficiencia, desviacion, desviacionPct, burnRate, burnRatePct, roc, margenPositivo, coberturaCorporativa };
-	});
-
-	const concentracionGlobal = $derived.by(() => {
-		const map = new Map<string, number>();
-		for (const item of items) {
-			for (const c of item.concentracion) {
-				map.set(c.categoria, (map.get(c.categoria) ?? 0) + c.monto);
-			}
-		}
-		const total = [...map.values()].reduce((s, v) => s + v, 0);
-		return [...map.entries()]
-			.map(([categoria, monto]) => ({ categoria, monto, pct: total > 0 ? (monto / total) * 100 : 0 }))
-			.sort((a, b) => b.monto - a.monto);
-	});
+	// Misma función que usa la herramienta MCP de Control Financiero (ver dashboardFinanzas.service.ts).
+	const totales = $derived(calcularTotalesRendimiento(items, gastosCorporativos));
+	const concentracionGlobal = $derived(calcularConcentracionGlobal(items));
 
 	function toggleSort(field: keyof CentroCostoRendimiento) {
 		if (sortBy === field) {

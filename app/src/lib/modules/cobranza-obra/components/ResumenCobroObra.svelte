@@ -166,11 +166,13 @@
 				<div class="p-4 sm:p-6 space-y-5">
 					<!-- Cabecera -->
 					<div class="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4">
-						<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-							<div><p class="text-xs text-slate-500">Valor venta total del proyecto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.valorVenta)}</p></div>
-							<div><p class="text-xs text-slate-500">Monto de adelanto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.totalAdelantos)}</p></div>
-							<div><p class="text-xs text-slate-500">Porcentaje adelanto</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{pct(r.totalAdelantos)}</p></div>
-							<div><p class="text-xs text-slate-500">Fecha de venta</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{fmtFecha(r.fechaVenta)}</p></div>
+						<!-- Ticket #106: "Valor venta total del proyecto (S/)" ocupa dos líneas; cada casilla se apoya abajo para que los
+						     cuatro valores queden en la misma línea. -->
+						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Valor venta total del proyecto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.valorVenta)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Monto de adelanto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.totalAdelantos)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Porcentaje adelanto</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{pct(r.totalAdelantos)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Fecha de venta</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{fmtFecha(r.fechaVenta)}</p></div>
 						</div>
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:w-[520px]">
 							{#each [{ t: 'Avance de cobranza programada', p: r.pctProgramado, a: 'Monto programado', av: r.programado, b: 'Saldo por cobrar (prog)', bv: r.valorVenta - r.programado, color: 'bg-blue-600' }, { t: 'Avance de cobranza efectiva', p: r.pctCobrado, a: 'Total cobrado', av: r.cobrado, b: 'Saldo por cobrar', bv: r.valorVenta - r.cobrado, color: 'bg-emerald-500' }] as k}

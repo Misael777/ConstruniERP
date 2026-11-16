@@ -223,9 +223,12 @@
 		}
 	}
 
-	// Enfoca el buscador apenas se abre el panel, para poder escribir de inmediato.
+	// Enfoca el buscador apenas se abre el panel, para poder escribir de inmediato — SOLO con mouse.
+	// Ticket #109: en el celular el foco abría el teclado, que tapaba media pantalla y no dejaba ver la
+	// lista. En pantallas táctiles el buscador sigue ahí; el teclado sale solo si se toca la lupa.
+	const conMouse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: fine)').matches;
 	$effect(() => {
-		if (open && buscadorEl) buscadorEl.focus();
+		if (open && buscadorEl && conMouse) buscadorEl.focus();
 	});
 
 	// Cierra al hacer scroll de CUALQUIER ancestro FUERA del propio panel (ej. el popup de Transacción

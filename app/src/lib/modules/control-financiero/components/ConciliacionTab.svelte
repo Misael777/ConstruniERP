@@ -136,7 +136,10 @@
 	}
 
 	async function handleRegistrarManual() {
-		const monto = Number(montoBancoManual);
+		// Vacío NO es 0: antes Number('')/Number(null) daba 0 y se registraba una conciliación "Banco 0.00" que abría
+		// una incidencia crítica falsa (así nacieron las incidencias #2–#5 de Producción).
+		const crudo = montoBancoManual as unknown;
+		const monto = crudo === '' || crudo === null || crudo === undefined ? NaN : Number(crudo);
 		if (!Number.isFinite(monto)) {
 			toast.error('Ingresa el monto reportado por el banco.');
 			return;

@@ -42,6 +42,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSaldosCuentaBanco, recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import { getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
 import { crearIncidencia, type Severidad } from './incidencia.service';
+import { COLUMNAS_MONEDA, montoEnMonedaCuenta } from '$lib/shared/moneda';
 
 /** Solo redondeo — cualquier diferencia mayor se trata como real (confirmado con el usuario, sin
  * margen de tolerancia de negocio inventado). */
@@ -119,48 +120,25 @@ export async function getUltimasAperturasPorCuentaBanco(client: SupabaseClient):
 export interface SaldoDetalleEntidad {
 	id: string;
 	label: string;
+	/** En SOLES (cuentas en dólares: su equivalente en soles, ver getSaldosDetalleCuentasBancarias). */
 	monto: number;
+	/** Solo cuentas bancarias: moneda de la cuenta y su saldo en esa moneda. */
+	moneda?: string;
+	saldo_moneda?: number;
+	/** Cuenta en dólares con saldo inicial/apertura y sin ningún movimiento con tipo de cambio para convertirlo. */
+	base_sin_tipo_cambio?: boolean;
 }
 
-/** Saldo VIGENTE de CADA centro de costo de FONDOS PROPIOS activo (tab "Centros de Costos" — ver
- * nota arriba, excluye Cuentas Internas): su última apertura (si existe) + solo las transacciones
- * posteriores a esa fecha de corte, con el mismo criterio tipo-gated que getSaldosPorCentroCosto
- * (centroCostos.service.ts) — replicado acá porque esa función no acepta un filtro de fecha y no se
- * toca (es de otro módulo). Sin apertura, cae al historial completo de siempre (baseline 0).
- * Desglosado por entidad — para el total, ver getSaldoTotalCentrosCosto; para mostrar "qué está
- * sumando" en Consistencia/Conciliación, usar esta función directamente. */
+/** Saldo VIGENTE en SOLES de CADA centro de costo de FONDOS PROPIOS activo (tab "Centros de Costos" — excluye Cuentas
+ * Internas): última apertura + movimientos posteriores a su fecha de corte, dólares × tipo de cambio. Lo calcula la base
+ * (fn_saldos_centros_costo), la MISMA función que usan el bloqueo por saldo, el formulario de transacciones y Centros de
+ * Costo — decisión del cliente (12/11/2026): el corte y el tipo de cambio valen igual en todo el sistema.
+ * Para el total, ver getSaldoTotalCentrosCosto. */
 export async function getSaldosDetalleCentrosCosto(client: SupabaseClient): Promise<SaldoDetalleEntidad[]> {
-	const [opciones, aperturas] = await Promise.all([getCentroCostoOptionsSoloCentros(client), getUltimasAperturasPorCentroCosto(client)]);
-	const ids = opciones.map((o) => Number(o.value));
-	if (ids.length === 0) return [];
-	const idsSet = new Set(ids);
-
-	const { data, error } = await client
-		.from('transaccion')
-		.select('id_centro_costo_origen, id_centro_costo_destino, tipo, monto_total, fecha')
-		.eq('estado', 'activo');
+	const [opciones, { data, error }] = await Promise.all([getCentroCostoOptionsSoloCentros(client), client.rpc('fn_saldos_centros_costo')]);
 	if (error) throw error;
-
-	const neto: Record<number, number> = {};
-	for (const id of ids) neto[id] = 0;
-	for (const t of (data ?? []) as any[]) {
-		const monto = Number(t.monto_total);
-		const origen = t.id_centro_costo_origen;
-		const destino = t.id_centro_costo_destino;
-		if (origen != null && idsSet.has(origen) && (t.tipo === 'egreso' || t.tipo === 'transferencia')) {
-			const corte = aperturas[origen]?.fecha_corte;
-			if (!corte || t.fecha > corte) neto[origen] -= monto;
-		}
-		if (destino != null && idsSet.has(destino) && (t.tipo === 'ingreso' || t.tipo === 'financiamiento' || t.tipo === 'transferencia')) {
-			const corte = aperturas[destino]?.fecha_corte;
-			if (!corte || t.fecha > corte) neto[destino] += monto;
-		}
-	}
-
-	return opciones.map((opt) => {
-		const id = Number(opt.value);
-		return { id: opt.value, label: opt.label, monto: Number(((aperturas[id]?.monto ?? 0) + neto[id]).toFixed(2)) };
-	});
+	const saldo = new Map(((data ?? []) as any[]).map((f) => [String(f.id_centro_costo), Number(f.saldo)]));
+	return opciones.map((opt) => ({ id: opt.value, label: opt.label, monto: saldo.get(opt.value) ?? 0 }));
 }
 
 /** Σ saldo VIGENTE de todos los centros de costo — ver getSaldosDetalleCentrosCosto. */
@@ -169,25 +147,27 @@ export async function getSaldoTotalCentrosCosto(client: SupabaseClient): Promise
 	return Number(detalle.reduce((sum, d) => sum + d.monto, 0).toFixed(2));
 }
 
-/** Saldo_actual de CADA cuenta bancaria activa, con su etiqueta ("Titular - N° de cuenta") — para
- * mostrar "qué está sumando" en Consistencia/Conciliación. */
+/** CADA cuenta bancaria activa con su etiqueta ("Titular - N° de cuenta"): `monto` = su saldo EN SOLES (para sumar y
+ * cuadrar contra los centros de costo, que se llevan en soles) y `saldo_moneda` = su saldo en su propia moneda (el
+ * saldo_actual de siempre). Cuenta en dólares: equivalente en soles = cada movimiento por su monto en soles (con el
+ * tipo de cambio de esa transacción) + su base convertida con el último tipo de cambio usado (fn_saldos_cuentas_banco). */
 export async function getSaldosDetalleCuentasBancarias(client: SupabaseClient): Promise<SaldoDetalleEntidad[]> {
-	const [{ data: cuentas, error }, saldos] = await Promise.all([
-		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta').eq('activo', true),
-		getSaldosCuentaBanco(client)
-	]);
+	const { data, error } = await client.rpc('fn_saldos_cuentas_banco');
 	if (error) throw error;
-	return (cuentas ?? []).map((c: any) => ({
+	return ((data ?? []) as any[]).map((c) => ({
 		id: c.numero_cuenta,
 		label: `${c.titular_cuenta} - ${c.numero_cuenta}`,
-		monto: Number((saldos[c.numero_cuenta] ?? 0).toFixed(2))
+		monto: Number(Number(c.saldo_soles).toFixed(2)),
+		moneda: c.tipo_moneda,
+		saldo_moneda: Number(c.saldo),
+		base_sin_tipo_cambio: !!c.base_sin_tipo_cambio
 	}));
 }
 
-/** Σ saldo_actual de TODAS las cuentas bancarias activas — ver getSaldosDetalleCuentasBancarias. */
+/** Σ en SOLES de TODAS las cuentas bancarias activas — ver getSaldosDetalleCuentasBancarias. */
 export async function getSaldoTotalCuentasBancarias(client: SupabaseClient): Promise<number> {
-	const saldos = await getSaldosCuentaBanco(client);
-	return Object.values(saldos).reduce((sum, v) => sum + v, 0);
+	const detalle = await getSaldosDetalleCuentasBancarias(client);
+	return Number(detalle.reduce((sum, d) => sum + d.monto, 0).toFixed(2));
 }
 
 function severidadPorDiferencia(diferencia: number): Severidad {
@@ -501,26 +481,32 @@ export interface MovimientoCuenta {
 	/** + entra a la cuenta, − sale. */
 	monto: number;
 	descripcion: string | null;
+	/** tipo de la transacción: ingreso | egreso | transferencia. */
+	tipo: string | null;
 }
 
 /** Movimientos activos de una cuenta bancaria (para el gráfico de "Puntos de corte"). */
 export async function getMovimientosCuentaBanco(client: SupabaseClient, numeroCuenta: string): Promise<MovimientoCuenta[]> {
 	// Dos consultas (origen y destino) en vez de .or(): los números de cuenta tienen espacios ("192 97436464068").
-	const columnas = 'id_transaccion, fecha, monto_total, cuente_origen, cuente_destino, descripcion';
-	const [salen, entran] = await Promise.all([
+	const columnas = `id_transaccion, fecha, monto_total, ${COLUMNAS_MONEDA}, cuente_origen, cuente_destino, descripcion, tipo`;
+	const [salen, entran, cuenta] = await Promise.all([
 		client.from('transaccion').select(columnas).eq('estado', 'activo').eq('cuente_origen', numeroCuenta),
-		client.from('transaccion').select(columnas).eq('estado', 'activo').eq('cuente_destino', numeroCuenta)
+		client.from('transaccion').select(columnas).eq('estado', 'activo').eq('cuente_destino', numeroCuenta),
+		client.from('cuenta_banco').select('tipo_moneda').eq('numero_cuenta', numeroCuenta).maybeSingle()
 	]);
 	if (salen.error) throw salen.error;
 	if (entran.error) throw entran.error;
+	// En la moneda de la cuenta (como fn_saldo_calculado_cuenta_banco): soles que entran a una cuenta en dólares ÷ TC, etc.
+	const moneda = (cuenta.data as any)?.tipo_moneda ?? 'soles';
 	const porId = new Map<number, any>();
 	for (const t of [...(salen.data ?? []), ...(entran.data ?? [])]) porId.set(t.id_transaccion, t);
 	return [...porId.values()]
 		.map((t: any) => ({
 			id_transaccion: t.id_transaccion,
 			fecha: String(t.fecha).slice(0, 10),
-			monto: (t.cuente_destino === numeroCuenta ? Number(t.monto_total) : 0) - (t.cuente_origen === numeroCuenta ? Number(t.monto_total) : 0),
-			descripcion: t.descripcion ?? null
+			monto: (t.cuente_destino === numeroCuenta ? montoEnMonedaCuenta(t, moneda) : 0) - (t.cuente_origen === numeroCuenta ? montoEnMonedaCuenta(t, moneda) : 0),
+			descripcion: t.descripcion ?? null,
+			tipo: t.tipo ?? null
 		}))
 		.sort((x, y) => (x.fecha === y.fecha ? x.id_transaccion - y.id_transaccion : x.fecha < y.fecha ? -1 : 1));
 }

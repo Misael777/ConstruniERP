@@ -8,7 +8,7 @@
 		getProyectosCentroCostoConsultoria,
 		esCentroDeVenta,
 		getMontoTotalProyecto,
-		getSaldosPorCentroCosto,
+		getSaldosVigentesCentroCosto,
 		getMontoRecibidoPorCentroCosto
 	} from '$lib/modules/centro-costos/services/centroCostos.service';
 	import type { CentroCosto, EntidadVinculada, ProyectoVinculadoConsultoria } from '$lib/modules/centro-costos/services/centroCostos.service';
@@ -81,11 +81,18 @@
 			const id = centro.id_centro_costo;
 			loadingMontos = true;
 			Promise.all([
-				esCentroDeVenta(centro) ? getMontoRecibidoPorCentroCosto(supabase, [id]) : getSaldosPorCentroCosto(supabase, [id]),
+				esCentroDeVenta(centro)
+					? getMontoRecibidoPorCentroCosto(supabase, [id]).then((m) => ({ monto: m[id], corte: null as string | null }))
+					: getSaldosVigentesCentroCosto(supabase, [id]).then((v) => ({ monto: v[id]?.saldo, corte: v[id]?.fecha_corte ?? null })),
 				getMontoTotalProyecto(supabase, centro)
 			])
-				.then(([montos, total]) => {
-					montoActual = montos[id] ?? centro.monto_actual ?? 0;
+				.then(([r, total]) => {
+					// Centro manual sin vínculo: lo escrito a mano + sus movimientos (igual que el listado); con punto de corte,
+					// el saldo ya parte de lo declarado ahí y lo escrito a mano no se suma.
+					const manual = !centro.id_proyecto && !centro.id_cliente && !centro.id_proveedor && !centro.id_empleado;
+					montoActual = manual
+						? (r.corte ? 0 : Number(centro.monto_actual) || 0) + (r.monto ?? 0)
+						: (r.monto ?? centro.monto_actual ?? 0);
 					montoTotal = total;
 				})
 				.finally(() => (loadingMontos = false));

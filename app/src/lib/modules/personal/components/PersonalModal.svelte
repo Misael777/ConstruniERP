@@ -38,6 +38,7 @@
 	} from '$lib/modules/personal/services/personal.service';
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
 	import { reducirFoto, subirFotoPersonal, FOTO_MAX_BYTES } from '$lib/modules/personal/services/personalFoto';
+	import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 
@@ -333,7 +334,10 @@
 			// por los de la nueva, igual que «Mover»); si no, se dejan como estén en Asistencia → Configuración.
 			const obrasFinal = datos.id_centro_costo && !obrasElegidas.includes(datos.id_centro_costo) ? [datos.id_centro_costo, ...obrasElegidas] : obrasElegidas;
 			const cambioDeObra = !!personal && [...obrasDe(personal)].sort().join(',') !== [...obrasFinal].sort().join(',');
+			const fotoAnterior = personal?.foto_url ?? null;
 			const idGuardado = await guardarPersonal(supabase, personal?.id_personal ?? null, datos, !personal || cambioDeObra ? huellerosElegidos : null, obrasFinal);
+			// Ticket #123: la foto reemplazada o quitada se borra también de Drive.
+			if (fotoAnterior && datos.foto_url !== fotoAnterior) void borrarArchivosDriveHuerfanos(supabase, [fotoAnterior]);
 			try {
 				await guardarCargosHistorial(supabase, idGuardado, cargos);
 			} catch (err) {

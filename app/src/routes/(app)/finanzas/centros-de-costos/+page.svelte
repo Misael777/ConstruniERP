@@ -15,7 +15,7 @@
 	} from '$lib/modules/centro-costos/config/centroCostos.config';
 	import {
 		getCentroCostos,
-		getSaldosPorCentroCosto,
+		getSaldosVigentesCentroCosto,
 		getMontoRecibidoPorCentroCosto,
 		getMontoTotalProyectosConsultoria,
 		esCentroDeVenta,
@@ -97,6 +97,8 @@
 	// fetchList, solo para esa pestaña (no se pidió para Cuentas Internas). Usado para centros SIN
 	// venta vinculada (bolsa general, manuales) — para los que sí la tienen, ver saldosVenta abajo.
 	let saldos = $state<Record<number, number>>({});
+	/** Centros con punto de corte (Control Financiero → Apertura): su saldo ya parte de lo declarado en el corte. */
+	let conCorte = $state<Set<number>>(new Set());
 	// Monto recibido (adelanto + cualquier otra transacción con destino ese centro, ver
 	// getMontoRecibidoPorCentroCosto) — a pedido del usuario, esto es lo que se muestra en "Monto
 	// Actual" para los centros vinculados a un proyecto (Obra) o el compartido de Consultoría, en vez
@@ -167,9 +169,9 @@
 			total = result.total;
 			totalPages = result.totalPages;
 			loadError = '';
-			saldos = activeTab === 'centros'
-				? await getSaldosPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
-				: {};
+			const vigentes = activeTab === 'centros' ? await getSaldosVigentesCentroCosto(supabase, items.map((i) => i.id_centro_costo)) : {};
+			saldos = Object.fromEntries(Object.entries(vigentes).map(([id, v]) => [Number(id), v.saldo]));
+			conCorte = new Set(Object.entries(vigentes).filter(([, v]) => v.fecha_corte).map(([id]) => Number(id)));
 			saldosVenta = activeTab === 'centros'
 				? await getMontoRecibidoPorCentroCosto(supabase, items.map((i) => i.id_centro_costo))
 				: {};
@@ -443,7 +445,13 @@
 			// venta real (proyecto/consultoría) siguen mostrando su ficha de caja como hasta ahora — esos
 			// no tienen un campo "Monto Actual" editable en su propio flujo (se crean solos en 0).
 			if (esConsultoriaGeneral(item) && montoTotalConsultoria !== null) return formatCurrency(montoTotalConsultoria);
-			if (esManualSinVincular(item)) return formatCurrency(item.monto_actual);
+			// Ticket de la clienta (11/11/2026): una Transferencia Interna a CORPORATIVO no se veía acá
+			// porque solo se mostraba lo escrito a mano. Ahora lo escrito a mano es el punto de partida y
+			// se le suman/restan los movimientos reales (mismo criterio que "Saldo actual" del formulario
+			// de transacciones).
+			// Con punto de corte, el saldo ya parte de lo declarado ahí: el "Monto Actual" escrito a mano no se suma.
+			if (esManualSinVincular(item))
+				return formatCurrency((conCorte.has(item.id_centro_costo) ? 0 : Number(item.monto_actual) || 0) + (saldos[item.id_centro_costo] ?? 0));
 			const saldo = esCentroDeVenta(item) ? saldosVenta[item.id_centro_costo] : saldos[item.id_centro_costo];
 			return formatCurrency(saldo ?? item.monto_actual);
 		}

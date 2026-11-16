@@ -42,7 +42,8 @@ la fuente y reportan inconsistencias; se pueden llamar en cualquier momento, tam
 | Cuentas por Cobrar | [cuentas-cobrar.md](cuentas-cobrar.md) | 13 casos ejecutados (2026-09-25) |
 | Cambio de periodicidad a mitad de plan (Pagar y Cobrar) | [fraccionamiento.md](fraccionamiento.md) | 22 casos ejecutados (2026-09-25) — `npm run test:negocio:fraccionamiento` |
 | El lápiz de las cuotas y montos desiguales | [lapiz-cuotas.md](lapiz-cuotas.md) | 12 casos ejecutados (2026-09-25) — `npm run test:negocio:lapiz` |
-| Transacciones, Centro de Costos, Cuentas Bancarias, Ventas, Facturación, Control Financiero | — | pendientes |
+| Control Financiero (de punta a punta, todas las pestañas) | [control-financiero.md](control-financiero.md) | 1211 casos (2026-11-12) — `npm run test:negocio:control-financiero` |
+| Transacciones, Centro de Costos, Cuentas Bancarias, Ventas, Facturación | — | pendientes |
 
 ## Hallazgos (resumen)
 

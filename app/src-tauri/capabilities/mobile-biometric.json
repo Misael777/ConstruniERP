@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile-biometric",
+  "description": "Ticket #112: ingreso con huella digital (tauri-plugin-biometric, solo Android/iOS).",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": [
+    "biometric:default"
+  ]
+}

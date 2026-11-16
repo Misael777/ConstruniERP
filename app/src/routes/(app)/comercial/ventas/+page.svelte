@@ -792,17 +792,17 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 		return [
 			{ label: 'Código de proyecto', valor: row.codigo || row.proyecto || '' },
 			{ label: 'Cliente', valor: row.clienteNombre ?? p.cliente?.nombre ?? '' },
-			{ label: 'Estado', valor: etiquetaEstadoVenta(row.estado_proyecto) },
+			{ label: 'Estado', valor: etiquetaEstadoVenta(row.estado_proyecto), sensible: true },
 			{ label: 'Tipo de proyecto', valor: etiquetaTipoVenta(row) },
 			{ label: 'Fecha de venta', valor: row.fecha ?? '' },
 			{ label: 'Asesor', valor: row.asesor ?? '' },
 			{ label: 'Valor venta', valor: formatoSoles(row.valor) },
-			{ label: 'Comisión', valor: `${formatoSoles(row.comision)} (${row.comisionPct ?? 0}%)` },
-			{ label: 'Contrato', valor: row.contrato ? 'Adjunto' : 'Sin contrato' },
-			{ label: 'Cobrado', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.cobrado) : '' },
-			{ label: 'Por cobrar', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.porCobrar) : '' },
-			{ label: 'Dirección del predio', valor: p.direccion_predio ?? '' },
-			{ label: 'Ubicación', valor: ubicacion },
+			{ label: 'Comisión', valor: row.comision ? `${formatoSoles(row.comision)} (${row.comisionPct ?? 0}%)` : '' },
+			{ label: 'Contrato', valor: row.contrato ? 'Adjunto' : '' },
+			{ label: 'Cobrado', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.cobrado) : '', sensible: true },
+			{ label: 'Por cobrar', valor: resumenVentaDatos?.cuotas.length ? formatoSoles(resumenVentaDatos.porCobrar) : '', sensible: true },
+			// Ticket #106 (arte del cliente): 12 casillas en 3 columnas; la ubicación va junto a la dirección.
+			{ label: 'Dirección del predio', valor: [p.direccion_predio, ubicacion].filter(Boolean).join(' — ') },
 			{ label: 'Observaciones', valor: p.descripcion ?? row.descripcion ?? '', completo: true }
 		];
 	});
@@ -1115,9 +1115,9 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 <!-- Resumen de venta (ícono ⓘ en Acciones): solo lectura, borrador o cerrada. -->
 <ResumenCuentaModal
 	open={resumenVentaOpen}
-	titulo="Resumen de venta"
-	tituloCronograma="Forma de cobranza"
-	etiquetaTotal="Valor venta"
+	titulo={resumenVentaFila ? `Resumen de venta · ${etiquetaTipoVenta(resumenVentaFila)}` : 'Resumen de venta'}
+	tituloCronograma="Cronograma de cobranza · Hitos de cobro"
+	etiquetaTotal="TOTAL CONTRATADO"
 	textoPagado="Cobrado"
 	campos={camposResumenVenta}
 	cuotas={resumenVentaDatos?.cuotas ?? []}
@@ -1126,6 +1126,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	esObra={resumenVentaFila?.tipoVenta === 'obra'}
 	montoTotal={Number(resumenVentaFila?.valor) || 0}
 	soloLectura
+	estiloVenta
 	onClose={() => { resumenVentaOpen = false; resumenVentaFila = null; resumenVentaDatos = null; }}
 	onEditarCuota={() => {}}
 />

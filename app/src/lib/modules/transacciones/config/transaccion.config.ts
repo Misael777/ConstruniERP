@@ -64,6 +64,14 @@
 
 import type { FieldConfig } from '$lib/shared/fieldConfig';
 import { currencyMask } from '$lib/shared/fieldConfig';
+import { requiereTipoCambio } from '$lib/shared/moneda';
+
+/** ¿Hace falta tipo de cambio? Transacción en dólares, o alguna de sus cuentas en otra moneda (decisión del cliente
+ * 12/11/2026: como en el banco). `moneda_cuenta_origen`/`moneda_cuenta_destino` no son columnas: las pone
+ * TransaccionModal.svelte según las cuentas elegidas (buildWritablePayload solo guarda las claves de FIELDS_CONFIG).
+ * La base de datos aplica la misma regla (trigger fn_trg_transaccion_tipo_cambio) en cualquier camino. */
+export const necesitaTipoCambio = (values: Record<string, unknown>) =>
+	requiereTipoCambio(String(values.tipo_moneda ?? 'soles'), values.moneda_cuenta_origen as string | undefined, values.moneda_cuenta_destino as string | undefined);
 
 export const TABLE_NAME = 'transaccion';
 export const PK_COLUMN = 'id_transaccion';
@@ -437,9 +445,11 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 		regex: /^\d+(\.\d{1,2})?$/,
 		regexMessage: 'Solo números, con máximo 2 decimales',
 		placeholder: '3.75',
-		disabledWhen: (values) => String(values.tipo_moneda ?? 'soles') !== 'dolares',
-		requiredWhen: (values) => String(values.tipo_moneda ?? 'soles') === 'dolares',
-		helpText: 'Tipo de cambio del día (S/ por US$). Obligatorio si la moneda es Dólares.',
+		// Sin disabledWhen a propósito: deshabilitarlo lo guardaba como null, y los caminos que no son el formulario
+		// (pagos/cobros, préstamos, agentes) no conocen las monedas de las cuentas — borraban el tipo de cambio de una
+		// transferencia soles → cuenta en dólares. Un tipo de cambio en una transacción solo-soles no afecta nada.
+		requiredWhen: (values) => necesitaTipoCambio(values),
+		helpText: 'Tipo de cambio del día (S/ por US$). Obligatorio si la moneda es Dólares o si alguna cuenta está en otra moneda.',
 		showInTable: false,
 		showInForm: true,
 		sortable: false
