@@ -68,6 +68,8 @@ export interface Personal {
 	/** Huelleros donde marca (tabla personal_huellero); no depende de la obra. huellas/rostros: cuántos tiene
 	 * registrados en ese huellero (solo el número; biometria_at null = el huellero aún no lo ha informado). */
 	personal_huellero?: { id_dispositivo: number; huellas?: number; rostros?: number; biometria_at?: string | null }[];
+	/** Todas sus obras o áreas (personal_obra); la principal es id_centro_costo. Sin la migración 20261116120000 no viene. */
+	personal_obra?: { id_centro_costo: number; centro_costo?: { codigo: string; nombre: string; tipo?: string } | null }[];
 }
 
 /** Campos editables desde la ficha (todo menos id, estado, fechas de auditoría y lo embebido). */
@@ -197,15 +199,28 @@ export function alertasVencimiento(p: Personal, hoy: string): { texto: string; v
 export const hoyLima = () => new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
 
 export async function getPersonal(client: SupabaseClient, soloEliminados = false): Promise<Personal[]> {
-	const consultar = (huelleros: string) => {
-		const query = client.from('personal').select(`*, ${CENTRO_COSTO_SELECT}, horario(nombre), personal_huellero(${huelleros})`).order('apellidos', { nullsFirst: true }).order('nombre');
+	const consultar = (huelleros: string, conObras: boolean) => {
+		const obras = conObras ? `, personal_obra(id_centro_costo, ${CENTRO_COSTO_SELECT})` : '';
+		// La obra principal se nombra por su FK: con personal_obra hay dos caminos de personal a centro_costo (PGRST201).
+		const principal = CENTRO_COSTO_SELECT.replace('centro_costo(', 'centro_costo!personal_id_centro_costo_fkey(');
+		const query = client.from('personal').select(`*, ${principal}, horario(nombre), personal_huellero(${huelleros})${obras}`).order('apellidos', { nullsFirst: true }).order('nombre');
 		return soloEliminados ? query.eq('estado', 'baja') : query.neq('estado', 'baja');
 	};
-	let { data, error } = await consultar('id_dispositivo, huellas, rostros, biometria_at');
+	let conObras = true;
+	let { data, error } = await consultar('id_dispositivo, huellas, rostros, biometria_at', conObras);
+	// Base sin la migración 20261116120000 (sin personal_obra): se carga igual, con una sola obra.
+	if (error && /personal_obra/.test(`${error.message} ${error.details ?? ''} ${error.hint ?? ''}`)) {
+		conObras = false;
+		({ data, error } = await consultar('id_dispositivo, huellas, rostros, biometria_at', conObras));
+	}
 	// Base sin la migración 20261103130000 (columna inexistente, 42703): se carga igual, sin el aviso de huella.
-	if (error?.code === '42703') ({ data, error } = await consultar('id_dispositivo'));
+	if (error?.code === '42703') ({ data, error } = await consultar('id_dispositivo', conObras));
 	if (error) throw error;
-	return (data ?? []).map((p: any) => ({ ...p, centro_costo: nombreCentro(p.centro_costo) })) as unknown as Personal[];
+	return (data ?? []).map((p: any) => ({
+		...p,
+		centro_costo: nombreCentro(p.centro_costo),
+		personal_obra: p.personal_obra?.map((o: any) => ({ id_centro_costo: o.id_centro_costo, centro_costo: nombreCentro(o.centro_costo) }))
+	})) as unknown as Personal[];
 }
 
 /** Traduce los choques de índices únicos (código de huellero o documento repetido) a un mensaje claro. */
@@ -222,7 +237,14 @@ function errorAmigable(error: { code?: string; message?: string; details?: strin
  * apellidos del ERP. Vincular o desvincular un huellero encola en la BD el alta o retiro en ese equipo. */
 /** Guarda la ficha. `huelleros` = lista completa de huelleros donde marca; null = no se tocan (al editar, los
  * huelleros, el horario y la biometría se configuran en Asistencia → Configuración). */
-export async function guardarPersonal(client: SupabaseClient, id: number | null, datos: DatosPersonal, huelleros: number[] | null): Promise<number> {
+export async function guardarPersonal(
+	client: SupabaseClient,
+	id: number | null,
+	datos: DatosPersonal,
+	huelleros: number[] | null,
+	/** Todas sus obras o áreas (incluida la principal, datos.id_centro_costo); null = no se tocan. */
+	obras: number[] | null = null
+): Promise<number> {
 	const fila = {
 		...datos,
 		nombre: [datos.nombres, datos.apellidos].filter(Boolean).join(' ').slice(0, 150) || null,
@@ -240,8 +262,39 @@ export async function guardarPersonal(client: SupabaseClient, id: number | null,
 		const { error } = await client.from('personal').update(fila).eq('id_personal', idPersonal);
 		if (error) throw errorAmigable(error);
 	}
+	if (obras) await sincronizarObras(client, idPersonal, obras);
 	if (huelleros) await sincronizarHuelleros(client, idPersonal, huelleros);
 	return idPersonal;
+}
+
+/** Obras o áreas del trabajador: las de personal_obra, o solo la principal si la base aún no tiene esa tabla. */
+export function obrasDe(p: Pick<Personal, 'id_centro_costo' | 'personal_obra'>): number[] {
+	const ids = (p.personal_obra ?? []).map((o) => o.id_centro_costo);
+	if (p.id_centro_costo && !ids.includes(p.id_centro_costo)) ids.unshift(p.id_centro_costo);
+	return ids;
+}
+
+/** Deja al trabajador exactamente en `obras` (personal_obra). La principal la agrega también un trigger. */
+async function sincronizarObras(client: SupabaseClient, idPersonal: number, obras: number[]): Promise<void> {
+	const { data: actuales, error: errorLectura } = await client.from('personal_obra').select('id_centro_costo').eq('id_personal', idPersonal);
+	if (errorLectura) {
+		// Base sin la migración 20261116120000: con una sola obra (la principal) no hace falta la tabla.
+		const sinTabla = errorLectura.code === 'PGRST205' || errorLectura.code === '42P01';
+		if (sinTabla && obras.length <= 1) return;
+		if (sinTabla) throw new Error('Esta base aún no admite varias obras por trabajador (falta la migración 20261116120000_personal_obras).');
+		throw errorLectura;
+	}
+	const antes = new Set((actuales ?? []).map((v) => v.id_centro_costo as number));
+	const quitar = [...antes].filter((o) => !obras.includes(o));
+	const agregar = obras.filter((o) => !antes.has(o));
+	if (quitar.length) {
+		const { error } = await client.from('personal_obra').delete().eq('id_personal', idPersonal).in('id_centro_costo', quitar);
+		if (error) throw error;
+	}
+	if (agregar.length) {
+		const { error } = await client.from('personal_obra').insert(agregar.map((o) => ({ id_personal: idPersonal, id_centro_costo: o })));
+		if (error) throw error;
+	}
 }
 
 /** Campos de asistencia que se editan desde Asistencia → Configuración. */
