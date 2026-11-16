@@ -28,6 +28,7 @@
 		etiquetaMonto,
 		etiqueta,
 		guardarPersonal,
+		obrasDe,
 		getCargosHistorial,
 		guardarCargosHistorial,
 		cargoActual,
@@ -128,6 +129,7 @@
 		errores = {};
 		huellerosElegidos = (personal?.personal_huellero ?? []).map((v) => v.id_dispositivo);
 		quitarFotoNueva();
+		obrasElegidas = personal ? obrasDe(personal) : [];
 		cargarCargos(personal?.id_personal ?? null);
 	});
 
@@ -216,14 +218,27 @@
 		form.foto_url = null;
 	}
 
-	/** Al cambiar de obra o área: marca sus huelleros y desmarca los de la anterior. */
-	function cambiarLugar(valor: string) {
-		const anterior = form.id_centro_costo;
-		const nuevo = valor ? Number(valor) : null;
-		form.id_centro_costo = nuevo;
-		const deAnterior = huelleros.filter((h) => anterior && h.id_centro_costo === anterior).map((h) => h.id_dispositivo);
-		const deNuevo = huelleros.filter((h) => nuevo && h.id_centro_costo === nuevo).map((h) => h.id_dispositivo);
-		huellerosElegidos = [...new Set([...huellerosElegidos.filter((id) => !deAnterior.includes(id)), ...deNuevo])];
+	// Obras o áreas (varias, a pedido del usuario 16/11/2026; personal_obra). La principal es form.id_centro_costo:
+	// a ella se carga su costo en la planilla y por ella se agrupa la lista. Al agregar una obra se suman sus
+	// huelleros; al quitarla, se quitan los de esa obra.
+	let obrasElegidas = $state<number[]>([]);
+	const nombreObra = (id: number) => obras.find((o) => o.value === String(id))?.label ?? `Centro de costo ${id}`;
+	const opcionesObraNueva = $derived(obras.filter((o) => !obrasElegidas.includes(Number(o.value))));
+	const huellerosDeObra = (id: number) => huelleros.filter((h) => h.id_centro_costo === id).map((h) => h.id_dispositivo);
+
+	function agregarObra(valor: string) {
+		const id = Number(valor);
+		if (!id || obrasElegidas.includes(id)) return;
+		obrasElegidas = [...obrasElegidas, id];
+		if (!form.id_centro_costo) form.id_centro_costo = id;
+		huellerosElegidos = [...new Set([...huellerosElegidos, ...huellerosDeObra(id)])];
+	}
+
+	function quitarObra(id: number) {
+		obrasElegidas = obrasElegidas.filter((o) => o !== id);
+		if (form.id_centro_costo === id) form.id_centro_costo = obrasElegidas[0] ?? null;
+		const deEsa = huellerosDeObra(id);
+		huellerosElegidos = huellerosElegidos.filter((d) => !deEsa.includes(d));
 	}
 
 	/** Al elegir el régimen se propone su periodicidad usual (civil: semanal; general: mensual) si aún no tiene. */
@@ -316,8 +331,9 @@
 			if (personal) for (const k of ['id_horario', 'id_empleado', 'consentimiento_biometrico', 'consentimiento_fecha'] as const) delete (datos as Partial<DatosPersonal>)[k];
 			// Huelleros: en un alta, los de su obra o área; al editar solo si cambió de obra (se cambian los de la anterior
 			// por los de la nueva, igual que «Mover»); si no, se dejan como estén en Asistencia → Configuración.
-			const cambioDeObra = !!personal && (personal.id_centro_costo ?? null) !== (datos.id_centro_costo ?? null);
-			const idGuardado = await guardarPersonal(supabase, personal?.id_personal ?? null, datos, !personal || cambioDeObra ? huellerosElegidos : null);
+			const obrasFinal = datos.id_centro_costo && !obrasElegidas.includes(datos.id_centro_costo) ? [datos.id_centro_costo, ...obrasElegidas] : obrasElegidas;
+			const cambioDeObra = !!personal && [...obrasDe(personal)].sort().join(',') !== [...obrasFinal].sort().join(',');
+			const idGuardado = await guardarPersonal(supabase, personal?.id_personal ?? null, datos, !personal || cambioDeObra ? huellerosElegidos : null, obrasFinal);
 			try {
 				await guardarCargosHistorial(supabase, idGuardado, cargos);
 			} catch (err) {
@@ -577,10 +593,29 @@
 								<SelectConSaldo id="vinculo" value={form.vinculo ?? vinculoDe(form)} options={VINCULOS} placeholder="Selecciona el vínculo" encabezadoNombre="Vínculo" onchange={(v) => (form.vinculo = (v || null) as DatosPersonal['vinculo'])} />
 							{/snippet}
 							{@render campo('vinculo', 'Tipo de vínculo', false, ctlVinculo, 'Planilla propia o personal de un subcontratista.')}
-							{#snippet ctlObra()}
-								<SelectConSaldo id="id_centro_costo" value={form.id_centro_costo ? String(form.id_centro_costo) : ''} options={obras} placeholder="Sin obra o área" encabezadoNombre="Obra o área" onchange={cambiarLugar} />
-							{/snippet}
-							{@render campo('id_centro_costo', 'Área asignada (centro de costo)', false, ctlObra, 'Obra, Consultoría o Corporativo. Al cambiarla se cambian sus huelleros por los de la nueva.')}
+							<div class="sm:col-span-2 flex flex-col gap-1.5">
+								<label for="id_centro_costo" class="text-xs font-semibold text-slate-700">Obras o áreas asignadas</label>
+								{#if obrasElegidas.length}
+									<div class="border border-slate-200 rounded-xl divide-y divide-slate-100">
+										{#each obrasElegidas as o (o)}
+											<div class="flex items-center gap-2 px-3 py-2 text-sm">
+												<i class="fas fa-helmet-safety text-slate-400 shrink-0"></i>
+												<span class="flex-1 min-w-0 text-slate-800 [overflow-wrap:anywhere]">{nombreObra(o)}</span>
+												{#if form.id_centro_costo === o}
+													<span class="shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200" title="Su costo se carga a esta obra en la planilla">Principal</span>
+												{:else}
+													<button type="button" onclick={() => (form.id_centro_costo = o)} class="shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50">Hacer principal</button>
+												{/if}
+												<button type="button" onclick={() => quitarObra(o)} title="Quitar esta obra o área" aria-label={`Quitar ${nombreObra(o)}`} class="shrink-0 w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								{#if opcionesObraNueva.length}
+									<SelectConSaldo id="id_centro_costo" value="" options={opcionesObraNueva} placeholder={obrasElegidas.length ? '+ Agregar otra obra o área' : 'Elige la obra o área'} encabezadoNombre="Obra o área" onchange={agregarObra} />
+								{/if}
+								<span class="text-xs text-slate-400">Puede estar en varias a la vez (Obra, Consultoría o Corporativo). La <b>principal</b> es a la que se carga su costo en la planilla. Al agregar o quitar una obra se agregan o quitan sus huelleros.</span>
+							</div>
 							{#snippet ctlEmpleador()}<input id="empleador_nombre" bind:value={form.empleador_nombre} maxlength="150" placeholder={vinculoDe(form) === 'planilla_propia' ? EMPRESA_NOMBRE : 'Ej. Servicios Marín S.A.C.'} class={inputClase('empleador_nombre')} />{/snippet}
 							{@render campo('empleador_nombre', 'Empleador', false, ctlEmpleador, vinculoDe(form) === 'planilla_propia' ? 'Vacío = la propia empresa.' : 'Empresa del subcontratista que lo emplea.')}
 							{#snippet ctlEmpRuc()}<input id="empleador_ruc" bind:value={form.empleador_ruc} maxlength="11" inputmode="numeric" placeholder="11 dígitos" class={inputClase('empleador_ruc')} />{/snippet}

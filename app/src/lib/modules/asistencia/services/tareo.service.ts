@@ -240,15 +240,23 @@ export interface ObraTareo {
 	nombre: string;
 }
 
-/** Obras con personal activo asignado o con un huellero instalado. */
+/** Ids de los trabajadores asignados a la obra en personal_obra (varias obras por trabajador). Vacío si la base aún
+ * no tiene esa tabla (migración 20261116120000): entonces solo cuenta la obra principal. */
+async function idsPorObra(client: SupabaseClient, idCentroCosto: number): Promise<number[]> {
+	const { data, error } = await client.from('personal_obra').select('id_personal').eq('id_centro_costo', idCentroCosto);
+	return error ? [] : (data ?? []).map((x) => x.id_personal as number);
+}
+
+/** Obras con personal activo asignado (principal u otra de sus obras) o con un huellero instalado. */
 export async function getObrasTareo(client: SupabaseClient): Promise<ObraTareo[]> {
-	const [{ data: per, error: e1 }, { data: disp, error: e2 }] = await Promise.all([
+	const [{ data: per, error: e1 }, { data: disp, error: e2 }, { data: otras }] = await Promise.all([
 		client.from('personal').select('id_centro_costo').eq('estado', 'activo').not('id_centro_costo', 'is', null),
-		client.from('asistencia_dispositivo').select('id_centro_costo').not('id_centro_costo', 'is', null)
+		client.from('asistencia_dispositivo').select('id_centro_costo').not('id_centro_costo', 'is', null),
+		client.from('personal_obra').select('id_centro_costo, personal!inner(estado)').eq('personal.estado', 'activo') // sin la tabla: data null
 	]);
 	if (e1) throw e1;
 	if (e2) throw e2;
-	const ids = [...new Set([...(per ?? []), ...(disp ?? [])].map((x) => x.id_centro_costo as number))];
+	const ids = [...new Set([...(per ?? []), ...(disp ?? []), ...(otras ?? [])].map((x) => x.id_centro_costo as number))];
 	if (!ids.length) return [];
 	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre, proyecto(nombre_proyecto)').in('id_centro_costo', ids).order('codigo');
 	if (error) throw error;
@@ -265,15 +273,21 @@ export interface DatosTareo {
 /** Carga la semana de la obra: trabajadores asignados, los que marcaron en sus huelleros y los ya enviados. */
 export async function cargarTareo(client: SupabaseClient, idCentroCosto: number, lunes: string, hoy: string): Promise<DatosTareo> {
 	const domingo = sumarDias(lunes, 6);
-	const seleccion = '*, centro_costo(codigo, nombre), horario(*, horario_dia(*))';
+	// Obra principal por su FK: con personal_obra hay dos caminos de personal a centro_costo (PGRST201).
+	const seleccion = '*, centro_costo!personal_id_centro_costo_fkey(codigo, nombre), horario(*, horario_dia(*))';
 
+	// Asignados: obra principal o cualquiera de sus obras (personal_obra).
+	const idsObra = await idsPorObra(client, idCentroCosto);
 	const { data: asignados, error: eA } = await client
 		.from('personal')
 		.select(seleccion)
-		.eq('id_centro_costo', idCentroCosto)
+		.or(idsObra.length ? `id_centro_costo.eq.${idCentroCosto},id_personal.in.(${idsObra.join(',')})` : `id_centro_costo.eq.${idCentroCosto}`)
 		.neq('estado', 'baja');
 	if (eA) throw eA;
 	const pinsAsignados = (asignados ?? []).map((p) => p.pin as string);
+	// Las marcas sin obra (huellero sin lugar, «Mi asistencia») cuentan solo en su obra PRINCIPAL: si no, un trabajador
+	// con varias obras las sumaría en cada una.
+	const pinsPrincipal = new Set((asignados ?? []).filter((p) => p.id_centro_costo === idCentroCosto).map((p) => p.pin as string));
 
 	let consultaMarcas = client
 		.from('asistencia_marcacion')
@@ -298,7 +312,7 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 	const asignadosPorPin = new Set(pinsAsignados);
 	// Marca de esta obra, o de un huellero sin obra si el trabajador es de esta obra.
 	const marcasValidas = (marcasCrudas ?? []).filter(
-		(m) => (m.evento == null || m.evento < EVENTO_RECHAZO) && (m.id_centro_costo === idCentroCosto || (m.id_centro_costo == null && asignadosPorPin.has(m.pin)))
+		(m) => (m.evento == null || m.evento < EVENTO_RECHAZO) && (m.id_centro_costo === idCentroCosto || (m.id_centro_costo == null && pinsPrincipal.has(m.pin)))
 	);
 	const guardados = ((semana?.tareo_trabajador ?? []) as TrabajadorGuardado[]);
 
@@ -353,7 +367,7 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 				guardados.find((g) => g.id_personal === p.id_personal) ?? null,
 				lunes,
 				hoy,
-				p.id_centro_costo === idCentroCosto
+				p.id_centro_costo === idCentroCosto || idsObra.includes(p.id_personal)
 			);
 		})
 		.sort((a, b) => nombreCompleto(a.personal).localeCompare(nombreCompleto(b.personal), 'es'));

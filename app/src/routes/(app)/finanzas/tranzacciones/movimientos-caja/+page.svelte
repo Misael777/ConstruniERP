@@ -495,12 +495,14 @@
 	</div>
 
 	<!-- KPIs — 100% sobre `transaccion`, sin ningún dato de cuentas_pagar/cobrar. -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4 mb-6">
+	<!-- Montos completos, nunca recortados (a pedido del usuario, 16/11/2026): cada tarjeta mide al menos lo que
+	     necesita un monto de millones; si no entran las 6 en una fila, pasan a la siguiente. -->
+	<div class="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(17rem,1fr))] gap-4 mb-6">
 		<div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center gap-3">
 			<div class="w-12 h-12 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center shrink-0"><TrendingUp size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Total Ingresos</p>
-				<p class="text-2xl font-bold text-slate-800 truncate">{loading ? '…' : formatCurrency(ingresosTotal)}</p>
+				<p class="text-xl font-bold tabular-nums whitespace-nowrap text-slate-800">{loading ? '…' : formatCurrency(ingresosTotal)}</p>
 				<p class="text-[11px] text-slate-400 truncate">{ingresosCount} transacci{ingresosCount === 1 ? 'ón' : 'ones'}</p>
 			</div>
 		</div>
@@ -508,7 +510,7 @@
 			<div class="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0"><CreditCard size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Pagado (Egresos)</p>
-				<p class="text-2xl font-bold text-slate-800 truncate">{loading ? '…' : formatCurrency(egresosTotal)}</p>
+				<p class="text-xl font-bold tabular-nums whitespace-nowrap text-slate-800">{loading ? '…' : formatCurrency(egresosTotal)}</p>
 				<p class="text-[11px] text-slate-400 truncate">Egresos de Transacciones</p>
 			</div>
 		</div>
@@ -516,7 +518,7 @@
 			<div class={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${pendienteDePago >= 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}><Scale size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Pendiente de pago</p>
-				<p class={`text-2xl font-bold truncate ${pendienteDePago >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(pendienteDePago)}</p>
+				<p class={`text-xl font-bold tabular-nums whitespace-nowrap ${pendienteDePago >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{formatCurrency(pendienteDePago)}</p>
 				<p class="text-[11px] text-slate-400 truncate">Total Ingresos − Pagado</p>
 			</div>
 		</div>
@@ -524,7 +526,7 @@
 			<div class="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0"><HandCoins size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Total Financiamiento</p>
-				<p class="text-2xl font-bold text-slate-800 truncate">{loading ? '…' : formatCurrency(financiamientoTotal)}</p>
+				<p class="text-xl font-bold tabular-nums whitespace-nowrap text-slate-800">{loading ? '…' : formatCurrency(financiamientoTotal)}</p>
 				<p class="text-[11px] text-slate-400 truncate">{financiamientoCount} transacci{financiamientoCount === 1 ? 'ón' : 'ones'}</p>
 			</div>
 		</div>
@@ -532,7 +534,7 @@
 			<div class={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${saldoActual >= 0 ? 'bg-blue-100 text-blue-600' : 'bg-red-100 text-red-600'}`}><Wallet size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Saldo Actual</p>
-				<p class={`text-2xl font-bold truncate ${saldoActual >= 0 ? 'text-slate-800' : 'text-red-700'}`}>{loading ? '…' : formatCurrency(saldoActual)}</p>
+				<p class={`text-xl font-bold tabular-nums whitespace-nowrap ${saldoActual >= 0 ? 'text-slate-800' : 'text-red-700'}`}>{loading ? '…' : formatCurrency(saldoActual)}</p>
 				<p class="text-[11px] text-slate-400 truncate">Al {formatDate(hasta || new Date().toISOString().slice(0, 10))}</p>
 			</div>
 		</div>
@@ -542,7 +544,7 @@
 			<div class={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${saldoActualDolares >= 0 ? 'bg-teal-100 text-teal-600' : 'bg-red-100 text-red-600'}`}><DollarSign size={22} /></div>
 			<div class="min-w-0">
 				<p class="text-xs font-medium text-slate-500 truncate">Saldo Actual en Dólares</p>
-				<p class={`text-2xl font-bold truncate ${saldoActualDolares >= 0 ? 'text-slate-800' : 'text-red-700'}`}>{loading ? '…' : `$ ${new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(saldoActualDolares)}`}</p>
+				<p class={`text-xl font-bold tabular-nums whitespace-nowrap ${saldoActualDolares >= 0 ? 'text-slate-800' : 'text-red-700'}`}>{loading ? '…' : `$ ${new Intl.NumberFormat('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(saldoActualDolares)}`}</p>
 				<p class="text-[11px] text-slate-400 truncate">Al {formatDate(hasta || new Date().toISOString().slice(0, 10))}</p>
 			</div>
 		</div>

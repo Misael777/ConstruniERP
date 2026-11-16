@@ -87,7 +87,15 @@
 				filas: [
 					['Tipo de vínculo', etiqueta(VINCULOS, vinculoDe(p))],
 					['Empleador', [empleadorDe(p, EMPRESA_NOMBRE), p.empleador_ruc ? `RUC ${p.empleador_ruc}` : null, etiqueta(TAMANOS_EMPRESA, p.empleador_tamano)].filter(Boolean).join(' · ')],
-					['Área asignada', p.centro_costo ? `${p.centro_costo.codigo} · ${p.centro_costo.nombre}` : null],
+					[
+						'Obras o áreas',
+						[
+							p.centro_costo ? `${p.centro_costo.codigo} · ${p.centro_costo.nombre} (principal)` : null,
+							...(p.personal_obra ?? []).filter((o) => o.id_centro_costo !== p.id_centro_costo && o.centro_costo).map((o) => `${o.centro_costo!.codigo} · ${o.centro_costo!.nombre}`)
+						]
+							.filter(Boolean)
+							.join('\n')
+					],
 					['Superior o referente', [p.referente_nombre, p.referente_cargo].filter(Boolean).join(' · ')],
 					['Régimen laboral', etiqueta(REGIMENES, p.regimen)],
 					...((esCivil ? [['Categoría', etiquetaCategoria(p.categoria)]] : []) as Fila[]),

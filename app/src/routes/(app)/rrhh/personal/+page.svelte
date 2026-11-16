@@ -31,6 +31,7 @@
 		etiqueta,
 		nombreCompleto,
 		fichaIncompleta,
+		obrasDe,
 		huellerosSinHuella,
 		huellerosSinRostro,
 		alertasVencimiento,
@@ -141,7 +142,10 @@
 
 	const opcionesObra = $derived.by(() => {
 		const vistas = new Map<number, string>();
-		for (const p of personal) if (p.id_centro_costo && p.centro_costo) vistas.set(p.id_centro_costo, `${p.centro_costo.codigo} · ${p.centro_costo.nombre}`);
+		for (const p of personal) {
+			if (p.id_centro_costo && p.centro_costo) vistas.set(p.id_centro_costo, `${p.centro_costo.codigo} · ${p.centro_costo.nombre}`);
+			for (const o of p.personal_obra ?? []) if (o.centro_costo) vistas.set(o.id_centro_costo, `${o.centro_costo.codigo} · ${o.centro_costo.nombre}`);
+		}
 		return [
 			{ value: '', label: 'Todas las áreas y obras' },
 			...[...vistas].sort((a, b) => a[1].localeCompare(b[1])).map(([id, label]) => ({ value: String(id), label })),
@@ -192,7 +196,8 @@
 			if (soloSinRostro && !huellerosSinRostro(p).length) return false;
 			if (q && !normalizar([nombreCompleto(p), p.numero_documento, p.pin, p.cargo, p.centro_costo?.nombre, p.referente_nombre].filter(Boolean).join(' ')).includes(q)) return false;
 			if (f.empleador && empleadorDe(p, EMPRESA) !== f.empleador) return false;
-			if (f.obra && (f.obra === NINGUNO ? p.id_centro_costo : String(p.id_centro_costo) !== f.obra)) return false;
+			// Cualquiera de sus obras o áreas (no solo la principal).
+			if (f.obra && (f.obra === NINGUNO ? obrasDe(p).length : !obrasDe(p).includes(Number(f.obra)))) return false;
 			const suyos = p.personal_huellero ?? [];
 			if (f.huellero && (f.huellero === NINGUNO ? suyos.length : !suyos.some((v) => String(v.id_dispositivo) === f.huellero))) return false;
 			if (f.cargo && p.cargo?.trim() !== f.cargo) return false;
@@ -513,6 +518,9 @@
 	{#if agrupar !== 'obra' && p.centro_costo}
 		<div class="text-[11px] text-slate-500 [overflow-wrap:anywhere]"><span class="font-mono text-sky-700">{p.centro_costo.codigo}</span> · {p.centro_costo.nombre}</div>
 	{/if}
+	{#each (p.personal_obra ?? []).filter((o) => o.id_centro_costo !== p.id_centro_costo && o.centro_costo) as o (o.id_centro_costo)}
+		<div class="text-[11px] text-slate-500 [overflow-wrap:anywhere]" title="También asignado a esta obra o área"><i class="fas fa-plus text-[8px] text-slate-400"></i> <span class="font-mono text-sky-700">{o.centro_costo?.codigo}</span> · {o.centro_costo?.nombre}</div>
+	{/each}
 {/snippet}
 
 <div class="flex flex-col md:h-[calc(100vh-80px)] md:overflow-hidden bg-slate-50/50">
