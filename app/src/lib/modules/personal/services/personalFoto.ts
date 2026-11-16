@@ -11,30 +11,55 @@ const CALIDAD = 0.85;
 /** Archivos más grandes que esto se rechazan antes de procesarlos (fotos de cámara: 2–8 MB). */
 export const FOTO_MAX_BYTES = 20 * 1024 * 1024;
 
-/** Reduce la imagen a JPEG de máx. 600 px por lado. Si el navegador no puede leerla, lanza un error claro. */
-export async function reducirFoto(file: File): Promise<Blob> {
+/** Decodifica la imagen: primero createImageBitmap (respeta la orientación EXIF de las fotos de cámara y lee
+ * archivos sin tipo que entrega la galería de Android), y si no, con un <img> como antes. */
+async function decodificar(file: Blob): Promise<{ fuente: CanvasImageSource; ancho: number; alto: number; cerrar: () => void }> {
+	if (typeof createImageBitmap === 'function') {
+		try {
+			const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions);
+			return { fuente: bmp, ancho: bmp.width, alto: bmp.height, cerrar: () => bmp.close() };
+		} catch {
+			// Se intenta con <img>.
+		}
+	}
 	const url = URL.createObjectURL(file);
 	try {
 		const img = await new Promise<HTMLImageElement>((resolve, reject) => {
 			const i = new Image();
 			i.onload = () => resolve(i);
-			i.onerror = () => reject(new Error('No se pudo leer la imagen. Usa una foto JPG o PNG.'));
+			i.onerror = () => reject(new Error('img'));
 			i.src = url;
 		});
-		const escala = Math.min(1, LADO_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+		return { fuente: img, ancho: img.naturalWidth, alto: img.naturalHeight, cerrar: () => URL.revokeObjectURL(url) };
+	} catch {
+		URL.revokeObjectURL(url);
+		const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test((file as File).name ?? '');
+		throw new Error(
+			heic
+				? 'Esta foto está en formato HEIC y el teléfono no la deja leer. Toma la foto con la cámara desde aquí o elige una JPG.'
+				: 'No se pudo leer la imagen. Usa una foto JPG o PNG, o tómala con la cámara desde aquí.'
+		);
+	}
+}
+
+/** Reduce la imagen a JPEG de máx. 600 px por lado. Si el navegador no puede leerla, lanza un error claro. */
+export async function reducirFoto(file: File): Promise<Blob> {
+	const { fuente, ancho, alto, cerrar } = await decodificar(file);
+	try {
+		const escala = Math.min(1, LADO_MAX / Math.max(ancho, alto));
 		const canvas = document.createElement('canvas');
-		canvas.width = Math.max(1, Math.round(img.naturalWidth * escala));
-		canvas.height = Math.max(1, Math.round(img.naturalHeight * escala));
+		canvas.width = Math.max(1, Math.round(ancho * escala));
+		canvas.height = Math.max(1, Math.round(alto * escala));
 		const ctx = canvas.getContext('2d');
 		if (!ctx) throw new Error('No se pudo procesar la imagen.');
 		ctx.fillStyle = '#ffffff'; // PNG con transparencia → fondo blanco en el JPEG
 		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+		ctx.drawImage(fuente, 0, 0, canvas.width, canvas.height);
 		return await new Promise<Blob>((resolve, reject) =>
 			canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo procesar la imagen.'))), 'image/jpeg', CALIDAD)
 		);
 	} finally {
-		URL.revokeObjectURL(url);
+		cerrar();
 	}
 }
 

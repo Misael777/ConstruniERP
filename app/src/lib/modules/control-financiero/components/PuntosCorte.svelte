@@ -84,11 +84,23 @@
 		await cargarMovimientos();
 	}
 
-	// ── Saldo de una cuenta en el tiempo ────────────────────────────────────────────────────────────────
+	// ── Saldo de una cuenta (o de TODAS) en el tiempo ───────────────────────────────────────────────────
+	// "Todas las cuentas" (pedido de la clienta, 13/11/2026): todos los movimientos de todas las cuentas a la vez, en
+	// SOLES (cuentas en dólares convertidas con el tipo de cambio de cada transacción). Cada movimiento suma o no según
+	// el corte de SU cuenta; el saldo total = Σ saldos de las cuentas (el mismo de Conciliación).
+	const TODAS = 'todas';
+	type MovItem = MovimientoCuenta & { corte: string | null; cuenta: string | null };
 	let cuentaSel = $state('');
-	let movimientos = $state<MovimientoCuenta[]>([]);
+	let movimientos = $state<MovItem[]>([]);
 	let saldoInicial = $state(0);
+	let saldoTotalTodas = $state(0);
 	let cargandoMov = $state(false);
+	const esTodas = $derived(cuentaSel === TODAS);
+	const corteDe = (idCuenta: number) => {
+		const v = vigentes.get(`b:${idCuenta}`);
+		return v ? String(v.fecha_corte).slice(0, 10) : null;
+	};
+	const sumaAlSaldo = (m: MovItem) => !m.corte || m.fecha > m.corte;
 
 	$effect(() => {
 		if (!cuentaSel && cuentas.length > 0) cuentaSel = String([...cuentas].sort((a, b) => Number(b.saldo_actual) - Number(a.saldo_actual))[0].id_cuenta_banco);
@@ -98,6 +110,39 @@
 		void cargarMovimientos();
 	});
 	async function cargarMovimientos() {
+		if (cuentaSel === TODAS) {
+			cargandoMov = true;
+			try {
+				const [listas, { data: saldos, error: errS }, { data: bases, error: errB }] = await Promise.all([
+					Promise.all(
+						cuentas.map((c) =>
+							getMovimientosCuentaBanco(supabase, c.numero_cuenta).then((ms) =>
+								ms.map((m): MovItem => ({ ...m, monto: m.monto_soles, corte: corteDe(c.id_cuenta_banco), cuenta: `${c.titular_cuenta} — ${c.numero_cuenta}` }))
+							)
+						)
+					),
+					supabase.rpc('fn_saldos_cuentas_banco'),
+					supabase.from('cuenta_banco').select('numero_cuenta, saldo_inicial').eq('activo', true)
+				]);
+				if (errS) throw errS;
+				if (errB) throw errB;
+				movimientos = listas.flat().sort((x, y) => (x.fecha === y.fecha ? x.id_transaccion - y.id_transaccion : x.fecha < y.fecha ? -1 : 1));
+				const filas = (saldos ?? []) as any[];
+				saldoTotalTodas = filas.reduce((s, c) => s + Number(c.saldo_soles), 0);
+				// Saldo inicial en soles (línea gris "sin corte"): las cuentas en dólares, con la misma relación S/ por US$ de su saldo.
+				saldoInicial = ((bases ?? []) as any[]).reduce((s, b) => {
+					const f = filas.find((x) => x.numero_cuenta === b.numero_cuenta);
+					const ratio = f && f.tipo_moneda === 'dolares' && Number(f.saldo) !== 0 ? Number(f.saldo_soles) / Number(f.saldo) : 1;
+					return s + Number(b.saldo_inicial ?? 0) * ratio;
+				}, 0);
+			} catch (err) {
+				console.error('[PuntosCorte] No se pudieron cargar los movimientos de todas las cuentas:', err);
+				movimientos = [];
+			} finally {
+				cargandoMov = false;
+			}
+			return;
+		}
 		const c = cuentas.find((x) => String(x.id_cuenta_banco) === cuentaSel);
 		if (!c) return;
 		cargandoMov = true;
@@ -106,7 +151,7 @@
 				getMovimientosCuentaBanco(supabase, c.numero_cuenta),
 				supabase.from('cuenta_banco').select('saldo_inicial').eq('id_cuenta_banco', c.id_cuenta_banco).maybeSingle()
 			]);
-			movimientos = movs;
+			movimientos = movs.map((m) => ({ ...m, corte: corteDe(c.id_cuenta_banco), cuenta: null }));
 			saldoInicial = Number(data?.saldo_inicial ?? 0);
 		} catch (err) {
 			console.error('[PuntosCorte] No se pudieron cargar los movimientos:', err);
@@ -116,20 +161,29 @@
 		}
 	}
 
-	const corteCuenta = $derived(cuentaSel ? vigentes.get(`b:${cuentaSel}`) ?? null : null);
+	const corteCuenta = $derived(cuentaSel && !esTodas ? vigentes.get(`b:${cuentaSel}`) ?? null : null);
+	const cuentasConCorte = $derived(esTodas ? cuentas.filter((c) => vigentes.has(`b:${c.id_cuenta_banco}`)).length : 0);
 	const analisis = $derived.by(() => {
 		const corte = corteCuenta ? String(corteCuenta.fecha_corte).slice(0, 10) : null;
-		const suman = corte ? movimientos.filter((m) => m.fecha > corte) : movimientos;
-		const noSuman = corte ? movimientos.filter((m) => m.fecha <= corte) : [];
-		const base = corteCuenta ? Number(corteCuenta.monto) : saldoInicial;
-		const total = (l: MovimientoCuenta[]) => l.reduce((s, m) => s + m.monto, 0);
-		const ingresos = suman.filter((m) => m.monto > 0);
-		const egresos = suman.filter((m) => m.monto < 0);
+		const suman = movimientos.filter(sumaAlSaldo);
+		const noSuman = movimientos.filter((m) => !sumaAlSaldo(m));
+		const total = (l: MovItem[]) => l.reduce((s, m) => s + m.monto, 0);
+		// Todas: base = Σ (corte que manda, o saldo inicial) de cada cuenta, en soles = saldo total − lo que suma.
+		const base = esTodas ? saldoTotalTodas - total(suman) : corteCuenta ? Number(corteCuenta.monto) : saldoInicial;
+		// Las transferencias entre cuentas propias van aparte (pedido de la clienta, 13/11/2026: veía "1 egreso" sin tener
+		// ningún egreso — era la salida de una transferencia interna). Con "Todas las cuentas", sus dos patas se cancelan.
+		const esTransf = (m: MovItem) => m.tipo === 'transferencia';
+		const ingresos = suman.filter((m) => !esTransf(m) && m.monto > 0);
+		const egresos = suman.filter((m) => !esTransf(m) && m.monto < 0);
+		const transf = suman.filter(esTransf);
 		return {
 			corte, base, suman, noSuman,
 			totalSuman: total(suman), totalNoSuman: total(noSuman), saldo: base + total(suman),
 			ingresos: ingresos.length, totalIngresos: total(ingresos),
-			egresos: egresos.length, totalEgresos: -total(egresos)
+			egresos: egresos.length, totalEgresos: -total(egresos),
+			// Todas: cada transferencia aparece en dos cuentas (sale de una, entra a otra) — se cuenta una vez.
+			transferencias: esTodas ? new Set(transf.map((m) => m.id_transaccion)).size : transf.length,
+			netoTransferencias: total(transf)
 		};
 	});
 
@@ -140,26 +194,37 @@
 			: { etiqueta: m.tipo === 'transferencia' ? 'Transferencia (sale)' : 'Egreso', css: 'bg-red-100 text-red-700', signo: '−' };
 
 	// Cortes de esta cuenta (el que manda y los reemplazados), para mostrarlos como filas propias.
+	// Con "Todas las cuentas": los cortes de cada cuenta (manda = el vigente de ESA cuenta).
 	const cortesCuenta = $derived(
 		aperturas
-			.filter((a) => String(a.id_cuenta_banco) === cuentaSel)
-			.map((a) => ({ ...a, fecha: String(a.fecha_corte).slice(0, 10), manda: corteCuenta?.id_apertura === a.id_apertura }))
+			.filter((a) => (esTodas ? a.id_cuenta_banco !== null : String(a.id_cuenta_banco) === cuentaSel))
+			.map((a) => ({
+				...a,
+				fecha: String(a.fecha_corte).slice(0, 10),
+				manda: vigentes.get(`b:${a.id_cuenta_banco}`)?.id_apertura === a.id_apertura,
+				cuenta: esTodas ? nombreCuenta(a.id_cuenta_banco) : null
+			}))
 	);
 
 	// Detalle: cortes y movimientos en orden cronológico, con el saldo que lleva la ERP tras cada uno.
 	// Mismo día: el corte va después de los movimientos de esa fecha (esos ya están incluidos en él).
 	type FilaDetalle =
-		| { clase: 'mov'; fecha: string; mov: MovimientoCuenta; suma: boolean; saldo: number | null }
-		| { clase: 'corte'; fecha: string; monto: number; manda: boolean; saldo: number | null };
+		| { clase: 'mov'; fecha: string; mov: MovItem; suma: boolean; saldo: number | null }
+		| { clase: 'corte'; fecha: string; monto: number; manda: boolean; saldo: number | null; cuenta: string | null };
 	const detalle = $derived.by(() => {
 		const { corte, base } = analisis;
 		const filas: FilaDetalle[] = [
-			...movimientos.map((m): FilaDetalle => ({ clase: 'mov', fecha: m.fecha, mov: m, suma: !corte || m.fecha > corte, saldo: null })),
-			...cortesCuenta.map((c): FilaDetalle => ({ clase: 'corte', fecha: c.fecha, monto: Number(c.monto), manda: c.manda, saldo: null }))
+			...movimientos.map((m): FilaDetalle => ({ clase: 'mov', fecha: m.fecha, mov: m, suma: sumaAlSaldo(m), saldo: null })),
+			...cortesCuenta.map((c): FilaDetalle => ({ clase: 'corte', fecha: c.fecha, monto: Number(c.monto), manda: c.manda, saldo: null, cuenta: c.cuenta }))
 		].sort((x, y) => (x.fecha !== y.fecha ? (x.fecha < y.fecha ? -1 : 1) : x.clase === y.clase ? 0 : x.clase === 'corte' ? 1 : -1));
-		let saldo: number | null = corte ? null : saldoInicial;
+		// Todas: el saldo parte de la base (cortes + saldos iniciales de cada cuenta) y suma lo posterior a cada corte.
+		let saldo: number | null = esTodas ? base : corte ? null : saldoInicial;
 		for (const f of filas) {
 			if (f.clase === 'corte') {
+				if (esTodas) {
+					f.saldo = null;
+					continue;
+				}
 				if (f.manda) saldo = base;
 				f.saldo = f.manda ? saldo : null;
 			} else {
@@ -175,14 +240,15 @@
 		const { corte, base } = analisis;
 		const fechas = [...new Set([...movimientos.map((m) => m.fecha), ...(corte ? [corte] : [])])].sort();
 		let acumTodo = saldoInicial;
-		let acumErp = corte ? null as number | null : saldoInicial;
+		let acumErp = corte ? null as number | null : esTodas ? base : saldoInicial;
 		const serieTodo: (number | null)[] = [];
 		const serieErp: (number | null)[] = [];
 		for (const f of fechas) {
 			const delDia = movimientos.filter((m) => m.fecha === f).reduce((s, m) => s + m.monto, 0);
 			acumTodo += delDia;
+			const sumaDia = movimientos.filter((m) => m.fecha === f && sumaAlSaldo(m)).reduce((s, m) => s + m.monto, 0);
 			if (corte && f === corte) acumErp = base;
-			else if (acumErp !== null) acumErp += delDia;
+			else if (acumErp !== null) acumErp += sumaDia;
 			serieTodo.push(acumTodo);
 			serieErp.push(corte && f < corte ? null : acumErp);
 		}
@@ -195,7 +261,7 @@
 			fechas,
 			labels: fechas.map(fmtFecha),
 			datasets: [
-				{ type: 'line' as const, label: 'Saldo en la ERP (desde el corte)', data: serieErp, borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.12)', fill: true, tension: 0.25, spanGaps: false,
+				{ type: 'line' as const, label: esTodas ? 'Saldo en la ERP — todas las cuentas (S/)' : 'Saldo en la ERP (desde el corte)', data: serieErp, borderColor: '#059669', backgroundColor: 'rgba(5,150,105,0.12)', fill: true, tension: 0.25, spanGaps: false,
 					pointBackgroundColor: colorPunto, pointBorderColor: colorPunto,
 					pointRadius: fechas.map((f) => (esCorte(f) ? 7 : 4)),
 					pointStyle: fechas.map((f) => (esCorte(f) ? 'rectRot' : 'circle')) },
@@ -315,11 +381,11 @@
 	<!-- Saldo de una cuenta en el tiempo -->
 	<div class="border-t border-slate-100 pt-5">
 		<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-			<h3 class="font-bold text-brand-marine text-sm">¿Por qué este saldo? — cuenta bancaria en el tiempo</h3>
+			<h3 class="font-bold text-brand-marine text-sm">¿Por qué este saldo? — {esTodas ? 'todas las cuentas en el tiempo (en S/)' : 'cuenta bancaria en el tiempo'}</h3>
 			<div class="w-full sm:w-80">
 				<SelectConSaldo
 					value={cuentaSel}
-					options={cuentas.map((c) => ({ value: String(c.id_cuenta_banco), label: `${c.titular_cuenta} — ${c.numero_cuenta}` }))}
+					options={[{ value: TODAS, label: 'Todas las cuentas (consolidado en S/)' }, ...cuentas.map((c) => ({ value: String(c.id_cuenta_banco), label: `${c.titular_cuenta} — ${c.numero_cuenta}` }))]}
 					onchange={(v) => (cuentaSel = String(v))}
 				/>
 			</div>
@@ -327,8 +393,11 @@
 
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
 			<div class="rounded-xl border border-amber-200 bg-amber-50 p-3">
-				<p class="text-[10px] font-bold uppercase tracking-wide text-amber-700">Corte que manda</p>
-				{#if analisis.corte}
+				<p class="text-[10px] font-bold uppercase tracking-wide text-amber-700">{esTodas ? 'Cortes' : 'Corte que manda'}</p>
+				{#if esTodas}
+					<p class="text-base font-black text-amber-800">{cuentasConCorte === 0 ? 'Sin cortes' : `${cuentasConCorte} de ${cuentas.length} cuentas con corte`}</p>
+					<p class="text-[11px] text-amber-700">Base (cortes + saldos iniciales): {formatCurrency(analisis.base)}</p>
+				{:else if analisis.corte}
 					<p class="text-base font-black text-amber-800">{fmtFecha(analisis.corte)}</p>
 					<p class="text-[11px] text-amber-700">Monto de apertura: {formatCurrency(analisis.base)}</p>
 				{:else}
@@ -339,10 +408,13 @@
 			<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
 				<p class="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Suman al saldo</p>
 				<p class="text-base font-black text-emerald-800">{formatCurrency(analisis.totalSuman)}</p>
-				<p class="text-[11px] text-emerald-700">{analisis.suman.length} movimiento{analisis.suman.length === 1 ? '' : 's'} posteriores al corte</p>
+				<p class="text-[11px] text-emerald-700">{analisis.suman.length} movimiento{analisis.suman.length === 1 ? '' : 's'} posteriores al corte{esTodas ? ' de su cuenta' : ''}</p>
 				<p class="mt-1 text-[11px] font-semibold leading-snug">
 					<span class="text-emerald-700">▲ {analisis.ingresos} ingreso{analisis.ingresos === 1 ? '' : 's'}: +{formatCurrency(analisis.totalIngresos)}</span><br />
 					<span class="text-red-600">▼ {analisis.egresos} egreso{analisis.egresos === 1 ? '' : 's'}: −{formatCurrency(analisis.totalEgresos)}</span>
+					{#if analisis.transferencias > 0}
+						<br /><span class="text-slate-600" title="Dinero que se movió entre cuentas de la empresa: sale de una y entra a otra.">⇄ {analisis.transferencias} transferencia{analisis.transferencias === 1 ? '' : 's'} entre cuentas{esTodas ? ` (neto ${formatCurrency(analisis.netoTransferencias)})` : `: ${analisis.netoTransferencias >= 0 ? '+' : '−'}${formatCurrency(Math.abs(analisis.netoTransferencias))}`}</span>
+					{/if}
 				</p>
 			</div>
 			<div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -364,7 +436,7 @@
 					<div class="bg-emerald-500" style={`width:${(analisis.suman.length / total) * 100}%`}></div>
 					<div class="bg-slate-300" style={`width:${(analisis.noSuman.length / total) * 100}%`}></div>
 				</div>
-				<p class="mt-1 text-[11px] text-slate-500">{analisis.suman.length} de {total} movimientos de esta cuenta suman al saldo.</p>
+				<p class="mt-1 text-[11px] text-slate-500">{analisis.suman.length} de {total} movimientos {esTodas ? `de las ${cuentas.length} cuentas` : 'de esta cuenta'} suman al saldo.</p>
 			</div>
 		{/if}
 
@@ -372,7 +444,7 @@
 			{#if cargandoMov}
 				<p class="text-sm text-slate-400 text-center pt-24">Cargando movimientos…</p>
 			{:else if movimientos.length === 0}
-				<p class="text-sm text-slate-400 text-center pt-24">Esta cuenta no tiene movimientos.</p>
+				<p class="text-sm text-slate-400 text-center pt-24">{esTodas ? 'Ninguna cuenta tiene movimientos.' : 'Esta cuenta no tiene movimientos.'}</p>
 			{:else}
 				<Line
 					data={chartData as any}
@@ -390,7 +462,7 @@
 									if (!f) return [];
 									const lineas = movimientos
 										.filter((m) => m.fecha === f)
-										.map((m) => `${claseMov(m).signo} ${formatCurrency(Math.abs(m.monto))}  ${claseMov(m).etiqueta}${m.descripcion ? ' · ' + m.descripcion.slice(0, 40) : ''}`);
+										.map((m) => `${claseMov(m).signo} ${formatCurrency(Math.abs(m.monto))}  ${claseMov(m).etiqueta}${m.cuenta ? ' · ' + m.cuenta : ''}${m.descripcion ? ' · ' + m.descripcion.slice(0, 40) : ''}`);
 									if (analisis.corte === f) lineas.push(`◆ Valor de corte: ${formatCurrency(analisis.base)}`);
 									return lineas.length ? ['', ...lineas] : [];
 								}
@@ -409,11 +481,12 @@
 		</div>
 
 		{#if movimientos.length + cortesCuenta.length > 0}
-			{@const nIng = movimientos.filter((m) => m.monto > 0).length}
-			{@const nEgr = movimientos.filter((m) => m.monto < 0).length}
+			{@const nIng = movimientos.filter((m) => m.tipo !== 'transferencia' && m.monto > 0).length}
+			{@const nEgr = movimientos.filter((m) => m.tipo !== 'transferencia' && m.monto < 0).length}
+			{@const nTr = esTodas ? new Set(movimientos.filter((m) => m.tipo === 'transferencia').map((m) => m.id_transaccion)).size : movimientos.filter((m) => m.tipo === 'transferencia').length}
 			<button type="button" onclick={() => (verDetalle = !verDetalle)} class="mt-4 flex items-center gap-1 text-xs font-semibold text-[#0f3b5e] hover:underline">
 				{#if verDetalle}<ChevronUp size={14} />{:else}<ChevronDown size={14} />{/if}
-				{verDetalle ? 'Ocultar' : 'Ver'} detalle: {nIng} ingreso{nIng === 1 ? '' : 's'} · {nEgr} egreso{nEgr === 1 ? '' : 's'} · {cortesCuenta.length} corte{cortesCuenta.length === 1 ? '' : 's'}
+				{verDetalle ? 'Ocultar' : 'Ver'} detalle: {nIng} ingreso{nIng === 1 ? '' : 's'} · {nEgr} egreso{nEgr === 1 ? '' : 's'}{nTr > 0 ? ` · ${nTr} transferencia${nTr === 1 ? '' : 's'}` : ''} · {cortesCuenta.length} corte{cortesCuenta.length === 1 ? '' : 's'}
 			</button>
 			{#if verDetalle}
 				<div class="mt-2 max-h-96 overflow-auto rounded-xl border border-slate-100">
@@ -422,17 +495,19 @@
 							<tr>
 								<th class="px-3 py-2">Fecha</th>
 								<th class="px-3 py-2">Tipo</th>
+								{#if esTodas}<th class="px-3 py-2">Cuenta</th>{/if}
 								<th class="px-3 py-2">Descripción</th>
 								<th class="px-3 py-2 text-right">Monto</th>
 								<th class="px-3 py-2 text-right">Saldo ERP</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-slate-100">
-							{#each detalle as f, i (f.clase === 'mov' ? `m${f.mov.id_transaccion}` : `c${f.fecha}-${i}`)}
+							{#each detalle as f, i (f.clase === 'mov' ? `m${f.mov.id_transaccion}-${f.mov.cuenta ?? ''}` : `c${f.fecha}-${i}`)}
 								{#if f.clase === 'corte'}
 									<tr class={f.manda ? 'bg-amber-50' : 'bg-slate-50 text-slate-400'}>
 										<td class="px-3 py-2 whitespace-nowrap font-semibold">{fmtFecha(f.fecha)}</td>
 										<td class="px-3 py-2 whitespace-nowrap"><span class={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${f.manda ? 'bg-amber-200 text-amber-800' : 'bg-slate-200 text-slate-500'}`}>◆ Valor de corte</span></td>
+										{#if esTodas}<td class="px-3 py-2 whitespace-nowrap">{f.cuenta}</td>{/if}
 										<td class="px-3 py-2">{f.manda ? 'Saldo declarado a esta fecha: el saldo parte de aquí' : 'Corte reemplazado por uno más reciente (no se usa)'}</td>
 										<td class="px-3 py-2 text-right whitespace-nowrap font-semibold">= {formatCurrency(f.monto)}</td>
 										<td class="px-3 py-2 text-right whitespace-nowrap">{f.saldo === null ? '—' : formatCurrency(f.saldo)}</td>
@@ -442,6 +517,7 @@
 									<tr class={f.suma ? '' : 'text-slate-400'}>
 										<td class="px-3 py-2 whitespace-nowrap">{fmtFecha(f.fecha)}</td>
 										<td class="px-3 py-2 whitespace-nowrap"><span class={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${f.suma ? c.css : 'bg-slate-100 text-slate-400'}`}>{c.signo === '+' ? '▲' : '▼'} {c.etiqueta}</span></td>
+										{#if esTodas}<td class="px-3 py-2 whitespace-nowrap">{f.mov.cuenta}</td>{/if}
 										<td class="px-3 py-2"><span class="text-slate-400">#{f.mov.id_transaccion}</span> {f.mov.descripcion ?? ''}{f.suma ? '' : ' · ya incluido en el corte'}</td>
 										<td class={`px-3 py-2 text-right whitespace-nowrap font-semibold ${f.suma ? (c.signo === '+' ? 'text-emerald-700' : 'text-red-600') : ''}`}>{c.signo}{formatCurrency(Math.abs(f.mov.monto))}</td>
 										<td class="px-3 py-2 text-right whitespace-nowrap">{f.saldo === null ? '—' : formatCurrency(f.saldo)}</td>

@@ -46,7 +46,7 @@
 		}
 	}
 	const tecla =
-		'h-[52px] sm:h-16 rounded-2xl bg-slate-100 text-[#0f2a4a] text-2xl sm:text-3xl font-bold shadow-sm active:scale-[0.97] active:bg-slate-200 transition disabled:opacity-50 flex items-center justify-center select-none';
+		'h-[min(52px,6dvh)] [@media(max-height:700px)]:h-[5.6dvh] sm:h-14 rounded-2xl bg-slate-100 text-[#0f2a4a] text-[clamp(1.25rem,3.2dvh,1.5rem)] sm:text-2xl font-bold shadow-sm active:scale-[0.97] active:bg-slate-200 transition disabled:opacity-50 flex items-center justify-center select-none';
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -56,7 +56,7 @@
 		{@const lleno = i < valor.length}
 		{@const actual = i === valor.length && !deshabilitado}
 		<div
-			class={`w-[52px] h-[52px] sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center border-2 transition ${
+			class={`w-[min(52px,6dvh)] h-[min(52px,6dvh)] sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center border-2 transition ${
 				error ? 'border-red-400 bg-red-50' : lleno ? 'border-slate-200 bg-slate-100' : actual ? 'border-brand-orange bg-white' : 'border-slate-200 bg-white'
 			}`}
 		>
@@ -67,18 +67,18 @@
 
 {#if nota}{@render nota()}{/if}
 
-<div class="grid grid-cols-3 gap-2 sm:gap-2.5 mt-3">
+<div class="grid grid-cols-3 gap-[min(0.5rem,1dvh)] sm:gap-2 mt-[min(0.75rem,1.2dvh)]">
 	{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as d (d)}
 		<button type="button" class={tecla} disabled={deshabilitado} onclick={() => pulsar(d)}>{d}</button>
 	{/each}
 	{#if teclaExtra}
 		{@render teclaExtra()}
 	{:else}
-		<div class="h-[52px] sm:h-16 rounded-2xl bg-slate-100/60"></div>
+		<div class="h-[min(52px,6dvh)] [@media(max-height:700px)]:h-[5.6dvh] sm:h-14 rounded-2xl bg-slate-100/60"></div>
 	{/if}
 	<button type="button" class={tecla} disabled={deshabilitado} onclick={() => pulsar('0')}>0</button>
 	<button type="button" class={tecla} disabled={deshabilitado} onclick={borrar} aria-label="Borrar">
-		<Delete size={28} />
+		<Delete size={24} />
 	</button>
 </div>
 

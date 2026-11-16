@@ -4,7 +4,7 @@
 // =============================================
 
 import { supabase } from '$lib/supabaseClient';
-import { ROLES_ADMIN, DEVELOPER_ROLE } from '$lib/config/modules';
+import { ROLES_ADMIN, DEVELOPER_ROLE, SUPERUSUARIO_EMAIL, PERMISO_SOLO_SUPERUSUARIO } from '$lib/config/modules';
 
 // --------------- Reactive State ---------------
 export const permisosState = $state<{
@@ -16,6 +16,8 @@ export const permisosState = $state<{
    * autocompletar "Datos de quien recibe" en el RECIBO DE PAGO (ver ReciboPagoModal.svelte). Vacío si
    * el empleado todavía no lo tiene cargado en IAM → Empleados. */
   dni: string;
+  /** Correo de la sesión (para los módulos solo del superusuario, ver esSuperusuario). */
+  email: string;
   loaded: boolean;
 }>({
   permisos: [],
@@ -23,6 +25,7 @@ export const permisosState = $state<{
   userName: '',
   userInitial: '',
   dni: '',
+  email: '',
   loaded: false,
 });
 
@@ -35,6 +38,12 @@ export const permisosState = $state<{
 export async function loadPermisos(userId: string): Promise<void> {
   console.log('[Permisos] loadPermisos started for userId:', userId);
   try {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      permisosState.email = (session?.user?.email ?? '').toLowerCase();
+    } catch {
+      permisosState.email = '';
+    }
     // 1. Get employee + role name
     console.log('[Permisos] Fetching employee profile and role from Supabase for auth_user_id:', userId);
     // OJO: `dni` NO va en este select — esta consulta es crítica (corre en cada carga de la app, para
@@ -149,6 +158,8 @@ export async function loadPermisos(userId: string): Promise<void> {
 // Map frontend-only sidebar check permissions to DB database permissions
 /** Check if the current user has a specific permission (or is admin) */
 export function hasPermiso(key: string): boolean {
+  // Módulos solo del superusuario: ni el comodín del administrador ni un rol los habilita.
+  if (key === PERMISO_SOLO_SUPERUSUARIO) return esSuperusuario();
   if (permisosState.permisos.includes('*')) {
     console.log(`[Permisos Check] Checking for "${key}". Admin wildcard bypass. Result: true`);
     return true; // admin bypass
@@ -167,6 +178,11 @@ export function hasPermiso(key: string): boolean {
 /** Solo el rol developer: herramientas de desarrollo (cambiar de base Prod/Dev, vaciar Dev, Panel Developer). */
 export function esDeveloper(): boolean {
   return permisosState.rolNombre === DEVELOPER_ROLE;
+}
+
+/** La cuenta superusuario (construnisys). */
+export function esSuperusuario(): boolean {
+  return permisosState.email === SUPERUSUARIO_EMAIL;
 }
 
 export function puedeVerEliminados(): boolean {

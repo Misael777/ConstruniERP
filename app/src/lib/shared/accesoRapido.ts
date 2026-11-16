@@ -71,6 +71,56 @@ async function descifrar(cifradoB64: string, llaveB64: string): Promise<string> 
 	return new TextDecoder().decode(pt);
 }
 
+// ---------- teléfono / escritorio ----------
+
+/** Pedido de la clienta (14/11/2026): la clave de 4 dígitos es SOLO del teléfono; en escritorio se ingresa con
+ * correo y contraseña. Teléfono = app de Android/iOS, o el navegador de un celular (pantalla táctil chica). */
+export async function esTelefono(): Promise<boolean> {
+	if (isRunningInTauri()) {
+		try {
+			const { platform } = await import('@tauri-apps/plugin-os');
+			const p = platform();
+			return p === 'android' || p === 'ios';
+		} catch {
+			return false;
+		}
+	}
+	try {
+		if (/Android|iPhone|iPod|Mobi/i.test(navigator.userAgent)) return true;
+		return window.matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 768;
+	} catch {
+		return false;
+	}
+}
+
+// ---------- perfil recordado (foto/iniciales en el login de escritorio) ----------
+
+export interface PerfilRecordado {
+	email: string;
+	nombre: string;
+	fotoUrl: string | null;
+}
+
+const CLAVE_PERFIL = `construni_perfil_recordado_${ENTORNO}`;
+
+export function leerPerfilRecordado(): PerfilRecordado | null {
+	try {
+		const v = JSON.parse(localStorage.getItem(CLAVE_PERFIL) ?? 'null') as PerfilRecordado | null;
+		return v?.email ? v : null;
+	} catch {
+		return null;
+	}
+}
+
+export function guardarPerfilRecordado(v: PerfilRecordado | null): void {
+	try {
+		if (v) localStorage.setItem(CLAVE_PERFIL, JSON.stringify(v));
+		else localStorage.removeItem(CLAVE_PERFIL);
+	} catch {
+		// Almacenamiento bloqueado: solo no se muestra la foto.
+	}
+}
+
 // ---------- huella ----------
 
 /** ¿Este equipo puede usar la huella? Solo la app de Android con huella registrada en el teléfono. */
