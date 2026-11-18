@@ -40,7 +40,7 @@
 			id: 'finanzas', name: 'Finanzas', icon: 'fas fa-dollar-sign', colorClass: 'text-blue-600 bg-blue-50 border-blue-100',
 			submodules: [
 				{ key: 'ver_finanzas', label: 'General Finanzas' },
-				// Control Financiero ya no se asigna por rol: solo lo ve el superusuario (ver PERMISO_SOLO_SUPERUSUARIO).
+				{ key: 'ver_finanzas_dashboard', label: 'Control Financiero' },
 				{ key: 'ver_finanzas_centros_costos', label: 'Centros de Costos' },
 				{ key: 'ver_finanzas_cuentas_pendientes', label: 'Cuentas Pendientes' },
 				{ key: 'ver_finanzas_facturacion', label: 'Facturación' },

@@ -41,6 +41,7 @@
 	import { diag } from '$lib/shared/diagnostico.svelte';
 	import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
+	import { esTelefono } from '$lib/shared/accesoRapido';
 	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 
 	let {
@@ -187,6 +188,10 @@
 	let fotoNueva = $state<Blob | null>(null);
 	let fotoNuevaUrl = $state<string | null>(null);
 	let procesandoFoto = $state(false);
+	// En PC el botón «Cámara» solo volvía a abrir el explorador de archivos (y el aviso de girar la cámara no aplica):
+	// se muestra solo en el teléfono.
+	let telefono = $state(false);
+	void esTelefono().then((v) => (telefono = v)).catch(() => {});
 	const fotoVista = $derived(fotoNuevaUrl ?? (form.foto_url ? toDriveThumbnailUrl(form.foto_url, 300) : null));
 
 	function quitarFotoNueva() {
@@ -559,19 +564,21 @@
 										     a la frontal o la trasera con el botón de girar de la propia cámara). -->
 										<label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 {procesandoFoto || guardando ? 'opacity-50 pointer-events-none' : ''}">
 											<input type="file" accept="image/*" class="hidden" onchange={elegirFoto} disabled={procesandoFoto || guardando} />
-											<i class="fas fa-image"></i> {fotoVista ? 'Cambiar (galería)' : 'Galería'}
+											<i class="fas fa-image"></i> {telefono ? (fotoVista ? 'Cambiar (galería)' : 'Galería') : fotoVista ? 'Cambiar foto' : 'Subir foto'}
 										</label>
+										{#if telefono}
 										<label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-sm font-semibold hover:bg-blue-100 {procesandoFoto || guardando ? 'opacity-50 pointer-events-none' : ''}">
 											<input type="file" accept="image/*" capture="environment" class="hidden" onchange={elegirFoto} disabled={procesandoFoto || guardando} />
 											<i class="fas fa-camera"></i> Cámara
 										</label>
+										{/if}
 										{#if fotoVista}
 											<button type="button" onclick={quitarFoto} disabled={procesandoFoto || guardando} class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 disabled:opacity-50">
 												<i class="fas fa-trash-alt text-rose-500"></i> Quitar
 											</button>
 										{/if}
 									</div>
-									<span class="text-xs text-slate-400">{fotoNueva ? 'Se guardará al pulsar Guardar cambios.' : 'En la cámara puedes girar a la frontal o la trasera.'}</span>
+									<span class="text-xs text-slate-400">{fotoNueva ? 'Se guardará al pulsar Guardar cambios.' : telefono ? 'En la cámara puedes girar a la frontal o la trasera.' : 'JPG o PNG. Se guarda al pulsar Guardar cambios.'}</span>
 								</div>
 							</div>
 							{#snippet ctlTipoDoc()}

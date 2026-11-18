@@ -86,11 +86,38 @@
 			total = result.total;
 			totalPages = result.totalPages;
 			loadError = '';
+			void contarMovsAntesApertura(result.items);
 		} catch (err: any) {
 			loadError = err.message || 'No se pudo cargar el listado de cuentas bancarias';
 		} finally {
 			loading = false;
 		}
+	}
+
+	/** Aviso (17/11/2026): cuántas transacciones activas de cada cuenta tienen fecha ANTERIOR a su fecha de
+	 * apertura. Sí suman en el saldo actual, pero indican que la fecha de apertura está mal puesta. */
+	let movsAntesApertura = $state<Record<string, number>>({});
+	async function contarMovsAntesApertura(lista: CuentaBanco[]) {
+		const conFecha = lista.filter((c) => c.fecha_autorizacion);
+		if (!conFecha.length) {
+			movsAntesApertura = {};
+			return;
+		}
+		const nums = conFecha.map((c) => `"${String(c.numero_cuenta).replace(/"/g, '\\"')}"`).join(',');
+		const { data, error } = await supabase
+			.from('transaccion')
+			.select('fecha, cuente_origen, cuente_destino')
+			.eq('estado', 'activo')
+			.or(`cuente_origen.in.(${nums}),cuente_destino.in.(${nums})`);
+		if (error) return; // solo es un aviso: si falla, no se muestra
+		const out: Record<string, number> = {};
+		for (const c of conFecha) {
+			const apertura = String(c.fecha_autorizacion).slice(0, 10);
+			out[c.numero_cuenta] = (data ?? []).filter(
+				(t: any) => (t.cuente_origen === c.numero_cuenta || t.cuente_destino === c.numero_cuenta) && String(t.fecha).slice(0, 10) < apertura
+			).length;
+		}
+		movsAntesApertura = out;
 	}
 
 	// Botón flotante de "+" en móvil (ver mobileFabState/MobileFab.svelte en el layout raíz).
@@ -342,10 +369,19 @@
 					<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
 						{getOptionLabel(estadoField, item.estado)}
 					</span>
-					<p class={`text-sm font-bold sm:mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo Inicial: {formatSaldo(item.saldo_inicial, item.tipo_moneda)}">
-						{formatSaldo(item.saldo_actual, item.tipo_moneda)}
+					<!-- A pedido del usuario (17/11/2026): se ven los dos montos para que se entienda — el saldo actual
+					     (saldo inicial + ingresos − egresos activos, lo recalcula la BD) y el saldo inicial con su fecha
+					     de apertura (columna fecha_autorizacion, antes rotulada "Autorizado"). -->
+					<p class={`text-sm font-bold sm:mt-1 ${Number(item.saldo_actual) >= 0 ? 'text-emerald-700' : 'text-red-700'}`} title="Saldo inicial + ingresos − egresos registrados">
+						<span class="text-[11px] font-medium text-slate-500">Saldo actual:</span> {formatSaldo(item.saldo_actual, item.tipo_moneda)}
 					</p>
-					<p class="text-[11px] text-slate-400">Autorizado: {formatDate(item.fecha_autorizacion)}</p>
+					<p class="text-[11px] text-slate-500">Saldo inicial: <span class="font-semibold text-slate-600">{formatSaldo(item.saldo_inicial, item.tipo_moneda)}</span></p>
+					<p class="text-[11px] text-slate-400">Apertura: {formatDate(item.fecha_autorizacion)}</p>
+					{#if movsAntesApertura[item.numero_cuenta]}
+						<p class="text-[11px] font-semibold text-amber-600" title="Estas transacciones sí suman en el saldo actual, pero su fecha es anterior a la fecha de apertura de la cuenta. Revisa la fecha de apertura.">
+							⚠ {movsAntesApertura[item.numero_cuenta]} transacci{movsAntesApertura[item.numero_cuenta] === 1 ? 'ón' : 'ones'} antes de la apertura
+						</p>
+					{/if}
 				</div>
 				<div class="order-3 sm:order-4 flex items-center gap-1 shrink-0 sm:ml-2">
 					{#if verEliminados}

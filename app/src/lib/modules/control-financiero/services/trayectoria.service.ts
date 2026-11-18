@@ -24,10 +24,35 @@ export interface PuntoTrayectoria {
 	saldo: number;
 }
 
+/** Una transacción que movió el saldo de la cuenta (para las gráficas de flechas y velas, y su panel). */
+export interface MovimientoTrayectoria {
+	id_transaccion: number;
+	fecha: string;
+	tipo: string | null;
+	descripcion: string | null;
+	num_operacion: string | null;
+	/** + entra a la cuenta, − sale (en la moneda de la cuenta). */
+	delta: number;
+	saldoAntes: number;
+	saldoDespues: number;
+}
+
 export interface SerieTrayectoria {
 	id: string;
 	label: string;
 	puntos: PuntoTrayectoria[];
+	/** Solo cuentas bancarias: punto de partida, saldo al final y cada movimiento. */
+	saldoInicial?: number;
+	fechaInicial?: string;
+	/** true si el punto de partida es un punto de corte de Control Financiero (no el saldo inicial de la cuenta). */
+	desdeCorte?: boolean;
+	/** Fecha de apertura registrada en la cuenta (fecha_autorizacion), aunque el gráfico arranque antes. */
+	fechaApertura?: string | null;
+	/** Transacciones con fecha ANTERIOR a la fecha de apertura (sí cuentan en el saldo: la fecha está mal puesta). */
+	movsAntesApertura?: number;
+	saldoActual?: number;
+	moneda?: string;
+	movimientos?: MovimientoTrayectoria[];
 }
 
 export interface TrayectoriaResultado {
@@ -111,9 +136,10 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 		client.from('cuenta_banco').select('numero_cuenta, titular_cuenta, tipo_moneda, saldo_inicial, fecha_autorizacion').eq('activo', true),
 		client
 			.from('transaccion')
-			.select(`cuente_origen, cuente_destino, monto_total, ${COLUMNAS_MONEDA}, fecha`)
+			.select(`id_transaccion, tipo, descripcion, num_operacion, cuente_origen, cuente_destino, monto_total, ${COLUMNAS_MONEDA}, fecha`)
 			.eq('estado', 'activo')
-			.order('fecha', { ascending: true }),
+			.order('fecha', { ascending: true })
+			.order('id_transaccion', { ascending: true }),
 		getUltimasAperturasPorCuentaBanco(client)
 	]);
 	if (errCuentas) throw errCuentas;
@@ -128,9 +154,10 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 		// solo suma lo posterior; montos en la moneda de la cuenta.
 		const corte = aperturas[c.numero_cuenta];
 		let saldo = corte ? corte.monto : Number(c.saldo_inicial);
-		const fechaInicio = corte ? corte.fecha_corte : c.fecha_autorizacion || hoy;
-		const puntos: PuntoTrayectoria[] = [{ fecha: fechaInicio, saldo }];
-		fechasSet.add(fechaInicio);
+		const fechaApertura: string | null = c.fecha_autorizacion ? String(c.fecha_autorizacion).slice(0, 10) : null;
+		const saldoInicial = saldo;
+		const movimientos: MovimientoTrayectoria[] = [];
+		const puntosMov: PuntoTrayectoria[] = [];
 		for (const t of (transacciones ?? []) as any[]) {
 			if (corte && String(t.fecha).slice(0, 10) <= corte.fecha_corte) continue;
 			const monto = montoEnMonedaCuenta(t, c.tipo_moneda);
@@ -138,11 +165,41 @@ export async function getTrayectoriaCuentasBancarias(client: SupabaseClient): Pr
 			if (t.cuente_origen === c.numero_cuenta) delta -= monto;
 			if (t.cuente_destino === c.numero_cuenta) delta += monto;
 			if (delta === 0) continue;
+			movimientos.push({
+				id_transaccion: t.id_transaccion,
+				fecha: String(t.fecha).slice(0, 10),
+				tipo: t.tipo ?? null,
+				descripcion: t.descripcion ?? null,
+				num_operacion: t.num_operacion ?? null,
+				delta,
+				saldoAntes: saldo,
+				saldoDespues: saldo + delta
+			});
 			saldo += delta;
-			puntos.push({ fecha: t.fecha, saldo });
-			fechasSet.add(t.fecha);
+			puntosMov.push({ fecha: String(t.fecha).slice(0, 10), saldo });
 		}
-		series.push({ id: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}`, puntos });
+		// Sin punto de corte, el saldo de la BD suma TODAS las transacciones (también las de fecha anterior a la
+		// apertura, que entonces está mal puesta). Para que la línea vaya en orden, el saldo inicial se dibuja en
+		// la fecha más antigua entre la apertura y la primera transacción; se avisa cuántas quedaron antes.
+		const primera = movimientos[0]?.fecha;
+		const movsAntesApertura = !corte && fechaApertura ? movimientos.filter((m) => m.fecha < fechaApertura).length : 0;
+		let fechaInicio = corte ? corte.fecha_corte : fechaApertura || primera || hoy;
+		if (!corte && primera && primera < fechaInicio) fechaInicio = primera;
+		const puntos: PuntoTrayectoria[] = [{ fecha: fechaInicio, saldo: saldoInicial }, ...puntosMov];
+		for (const p of puntos) fechasSet.add(p.fecha);
+		series.push({
+			id: c.numero_cuenta,
+			label: `${c.titular_cuenta} - ${c.numero_cuenta}`,
+			puntos,
+			saldoInicial,
+			fechaInicial: fechaInicio,
+			desdeCorte: !!corte,
+			fechaApertura,
+			movsAntesApertura,
+			saldoActual: saldo,
+			moneda: c.tipo_moneda,
+			movimientos
+		});
 	}
 
 	return { fechas: [...fechasSet].sort(), series };

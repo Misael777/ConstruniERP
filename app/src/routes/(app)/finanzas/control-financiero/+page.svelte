@@ -10,18 +10,6 @@
 	import ConciliacionTab from '$lib/modules/control-financiero/components/ConciliacionTab.svelte';
 	import IncidenciasTab from '$lib/modules/control-financiero/components/IncidenciasTab.svelte';
 	import { Shield } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
-	import { permisosState, esSuperusuario, hasPermiso } from '$lib/stores/permisos.svelte';
-	import { getFirstAccessiblePath } from '$lib/config/modules';
-
-	// Pedido del usuario (14/11/2026): solo el superusuario (construnisys) ve Control Financiero. El menú ya lo
-	// oculta y el layout bloquea la ruta; esto cubre además cualquier enlace directo a esta página.
-	let permitido = $derived(permisosState.loaded && esSuperusuario());
-	$effect(() => {
-		if (permisosState.loaded && !esSuperusuario()) {
-			goto(getFirstAccessiblePath(hasPermiso) ?? '/dashboard', { replaceState: true });
-		}
-	});
 
 	let activeTab = $state<'dashboard' | 'igv' | 'consistencia' | 'conciliacion' | 'incidencias'>('dashboard');
 </script>
@@ -30,7 +18,6 @@
 	<title>Control Financiero | Construni ERP</title>
 </svelte:head>
 
-{#if permitido}
 <div class="mb-4">
 	<h1 class="text-2xl font-bold text-brand-marine flex items-center gap-2">
 		<Shield size={24} class="text-blue-600" /> Control Financiero
@@ -97,5 +84,4 @@
 	<ConciliacionTab />
 {:else if activeTab === 'incidencias'}
 	<IncidenciasTab />
-{/if}
 {/if}
