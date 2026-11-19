@@ -26,7 +26,7 @@
 	// llevan POR PANORAMA (cambiosPorPanorama, indexado como `grid` por pIdx) — nunca en un solo
 	// Map compartido, para que confirmar/descartar en un panorama no toque a los otros dos.
 	import { dndzone } from 'svelte-dnd-action';
-	import { ChevronLeft, ChevronRight, Pencil, Eye, Loader2, Lock, Copy } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, Pencil, Eye, Loader2, Lock, Copy, CalendarDays, ArrowUpRight } from '@lucide/svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 
 	const {
@@ -39,7 +39,8 @@
 		onGuardarFechas,
 		onItemBloqueado,
 		onCopiarAPanorama,
-		onVerResumen
+		onVerResumen,
+		accesoRapido
 	}: {
 		panoramas: CalendarPanorama<T>[];
 		tipo: 'ingreso' | 'egreso';
@@ -61,6 +62,8 @@
 		/** Pedido del cliente (19/11/2026): ojito en cada tarjeta para ver el resumen de la cuenta (igual que el de la
 		 * lista de Cuentas por Cobrar). Si no se pasa, no se muestra. */
 		onVerResumen?: (item: T) => void;
+		/** Botón a la derecha de la barra de navegación (pedido del cliente con imagen, 19/11/2026): ir al otro calendario. */
+		accesoRapido?: { label: string; onClick: () => void };
 	} = $props();
 
 	const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -262,7 +265,6 @@
 	function totalRango(pIdx: number): number {
 		return visibleDays.reduce((t, _, dIdx) => t + totalDia(pIdx, dIdx), 0);
 	}
-	const montoCorto = (v: number) => formatCurrency(v).replace(/\.00$/, '');
 
 	let colorCard = $derived(tipo === 'ingreso' ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200');
 	let colorTexto = $derived(tipo === 'ingreso' ? 'text-emerald-700' : 'text-rose-700');
@@ -288,6 +290,17 @@
 				</button>
 			</div>
 		</div>
+		{#if accesoRapido}
+			<button
+				type="button"
+				onclick={accesoRapido.onClick}
+				class="ml-auto flex items-center gap-2 px-3 h-8 rounded-lg border border-orange-300 bg-orange-50 text-slate-800 text-sm font-semibold hover:bg-orange-100"
+			>
+				<CalendarDays size={15} />
+				{accesoRapido.label}
+				<ArrowUpRight size={15} />
+			</button>
+		{/if}
 	</div>
 
 	{#each panoramas as panorama, pIdx (panorama.id)}
@@ -336,18 +349,16 @@
 						{#if vista === 'semana'}
 							<div class={`px-2 py-2 text-center border-b border-slate-100 ${esHoy ? 'bg-blue-50' : ''}`}>
 								<p class="text-[11px] font-bold text-slate-500 uppercase">{DIAS[dIdx]} {Number(day.slice(8, 10))}</p>
-								<p class="text-[11px] font-bold {totalDia(pIdx, dIdx) ? colorTexto : 'text-slate-300'}" title="Total proyectado del día">
-									{totalDia(pIdx, dIdx) ? formatCurrency(totalDia(pIdx, dIdx)) : '—'}
+								<p class="text-[10px] text-slate-500 leading-tight" title="Total proyectado del día">
+									{tipo === 'ingreso' ? 'Ingresos' : 'Egresos'} proyectados: <b class={totalDia(pIdx, dIdx) ? colorTexto : 'text-slate-500'}>{formatCurrency(totalDia(pIdx, dIdx))}</b>
 								</p>
 							</div>
 						{:else}
 							<div class={`px-1.5 pt-1 ${esHoy ? 'bg-blue-50' : ''}`}>
-								<div class="flex items-baseline justify-between gap-1">
-									<p class="text-[10px] font-semibold text-slate-500">{Number(day.slice(8, 10))}</p>
-									{#if totalDia(pIdx, dIdx)}
-										<p class="text-[10px] font-bold truncate {colorTexto}" title="Total proyectado del día: {formatCurrency(totalDia(pIdx, dIdx))}">{montoCorto(totalDia(pIdx, dIdx))}</p>
-									{/if}
-								</div>
+								<p class="text-[10px] font-semibold text-slate-500">{Number(day.slice(8, 10))}</p>
+								<p class="text-[9px] text-slate-500 leading-tight" title="Total proyectado del día: {formatCurrency(totalDia(pIdx, dIdx))}">
+									{tipo === 'ingreso' ? 'Ingresos' : 'Egresos'} proyectados: <b class={totalDia(pIdx, dIdx) ? colorTexto : 'text-slate-500'}>{formatCurrency(totalDia(pIdx, dIdx))}</b>
+								</p>
 							</div>
 						{/if}
 						{#key `${panorama.id}-${dIdx}-${gridVersion}-${vista}`}
@@ -367,6 +378,17 @@
 											{fmtFechaCorta(item.fechaVencimiento)}
 										</p>
 										<div class="flex items-start gap-1">
+											{#if onVerResumen}
+												<button
+													type="button"
+													onclick={(e) => { e.stopPropagation(); onVerResumen(item); }}
+													class="shrink-0 p-0.5 -m-0.5 text-slate-400 hover:text-[#0f3b5e]"
+													title="Ver resumen de la cuenta"
+													aria-label="Ver resumen de la cuenta"
+												>
+													<Eye size={vista === 'semana' ? 11 : 9} />
+												</button>
+											{/if}
 											<button
 												type="button"
 												onclick={(e) => { e.stopPropagation(); onAbrirCuotas(item); }}
@@ -381,17 +403,6 @@
 													<Pencil size={vista === 'semana' ? 11 : 9} />
 												{/if}
 											</button>
-											{#if onVerResumen}
-												<button
-													type="button"
-													onclick={(e) => { e.stopPropagation(); onVerResumen(item); }}
-													class="shrink-0 p-0.5 -m-0.5 text-slate-400 hover:text-[#0f3b5e]"
-													title="Ver resumen de la cuenta"
-													aria-label="Ver resumen de la cuenta"
-												>
-													<Eye size={vista === 'semana' ? 11 : 9} />
-												</button>
-											{/if}
 											<p class="font-semibold text-slate-700 truncate flex-1">{item.titulo}</p>
 											{#if onCopiarAPanorama && !item.pagado}
 												{#if panorama.id === 0}

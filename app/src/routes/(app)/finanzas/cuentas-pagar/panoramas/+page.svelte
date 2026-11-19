@@ -31,6 +31,7 @@
 		type BandejaSortBy
 	} from '$lib/modules/panoramas/services/panoramas.service';
 	import { getProveedorOptions, getPagos, sincronizarCuotasProgramadas } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { getClienteOptions } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { getCentroCostoOptions, getCentroCostoTipoMap } from '$lib/modules/transacciones/services/transacciones.service';
 	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
@@ -291,10 +292,50 @@
 	function itemsCalendario(items: PagoPendienteItem[]): PagoPendienteItem[] {
 		return items.map((i) => {
 			const f = i.id < 0 ? i.fracciones[0] : undefined;
+			// Título como en Cobros (imagen del cliente, 19/11/2026): solo "Cuota n/N", "Pago único pendiente" o "Pago realizado".
 			return f
-				? { ...i, titulo: `Cuota ${f.numeroCuota}/${f.totalCuotas} · ${i.titulo}`, fechaVencimiento: f.fecha }
-				: { ...i, fechaVencimiento: i.fechaProgramada ?? i.fechaVencimiento };
+				? { ...i, titulo: `Cuota ${f.numeroCuota}/${f.totalCuotas}`, fechaVencimiento: f.fecha }
+				: { ...i, titulo: i.pagado ? 'Pago realizado' : 'Pago único pendiente', fechaVencimiento: i.fechaProgramada ?? i.fechaVencimiento };
 		});
+	}
+
+	// Ojito del Calendario (19/11/2026): el mismo "Resumen de pago" de la lista de Cuentas por Pagar, en solo lectura.
+	let resumenCuenta = $state<{ campos: CampoResumen[]; cuotas: CuotaResumen[]; monto: number } | null>(null);
+	async function verResumen(item: PagoPendienteItem) {
+		try {
+			const [{ data: c, error }, pagos] = await Promise.all([
+				supabase.from('cuentas_pagar').select('*, proveedor(razon_social)').eq('id_cuenta_pagar', item.id_cuenta_pagar).maybeSingle(),
+				getPagos(supabase, item.id_cuenta_pagar)
+			]);
+			if (error) throw error;
+			if (!c) throw new Error('No se encontró la cuenta por pagar');
+			const hoyIso = new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+			const programadas = (pagos as any[]).filter((q) => q.estado_pago === 'programado').sort((a, b) => (a.fecha_pago < b.fecha_pago ? -1 : 1));
+			const fecha = (f: string | null) => (f ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : '');
+			resumenCuenta = {
+				monto: Number(c.monto_comprometido ?? 0),
+				campos: [
+					{ label: 'Proveedor', valor: c.proveedor?.razon_social ?? '' },
+					{ label: 'N° documento', valor: c.num_documento ?? '' },
+					{ label: 'Monto comprometido', valor: formatCurrency(Number(c.monto_comprometido ?? 0)) },
+					{ label: 'Saldo pendiente', valor: formatCurrency(Number(c.saldo_pendiente ?? 0)) },
+					{ label: 'Próximo a pagar', valor: programadas[0] ? `${formatCurrency(Number(programadas[0].monto))} · ${fecha(programadas[0].fecha_pago)}` : '' },
+					{ label: 'Responsable', valor: c.responsable ?? '' },
+					{ label: 'Fecha de emisión', valor: fecha(c.fecha_emision) },
+					{ label: 'Fecha de vencimiento', valor: fecha(c.fecha_vencimiento) },
+					{ label: 'Observación', valor: c.observacion ?? '', completo: true }
+				],
+				cuotas: (pagos as any[]).map((q): CuotaResumen => ({
+					id: q.id_pago,
+					monto: Number(q.monto),
+					fecha: q.fecha_pago,
+					estado: q.estado_pago === 'pagado' ? 'pagado' : q.estado_pago === 'cancelado' ? 'anulado' : q.fecha_pago < hoyIso ? 'vencido' : 'pendiente',
+					editable: false
+				}))
+			};
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo cargar el resumen de la cuenta');
+		}
 	}
 
 	function desglosarEnTarjetas(items: PagoPendienteItem[]): PagoPendienteItem[] {
@@ -560,8 +601,8 @@
 	 * desglosarEnTarjetas), `item` viene de panorama0Items SIN desglosar (cuenta completa con todas sus
 	 * cuotas) — se desglosa acá antes de copiar para no reintroducir una tarjeta "cluster" agrupada. */
 	function copiarItemCalendarioAPanorama(item: PagoPendienteItem, destino: 1 | 2) {
-		// Del calendario llega la tarjeta ya preparada (título "Cuota n/N · …"): se copia la tarjeta original.
-		const original = item.id < 0 ? (desglosarEnTarjetas(panorama0Items).find((t) => t.id === item.id) ?? item) : item;
+		// Del calendario llega la tarjeta ya preparada (título "Cuota n/N" / "Pago único pendiente"): se copia la original.
+		const original = (item.id < 0 ? desglosarEnTarjetas(panorama0Items) : panorama0Items).find((t) => t.id === item.id) ?? item;
 		const nuevas = desglosarEnTarjetas([original]).filter((t) => !panoramaItems(destino).some((i) => i.id === t.id));
 		if (nuevas.length === 0) {
 			toast.error(`Ya está en ${PANORAMAS[destino - 1].nombre}`);
@@ -697,7 +738,7 @@
 </script>
 
 <div class="max-w-[1700px] mx-auto">
-	<div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+	<div class="flex flex-col items-start mb-6 gap-3">
 		<div class="flex items-center gap-3">
 			<button type="button" onclick={() => goto('/finanzas/cuentas-pagar')} class="p-2 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Volver a Cuentas por Pagar">
 				<ArrowLeft size={18} />
@@ -707,7 +748,7 @@
 				<p class="text-sm text-slate-500">Crea y compara proyecciones de pagos arrastrando tus pagos pendientes a cada panorama.</p>
 			</div>
 		</div>
-		<div class="flex items-center gap-2">
+		<div class="flex flex-wrap items-center gap-2">
 			<div class="flex rounded-lg border border-slate-200 overflow-hidden">
 				<button
 					type="button"
@@ -732,14 +773,53 @@
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
 			</button>
-			{#if vistaActiva === 'calendario'}
-				<button type="button" onclick={() => goto('/finanzas/cuentas-cobrar/panoramas?vista=calendario')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50" title="Ir al calendario de Cobros">
-					<CalendarDays size={16} /> Calendario de Cobros
-				</button>
-			{/if}
 			<button type="button" onclick={() => (pagoModalOpen = true)} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 				<Plus size={16} /> Nuevo Pago
 			</button>
+			<!-- Filtro "Tipo" (Consultoría/Obra/Corporativo/Otros): filtra la Bandeja del Tablero y las tarjetas del Calendario.
+			     Va en la misma fila que los botones (imagen del cliente, 19/11/2026). -->
+			<div class="flex flex-wrap gap-2">
+				<button
+					type="button"
+					onclick={() => toggleTipoFilter('consultoria')}
+					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				>
+					<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+						<Briefcase size={14} />
+					</div>
+					<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+				</button>
+				<button
+					type="button"
+					onclick={() => toggleTipoFilter('proyecto')}
+					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				>
+					<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+						<HardHat size={14} />
+					</div>
+					<span class="font-semibold text-slate-700 text-sm">Obra</span>
+				</button>
+				<button
+					type="button"
+					onclick={() => toggleTipoFilter('bolsa general')}
+					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				>
+					<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+						<Building2 size={14} />
+					</div>
+					<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
+				</button>
+				<button
+					type="button"
+					onclick={() => toggleTipoFilter('otro')}
+					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otro' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+				>
+					<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
+						<Ellipsis size={14} />
+					</div>
+					<span class="font-semibold text-slate-700 text-sm">Otros</span>
+				</button>
+			</div>
 		</div>
 	</div>
 
@@ -747,52 +827,6 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	<!-- (19/11/2026: también en el Calendario.) Filtro "Tipo" — a pedido explícito del usuario, con imagen de referencia: mismas píldoras
-	     compactas ya usadas en finanzas/cuentas-pagar/+page.svelte, filtran la Bandeja de Pagos
-	     Pendientes (ver toggleTipoFilter/fetchBandeja). Solo tiene sentido en Tablero: Calendario no
-	     muestra la Bandeja. -->
-	<div class="flex flex-wrap gap-3 mb-4">
-		<button
-			type="button"
-			onclick={() => toggleTipoFilter('consultoria')}
-			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-		>
-			<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
-				<Briefcase size={14} />
-			</div>
-			<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
-		</button>
-		<button
-			type="button"
-			onclick={() => toggleTipoFilter('proyecto')}
-			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-		>
-			<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
-				<HardHat size={14} />
-			</div>
-			<span class="font-semibold text-slate-700 text-sm">Obra</span>
-		</button>
-		<button
-			type="button"
-			onclick={() => toggleTipoFilter('bolsa general')}
-			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-		>
-			<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-				<Building2 size={14} />
-			</div>
-			<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
-		</button>
-		<button
-			type="button"
-			onclick={() => toggleTipoFilter('otro')}
-			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otro' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-		>
-			<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
-				<Ellipsis size={14} />
-			</div>
-			<span class="font-semibold text-slate-700 text-sm">Otros</span>
-		</button>
-	</div>
 
 	{#if vistaActiva === 'calendario'}
 		{#if panorama1.length === 0 && panorama2.length === 0}
@@ -826,6 +860,8 @@
 				onAbrirCuotas={abrirCuotasDe}
 				{cuotasCargandoId}
 				onGuardarFechas={handleGuardarFechasCalendario}
+				onVerResumen={verResumen}
+				accesoRapido={{ label: 'Calendario de cuentas por cobrar', onClick: () => goto('/finanzas/cuentas-cobrar/panoramas?vista=calendario') }}
 				onItemBloqueado={() => toast.error('Este pago ya se realizó')}
 				onCopiarAPanorama={copiarItemCalendarioAPanorama}
 			/>
@@ -1248,4 +1284,18 @@
 	onClose={() => (cuotasModalOpen = false)}
 	onConfirm={handleCuotasConfirmadas}
 	onEliminar={handleCuotasEliminadas}
+/>
+
+<ResumenCuentaModal
+	open={!!resumenCuenta}
+	titulo="Resumen de pago"
+	tituloCronograma="Cronograma de pagos"
+	etiquetaTotal="Monto total"
+	textoPagado="Pagado"
+	campos={resumenCuenta?.campos ?? []}
+	cuotas={resumenCuenta?.cuotas ?? []}
+	soloLectura
+	montoTotal={resumenCuenta?.monto ?? 0}
+	onClose={() => (resumenCuenta = null)}
+	onEditarCuota={() => {}}
 />
