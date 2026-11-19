@@ -220,7 +220,7 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 	},
 	{
 		key: 'fecha_autorizacion',
-		label: 'Fecha de Autorización',
+		label: 'Fecha de apertura',
 		tipo: 'date',
 		showInTable: true,
 		showInForm: true,

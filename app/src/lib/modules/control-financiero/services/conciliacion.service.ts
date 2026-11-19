@@ -42,7 +42,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSaldosCuentaBanco, recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import { getCentroCostoOptionsSoloCentros } from '$lib/modules/transacciones/services/transacciones.service';
 import { crearIncidencia, type Severidad } from './incidencia.service';
-import { COLUMNAS_MONEDA, montoEnMonedaCuenta } from '$lib/shared/moneda';
+import { COLUMNAS_MONEDA, montoEnMonedaCuenta, montoSoles } from '$lib/shared/moneda';
 
 /** Solo redondeo — cualquier diferencia mayor se trata como real (confirmado con el usuario, sin
  * margen de tolerancia de negocio inventado). */
@@ -478,8 +478,10 @@ export async function cambiarFechaCorte(client: SupabaseClient, fechaActual: str
 export interface MovimientoCuenta {
 	id_transaccion: number;
 	fecha: string;
-	/** + entra a la cuenta, − sale. */
+	/** + entra a la cuenta, − sale. En la moneda de la cuenta. */
 	monto: number;
+	/** Lo mismo en soles (para sumar varias cuentas, ver "Todas las cuentas" en PuntosCorte.svelte). */
+	monto_soles: number;
 	descripcion: string | null;
 	/** tipo de la transacción: ingreso | egreso | transferencia. */
 	tipo: string | null;
@@ -505,6 +507,7 @@ export async function getMovimientosCuentaBanco(client: SupabaseClient, numeroCu
 			id_transaccion: t.id_transaccion,
 			fecha: String(t.fecha).slice(0, 10),
 			monto: (t.cuente_destino === numeroCuenta ? montoEnMonedaCuenta(t, moneda) : 0) - (t.cuente_origen === numeroCuenta ? montoEnMonedaCuenta(t, moneda) : 0),
+			monto_soles: (t.cuente_destino === numeroCuenta ? montoSoles(t) : 0) - (t.cuente_origen === numeroCuenta ? montoSoles(t) : 0),
 			descripcion: t.descripcion ?? null,
 			tipo: t.tipo ?? null
 		}))

@@ -17,7 +17,11 @@
 		actualizarPerfilAccesoRapido,
 		huellaDisponible,
 		fraseDelDia,
+		esTelefono,
+		leerPerfilRecordado,
+		guardarPerfilRecordado,
 		AccesoRapidoError,
+		type PerfilRecordado,
 		type AccesoRapidoGuardado,
 		type FraseDelDia
 	} from '$lib/shared/accesoRapido';
@@ -100,6 +104,16 @@
 	let pasoClave = $state<'crear' | 'confirmar'>('crear');
 	let usarHuella = $state(true);
 	let activando = $state(false);
+	// Pedido de la clienta (14/11/2026): la clave de 4 dígitos es solo del teléfono. En escritorio se entra con
+	// correo y contraseña (maqueta: frase del día con Snoopy y la foto/iniciales de quien entró la última vez).
+	let telefono = $state(false);
+	let perfilRecordado = $state<PerfilRecordado | null>(null);
+	let perfilVisible = $derived(
+		perfilRecordado && email.trim().toLowerCase() === perfilRecordado.email.toLowerCase() ? perfilRecordado : null
+	);
+	// Teléfono con la clave ya creada pero sin huella: se activa al ingresar la clave la próxima vez (hace falta
+	// la contraseña descifrada para volver a guardar el acceso, y eso solo se tiene al abrir con la clave).
+	let activarHuellaPendiente = $state(false);
 
 	function iniciales(nombre: string): string {
 		return nombre
@@ -117,6 +131,22 @@
 		mensajeCargaPantallaCompleta = 'Iniciando sesión…';
 		try {
 			const cred = await abrirConClave(pin);
+			if (activarHuellaPendiente && accesoGuardado) {
+				try {
+					await activarAccesoRapido({
+						pin,
+						email: cred.email,
+						password: cred.password,
+						nombre: accesoGuardado.nombre,
+						fotoUrl: accesoGuardado.fotoUrl,
+						conHuella: true
+					});
+				} catch (err) {
+					// No impide entrar: solo queda sin huella.
+					console.error('[Login] No se pudo activar la huella:', err);
+				}
+				activarHuellaPendiente = false;
+			}
 			await completarIngreso(cred.email, cred.password, 'rapido');
 		} catch (err) {
 			manejarErrorRapido(err);
@@ -307,10 +337,24 @@
 
 		checkFirstAdminAvailability();
 
-		// Ticket #112: si este equipo tiene ingreso rápido, se muestra esa pantalla.
-		accesoGuardado = leerAccesoRapido();
-		activarRapido = !accesoGuardado;
+		// Ticket #112: si este equipo tiene ingreso rápido, se muestra esa pantalla (solo en el teléfono).
 		void fraseDelDia().then((f) => (frase = f));
+		telefono = await esTelefono();
+		perfilRecordado = leerPerfilRecordado();
+		accesoGuardado = leerAccesoRapido();
+		if (accesoGuardado && !telefono) {
+			// Escritorio con una clave creada antes de este cambio: se pasa a correo y contraseña y se borra el
+			// acceso guardado (la contraseña cifrada) de este equipo. Se conserva el correo y la foto.
+			perfilRecordado = { email: accesoGuardado.email, nombre: accesoGuardado.nombre, fotoUrl: accesoGuardado.fotoUrl };
+			guardarPerfilRecordado(perfilRecordado);
+			if (!email) {
+				email = accesoGuardado.email;
+				setTimeout(() => passwordInputRef?.focus(), 100);
+			}
+			void quitarAccesoRapido();
+			accesoGuardado = null;
+		}
+		activarRapido = telefono && !accesoGuardado;
 		if (accesoGuardado) mode = 'rapido';
 		puedeHuella = await huellaDisponible();
 		if (accesoGuardado?.huella && puedeHuella && mode === 'rapido') void ingresarConHuella();
@@ -386,6 +430,9 @@
 				// Sin foto: se muestran las iniciales.
 			}
 
+			// Foto/iniciales en el login de escritorio: solo si pidió recordar el correo.
+			if (origen === 'contrasena') guardarPerfilRecordado(rememberEmail ? { email, nombre, fotoUrl } : null);
+
 			if (origen === 'rapido') {
 				actualizarPerfilAccesoRapido(nombre, fotoUrl);
 				await irAlSistema();
@@ -403,7 +450,7 @@
 			
 			isLoading = false;
 			// Ticket #112: si marcó "Activar ingreso rápido", antes de entrar crea su clave de 4 dígitos.
-			if (activarRapido) {
+			if (activarRapido && telefono) {
 				pendienteActivacion = { email, password, nombre, fotoUrl };
 				claveNueva = '';
 				claveConfirmar = '';
@@ -600,17 +647,19 @@ async function handleSetupPassword(e: Event) {
 	     frase del día con Snoopy, clave de 4 dígitos con teclado grande y botón naranja). También el paso de crear la
 	     clave, con el mismo diseño. -->
 	{@const perfil = mode === 'rapido' ? accesoGuardado : pendienteActivacion}
-	<div class="min-h-dvh bg-slate-100 sm:flex sm:items-center sm:justify-center sm:p-6">
-		<div class="w-full sm:max-w-md min-h-dvh sm:min-h-0 flex flex-col bg-[#0b2447] sm:rounded-3xl sm:shadow-2xl overflow-hidden">
-			<header class="flex items-center gap-3 px-6 pt-[calc(env(safe-area-inset-top)+1rem)] pb-8">
-				<img src="/logo-isotipo.png" alt="" class="h-12 w-auto" />
+	<!-- Pedido de la clienta (13/11/2026): "todo en 1 pantalla". En el teléfono la pantalla mide exactamente el alto
+	     visible (h-dvh, sin scroll) y las teclas/casillas se achican con el alto disponible (ver TecladoClave). -->
+	<div class="h-dvh sm:h-auto sm:min-h-dvh bg-slate-100 sm:flex sm:items-center sm:justify-center sm:p-6">
+		<div class="w-full sm:max-w-md h-dvh sm:h-auto flex flex-col bg-[#0b2447] sm:rounded-3xl sm:shadow-2xl overflow-hidden">
+			<header class="shrink-0 flex items-center gap-2.5 px-5 pt-[calc(env(safe-area-inset-top)+min(0.75rem,1.5dvh))] pb-[min(1.75rem,4dvh)]">
+				<img src="/logo-isotipo.png" alt="" class="h-[min(2.25rem,5.5dvh)] w-auto" />
 				<div class="leading-none">
-					<p class="text-white text-[2rem] font-bold tracking-tight">construni</p>
-					<p class="mt-1 pl-0.5 border-l-2 border-white/60 text-brand-orange text-xl font-bold tracking-wide">&nbsp;ERP</p>
+					<p class="text-white text-2xl font-bold tracking-tight">construni</p>
+					<p class="mt-0.5 pl-0.5 border-l-2 border-white/60 text-brand-orange text-base font-bold tracking-wide">&nbsp;ERP</p>
 				</div>
 			</header>
 
-			<main class="flex-1 -mt-5 bg-white rounded-t-[2rem] px-5 pt-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] flex flex-col">
+			<main class="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] -mt-5 bg-white rounded-t-[1.75rem] px-5 pt-[min(1rem,2dvh)] pb-[calc(env(safe-area-inset-bottom)+min(0.75rem,1dvh))] flex flex-col">
 				{#if ENTORNO === 'dev'}
 					<div class="mb-3 px-3 py-1.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-xs text-center">
 						Base de <b>DESARROLLO</b> (datos de prueba)
@@ -618,38 +667,42 @@ async function handleSetupPassword(e: Event) {
 				{/if}
 
 				<div class="text-center">
-					<h1 class="text-4xl font-extrabold text-[#0f2a4a]">Hola</h1>
-					<p class="mt-1 text-lg text-slate-600">{mode === 'rapido' ? '¡Qué bueno tenerte aquí!' : 'Crea tu clave de ingreso rápido'}</p>
+					<h1 class="text-[clamp(1.375rem,4.2dvh,1.75rem)] leading-tight font-extrabold text-[#0f2a4a]">Hola</h1>
+					<!-- Pantallas bajas (< 700 px, ej. 360×640): se ocultan subtítulo y correo para que entre todo sin deslizar. -->
+					<p class={`text-sm text-slate-600 ${mode === 'rapido' ? '[@media(max-height:700px)]:hidden' : ''}`}>{mode === 'rapido' ? '¡Qué bueno tenerte aquí!' : 'Crea tu clave de ingreso rápido'}</p>
 				</div>
 
-				<!-- Foto al centro; frase del día y Snoopy a la derecha. -->
-				<div class="mt-4 grid grid-cols-[minmax(0,0.55fr)_auto_minmax(0,1.45fr)] items-start gap-2">
-					<div></div>
-					<div class="w-28 h-28 sm:w-32 sm:h-32 rounded-full overflow-hidden bg-slate-200 ring-4 ring-white shadow-md flex items-center justify-center">
+				<!-- Pedido de la clienta (14/11/2026), igual que en escritorio: arriba la frase del día con Snoopy al lado y,
+				     debajo, la foto al centro (la foto al lado de la frase se veía rara en el celular). -->
+				{#if frase}
+					<div class="mt-[min(0.5rem,1dvh)] grid grid-cols-[3.25rem_minmax(0,1fr)_3.25rem] items-center gap-1.5">
+						<div></div>
+						<div class="text-center min-w-0">
+							<p class="text-xs font-semibold leading-snug text-[#0f2a4a] line-clamp-3">“{frase.frase}”</p>
+							{#if frase.autor}<p class="mt-0.5 text-[10px] text-slate-500 truncate">{frase.autor}</p>{/if}
+						</div>
+						<img src="/snoopy-casco.webp" alt="" width="376" height="473" class="h-[min(3.75rem,7dvh)] w-auto justify-self-end select-none" draggable="false" />
+					</div>
+				{/if}
+				<div class="mt-[min(0.375rem,0.8dvh)] flex justify-center">
+					<div class="w-[min(5rem,9dvh)] h-[min(5rem,9dvh)] sm:w-24 sm:h-24 rounded-full overflow-hidden bg-slate-200 ring-4 ring-white shadow-md flex items-center justify-center">
 						{#if perfil?.fotoUrl}
 							<img src={toDriveThumbnailUrl(perfil.fotoUrl, 300)} alt="" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
 						{:else}
-							<span class="text-3xl font-bold text-slate-500">{iniciales(perfil?.nombre ?? '')}</span>
+							<span class="text-2xl font-bold text-slate-500">{iniciales(perfil?.nombre ?? '')}</span>
 						{/if}
-					</div>
-					<div class="flex flex-col items-center text-center min-w-0">
-						{#if frase}
-							<p class="text-[12px] sm:text-[13px] font-semibold leading-snug text-[#0f2a4a]">“{frase.frase}”</p>
-							{#if frase.autor}<p class="mt-0.5 text-[10px] sm:text-[11px] text-slate-500">{frase.autor}</p>{/if}
-						{/if}
-						<img src="/snoopy-salto.webp" alt="" class="mt-1 h-16 w-auto select-none" draggable="false" />
 					</div>
 				</div>
 
-				<div class="mt-2 text-center">
-					<p class="text-2xl font-bold text-[#0f2a4a] truncate">{perfil?.nombre ?? ''}</p>
-					<p class="text-base text-slate-500 truncate">{perfil?.email ?? ''}</p>
+				<div class="mt-1 text-center leading-tight">
+					<p class="text-lg font-bold text-[#0f2a4a] truncate">{perfil?.nombre ?? ''}</p>
+					<p class="text-sm text-slate-500 truncate [@media(max-height:700px)]:hidden">{perfil?.email ?? ''}</p>
 					{#if mode === 'rapido'}
-						<button type="button" onclick={cambiarCuenta} class="mt-1 text-base font-medium text-brand-orange hover:underline">Cambiar cuenta</button>
+						<button type="button" onclick={cambiarCuenta} class="mt-0.5 text-sm font-medium text-brand-orange hover:underline">Cambiar cuenta</button>
 					{/if}
 				</div>
 
-				<p class="mt-3 text-center text-lg font-semibold text-[#0f2a4a]">
+				<p class="mt-[min(0.75rem,1.2dvh)] text-center text-base font-semibold text-[#0f2a4a]">
 					{#if mode === 'rapido'}
 						Ingresa tu clave de 4 dígitos
 					{:else if pasoClave === 'crear'}
@@ -659,15 +712,19 @@ async function handleSetupPassword(e: Event) {
 					{/if}
 				</p>
 
-				<div class="mt-3">
+				<div class="mt-2">
 					{#if mode === 'rapido'}
 						<TecladoClave bind:valor={clave} error={claveError} alCompletar={ingresarConClave}>
 							{#snippet nota()}
 								{#if mensajeRapido}
-									<p class="mt-3 text-center text-sm font-medium text-red-600">{mensajeRapido}</p>
+									<p class="mt-[min(0.75rem,1.2dvh)] text-center text-xs font-medium text-red-600">{mensajeRapido}</p>
+								{:else if activarHuellaPendiente}
+									<p class="mt-[min(0.75rem,1.2dvh)] flex items-center justify-center gap-1.5 text-xs font-medium text-brand-orange">
+										<Fingerprint size={13} /> Ingresa tu clave para activar tu huella
+									</p>
 								{:else}
-									<p class="mt-3 flex items-center justify-center gap-1.5 text-sm text-slate-500">
-										<Lock size={15} /> Acceso guardado en este equipo
+									<p class="mt-[min(0.75rem,1.2dvh)] flex items-center justify-center gap-1.5 text-xs text-slate-500">
+										<Lock size={13} /> Acceso guardado en este equipo
 									</p>
 								{/if}
 							{/snippet}
@@ -677,19 +734,32 @@ async function handleSetupPassword(e: Event) {
 										type="button"
 										onclick={ingresarConHuella}
 										aria-label="Ingresar con huella"
-										class="h-[52px] sm:h-16 rounded-2xl bg-orange-50 text-brand-orange shadow-sm active:scale-[0.97] flex items-center justify-center"
+										class="h-[min(52px,6dvh)] [@media(max-height:700px)]:h-[5.6dvh] sm:h-14 rounded-2xl bg-orange-50 text-brand-orange shadow-sm active:scale-[0.97] flex items-center justify-center"
 									>
-										<Fingerprint size={30} />
+										<Fingerprint size={26} />
+									</button>
+								{:else if puedeHuella}
+									<!-- Teléfono con huella registrada pero sin activarla aquí: se activa al ingresar la clave. -->
+									<button
+										type="button"
+										onclick={() => { activarHuellaPendiente = !activarHuellaPendiente; mensajeRapido = ''; }}
+										aria-pressed={activarHuellaPendiente}
+										aria-label="Activar ingreso con huella"
+										title="Activar ingreso con huella"
+										class={`h-[min(52px,6dvh)] [@media(max-height:700px)]:h-[5.6dvh] sm:h-14 rounded-2xl active:scale-[0.97] flex flex-col items-center justify-center leading-none ${activarHuellaPendiente ? 'bg-orange-100 text-brand-orange ring-2 ring-brand-orange' : 'bg-slate-100 text-slate-500'}`}
+									>
+										<Fingerprint size={20} />
+										<span class="mt-0.5 text-[9px] font-semibold">Activar</span>
 									</button>
 								{:else}
-									<div class="h-[52px] sm:h-16 rounded-2xl bg-slate-100/60"></div>
+									<div class="h-[min(52px,6dvh)] [@media(max-height:700px)]:h-[5.6dvh] sm:h-14 rounded-2xl bg-slate-100/60"></div>
 								{/if}
 							{/snippet}
 						</TecladoClave>
 					{:else if pasoClave === 'crear'}
 						<TecladoClave bind:valor={claveNueva} error={claveError} deshabilitado={activando} alCompletar={onClaveNuevaCompleta}>
 							{#snippet nota()}
-								<p class={`mt-3 text-center text-sm ${mensajeRapido ? 'font-medium text-red-600' : 'text-slate-500'}`}>
+								<p class={`mt-[min(0.75rem,1.2dvh)] text-center text-xs ${mensajeRapido ? 'font-medium text-red-600' : 'text-slate-500'}`}>
 									{mensajeRapido || 'La usarás para entrar sin escribir tu contraseña.'}
 								</p>
 							{/snippet}
@@ -697,30 +767,30 @@ async function handleSetupPassword(e: Event) {
 					{:else}
 						<TecladoClave bind:valor={claveConfirmar} deshabilitado={activando} alCompletar={onClaveNuevaCompleta}>
 							{#snippet nota()}
-								<p class="mt-3 text-center text-sm text-slate-500">Escribe la misma clave otra vez.</p>
+								<p class="mt-[min(0.75rem,1.2dvh)] text-center text-xs text-slate-500">Escribe la misma clave otra vez.</p>
 							{/snippet}
 						</TecladoClave>
 					{/if}
 				</div>
 
 				{#if mode === 'crear_clave' && puedeHuella}
-					<label class="mt-4 flex items-center justify-center gap-2 text-sm font-medium text-slate-700">
+					<label class="mt-2 flex items-center justify-center gap-2 text-sm font-medium text-slate-700">
 						<input type="checkbox" bind:checked={usarHuella} class="w-4 h-4 rounded text-brand-orange focus:ring-brand-orange" />
 						<Fingerprint size={18} class="text-brand-orange" /> Ingresar también con mi huella
 					</label>
 				{/if}
 
-				<div class="mt-auto pt-4">
+				<div class="mt-auto pt-[min(0.5rem,1dvh)]">
 					{#if mode === 'rapido'}
 						<button
 							type="button"
 							disabled={clave.length < 4}
 							onclick={() => ingresarConClave(clave)}
-							class="w-full h-14 rounded-2xl bg-brand-orange text-white text-xl font-bold shadow-lg shadow-orange-500/25 active:scale-[0.98] transition disabled:opacity-60 flex items-center justify-center gap-2"
+							class="w-full h-[min(3.25rem,6dvh)] rounded-2xl bg-brand-orange text-white text-lg font-bold shadow-lg shadow-orange-500/25 active:scale-[0.98] transition disabled:opacity-60 flex items-center justify-center gap-2"
 						>
-							Ingresar <ArrowRight size={24} />
+							Ingresar <ArrowRight size={20} />
 						</button>
-						<button type="button" onclick={usarContrasena} class="mt-3 w-full text-center text-base font-medium text-[#0f2a4a] hover:underline">
+						<button type="button" onclick={usarContrasena} class="mt-2 w-full text-center text-sm font-medium text-[#0f2a4a] hover:underline">
 							¿Olvidaste tu acceso?
 						</button>
 					{:else}
@@ -728,7 +798,7 @@ async function handleSetupPassword(e: Event) {
 							type="button"
 							disabled={activando}
 							onclick={irAlSistema}
-							class="w-full text-center text-base font-medium text-slate-500 hover:underline disabled:opacity-50"
+							class="w-full text-center text-sm font-medium text-slate-500 hover:underline disabled:opacity-50"
 						>
 							{activando ? 'Guardando…' : 'Ahora no'}
 						</button>
@@ -774,6 +844,32 @@ async function handleSetupPassword(e: Event) {
 					<h2 class="text-xl font-bold text-slate-800">Bienvenido de nuevo</h2>
 					<p class="text-sm text-slate-500 mt-1">Ingresa tus credenciales para continuar</p>
 				</div>
+
+				<!-- Maqueta de la clienta (14/11/2026): frase del día con Snoopy y, debajo, la foto o iniciales de quien
+				     entró la última vez en este equipo (si pidió recordar el correo y es el mismo correo escrito). -->
+				{#if frase || perfilVisible}
+					<div class="-mt-4 flex flex-col items-center">
+						{#if frase}
+							<div class="w-full grid grid-cols-[4.5rem_minmax(0,1fr)_4.5rem] items-center gap-2">
+								<div></div>
+								<div class="text-center">
+									<p class="text-sm font-semibold leading-snug text-[#0f2a4a]">“{frase.frase}”</p>
+									{#if frase.autor}<p class="mt-0.5 text-xs text-slate-500">{frase.autor}</p>{/if}
+								</div>
+								<img src="/snoopy-casco.webp" alt="" width="376" height="473" class="h-20 w-auto justify-self-end select-none" draggable="false" />
+							</div>
+						{/if}
+						{#if perfilVisible}
+							<div class="mt-2 w-20 h-20 rounded-full overflow-hidden bg-slate-200 ring-4 ring-white shadow-md flex items-center justify-center" title={perfilVisible.nombre}>
+								{#if perfilVisible.fotoUrl}
+									<img src={toDriveThumbnailUrl(perfilVisible.fotoUrl, 300)} alt="" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+								{:else}
+									<span class="text-2xl font-bold text-slate-500">{iniciales(perfilVisible.nombre)}</span>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/if}
 				
 				{#if errorMessage}
 					<div class="p-3 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl font-medium text-center">
@@ -841,7 +937,8 @@ async function handleSetupPassword(e: Event) {
 					<button type="button" onclick={() => { mode = 'forgot_password'; errorMessage = ''; setupEmail = ''; setupPassword = ''; setupConfirmPassword = ''; }} class="text-brand-orange hover:text-orange-600 font-semibold">¿Olvidaste tu contraseña?</button>
 				</div>
 
-				<!-- Ticket #112: ingreso rápido con clave de 4 dígitos (y huella en Android). -->
+				<!-- Ticket #112: ingreso rápido con clave de 4 dígitos (y huella en Android). Solo en el teléfono. -->
+				{#if telefono}
 				<label class="flex items-start gap-2 cursor-pointer text-sm text-slate-600 font-medium -mt-2">
 					<input type="checkbox" bind:checked={activarRapido} class="mt-0.5 rounded text-blue-600 focus:ring-blue-500 border-slate-300 w-4 h-4" />
 					<span>
@@ -849,6 +946,7 @@ async function handleSetupPassword(e: Event) {
 						<span class="block text-xs font-normal text-slate-400">Entra con una clave de 4 dígitos{puedeHuella ? ' o con tu huella' : ''}, sin escribir tu contraseña.</span>
 					</span>
 				</label>
+				{/if}
 				
 				<!-- Botón -->
 				<button 

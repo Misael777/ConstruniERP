@@ -1272,8 +1272,9 @@ async function copiarCodigoGenerado() {
 		Number(valorVenta) > 0 &&
 		comisionPorcentaje !== '' && !Number.isNaN(Number(comisionPorcentaje)) &&
 		caracteristicasTab !== null &&
+		Number(numeroPisos) > 0 &&
 		(caracteristicasTab !== 'consultoria' ||
-			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion && Number(numeroPisos) > 0))
+			(!!tipoProyecto && !!estadoPredio && !!tipoEdificacion))
 	);
 
 	// Una venta dada de baja ('baja') quedó cerrada primero (solo se puede dar de baja una venta ya
@@ -1378,8 +1379,9 @@ async function copiarCodigoGenerado() {
 			falta(!tipoProyecto, 'tipoProyecto', 'Tipo de proyecto');
 			falta(!estadoPredio, 'estadoPredio', 'Estado del predio');
 			falta(!tipoEdificacion, 'tipoEdificacion', 'Tipo de edificación');
-			falta(!(Number(numeroPisos) > 0), 'numeroPisos', 'Número de pisos');
 		}
+		// Obra y Consultoría: el Nº de pisos va dentro del código en ambas.
+		falta(caracteristicasTab !== null && !(Number(numeroPisos) > 0), 'numeroPisos', 'Número de pisos');
 		// El código se arma solo con los datos de arriba; solo se avisa si todo lo demás ya está.
 		falta(f.length === 0 && !proyectoNombre.trim(), 'codigo', 'Código de proyecto');
 		return f;
@@ -3106,6 +3108,13 @@ async function copiarCodigoGenerado() {
 	disabled={!documentosCierreListos}
 	onchange={(v) => (tipoEdificacionObra = v)}
 />
+							</div>
+							<!-- A pedido de la clienta: el código de Obra lleva el Nº de pisos (va pegado a la
+							     Tipo de Contratación, ver codigoGenerado), pero el campo solo existía en la pestaña
+							     Consultoría — que queda bloqueada al elegir Obra — y no había dónde escribirlo. -->
+							<div data-campo="numeroPisos" class:campo-faltante={faltaCampo('numeroPisos')} class="flex flex-col gap-1">
+								<label class="text-xs font-semibold text-[#0f3b5e]">Número de pisos *</label>
+								<input type="number" min="1" bind:value={numeroPisos} disabled={!documentosCierreListos} placeholder="Ej. 5" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed">
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">N° de proyecto en el distrito</label>

@@ -18,7 +18,7 @@
 	 * una lista larga desbordaban la fila. Un solo dropdown abierto a la vez (openDropdown), se cierra
 	 * con un backdrop transparente al hacer clic afuera.
 	 */
-	import { ChevronDown, ChevronUp, X } from '@lucide/svelte';
+	import { ChevronDown, ChevronUp, X, Search } from '@lucide/svelte';
 	import {
 		columnFilterKind,
 		hasActiveColumnFilters,
@@ -48,6 +48,19 @@
 	let expanded = $state(false);
 	let openDropdown = $state<string | null>(null);
 	let debounceTimer: ReturnType<typeof setTimeout>;
+
+	// Buscador dentro del dropdown multi-selección (pedido de la clienta, 13/11/2026: el filtro "Proveedor" de Cuentas
+	// por Pagar tiene decenas de opciones y había que recorrerlas a mano). Sin tildes ni mayúsculas.
+	const MIN_OPCIONES_BUSCADOR = 7;
+	let busqueda = $state('');
+	const normalizar = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+	function abrirDropdown(key: string, isOpen: boolean) {
+		openDropdown = isOpen ? null : key;
+		busqueda = '';
+	}
+	function enfocar(node: HTMLInputElement) {
+		node.focus();
+	}
 
 	const filterableFields = $derived(fields.filter((f) => f.showInTable || f.filterable));
 	const activeCount = $derived(Object.values(filters).filter(isColumnFilterActive).length);
@@ -134,7 +147,7 @@
 							<div class="relative">
 								<button
 									type="button"
-									onclick={() => (openDropdown = isOpen ? null : field.key)}
+									onclick={() => abrirDropdown(field.key, isOpen)}
 									class={`w-full min-w-0 flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-sm text-left focus:outline-none focus:ring-2 focus:ring-blue-200 ${
 										selected.length > 0 ? 'border-blue-300 bg-blue-50' : 'border-slate-300 hover:bg-slate-50'
 									}`}
@@ -152,9 +165,37 @@
 								</button>
 
 								{#if isOpen}
+									{@const conBuscador = options.length >= MIN_OPCIONES_BUSCADOR}
+									{@const q = normalizar(busqueda.trim())}
+									{@const visibles = q ? options.filter((o) => normalizar(o.label).includes(q)) : options}
 									<div class="fixed inset-0 z-10" onclick={() => (openDropdown = null)}></div>
-									<div class="absolute left-0 right-0 top-full mt-1 z-20 bg-white rounded-lg border border-slate-200 shadow-lg max-h-56 overflow-y-auto py-1">
-										{#each options as opt (opt.value)}
+									<div class="absolute left-0 right-0 top-full mt-1 z-20 bg-white rounded-lg border border-slate-200 shadow-lg max-h-72 overflow-y-auto pb-1">
+										{#if conBuscador}
+											<div class="sticky top-0 z-10 bg-white p-2 border-b border-slate-100">
+												<div class="relative">
+													<Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+													<input
+														type="text"
+														bind:value={busqueda}
+														use:enfocar
+														onkeydown={(e) => e.key === 'Escape' && (openDropdown = null)}
+														placeholder={`Buscar ${field.label.toLowerCase()}...`}
+														class="w-full rounded-md border border-slate-300 pl-8 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+													/>
+													{#if busqueda}
+														<button type="button" onclick={() => (busqueda = '')} class="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600" aria-label="Borrar búsqueda">
+															<X size={14} />
+														</button>
+													{/if}
+												</div>
+												{#if selected.length > 0}
+													<p class="mt-1.5 text-[11px] text-blue-700">{selected.length} seleccionado{selected.length === 1 ? '' : 's'}</p>
+												{/if}
+											</div>
+										{:else}
+											<div class="pt-1"></div>
+										{/if}
+										{#each visibles as opt (opt.value)}
 											<label class="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
 												<input
 													type="checkbox"
@@ -165,7 +206,7 @@
 												<span class="min-w-0 flex-1 truncate text-slate-700">{opt.label}</span>
 											</label>
 										{:else}
-											<p class="px-3 py-2 text-xs text-slate-400">Sin opciones</p>
+											<p class="px-3 py-2 text-xs text-slate-400">{q ? `Sin resultados para "${busqueda.trim()}"` : 'Sin opciones'}</p>
 										{/each}
 									</div>
 								{/if}

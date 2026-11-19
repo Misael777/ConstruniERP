@@ -9,7 +9,7 @@ import { borrarArchivosDriveHuerfanos, enlacesDeTransacciones } from '$lib/share
 import { recalcularSaldoCuentaBanco } from '$lib/modules/cuentas-bancarias/services/cuentaBanco.service';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FieldOption, ColumnFilters } from '$lib/shared/fieldConfig';
-import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency, applyColumnFilters, isColumnFilterActive } from '$lib/shared/fieldConfig';
+import { validatePayload, buildWritablePayload, translateSupabaseError, translateRpcError, formatCurrency, applyColumnFilters } from '$lib/shared/fieldConfig';
 import {
 	TABLE_NAME,
 	PK_COLUMN,
@@ -243,12 +243,9 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 		const orFilter = SEARCHABLE_COLUMNS.map((col) => `${col}.ilike.%${escaped}%`).join(',');
 		query = query.or(orFilter);
 	}
-	// Una cuenta ya pagada (saldo=0) no es algo pendiente de gestionar — se oculta de la lista por
-	// defecto, a pedido del usuario. Solo se muestra si el usuario filtra explícitamente por
-	// Estado: Pagado en la barra de filtros (ColumnFilterBar) — ahí sí se respeta su elección.
-	if (!isColumnFilterActive(params.columnFilters?.estado)) {
-		query = query.neq('estado', 'pagado');
-	}
+	// A pedido de la clienta (13/11/2026): la lista muestra TODAS las cuentas por defecto, también las ya pagadas,
+	// para poder consultarlas. Antes las pagadas se ocultaban salvo filtrando "Estado: Pagado". Para ver solo las
+	// pendientes, filtrar por Estado en la barra de filtros. (El "Total de Filtrado" ya incluía las pagadas.)
 	query = params.soloEliminados ? query.eq('activo', false) : query.eq('activo', true);
 	if (params.columnFilters) query = applyColumnFilters(query, FIELDS_CONFIG, params.columnFilters);
 	query = aplicarFiltroCentroCosto(query, params.idsCentroCosto, params.incluirSinCentroCosto);

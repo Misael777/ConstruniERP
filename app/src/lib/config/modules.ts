@@ -11,6 +11,12 @@ export type ModuleItem = {
   subItems?: { path: string; label: string; permiso?: string }[];
 };
 
+/** Cuenta superusuario: la única que ve los módulos marcados con PERMISO_SOLO_SUPERUSUARIO (ni otros
+ * administradores ni el developer). */
+export const SUPERUSUARIO_EMAIL = 'construnisys@gmail.com';
+/** Permiso especial: no se asigna en Roles y Permisos ni lo cubre el comodín '*' del administrador. */
+export const PERMISO_SOLO_SUPERUSUARIO = 'solo_superusuario';
+
 export const MODULE_REGISTRY: ModuleItem[] = [
   { path: '/dashboard', label: 'Dashboard', icon: 'fas fa-home', permiso: 'ver_dashboard' },
   { 
@@ -58,6 +64,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     icon: 'fas fa-chart-line', 
     permiso: 'ver_finanzas',
     subItems: [
+      // 17/11/2026: el usuario quitó la regla de "solo superusuario" — vuelve a asignarse por rol.
       { path: '/finanzas/control-financiero', label: 'Control Financiero', permiso: 'ver_finanzas_dashboard' },
       { path: '/finanzas/centros-de-costos', label: 'Centro de Costos y Cuentas Internas', permiso: 'ver_finanzas_centros_costos' },
       { path: '/finanzas/cuentas-cobrar', label: 'Cuentas por Cobrar', permiso: 'ver_finanzas_cuentas_pendientes' },

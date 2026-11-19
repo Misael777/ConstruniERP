@@ -19,6 +19,7 @@
 	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import NodeGraph from '$lib/components/dashboard/NodeGraph.svelte';
+	import TrayectoriaCuentasChart from './TrayectoriaCuentasChart.svelte';
 	import {
 		getCentrosCostoOptions,
 		getRendimientoPorCentroCosto,
@@ -120,13 +121,25 @@
 					}
 					data.push(ultimo);
 				}
+				// A pedido del usuario (17/11/2026): resaltar en cada línea el punto del saldo inicial (rombo hueco,
+				// donde arranca la serie) y el del saldo actual (círculo relleno, al final del eje).
+				const color = PALETA_TRAYECTORIA[i % PALETA_TRAYECTORIA.length];
+				const idxInicial = serie.puntos.length ? resultado.fechas.indexOf(serie.puntos[0].fecha) : -1;
+				const idxActual = ultimo === null ? -1 : data.length - 1;
+				const marcas: ('inicial' | 'actual' | null)[] = data.map((_, k) => (k === idxActual ? 'actual' : k === idxInicial ? 'inicial' : null));
 				return {
 					label: serie.label,
 					data,
-					borderColor: PALETA_TRAYECTORIA[i % PALETA_TRAYECTORIA.length],
+					marcas,
+					borderColor: color,
 					backgroundColor: 'transparent',
 					borderWidth: 1.5,
-					pointRadius: 0,
+					pointRadius: marcas.map((m) => (m === 'actual' ? 6 : m === 'inicial' ? 6 : 0)),
+					pointHoverRadius: marcas.map((m) => (m ? 8 : 4)),
+					pointStyle: marcas.map((m) => (m === 'inicial' ? 'rectRot' : 'circle')),
+					pointBackgroundColor: marcas.map((m) => (m === 'actual' ? color : '#ffffff')),
+					pointBorderColor: color,
+					pointBorderWidth: 2,
 					tension: 0.1,
 					spanGaps: false
 				};
@@ -134,8 +147,14 @@
 		};
 	}
 
+	/** Tooltip: dice si el punto es el saldo inicial o el saldo actual de la línea. */
+	function etiquetaTooltipTrayectoria(ctx: any): string {
+		const marca = ctx.dataset?.marcas?.[ctx.dataIndex];
+		const prefijo = marca === 'actual' ? 'Saldo actual' : marca === 'inicial' ? 'Saldo inicial' : 'Saldo';
+		return `${ctx.dataset.label} · ${prefijo}: ${formatCurrency(Number(ctx.parsed.y))}`;
+	}
+
 	const datasetsTrayectoriaCentros = $derived(construirDatasetsTrayectoria(trayectoriaCentros));
-	const datasetsTrayectoriaCuentas = $derived(construirDatasetsTrayectoria(trayectoriaCuentas));
 
 	const estadoGeneral = $derived(calcularEstadoGeneral({ incidenciasAbiertas, conciliacionesPendientes, ultimaRevision }));
 
@@ -479,7 +498,7 @@
 	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col mb-8">
 		<h3 class="font-bold text-brand-marine text-sm mb-1">Trayectoria de Saldo — Centros de Costo</h3>
 		<p class="text-[11px] text-slate-400 mb-3">
-			Una línea por centro de costo (fondos propios): arranca en su última Apertura Financiera y avanza con cada transacción real posterior. Haz clic en la leyenda para aislar/ocultar líneas.
+			Una línea por centro de costo (fondos propios): arranca en su última Apertura Financiera y avanza con cada transacción real posterior. Haz clic en la leyenda para aislar/ocultar líneas. <span class="whitespace-nowrap"><span class="font-bold text-slate-500">◇</span> saldo inicial · <span class="font-bold text-slate-500">●</span> saldo actual</span>
 		</p>
 		<div class="flex-1 min-h-0">
 			{#if datasetsTrayectoriaCentros.datasets.length === 0}
@@ -491,7 +510,7 @@
 						responsive: true,
 						maintainAspectRatio: false,
 						interaction: { mode: 'nearest', intersect: false },
-						plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 9 } } } },
+						plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 9 } } }, tooltip: { callbacks: { label: etiquetaTooltipTrayectoria } } },
 						scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } }
 					}}
 				/>
@@ -499,26 +518,7 @@
 		</div>
 	</div>
 
-	<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm h-96 flex flex-col mb-8">
-		<h3 class="font-bold text-brand-marine text-sm mb-1">Trayectoria de Saldo — Cuentas Bancarias</h3>
-		<p class="text-[11px] text-slate-400 mb-3">Una línea por cuenta bancaria: arranca en su Saldo Inicial y avanza con cada transacción real que la use como origen o destino.</p>
-		<div class="flex-1 min-h-0">
-			{#if datasetsTrayectoriaCuentas.datasets.length === 0}
-				<p class="text-xs text-slate-300 flex items-center justify-center h-full">Sin cuentas bancarias registradas todavía.</p>
-			{:else}
-				<Line
-					data={datasetsTrayectoriaCuentas}
-					options={{
-						responsive: true,
-						maintainAspectRatio: false,
-						interaction: { mode: 'nearest', intersect: false },
-						plugins: { legend: { position: 'right', labels: { boxWidth: 10, font: { size: 9 } } } },
-						scales: { y: { ticks: { callback: (v) => formatCurrency(Number(v)) } } }
-					}}
-				/>
-			{/if}
-		</div>
-	</div>
+	<TrayectoriaCuentasChart resultado={trayectoriaCuentas} />
 
 	<!-- ── FILTROS (viabilidad por CdC) ────────────────────────────────────── -->
 	<div class="flex flex-wrap items-end gap-3 mb-6 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
