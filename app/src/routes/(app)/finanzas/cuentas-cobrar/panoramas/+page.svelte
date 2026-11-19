@@ -7,7 +7,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, type FieldOption } from '$lib/shared/fieldConfig';
-	import { Briefcase, HardHat, Building2, Ellipsis, ArrowLeft, Receipt, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
+	import { Briefcase, HardHat, Building2, Ellipsis, ArrowLeft, GripVertical, MoreVertical, Loader2, Download, Plus, Info, Lightbulb, DollarSign, TrendingUp, CreditCard, Wallet, Target, Clock, AlertTriangle, Users, LayoutGrid, CalendarDays, Layers, Search, X, ChevronDown, ChevronUp } from '@lucide/svelte';
 	import {
 		getCobrosPendientes,
 		getPanoramaItemsCobro,
@@ -671,7 +671,8 @@
 		</div>
 	</div>
 
-	<div class="grid grid-cols-1 xl:grid-cols-[280px_1fr_1fr_300px] gap-4 items-start">
+	<!-- minmax(0,1fr) + min-w-0 en cada columna: sin esto un título largo (p. ej. "Forma de cobranza definida al crear la venta — …") ensanchaba el panorama y descuadraba toda la pantalla (19/11/2026). -->
+	<div class="grid grid-cols-[minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)_300px] gap-4 items-start [&>*]:min-w-0">
 		<!-- Bandeja -->
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-1">
@@ -770,13 +771,12 @@
 									<GripVertical size={14} />
 								{/if}
 							</button>
-							<div class="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-								<Receipt size={16} />
-							</div>
 							<div class="flex-1 min-w-0">
-								<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
-								<p class="text-xs text-slate-500 truncate">Proyecto: {item.proyectoNombre ?? 'Sin proyecto'}</p>
-								<p class="text-xs text-slate-500 truncate">Cliente: {item.clienteNombre}</p>
+								<!-- A pedido del cliente (19/11/2026): en negrita el PROYECTO (nombre completo al pasar el mouse); el título
+								     ("Forma de cobranza definida al crear la venta — …") queda abajo, en chico. -->
+								<p class="text-sm font-semibold text-slate-800 truncate" title={item.proyectoNombre ?? 'Sin proyecto'}>{item.proyectoNombre ?? 'Sin proyecto'}</p>
+								<p class="text-xs text-slate-500 truncate" title={item.clienteNombre}>Cliente: {item.clienteNombre}</p>
+								<p class="text-[11px] text-slate-400 truncate" title={item.titulo}>{item.titulo}</p>
 								<p class="text-[11px] text-slate-400">Vencimiento: {item.fechaVencimiento ?? '—'}</p>
 
 								{#if item.fracciones.length > 0}
@@ -877,9 +877,11 @@
 										<MoreVertical size={14} />
 									</button>
 									<div class="flex-1 min-w-0">
-										<p class="text-sm font-semibold text-slate-800 truncate">{item.titulo}</p>
-										<p class="text-xs text-slate-500 truncate">Proyecto: {item.proyectoNombre ?? 'Sin proyecto'}</p>
-										<p class="text-xs text-slate-500 truncate">Cliente: {item.clienteNombre}</p>
+										<!-- A pedido del cliente (19/11/2026): en negrita el PROYECTO (nombre completo al pasar el mouse); el título
+										     ("Forma de cobranza definida al crear la venta — …") queda abajo, en chico. -->
+										<p class="text-sm font-semibold text-slate-800 truncate" title={item.proyectoNombre ?? 'Sin proyecto'}>{item.proyectoNombre ?? 'Sin proyecto'}</p>
+										<p class="text-xs text-slate-500 truncate" title={item.clienteNombre}>Cliente: {item.clienteNombre}</p>
+										<p class="text-[11px] text-slate-400 truncate" title={item.titulo}>{item.titulo}</p>
 									</div>
 									<div class="text-right shrink-0">
 										<p class="text-sm font-bold text-slate-800">{formatCurrency(item.monto)}</p>

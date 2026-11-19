@@ -824,7 +824,8 @@
 		</div>
 	</div>
 
-	<div class="grid grid-cols-1 xl:grid-cols-[280px_1fr_1fr_300px] gap-4 items-start">
+	<!-- minmax(0,1fr) + min-w-0 en cada columna: sin esto un título largo (p. ej. "Forma de cobranza definida al crear la venta — …") ensanchaba el panorama y descuadraba toda la pantalla (19/11/2026). -->
+	<div class="grid grid-cols-[minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_minmax(0,1fr)_300px] gap-4 items-start [&>*]:min-w-0">
 		<!-- Bandeja -->
 		<div class="bg-white rounded-xl border border-slate-200 p-4">
 			<div class="flex items-center gap-2 mb-1">

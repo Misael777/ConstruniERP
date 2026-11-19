@@ -264,9 +264,43 @@ export async function getObrasTareo(client: SupabaseClient): Promise<ObraTareo[]
 	return (data ?? []).map((c: any) => ({ id_centro_costo: c.id_centro_costo, ...nombreCentro(c)! }));
 }
 
+/** Diagnóstico de marcas (pedido del usuario, 19/11/2026): TODAS las marcas del trabajador en la semana, cuenten o
+ * no en el tareo de esta obra, con el motivo. Así el residente ve por qué un día sale Falta sin revisar la base. */
+export interface MarcaDiagnostico {
+	fecha: string;
+	hora: string;
+	huellero: string;
+	/** Obra en la que quedó registrada la marca (la del huellero al recibirla). */
+	obra: string;
+	modo: number | null;
+	evento: number | null;
+	cuenta: boolean;
+	motivo: string;
+}
+
+/** Por qué una marca cuenta (o no) en el tareo de `idCentroCosto`. Mismo criterio que el filtro de cargarTareo. */
+export function motivoMarca(
+	m: { evento: number | null; id_centro_costo: number | null; id_dispositivo: number | null; pin: string },
+	idCentroCosto: number,
+	pinsPrincipal: Set<string>,
+	nombreObra: (id: number) => string
+): { cuenta: boolean; motivo: string } {
+	if (m.evento != null && m.evento >= EVENTO_RECHAZO) return { cuenta: false, motivo: `Rechazada por el huellero (evento ${m.evento}: no lo reconoció o no tenía acceso)` };
+	if (m.id_centro_costo === idCentroCosto) return { cuenta: true, motivo: m.id_dispositivo == null ? 'Marca manual en esta obra' : 'Huellero de esta obra' };
+	if (m.id_centro_costo == null) {
+		const origen = m.id_dispositivo == null ? 'Marca desde el ERP (Mi asistencia)' : 'Huellero sin obra asignada';
+		return pinsPrincipal.has(m.pin)
+			? { cuenta: true, motivo: `${origen}: cuenta en la obra principal del trabajador (esta)` }
+			: { cuenta: false, motivo: `${origen}: solo cuenta en la obra principal del trabajador, que no es esta` };
+	}
+	return { cuenta: false, motivo: `Registrada en otra obra (${nombreObra(m.id_centro_costo)}): el huellero está asignado a esa obra. Cuenta en el tareo de esa obra.` };
+}
+
 export interface DatosTareo {
 	filas: FilaTareo[];
 	feriados: FeriadoTareo[];
+	/** Por id_personal: todas sus marcas de la semana con el motivo de si cuentan o no. */
+	diagnostico: Record<number, MarcaDiagnostico[]>;
 	semana: { estado: 'borrador' | 'aprobado'; aprobado_por: string | null; aprobado_en: string | null } | null;
 }
 
@@ -372,9 +406,41 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 		})
 		.sort((a, b) => nombreCompleto(a.personal).localeCompare(nombreCompleto(b.personal), 'es'));
 
+	// Diagnóstico: todas las marcas crudas de cada trabajador del tareo, con el motivo.
+	const idsObrasMarcas = [...new Set((marcasCrudas ?? []).map((m) => m.id_centro_costo as number | null).filter((x): x is number => x != null && x !== idCentroCosto))];
+	const obrasMarcas = new Map<number, string>();
+	if (idsObrasMarcas.length) {
+		const { data } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre, proyecto(nombre_proyecto)').in('id_centro_costo', idsObrasMarcas);
+		for (const c of (data ?? []) as any[]) {
+			const n = nombreCentro(c);
+			obrasMarcas.set(c.id_centro_costo, n ? `${n.codigo} · ${n.nombre}` : String(c.id_centro_costo));
+		}
+	}
+	const nombreObra = (id: number) => obrasMarcas.get(id) ?? `obra #${id}`;
+	const idPorPin = new Map(trabajadores.map((p) => [p.pin as string, p.id_personal as number]));
+	const diagnostico: Record<number, MarcaDiagnostico[]> = {};
+	for (const m of marcasCrudas ?? []) {
+		const id = idPorPin.get(m.pin);
+		if (id == null) continue;
+		const lima = new Date(Date.parse(m.marcado_en) - LIMA_MS).toISOString();
+		const disp = m.asistencia_dispositivo as { nombre: string | null } | { nombre: string | null }[] | null;
+		const { cuenta, motivo } = motivoMarca(m as any, idCentroCosto, pinsPrincipal, nombreObra);
+		(diagnostico[id] ??= []).push({
+			fecha: lima.slice(0, 10),
+			hora: lima.slice(11, 19),
+			huellero: (Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre) ?? (m.id_dispositivo ? 'Huellero' : 'ERP (Mi asistencia)'),
+			obra: m.id_centro_costo == null ? 'Sin obra' : m.id_centro_costo === idCentroCosto ? 'Esta obra' : nombreObra(m.id_centro_costo),
+			modo: m.modo_verificacion ?? null,
+			evento: m.evento ?? null,
+			cuenta,
+			motivo
+		});
+	}
+
 	return {
 		filas,
 		feriados: (feriados ?? []) as FeriadoTareo[],
+		diagnostico,
 		semana: semana ? { estado: semana.estado, aprobado_por: semana.aprobado_por, aprobado_en: semana.aprobado_en } : null
 	};
 }

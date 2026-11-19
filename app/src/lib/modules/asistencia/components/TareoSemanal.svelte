@@ -254,6 +254,12 @@
 
 	// ── Editar día ──
 	type Pago = 'completo' | 'medio' | 'sin_pago' | 'otras';
+	// Diagnóstico de marcas (19/11/2026): todas las marcas de la semana del trabajador y por qué cuentan o no.
+	let diag = $state<FilaTareo | null>(null);
+	const marcasDe = (f: FilaTareo) => datos?.diagnostico?.[f.personal.id_personal] ?? [];
+	const noCuentan = (f: FilaTareo) => marcasDe(f).filter((m) => !m.cuenta).length;
+	const MODOS: Record<number, string> = { 1: 'Huella', 15: 'Rostro', 0: 'Clave', 3: 'Clave', 4: 'Tarjeta' };
+
 	let edicion = $state<{ fila: FilaTareo; dia: DiaTareo } | null>(null);
 	let edEstado = $state<EstadoAjuste>('asistio');
 	let edPago = $state<Pago>('completo');
@@ -486,6 +492,7 @@
 								{#if puedeAprobar}<td class="px-2 py-2 text-center"><input type="checkbox" bind:checked={seleccion[id]} disabled={pendienteDe(f) <= 0} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} /></td>{/if}
 								<td class="px-2 py-2">
 									<div class="font-medium text-slate-800">{nombreCompleto(f.personal)}</div>
+									{@render botonMarcas(f)}
 									<div class="text-[11px] text-slate-400">{f.personal.cargo ?? f.personal.categoria ?? ''}{f.personal.id_centro_costo !== obra.id_centro_costo ? ' · de otra obra' : ''}</div>
 									{#if f.sinMonto}
 										<div class="text-[11px] text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin monto de pago en Personal</div>
@@ -539,6 +546,7 @@
 							{#if puedeAprobar}<input type="checkbox" class="mt-1" bind:checked={seleccion[id]} disabled={pendienteDe(f) <= 0} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} />{/if}
 							<div class="min-w-0 flex-1">
 								<div class="font-semibold text-slate-800">{nombreCompleto(f.personal)}</div>
+								{@render botonMarcas(f)}
 								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día · ${formatCurrency(f.tarifaHora)}/h`}</div>
 							</div>
 							<div class="text-right">
@@ -587,6 +595,65 @@
 		{/if}
 	{/if}
 </div>
+
+{#snippet botonMarcas(f: FilaTareo)}
+	{@const n = marcasDe(f).length}
+	{@const nc = noCuentan(f)}
+	<button
+		type="button"
+		onclick={() => (diag = f)}
+		class="text-[11px] font-semibold {nc ? 'text-amber-700 hover:text-amber-800' : 'text-slate-400 hover:text-blue-600'}"
+		title="Ver todas las marcas de la semana y si cuentan en esta obra"
+	>
+		<i class="fas {nc ? 'fa-triangle-exclamation' : 'fa-magnifying-glass'}"></i>
+		{n ? `${n} marca${n === 1 ? '' : 's'}` : 'Sin marcas'}{nc ? ` · ${nc} no cuenta${nc === 1 ? '' : 'n'}` : ''}
+	</button>
+{/snippet}
+
+<!-- Diagnóstico de marcas -->
+{#if diag}
+	{@const lista = marcasDe(diag)}
+	<div class="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Marcas de la semana">
+		<div class="w-full sm:max-w-2xl bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl p-5 flex flex-col gap-3 max-h-[92vh] overflow-y-auto">
+			<div class="flex items-start justify-between gap-3">
+				<div>
+					<h2 class="text-lg font-bold text-slate-800">Marcas de la semana</h2>
+					<p class="text-sm text-slate-500">{nombreCompleto(diag.personal)} · PIN {diag.personal.pin} · {ddmm(lunes)} – {ddmm(sumarDias(lunes, 6))}</p>
+				</div>
+				<button type="button" onclick={() => (diag = null)} class="text-slate-400 hover:text-slate-600 p-1" aria-label="Cerrar"><i class="fas fa-times"></i></button>
+			</div>
+			<p class="text-xs text-slate-500">
+				Todas las marcas que llegaron al ERP para este trabajador. Solo las marcadas <b class="text-emerald-700">Cuenta</b> se usan para las horas del tareo de esta obra; las demás dicen por qué no.
+			</p>
+			{#if !lista.length}
+				<div class="rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
+					No llegó ninguna marca de este trabajador esta semana (PIN {diag.personal.pin}). Si sí marcó, revisa que el huellero esté conectado y que su PIN en el huellero sea el mismo que en Personal.
+				</div>
+			{:else}
+				<div class="flex flex-col divide-y divide-slate-100 rounded-xl border border-slate-100">
+					{#each lista as m, i (i)}
+						<div class="px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-sm">
+							<div class="sm:w-36 shrink-0">
+								<span class="font-semibold text-slate-800">{DIAS_SEMANA[(new Date(m.fecha + 'T12:00:00Z').getUTCDay() + 6) % 7].slice(0, 3)} {ddmm(m.fecha)}</span>
+								<span class="text-slate-500">{m.hora.slice(0, 5)}</span>
+							</div>
+							<div class="flex-1 min-w-0 text-xs text-slate-500">
+								<div>{m.huellero}{m.modo != null && MODOS[m.modo] ? ` · ${MODOS[m.modo]}` : ''} · <span class="text-slate-600">{m.obra}</span></div>
+								<div class={m.cuenta ? 'text-slate-400' : 'text-amber-700'}>{m.motivo}</div>
+							</div>
+							<span class="shrink-0 self-start sm:self-center px-2 py-0.5 rounded-full text-[11px] font-semibold border {m.cuenta ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}">
+								{m.cuenta ? 'Cuenta' : 'No cuenta'}
+							</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<div class="flex justify-end">
+				<button type="button" onclick={() => (diag = null)} class="px-4 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">Cerrar</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <!-- Editar día -->
 {#if edicion}

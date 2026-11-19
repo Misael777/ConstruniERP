@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 
-import { calcularFila, jornadaMinutos, tarifas, lunesDe, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
+import { calcularFila, jornadaMinutos, tarifas, lunesDe, motivoMarca, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
 import type { Horario } from '$lib/modules/personal/services/horarios.service';
 import type { Personal } from '$lib/modules/personal/services/personal.service';
 
@@ -101,5 +101,25 @@ describe('calcularFila', () => {
 		expect(f.dias[4].pago).toBe(0);
 		const g = calcularFila(persona(), civil, marcas, [], [], null, LUNES, '2026-11-04');
 		expect(g.dias[5].estado).toBe('por_venir');
+	});
+});
+
+describe('motivoMarca (diagnóstico de marcas)', () => {
+	const principal = new Set(['7']);
+	const obra = (id: number) => (id === 139 ? 'BG-001 · CORPORATIVO' : `#${id}`);
+	it('cuenta la marca del huellero de esta obra', () => {
+		expect(motivoMarca({ evento: 3, id_centro_costo: 490, id_dispositivo: 1, pin: '7' }, 490, principal, obra).cuenta).toBe(true);
+	});
+	it('no cuenta la marca de un huellero asignado a otra obra y dice cuál', () => {
+		const r = motivoMarca({ evento: 3, id_centro_costo: 139, id_dispositivo: 1, pin: '7' }, 490, principal, obra);
+		expect(r.cuenta).toBe(false);
+		expect(r.motivo).toContain('CORPORATIVO');
+	});
+	it('marca sin obra: cuenta solo en la obra principal', () => {
+		expect(motivoMarca({ evento: null, id_centro_costo: null, id_dispositivo: 1, pin: '7' }, 490, principal, obra).cuenta).toBe(true);
+		expect(motivoMarca({ evento: null, id_centro_costo: null, id_dispositivo: 1, pin: '9' }, 490, principal, obra).cuenta).toBe(false);
+	});
+	it('no cuenta una marca rechazada por el huellero', () => {
+		expect(motivoMarca({ evento: 27, id_centro_costo: 490, id_dispositivo: 1, pin: '7' }, 490, principal, obra).cuenta).toBe(false);
 	});
 });
