@@ -470,6 +470,20 @@ export async function getProyeccionIngresos(client: SupabaseClient, desde?: stri
 /** Reprograma fecha_pago_programada de una o más cuentas por pagar (drag-and-drop en la vista
  * Calendario de Panoramas de Pago — Panorama Actual escribe directo, P1/P2 escriben acá recién al
  * "Establecer como panorama actual") — 1 update por fila, igual patrón que reorderPanorama. */
+/** Reprograma cuotas 'programado' de cuentas por pagar (pagos.fecha_pago) — desde el Calendario de Panoramas de Pago,
+ * donde cada cuota de una cuenta fraccionada es su propia tarjeta (19/11/2026). */
+export async function actualizarFechasCuotasPago(
+	client: SupabaseClient,
+	cambios: { idPago: number; fecha: string }[]
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(
+		cambios.map((c) => client.from('pagos').update({ fecha_pago: c.fecha }).eq('id_pago', c.idPago).eq('estado_pago', 'programado'))
+	);
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas de las cuotas: ${failed.error.message}` };
+	return { success: true, message: 'Fechas actualizadas' };
+}
+
 export async function actualizarFechasProgramadasPago(
 	client: SupabaseClient,
 	cambios: { id: number; fecha: string }[]
