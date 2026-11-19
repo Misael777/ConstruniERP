@@ -429,12 +429,12 @@
 	const soles = (n: number | null) => (n == null ? null : `S/ ${Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 	const fechaCorta = (f: string | null) => (f ? new Date(`${f}T00:00:00`).toLocaleDateString('es-PE') : null);
 
-	/** Estado de una cobertura según su vencimiento (aviso 30 días antes, como en la lista). */
-	function estadoVence(f: string | null): { texto: string; clase: string } {
+	/** Estado de una cobertura según su vencimiento (aviso 7 días antes para el SCTR y 30 para el examen médico, como en la lista). */
+	function estadoVence(f: string | null, diasAviso = 30): { texto: string; clase: string } {
 		if (!f) return { texto: 'Sin registrar', clase: 'bg-slate-100 text-slate-500 border-slate-200' };
 		const dias = Math.round((Date.parse(f) - Date.parse(hoyIso())) / 86400000);
 		if (dias < 0) return { texto: 'Vencido', clase: 'bg-rose-50 text-rose-700 border-rose-200' };
-		if (dias <= 30) return { texto: 'Por vencer', clase: 'bg-amber-50 text-amber-700 border-amber-200' };
+		if (dias <= diasAviso) return { texto: 'Por vencer', clase: 'bg-amber-50 text-amber-700 border-amber-200' };
 		return { texto: 'Vigente', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
 	}
 </script>
@@ -792,7 +792,7 @@
 								</div>
 								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 text-sm">
 									<span class="font-medium text-slate-800">SCTR</span>
-									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.sctr_vencimiento))}</span>
+									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.sctr_vencimiento, 7))}</span>
 									<input id="sctr_poliza" bind:value={form.sctr_poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza SCTR" class="col-span-2 sm:col-span-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
 									<input id="sctr_vencimiento" type="date" bind:value={form.sctr_vencimiento} aria-label="Vencimiento del SCTR" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
 								</div>
@@ -803,7 +803,7 @@
 									<input id="examen_medico_vencimiento" type="date" bind:value={form.examen_medico_vencimiento} aria-label="Vencimiento del examen médico" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
 								</div>
 							</div>
-							{@render nota('El ERP avisa en la lista de Personal 30 días antes de cada vencimiento.')}
+							{@render nota('El ERP avisa en la lista de Personal 1 semana antes del vencimiento del SCTR y 30 días antes del examen médico.')}
 						{/if}
 					</div>
 				</div>

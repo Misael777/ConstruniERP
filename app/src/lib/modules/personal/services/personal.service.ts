@@ -179,13 +179,16 @@ function diasPara(fecha: string | null, hoy: string): number | null {
 }
 
 export const DIAS_AVISO_VENCIMIENTO = 30;
+/** Ticket #125: el SCTR dura 1 mes, así que avisa solo 1 semana antes (el examen médico sigue en 30 días). */
+export const DIAS_AVISO_SCTR = 7;
+export const diasAvisoVencimiento = (nombre: string) => (nombre === 'SCTR' ? DIAS_AVISO_SCTR : DIAS_AVISO_VENCIMIENTO);
 
-/** Avisos de SCTR y examen médico vencidos o por vencer en los próximos 30 días. */
+/** Avisos de SCTR (7 días antes) y examen médico (30 días antes) vencidos o por vencer. */
 export function alertasVencimiento(p: Personal, hoy: string): { texto: string; vencido: boolean }[] {
 	const alertas: { texto: string; vencido: boolean }[] = [];
 	for (const [nombre, fecha] of [['SCTR', p.sctr_vencimiento], ['Examen médico', p.examen_medico_vencimiento]] as const) {
 		const dias = diasPara(fecha, hoy);
-		if (dias === null || dias > DIAS_AVISO_VENCIMIENTO) continue;
+		if (dias === null || dias > diasAvisoVencimiento(nombre)) continue;
 		alertas.push(
 			dias < 0
 				? { texto: `${nombre} vencido`, vencido: true }
