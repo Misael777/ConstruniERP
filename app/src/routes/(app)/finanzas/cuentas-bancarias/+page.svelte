@@ -361,9 +361,12 @@
 					<Landmark size={18} />
 				</div>
 				<div class="order-2 flex-1 min-w-0">
-					<p class="font-semibold text-slate-800 break-words sm:truncate">{item.nombre_banco} — {item.numero_cuenta}</p>
-					<p class="text-xs text-slate-500 break-words sm:truncate">Titular: {item.titular_cuenta} · {getOptionLabel(tipoCuentaField, item.tipo_cuenta)} · {getOptionLabel(tipoMonedaField, item.tipo_moneda)}</p>
-					{#if item.cci_cuenta}<p class="text-[11px] text-slate-400 break-all">CCI: {item.cci_cuenta}</p>{/if}
+					<!-- Ticket #126 (19/11/2026, imagen de referencia): el titular va como título y debajo "Banco — N° de cuenta". -->
+					<p class="font-bold uppercase text-[#0f2a4a] break-words sm:truncate" title={item.titular_cuenta}>{item.titular_cuenta}</p>
+					<p class="text-sm font-semibold text-slate-700 break-words sm:truncate">{item.nombre_banco} — {item.numero_cuenta}</p>
+					<p class="text-[11px] text-slate-400 break-words">
+						{getOptionLabel(tipoCuentaField, item.tipo_cuenta)} · {getOptionLabel(tipoMonedaField, item.tipo_moneda)}{#if item.cci_cuenta} · <span class="break-all">CCI: {item.cci_cuenta}</span>{/if}
+					</p>
 				</div>
 				<div class="order-4 sm:order-3 basis-full sm:basis-auto pl-[52px] sm:pl-0 flex flex-wrap sm:block items-center gap-x-3 gap-y-1 sm:text-right shrink-0">
 					<span class={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${estadoBadgeClass[item.estado] ?? 'bg-slate-100 text-slate-600'}`}>
