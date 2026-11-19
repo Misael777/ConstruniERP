@@ -32,6 +32,7 @@
 	import { getMovimientosCaja } from '$lib/modules/transacciones/services/movimientosCaja.service';
 	import CuentaCobrarModal from '$lib/modules/cuentas-cobrar/components/CuentaCobrarModal.svelte';
 	import FraccionamientoModal, { type Fraccion } from '$lib/shared/components/FraccionamientoModal.svelte';
+	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import PanoramaCalendarView from '$lib/modules/panoramas/components/PanoramaCalendarView.svelte';
 
 	// Tablero de planeación de flujo de cobro: contraparte de /finanzas/cuentas-pagar/panoramas,
@@ -135,7 +136,10 @@
 	let resumen = $state<ResumenCobros>({ totalPendiente: 0, vencidoTotal: 0, vencidoCount: 0, clientesConVentas: 0 });
 
 	let cuentaModalOpen = $state(false);
-	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
+	// ?vista=calendario (botón de acceso rápido entre los calendarios de Cobros y Pagos, 19/11/2026) abre directo el Calendario.
+	let vistaActiva = $state<'tablero' | 'calendario'>(
+		typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'calendario' ? 'calendario' : 'tablero'
+	);
 
 	// Popup de cuotas: se abre haciendo clic en el icono de arrastrar (⋮⋮) de cualquier tarjeta —
 	// de la Bandeja o de un Panorama — para ver/editar el calendario de cuotas 'programado' de esa
@@ -202,18 +206,65 @@
 	 * esa cuota — antes salía una sola tarjeta en la fecha de vencimiento final con la suma, y la cuota próxima (p. ej. la
 	 * del 23/11) no se veía en su día. id negativo (-id_cobro) para no chocar con id_cuenta_cobrar. */
 	function desglosarCuotas(items: IngresoPendienteItem[]): IngresoPendienteItem[] {
+		// Título (pedido del cliente, 19/11/2026): solo "Cuota n/N" o "Pago único pendiente" — las observaciones de la
+		// cuenta ("Forma de cobranza definida al crear la venta — …") no van en el calendario.
 		return items.flatMap((item) =>
 			item.fracciones.length === 0
-				? [item]
+				? [{ ...item, titulo: 'Pago único pendiente' }]
 				: item.fracciones.map((f) => ({
 						...item,
 						id: -f.id,
-						titulo: `Cuota ${f.numeroCuota}/${f.totalCuotas} · ${item.titulo}`,
+						titulo: `Cuota ${f.numeroCuota}/${f.totalCuotas}`,
 						monto: f.monto,
 						fechaVencimiento: f.fecha,
 						fracciones: [f]
 					}))
 		);
+	}
+
+	// Ojito del Calendario (pedido del cliente, 19/11/2026): el mismo "Resumen de cobro" de la lista de Cuentas por
+	// Cobrar, en solo lectura (para registrar un cobro se usa Cuentas por Cobrar).
+	let resumenCuenta = $state<{ campos: CampoResumen[]; cuotas: CuotaResumen[]; monto: number; esObra: boolean } | null>(null);
+	async function verResumen(item: IngresoPendienteItem) {
+		try {
+			const [{ data: c, error }, cobros] = await Promise.all([
+				supabase.from('cuentas_cobrar').select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)').eq('id_cuenta_cobrar', item.id_cuenta_cobrar).maybeSingle(),
+				getCobros(supabase, item.id_cuenta_cobrar)
+			]);
+			if (error) throw error;
+			if (!c) throw new Error('No se encontró la cuenta por cobrar');
+			const hoyIso = new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+			const programadas = cobros.filter((q) => q.estado_cobro === 'programado').sort((a, b) => (a.fecha_cobro < b.fecha_cobro ? -1 : 1));
+			const fecha = (f: string | null) => (f ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : '');
+			resumenCuenta = {
+				monto: Number(c.monto ?? 0),
+				esObra: c.proyecto?.tipo_venta === 'obra',
+				campos: [
+					{ label: 'Proyecto', valor: c.proyecto?.nombre_proyecto ?? '' },
+					{ label: 'Cliente', valor: c.cliente?.nombre ?? '' },
+					{ label: 'N° documento', valor: c.num_documento ?? '' },
+					{ label: 'Valor de venta', valor: formatCurrency(Number(c.monto ?? 0)) },
+					{ label: 'Saldo pendiente', valor: formatCurrency(Number(c.saldo_pendiente ?? 0)) },
+					{ label: 'Próximo a cobrar', valor: programadas[0] ? `${formatCurrency(Number(programadas[0].monto))} · ${fecha(programadas[0].fecha_cobro)}` : '' },
+					{ label: 'Responsable', valor: c.responsable ?? '' },
+					{ label: 'Fecha de emisión', valor: fecha(c.fecha_emision) },
+					{ label: 'Fecha de vencimiento', valor: fecha(c.fecha_vencimiento) },
+					{ label: 'Observaciones', valor: c.observaciones ?? '', completo: true }
+				],
+				cuotas: cobros.map((q: any): CuotaResumen => ({
+					id: q.id_cobro,
+					monto: Number(q.monto),
+					fecha: q.fecha_cobro,
+					concepto: q.referencia ?? null,
+					estado: q.estado_cobro === 'cobrado' ? 'pagado' : q.estado_cobro === 'cancelado' ? 'anulado' : q.fecha_cobro < hoyIso ? 'vencido' : 'pendiente',
+					editable: false,
+					detraccionDe: q.es_detraccion ? (q.id_cobro_origen ?? null) : null,
+					idTransaccion: q.id_transaccion ?? null
+				}))
+			};
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo cargar el resumen de la cuenta');
+		}
 	}
 
 	function panoramaItems(id: 1 | 2) {
@@ -350,6 +401,14 @@
 			.map(([id]) => Number(id));
 		return { ids, incluirSinCentroCosto: tipo === 'otro' };
 	}
+	/** Calendario: mismas píldoras de tipo (pedido del cliente, 19/11/2026), filtrando las tarjetas por el tipo del centro de costo. */
+	function filtrarPorTipo<X extends { idCentroCosto: number | null }>(items: X[]): X[] {
+		if (!tipoFilter) return items;
+		const { ids, incluirSinCentroCosto } = idsParaTipoFiltro(tipoFilter);
+		const set = new Set(ids);
+		return items.filter((i) => (i.idCentroCosto !== null && set.has(i.idCentroCosto)) || (incluirSinCentroCosto && i.idCentroCosto === null));
+	}
+
 	function toggleTipoFilter(tipo: TipoFiltroCC) {
 		tipoFilter = tipoFilter === tipo ? null : tipo;
 		refetchOnFilterChange();
@@ -608,6 +667,11 @@
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
 			</button>
+			{#if vistaActiva === 'calendario'}
+				<button type="button" onclick={() => goto('/finanzas/cuentas-pagar/panoramas?vista=calendario')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50" title="Ir al calendario de Pagos">
+					<CalendarDays size={16} /> Calendario de Pagos
+				</button>
+			{/if}
 			<button type="button" onclick={() => (cuentaModalOpen = true)} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 				<Plus size={16} /> Nueva Cuenta por Cobrar
 			</button>
@@ -618,30 +682,28 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	{#if vistaActiva === 'tablero'}
-		<!-- Filtro "Tipo" de la Bandeja por Proyectar (ver toggleTipoFilter/fetchBandeja) — mismas píldoras que
-		     Panoramas de Pago. Solo en Tablero: Calendario no muestra la Bandeja. -->
-		<div class="flex flex-wrap gap-3 mb-4">
-			{#each [
-				{ v: 'consultoria', l: 'Consultoria', icono: Briefcase, activo: 'border-blue-300 bg-blue-50', circulo: 'bg-blue-100 text-blue-600' },
-				{ v: 'obra', l: 'Obra', icono: HardHat, activo: 'border-orange-300 bg-orange-50', circulo: 'bg-orange-100 text-orange-500' },
-				{ v: 'bolsa general', l: 'Corporativo', icono: Building2, activo: 'border-emerald-300 bg-emerald-50', circulo: 'bg-emerald-100 text-emerald-600' },
-				{ v: 'otro', l: 'Otros', icono: Ellipsis, activo: 'border-slate-400 bg-slate-100', circulo: 'bg-slate-700 text-white' }
-			] as op (op.v)}
-				<button
-					type="button"
-					onclick={() => toggleTipoFilter(op.v as TipoFiltroCC)}
-					aria-pressed={tipoFilter === op.v}
-					class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === op.v ? op.activo : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-				>
-					<div class={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${op.circulo}`}>
-						<op.icono size={14} />
-					</div>
-					<span class="font-semibold text-slate-700 text-sm">{op.l}</span>
-				</button>
-			{/each}
-		</div>
-	{/if}
+	<!-- Filtro "Tipo" de la Bandeja por Proyectar (y del Calendario, 19/11/2026) (ver toggleTipoFilter/fetchBandeja) — mismas píldoras que
+	     Panoramas de Pago. Solo en Tablero: Calendario no muestra la Bandeja. -->
+	<div class="flex flex-wrap gap-3 mb-4">
+		{#each [
+			{ v: 'consultoria', l: 'Consultoria', icono: Briefcase, activo: 'border-blue-300 bg-blue-50', circulo: 'bg-blue-100 text-blue-600' },
+			{ v: 'obra', l: 'Obra', icono: HardHat, activo: 'border-orange-300 bg-orange-50', circulo: 'bg-orange-100 text-orange-500' },
+			{ v: 'bolsa general', l: 'Corporativo', icono: Building2, activo: 'border-emerald-300 bg-emerald-50', circulo: 'bg-emerald-100 text-emerald-600' },
+			{ v: 'otro', l: 'Otros', icono: Ellipsis, activo: 'border-slate-400 bg-slate-100', circulo: 'bg-slate-700 text-white' }
+		] as op (op.v)}
+			<button
+				type="button"
+				onclick={() => toggleTipoFilter(op.v as TipoFiltroCC)}
+				aria-pressed={tipoFilter === op.v}
+				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === op.v ? op.activo : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+			>
+				<div class={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${op.circulo}`}>
+					<op.icono size={14} />
+				</div>
+				<span class="font-semibold text-slate-700 text-sm">{op.l}</span>
+			</button>
+		{/each}
+	</div>
 
 	{#if vistaActiva === 'calendario'}
 		{#if panorama1.length === 0 && panorama2.length === 0}
@@ -654,11 +716,11 @@
 				{/if}
 			</div>
 		{/if}
-		{#key panorama0Version + panorama1Version + panorama2Version}
+		{#key `${panorama0Version}-${panorama1Version}-${panorama2Version}-${tipoFilter}`}
 			<PanoramaCalendarView
 				panoramas={[
-					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: desglosarCuotas(panorama0Items) },
-					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: desglosarCuotas(panoramaItems(p.id)) }))
+					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: desglosarCuotas(filtrarPorTipo(panorama0Items)) },
+					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: desglosarCuotas(filtrarPorTipo(panoramaItems(p.id))) }))
 				]}
 				tipo="ingreso"
 				subtituloDe={(i: IngresoPendienteItem) => `Cliente: ${i.clienteNombre}`}
@@ -666,6 +728,7 @@
 				onAbrirCuotas={abrirCuotasDe}
 				{cuotasCargandoId}
 				onGuardarFechas={handleGuardarFechasCalendario}
+				onVerResumen={verResumen}
 			/>
 		{/key}
 	{:else}
@@ -1077,4 +1140,21 @@
 	onClose={() => (cuotasModalOpen = false)}
 	onConfirm={handleCuotasConfirmadas}
 	onEliminar={handleCuotasEliminadas}
+/>
+
+<ResumenCuentaModal
+	open={!!resumenCuenta}
+	titulo="Resumen de cobro"
+	tituloCronograma="Cronograma de cobranza"
+	etiquetaTotal="Valor venta"
+	textoPagado="Cobrado"
+	campos={resumenCuenta?.campos ?? []}
+	cuotas={resumenCuenta?.cuotas ?? []}
+	etiquetaPlan="Plan de pagos"
+	mostrarHito
+	soloLectura
+	esObra={resumenCuenta?.esObra ?? false}
+	montoTotal={resumenCuenta?.monto ?? 0}
+	onClose={() => (resumenCuenta = null)}
+	onEditarCuota={() => {}}
 />

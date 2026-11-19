@@ -143,6 +143,14 @@
 		return { ids, incluirSinCentroCosto: tipo === 'otro' };
 	}
 
+	/** Calendario: mismas píldoras de tipo (pedido del cliente, 19/11/2026), filtrando las tarjetas por el tipo del centro de costo. */
+	function filtrarPorTipo<X extends { idCentroCosto: number | null }>(items: X[]): X[] {
+		if (!tipoFilter) return items;
+		const { ids, incluirSinCentroCosto } = idsParaTipoFiltro(tipoFilter);
+		const set = new Set(ids);
+		return items.filter((i) => (i.idCentroCosto !== null && set.has(i.idCentroCosto)) || (incluirSinCentroCosto && i.idCentroCosto === null));
+	}
+
 	function toggleTipoFilter(tipo: TipoFiltroCC) {
 		tipoFilter = tipoFilter === tipo ? null : tipo;
 		refetchOnFilterChange();
@@ -167,7 +175,10 @@
 
 	let pagoModalOpen = $state(false);
 	let cuentaCobrarModalOpen = $state(false);
-	let vistaActiva = $state<'tablero' | 'calendario'>('tablero');
+	// ?vista=calendario (botón de acceso rápido entre los calendarios de Cobros y Pagos, 19/11/2026) abre directo el Calendario.
+	let vistaActiva = $state<'tablero' | 'calendario'>(
+		typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vista') === 'calendario' ? 'calendario' : 'tablero'
+	);
 
 	function panoramaItems(id: 1 | 2) {
 		return id === 1 ? panorama1 : panorama2;
@@ -721,6 +732,11 @@
 			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
 				<Download size={16} /> Exportar
 			</button>
+			{#if vistaActiva === 'calendario'}
+				<button type="button" onclick={() => goto('/finanzas/cuentas-cobrar/panoramas?vista=calendario')} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50" title="Ir al calendario de Cobros">
+					<CalendarDays size={16} /> Calendario de Cobros
+				</button>
+			{/if}
 			<button type="button" onclick={() => (pagoModalOpen = true)} class="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f3b5e] text-white text-sm font-medium hover:bg-[#0c2f4c]">
 				<Plus size={16} /> Nuevo Pago
 			</button>
@@ -731,54 +747,52 @@
 		<div class="mb-4 bg-red-100 text-red-700 px-4 py-2 rounded-lg text-sm">{loadError}</div>
 	{/if}
 
-	{#if vistaActiva === 'tablero'}
-		<!-- Filtro "Tipo" — a pedido explícito del usuario, con imagen de referencia: mismas píldoras
-		     compactas ya usadas en finanzas/cuentas-pagar/+page.svelte, filtran la Bandeja de Pagos
-		     Pendientes (ver toggleTipoFilter/fetchBandeja). Solo tiene sentido en Tablero: Calendario no
-		     muestra la Bandeja. -->
-		<div class="flex flex-wrap gap-3 mb-4">
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('consultoria')}
-				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
-					<Briefcase size={14} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
-			</button>
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('proyecto')}
-				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
-					<HardHat size={14} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Obra</span>
-			</button>
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('bolsa general')}
-				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
-					<Building2 size={14} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
-			</button>
-			<button
-				type="button"
-				onclick={() => toggleTipoFilter('otro')}
-				class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otro' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-			>
-				<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
-					<Ellipsis size={14} />
-				</div>
-				<span class="font-semibold text-slate-700 text-sm">Otros</span>
-			</button>
-		</div>
-	{/if}
+	<!-- (19/11/2026: también en el Calendario.) Filtro "Tipo" — a pedido explícito del usuario, con imagen de referencia: mismas píldoras
+	     compactas ya usadas en finanzas/cuentas-pagar/+page.svelte, filtran la Bandeja de Pagos
+	     Pendientes (ver toggleTipoFilter/fetchBandeja). Solo tiene sentido en Tablero: Calendario no
+	     muestra la Bandeja. -->
+	<div class="flex flex-wrap gap-3 mb-4">
+		<button
+			type="button"
+			onclick={() => toggleTipoFilter('consultoria')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'consultoria' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+				<Briefcase size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Consultoria</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilter('proyecto')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'proyecto' ? 'border-orange-300 bg-orange-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-orange-100 text-orange-500 flex items-center justify-center shrink-0">
+				<HardHat size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Obra</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilter('bolsa general')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'bolsa general' ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+				<Building2 size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Corporativo</span>
+		</button>
+		<button
+			type="button"
+			onclick={() => toggleTipoFilter('otro')}
+			class={`flex items-center gap-2 pl-2 pr-4 py-2 rounded-full border text-left transition-colors ${tipoFilter === 'otro' ? 'border-slate-400 bg-slate-100' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
+		>
+			<div class="w-7 h-7 rounded-full bg-slate-700 text-white flex items-center justify-center shrink-0">
+				<Ellipsis size={14} />
+			</div>
+			<span class="font-semibold text-slate-700 text-sm">Otros</span>
+		</button>
+	</div>
 
 	{#if vistaActiva === 'calendario'}
 		{#if panorama1.length === 0 && panorama2.length === 0}
@@ -791,7 +805,7 @@
 				{/if}
 			</div>
 		{/if}
-		{#key panorama0Version + panorama1Version + panorama2Version}
+		{#key `${panorama0Version}-${panorama1Version}-${panorama2Version}-${tipoFilter}`}
 			<!-- A pedido del usuario: el calendario debe mostrar TODAS las cuentas por pagar en su fecha
 			     correspondiente — antes, una cuenta sin fecha_pago_programada explícita (ej. recién
 			     creada al Contado, que arranca en blanco hasta que alguien la completa a mano, ver
@@ -804,8 +818,8 @@
 			     cuenta aparece igual, ubicada en su fecha de vencimiento hasta que se arrastre a otra. -->
 			<PanoramaCalendarView
 				panoramas={[
-					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: itemsCalendario(desglosarEnTarjetas(panorama0Items)) },
-					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: itemsCalendario(panoramaItems(p.id)) }))
+					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: itemsCalendario(desglosarEnTarjetas(filtrarPorTipo(panorama0Items))) },
+					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: itemsCalendario(filtrarPorTipo(panoramaItems(p.id))) }))
 				]}
 				tipo="egreso"
 				subtituloDe={(i: PagoPendienteItem) => `Proveedor: ${i.proveedorNombre}`}
