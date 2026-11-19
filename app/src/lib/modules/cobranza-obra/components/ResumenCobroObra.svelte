@@ -9,7 +9,7 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
-	import { hasPermiso } from '$lib/stores/permisos.svelte';
+	import { hasPermiso, isAdmin } from '$lib/stores/permisos.svelte';
 	import { toast } from '$lib/stores/toast';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import {
@@ -41,6 +41,8 @@
 	let error = $state('');
 	let abiertos = $state<Record<string, boolean>>({});
 	const puedeGestionar = $derived(!soloLectura && hasPermiso('gestionar_valorizaciones'));
+	// A pedido del usuario (18/11/2026): el lápiz (editar valorización / pago) solo para administradores.
+	const puedeEditar = $derived(puedeGestionar && isAdmin());
 
 	async function cargar() {
 		if (!idCuentaCobrar) return;
@@ -70,8 +72,9 @@
 	const etiquetaEstadoPago: Record<PagoObra['estado'], string> = { cobrado: 'Cobrado', pendiente: 'Pendiente', vencido: 'Vencido' };
 	const estadoVal: Record<GrupoObra['estado'], { texto: string; clase: string; punto: string }> = {
 		completada: { texto: 'Completada', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200', punto: 'bg-emerald-500' },
-		en_proceso: { texto: 'En proceso', clase: 'bg-amber-50 text-amber-700 border-amber-200', punto: 'bg-amber-500' },
-		pendiente: { texto: 'Pendiente', clase: 'bg-slate-100 text-slate-600 border-slate-200', punto: 'bg-slate-400' }
+		// Pendiente en naranja (ámbar), como en Cuentas por Cobrar/Pagar; "En proceso" en azul para distinguirlo.
+		en_proceso: { texto: 'En proceso', clase: 'bg-blue-50 text-blue-700 border-blue-200', punto: 'bg-blue-500' },
+		pendiente: { texto: 'Pendiente', clase: 'bg-amber-50 text-amber-700 border-amber-300', punto: 'bg-amber-500' }
 	};
 
 	// ---- Formularios en línea (valorización / pago) ----
@@ -284,8 +287,13 @@
 											</td>
 											<td class="py-2 px-2 text-center"><span class={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${ev.clase}`}><span class={`w-1.5 h-1.5 rounded-full ${ev.punto}`}></span>{ev.texto}</span></td>
 											<td class="py-2 px-2 text-center whitespace-nowrap">
-												{#if puedeGestionar}
+												{#if comprobantesDe(g) > 0}
+													<button type="button" onclick={() => verComprobante(g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null)} class="p-1 text-slate-500 hover:text-[#0f3b5e]" title="Ver voucher del cobro" aria-label="Ver voucher del cobro"><i class="fas fa-eye"></i></button>
+												{/if}
+												{#if puedeEditar}
 													<button type="button" onclick={() => (formVal = { idGrupo: g.id_grupo, monto: String(g.total), observaciones: g.observaciones ?? '' })} class="p-1 text-blue-600" title="Editar valorización" aria-label="Editar valorización"><i class="fas fa-pen"></i></button>
+												{/if}
+												{#if puedeGestionar}
 													<button type="button" onclick={() => ejecutar(() => eliminarValorizacion(supabase, g.id_grupo), 'Valorización eliminada.')} class="p-1 text-rose-500" title="Eliminar valorización" aria-label="Eliminar valorización"><i class="fas fa-trash-alt"></i></button>
 												{/if}
 											</td>
@@ -314,8 +322,10 @@
 																	</td>
 																	<td class="py-1 text-center whitespace-nowrap">
 																		{#if p.comprobante_url}<button type="button" onclick={() => verComprobante(p.comprobante_url)} class="p-1 text-slate-500" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{/if}
-																		{#if puedeGestionar && p.estado !== 'cobrado'}
+																		{#if puedeEditar && p.estado !== 'cobrado'}
 																			<button type="button" onclick={() => (formPago = { idGrupo: g.id_grupo, idCobro: p.id_cobro, monto: String(montoBruto(p)), fecha: p.fecha, partida: p.partida ?? '' })} class="p-1 text-blue-600" aria-label="Editar pago"><i class="fas fa-pen"></i></button>
+																		{/if}
+																		{#if puedeGestionar && p.estado !== 'cobrado'}
 																			<button type="button" onclick={() => ejecutar(() => eliminarPago(supabase, p.id_cobro), 'Pago eliminado.')} class="p-1 text-rose-500" aria-label="Eliminar pago"><i class="fas fa-trash-alt"></i></button>
 																		{/if}
 																	</td>

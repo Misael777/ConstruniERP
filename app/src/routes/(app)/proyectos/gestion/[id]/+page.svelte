@@ -14,6 +14,7 @@
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
 	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import CuentaCobrarObraFactura from '$lib/modules/cobranza-obra/components/CuentaCobrarObraFactura.svelte';
 
 	let projectId = $state<string | undefined>(undefined);
 	let lastLoadedProjectId = $state<string | undefined>(undefined);
@@ -48,6 +49,7 @@
 		asesor_comercial_id: string;
 		comision_asesor: number;
 		cliente?: { nombre: string } | null;
+		tipo_venta?: string | null;
 	};
 
 	// Campos realmente editables desde este tab — deja fuera ids crudos
@@ -265,10 +267,29 @@
 		}
 	}
 
+	// Cuenta por cobrar de la venta de Obra (formato factura, 18/11/2026): se ve aquí apenas se genera al cerrar la venta.
+	let idCuentaObra = $state<number | null>(null);
+	let facturaObraEditar = $state(false);
+	let facturaObraRecargar = $state(0);
+	async function loadCuentaObra() {
+		idCuentaObra = null;
+		if (!proyecto || proyecto.tipo_venta !== 'obra') return;
+		const { data } = await supabase
+			.from('cuentas_cobrar')
+			.select('id_cuenta_cobrar')
+			.eq('id_proyecto', proyecto.id_proyecto)
+			.eq('activo', true)
+			.order('id_cuenta_cobrar', { ascending: false })
+			.limit(1)
+			.maybeSingle();
+		idCuentaObra = data?.id_cuenta_cobrar ?? null;
+	}
+
 	$effect(() => {
 		if (activeTab === 'venta' && proyecto) {
 			loadProformasProyecto();
 			loadAdelantosProyecto();
+			loadCuentaObra();
 		}
 	});
 
@@ -571,6 +592,20 @@
 		{/if}
 
 		{#if activeTab === 'venta'}
+			{#if idCuentaObra}
+				<section class="animate-in fade-in duration-300 mb-8">
+					<h3 class="text-lg font-bold text-slate-800 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">
+						<i class="fas fa-file-invoice-dollar text-orange-500"></i> Cuenta por cobrar
+					</h3>
+					<CuentaCobrarObraFactura modo="embebido" soloLectura idCuentaCobrar={idCuentaObra} recargar={facturaObraRecargar} onEditar={() => (facturaObraEditar = true)} />
+				</section>
+				<CuentaCobrarObraFactura
+					open={facturaObraEditar}
+					idCuentaCobrar={facturaObraEditar ? idCuentaObra : null}
+					onClose={() => (facturaObraEditar = false)}
+					onSaved={() => facturaObraRecargar++}
+				/>
+			{/if}
 			<div class="animate-in fade-in duration-300 max-w-4xl space-y-8">
 				<!-- Proformas -->
 				<section>

@@ -452,7 +452,7 @@ async function validarPago(client: SupabaseClient, idGrupo: number, monto: numbe
 	return { grupo: g };
 }
 
-export async function agregarPago(client: SupabaseClient, idGrupo: number, p: { monto: number; fecha: string; partida?: string | null }, usuario: string | null) {
+export async function agregarPago(client: SupabaseClient, idGrupo: number, p: { monto: number; fecha: string; partida?: string | null; observacion?: string | null }, usuario: string | null) {
 	const v = await validarPago(client, idGrupo, p.monto);
 	if ('error' in v) return { success: false as const, message: v.error! };
 	if (!p.fecha) return { success: false as const, message: 'Indica la fecha estimada del pago.' };
@@ -467,6 +467,7 @@ export async function agregarPago(client: SupabaseClient, idGrupo: number, p: { 
 			monto: neto,
 			fecha_cobro: p.fecha,
 			partida: p.partida?.trim()?.slice(0, 200) || null,
+			referencia: p.observacion?.trim()?.slice(0, 100) || null,
 			estado_cobro: 'programado',
 			usuario_registro: usuario
 		})
@@ -490,7 +491,7 @@ export async function agregarPago(client: SupabaseClient, idGrupo: number, p: { 
 }
 
 /** Solo pagos pendientes (programados): uno cobrado se corrige desde su transacción. */
-export async function editarPago(client: SupabaseClient, idCobro: number, p: { monto: number; fecha: string; partida?: string | null }) {
+export async function editarPago(client: SupabaseClient, idCobro: number, p: { monto: number; fecha: string; partida?: string | null; observacion?: string | null }) {
 	const { data: c } = await client.from('cobros').select('id_grupo, estado_cobro, id_cuenta_cobrar').eq('id_cobro', idCobro).single();
 	if (!c?.id_grupo) return { success: false as const, message: 'Pago no encontrado.' };
 	if (c.estado_cobro !== 'programado') return { success: false as const, message: 'El pago ya está cobrado: corrígelo desde su transacción.' };
@@ -498,7 +499,10 @@ export async function editarPago(client: SupabaseClient, idCobro: number, p: { m
 	if ('error' in v) return { success: false as const, message: v.error! };
 	const pct = await getPorcentajeDetraccionCuenta(client, c.id_cuenta_cobrar);
 	const { neto, detraccion } = partirDetraccion(p.monto, pct);
-	const { error } = await client.from('cobros').update({ monto: neto, fecha_cobro: p.fecha, partida: p.partida?.trim()?.slice(0, 200) || null }).eq('id_cobro', idCobro);
+	const cambios: Record<string, unknown> = { monto: neto, fecha_cobro: p.fecha, partida: p.partida?.trim()?.slice(0, 200) || null };
+	// undefined = no se tocó (el Resumen de cobro no la edita); string = la observación del pago (cobros.referencia).
+	if (p.observacion !== undefined) cambios.referencia = p.observacion?.trim()?.slice(0, 100) || null;
+	const { error } = await client.from('cobros').update(cambios).eq('id_cobro', idCobro);
 	if (error) return { success: false as const, message: error.message };
 	const errDet = await actualizarDetraccionDe(client, {
 		idCuentaCobrar: c.id_cuenta_cobrar,
@@ -591,4 +595,87 @@ export async function asegurarCuentaObra(
 	}
 	await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: idCuenta });
 	return { idCuentaCobrar: idCuenta! };
+}
+
+// ---- Cuenta por cobrar de obra en formato factura (a pedido del usuario, 18/11/2026) ----
+
+export interface CabeceraCuentaObra {
+	id_cuenta_cobrar: number;
+	/** Código para mostrar: CXC-<código del centro de costo de la obra> (o CXC-<id> si no tiene). */
+	folio: string;
+	estado: string;
+	clienteNombre: string;
+	clienteDocumento: string;
+	centroCosto: string;
+	proyectoNombre: string;
+	responsable: string | null;
+	moneda: string;
+	tipo_cambio: number | null;
+	fecha_emision: string | null;
+	prioridad: string | null;
+	observaciones: string | null;
+}
+
+/** Cabecera de la cuenta (cliente, obra, responsable…). Cliente, centro de costo, proyecto y moneda vienen de la
+ * venta y no se editan aquí: cambiarlos desconectaría la cuenta de las transacciones ya registradas. */
+export async function getCabeceraCuentaObra(client: SupabaseClient, idCuentaCobrar: number): Promise<CabeceraCuentaObra> {
+	const { data, error } = await client
+		.from('cuentas_cobrar')
+		.select('id_cuenta_cobrar, estado, responsable, moneda, tipo_cambio, fecha_emision, prioridad, observaciones, cliente(nombre, tipo_doc, num_documento), centro_costo(codigo, nombre), proyecto(nombre_proyecto)')
+		.eq('id_cuenta_cobrar', idCuentaCobrar)
+		.single();
+	if (error || !data) throw error ?? new Error('Cuenta por cobrar no encontrada');
+	const uno = <T>(x: T | T[] | null | undefined): T | null => (Array.isArray(x) ? (x[0] ?? null) : (x ?? null));
+	const cli = uno((data as any).cliente) as { nombre: string; tipo_doc: string | null; num_documento: string | null } | null;
+	const cc = uno((data as any).centro_costo) as { codigo: string | null; nombre: string } | null;
+	const pr = uno((data as any).proyecto) as { nombre_proyecto: string | null } | null;
+	const tipoDoc = cli?.num_documento ? (cli.num_documento.length === 11 ? 'RUC' : (cli.tipo_doc?.trim() || 'DNI')) : '';
+	return {
+		id_cuenta_cobrar: data.id_cuenta_cobrar,
+		folio: `CXC-${cc?.codigo?.trim() || String(data.id_cuenta_cobrar).padStart(4, '0')}`,
+		estado: data.estado ?? 'pendiente',
+		clienteNombre: cli?.nombre ?? '',
+		clienteDocumento: cli?.num_documento ? `${tipoDoc} ${cli.num_documento}` : '',
+		centroCosto: cc ? [cc.codigo, cc.nombre].filter(Boolean).join(' · ') : '',
+		proyectoNombre: pr?.nombre_proyecto ?? '',
+		responsable: data.responsable ?? null,
+		moneda: data.moneda ?? 'PEN',
+		tipo_cambio: data.tipo_cambio != null ? Number(data.tipo_cambio) : null,
+		fecha_emision: data.fecha_emision ?? null,
+		prioridad: data.prioridad ?? null,
+		observaciones: data.observaciones ?? null
+	};
+}
+
+/** Solo los datos administrativos de la cabecera (no tocan montos ni cuotas, así que no pasan por el bloqueo de
+ * transacciones aprobadas de updateCuentaCobrar). Moneda y tipo de cambio (a pedido del usuario, 18/11/2026): el
+ * monto sigue en soles (valor de venta); con Dólares se guarda el tipo de cambio y el equivalente en monto_dolares,
+ * igual que el formulario general de Cuentas por Cobrar. */
+export async function actualizarCabeceraCuentaObra(
+	client: SupabaseClient,
+	idCuentaCobrar: number,
+	c: { responsable: string | null; fecha_emision: string; prioridad: string | null; observaciones: string | null; moneda?: 'PEN' | 'USD'; tipo_cambio?: number | null }
+) {
+	if (!c.fecha_emision) return { success: false as const, message: 'Indica la fecha de emisión.' };
+	const cambios: Record<string, unknown> = {
+		responsable: c.responsable?.trim()?.slice(0, 100) || null,
+		fecha_emision: c.fecha_emision,
+		prioridad: c.prioridad || null,
+		observaciones: c.observaciones?.trim()?.slice(0, 200) || null
+	};
+	if (c.moneda === 'USD') {
+		const tc = Math.round(Number(c.tipo_cambio) * 100) / 100;
+		if (!(tc > 0)) return { success: false as const, message: 'Con moneda Dólares, indica el tipo de cambio (mayor a 0).' };
+		const { data: cuenta, error: errMonto } = await client.from('cuentas_cobrar').select('monto').eq('id_cuenta_cobrar', idCuentaCobrar).single();
+		if (errMonto) return { success: false as const, message: errMonto.message };
+		cambios.moneda = 'USD';
+		cambios.tipo_cambio = tc;
+		cambios.monto_dolares = Math.round((Number(cuenta?.monto ?? 0) / tc) * 100) / 100;
+	} else if (c.moneda === 'PEN') {
+		cambios.moneda = 'PEN';
+		cambios.tipo_cambio = null;
+		cambios.monto_dolares = null;
+	}
+	const { error } = await client.from('cuentas_cobrar').update(cambios).eq('id_cuenta_cobrar', idCuentaCobrar);
+	return error ? { success: false as const, message: error.message } : { success: true as const };
 }

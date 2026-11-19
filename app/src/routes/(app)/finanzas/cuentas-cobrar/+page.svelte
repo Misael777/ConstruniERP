@@ -11,6 +11,7 @@
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar, prepararTransaccionDeCuota } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import ResumenCobroObra from '$lib/modules/cobranza-obra/components/ResumenCobroObra.svelte';
+	import CuentaCobrarObraFactura from '$lib/modules/cobranza-obra/components/CuentaCobrarObraFactura.svelte';
 	import { cuentaTieneGrupos } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
@@ -453,6 +454,12 @@
 		}
 	}
 	function openEdit(item: CuentaCobrar) {
+		// Cuenta de un proyecto de Obra (tenga o no adelantos/valorizaciones todavía): se edita en formato factura (18/11/2026).
+		if (item.proyecto?.tipo_venta === 'obra') {
+			selectedId = item.id_cuenta_cobrar;
+			facturaObraOpen = true;
+			return;
+		}
 		modalMode = 'edit';
 		editingCuenta = item;
 		clienteBloqueado = false;
@@ -628,6 +635,8 @@
 	// Finanzas de Obras: una cuenta de Obra con adelantos/valorizaciones (cobro_grupo) abre su propio Resumen de cobro.
 	let resumenObraOpen = $state(false);
 	let resumenObraRecargar = $state(0);
+	/** Cuenta por cobrar de Obra en formato factura (editar, y último paso del cierre de una venta de Obra). */
+	let facturaObraOpen = $state(false);
 	async function cobrarPagoObra(idCobro: number) {
 		const r = await prepararTransaccionDeCuota(supabase, idCobro);
 		if (!r.success) {
@@ -652,6 +661,12 @@
 			}
 			item = data as CuentaCobrar;
 			items = [item, ...items];
+		}
+		// Venta de Obra: se termina de elaborar su cuenta por cobrar en formato factura (valorizaciones y pagos).
+		if (item.proyecto?.tipo_venta === 'obra') {
+			selectedId = item.id_cuenta_cobrar;
+			facturaObraOpen = true;
+			return;
 		}
 		await openResumen(item);
 	}
@@ -1358,6 +1373,17 @@
 		resumenObraOpen = false;
 		fetchList();
 	}}
+	onCobrarPago={cobrarPagoObra}
+/>
+<CuentaCobrarObraFactura
+	open={facturaObraOpen}
+	idCuentaCobrar={facturaObraOpen ? selectedId : null}
+	recargar={resumenObraRecargar}
+	onClose={() => {
+		facturaObraOpen = false;
+		fetchList();
+	}}
+	onSaved={() => fetchList()}
 	onCobrarPago={cobrarPagoObra}
 />
 <CobroModal

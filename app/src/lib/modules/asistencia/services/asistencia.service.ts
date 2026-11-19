@@ -1,9 +1,9 @@
 /**
  * Asistencia por trabajador: cruza sus marcaciones (asistencia_marcacion, enlazadas por pin desde cualquier
  * huellero) con su horario (horario_dia) y arma el día a día del periodo en hora de Lima.
- * Reglas: entrada = primera marca del día, salida = última; marcas a menos de 2 min de la anterior son repetidas.
- * Con 4 o más marcas en número par se suman los tramos (salió y volvió del refrigerio); si no, de entrada a salida
- * menos el refrigerio del horario. Tardanza: entrada después de hora de entrada + tolerancia (se cuenta desde la
+ * Reglas: entrada = primera marca del día, salida = última; marcas a menos de 2 min de la anterior son repetidas, y
+ * con horario fijo también las que caen a menos de 30 min de la entrada o de la salida. Las marcas del medio se
+ * ubican en la salida o la vuelta del refrigerio por cercanía (ver leerJornada). Tardanza: entrada después de hora de entrada + tolerancia (se cuenta desde la
  * hora de entrada). Horas extra: lo trabajado después de la hora de salida, o todo si el día era de descanso.
  * Horario libre (por horas): sin entrada ni salida programadas; las marcas se toman en pares (entrada→salida,
  * entrada→salida…) y se suman los tramos. Sin tardanza, faltas ni horas extra; una marca sin pareja deja el día incompleto.
@@ -14,6 +14,8 @@ import { aMinutos, esLibre, minutosDelDia, type Horario, type HorarioDia } from 
 
 const LIMA_MS = 5 * 3_600_000;
 const MARCA_REPETIDA_MIN = 2;
+/** Con horario fijo: marcas a menos de esto de la entrada (o de la salida) son la misma entrada (o salida) repetida. */
+export const MARCA_REPETIDA_JORNADA_MIN = 30;
 /** Eventos del huellero en modo control de acceso desde 20 son verificaciones rechazadas, no asistencia. */
 const EVENTO_RECHAZO = 20;
 
@@ -125,6 +127,49 @@ export async function getMarcas(client: SupabaseClient, pin: string, desde: stri
 /** Minutos en que [a, b] se cruza con [c, d]. */
 const cruce = (a: number, b: number, c: number, d: number) => Math.max(0, Math.min(b, d) - Math.max(a, c));
 
+/**
+ * Entrada, salida y minutos trabajados de un día con horario fijo (o sin horario), a partir de las marcas del día
+ * (minutos, en orden, ya sin las repetidas a menos de 2 min). A pedido del usuario (18/11/2026): una marca de más
+ * (p. ej. 07:30 y otra vez 07:40 porque no vio el aviso del huellero) no debe correr las demás.
+ * - Entrada = primera marca; las que siguen a menos de MARCA_REPETIDA_JORNADA_MIN son la misma entrada repetida.
+ * - Salida = última marca, si está a más de ese margen de la entrada (si no, el día sigue sin salida); las que la
+ *   preceden dentro de ese margen son la misma salida repetida.
+ * - Marcas del medio, con refrigerio en el horario: cada una va a la salida o a la vuelta del refrigerio según cuál
+ *   le quede más cerca (vale la primera de cada grupo). Con las dos, se suman los tramos reales; si falta alguna, de
+ *   entrada a salida menos el refrigerio del horario.
+ * - Sin refrigerio en el horario (o día de descanso): marcas del medio en número par = se suman los tramos; si no,
+ *   de entrada a salida.
+ */
+export function leerJornada(
+	marcas: number[],
+	programado: Pick<HorarioDia, 'refrigerio_inicio' | 'refrigerio_fin'> | null
+): { entrada: number | null; salida: number | null; trabajados: number } {
+	if (!marcas.length) return { entrada: null, salida: null, trabajados: 0 };
+	const entrada = marcas[0];
+	const ultima = marcas.at(-1)!;
+	if (ultima - entrada < MARCA_REPETIDA_JORNADA_MIN) return { entrada, salida: null, trabajados: 0 };
+	const salida = ultima;
+	const medio = marcas.filter((x) => x - entrada >= MARCA_REPETIDA_JORNADA_MIN && salida - x >= MARCA_REPETIDA_JORNADA_MIN);
+
+	const refIni = programado?.refrigerio_inicio ? aMinutos(programado.refrigerio_inicio) : null;
+	const refFin = programado?.refrigerio_fin ? aMinutos(programado.refrigerio_fin) : null;
+	if (refIni != null && refFin != null) {
+		const mitad = (refIni + refFin) / 2;
+		const sale = medio.find((x) => x <= mitad);
+		const vuelve = medio.find((x) => x > mitad);
+		const trabajados =
+			sale != null && vuelve != null ? sale - entrada + (salida - vuelve) : salida - entrada - cruce(entrada, salida, refIni, refFin);
+		return { entrada, salida, trabajados };
+	}
+	if (medio.length && medio.length % 2 === 0) {
+		const puntos = [entrada, ...medio, salida];
+		let trabajados = 0;
+		for (let i = 0; i < puntos.length; i += 2) trabajados += puntos[i + 1] - puntos[i];
+		return { entrada, salida, trabajados };
+	}
+	return { entrada, salida, trabajados: salida - entrada };
+}
+
 /** Día a día de `desde` a `hasta` (sin pasar de hoy). `horario` null = trabajador sin horario asignado. */
 export function calcularAsistencia(
 	marcas: Marca[],
@@ -145,21 +190,19 @@ export function calcularAsistencia(
 			const anterior = delDia.at(-1);
 			if (!anterior || m.minuto - anterior.minuto >= MARCA_REPETIDA_MIN) delDia.push(m);
 		}
-		const entrada = delDia[0]?.minuto ?? null;
-		// Libre: con número impar de marcas la última es una entrada sin salida todavía.
-		const salida = delDia.length > 1 && (!libre || delDia.length % 2 === 0) ? delDia.at(-1)!.minuto : null;
-
+		let entrada: number | null;
+		let salida: number | null;
 		let trabajados = 0;
 		if (libre) {
+			entrada = delDia[0]?.minuto ?? null;
+			// Libre: con número impar de marcas la última es una entrada sin salida todavía.
+			salida = delDia.length > 1 && delDia.length % 2 === 0 ? delDia.at(-1)!.minuto : null;
 			for (let i = 0; i + 1 < delDia.length; i += 2) trabajados += delDia[i + 1].minuto - delDia[i].minuto;
-		} else if (entrada != null && salida != null) {
-			if (delDia.length >= 4 && delDia.length % 2 === 0) {
-				for (let i = 0; i < delDia.length; i += 2) trabajados += delDia[i + 1].minuto - delDia[i].minuto;
-			} else {
-				trabajados = salida - entrada;
-				if (programado?.refrigerio_inicio && programado.refrigerio_fin)
-					trabajados -= cruce(entrada, salida, aMinutos(programado.refrigerio_inicio), aMinutos(programado.refrigerio_fin));
-			}
+		} else {
+			({ entrada, salida, trabajados } = leerJornada(
+				delDia.map((x) => x.minuto),
+				programado
+			));
 		}
 
 		let tardanza = 0;

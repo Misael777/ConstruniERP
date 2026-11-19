@@ -57,6 +57,42 @@ describe('calcularAsistencia', () => {
 		const [d] = calcularAsistencia([m('2026-10-26', '07:30'), m('2026-10-26', '12:00'), m('2026-10-26', '13:30'), m('2026-10-26', '17:00')], civil, '2026-10-26', '2026-10-26', '2026-11-02', sinContrato);
 		expect(d.trabajados).toBe(270 + 210);
 	});
+	// Marca de más al llegar (07:30 y 07:40): no debe correr las demás (a pedido del usuario, 18/11/2026).
+	const dia = (...horas: string[]) =>
+		calcularAsistencia(horas.map((h) => m('2026-10-26', h)), civil, '2026-10-26', '2026-10-26', '2026-11-02', sinContrato)[0];
+	it('07:30 y 07:40 solas: es la entrada repetida, el día queda sin salida (no "puntual" con 10 min)', () => {
+		const d = dia('07:30', '07:40');
+		expect(d.estado).toBe('incompleto');
+		expect(d.salida).toBeNull();
+		expect(d.trabajados).toBe(0);
+	});
+	it('07:30 y 07:40 hoy: sigue en jornada', () => {
+		const [d] = calcularAsistencia([m('2026-10-26', '07:30'), m('2026-10-26', '07:40')], civil, '2026-10-26', '2026-10-26', '2026-10-26', sinContrato);
+		expect(d.estado).toBe('en_curso');
+	});
+	it('07:30 · 07:40 · 12:00 · 17:00: refrigerio sin vuelta marcada → se descuenta el del horario', () => {
+		expect(dia('07:30', '07:40', '12:00', '17:00').trabajados).toBe(8 * 60 + 30);
+	});
+	it('07:30 · 07:40 · 12:00 · 13:00 · 17:00: tramos reales', () => {
+		expect(dia('07:30', '07:40', '12:00', '13:00', '17:00').trabajados).toBe(8 * 60 + 30);
+	});
+	it('07:30 · 07:40 · 12:00 · 13:00 (se fue sin marcar): salida 13:00 con salida anticipada', () => {
+		const d = dia('07:30', '07:40', '12:00', '13:00');
+		expect(d.salida).toBe(13 * 60);
+		expect(d.trabajados).toBe(4 * 60 + 30);
+		expect(d.salidaAnticipada).toBe(4 * 60);
+	});
+	it('salida repetida (16:58 y 17:05): vale la última', () => {
+		const d = dia('07:30', '12:02', '12:58', '16:58', '17:05');
+		expect(d.salida).toBe(17 * 60 + 5);
+		expect(d.trabajados).toBe(4 * 60 + 32 + 4 * 60 + 7);
+	});
+	it('vuelta del refrigerio repetida (12:58 y 13:00): vale la primera', () => {
+		expect(dia('07:28', '12:02', '12:58', '13:00', '17:05').trabajados).toBe(4 * 60 + 34 + 4 * 60 + 7);
+	});
+	it('3 marcas con la del medio en el refrigerio: se descuenta el del horario', () => {
+		expect(dia('07:30', '12:00', '17:00').trabajados).toBe(8 * 60 + 30);
+	});
 	it('antes del ingreso no cuenta como falta', () => {
 		const [d] = calcularAsistencia([], civil, '2026-10-26', '2026-10-26', '2026-11-02', { ingreso: '2026-10-27', cese: null });
 		expect(d.estado).toBe('fuera_contrato');
