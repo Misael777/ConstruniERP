@@ -946,6 +946,20 @@ export async function getResumenPagos(client: SupabaseClient): Promise<ResumenPa
 
 /** Reprograma fecha_vencimiento de una o más cuentas por cobrar (drag-and-drop en la vista Calendario
  * de Panoramas de Cobro) — inverso de actualizarFechasVencimientoPago. */
+/** Reprograma cuotas 'programado' de cuentas por cobrar (cobros.fecha_cobro) — desde el Calendario de Panoramas de
+ * Cobro, donde cada cuota de una cuenta fraccionada es su propia tarjeta (19/11/2026). */
+export async function actualizarFechasCuotasCobro(
+	client: SupabaseClient,
+	cambios: { idCobro: number; fecha: string }[]
+): Promise<{ success: boolean; message: string }> {
+	const results = await Promise.all(
+		cambios.map((c) => client.from('cobros').update({ fecha_cobro: c.fecha }).eq('id_cobro', c.idCobro).eq('estado_cobro', 'programado'))
+	);
+	const failed = results.find((r) => r.error);
+	if (failed?.error) return { success: false, message: `No se pudieron actualizar las fechas de las cuotas: ${failed.error.message}` };
+	return { success: true, message: 'Fechas actualizadas' };
+}
+
 export async function actualizarFechasVencimientoCobro(
 	client: SupabaseClient,
 	cambios: { id: number; fecha: string }[]

@@ -16,6 +16,7 @@
 		getResumenCobros,
 		getProyectoOptions,
 		actualizarFechasVencimientoCobro,
+		actualizarFechasCuotasCobro,
 		getTodasLasCuentasPorCobrarPendientes,
 		reorderPanoramaCobro,
 		moverFraccionAPanoramaCobro,
@@ -196,6 +197,24 @@
 	let panorama1Version = $state(0);
 	let panorama2Version = $state(0);
 	let panorama0Version = $state(0);
+
+	/** Calendario (19/11/2026): una cuenta fraccionada se muestra como una tarjeta POR CUOTA, en la fecha y por el monto de
+	 * esa cuota — antes salía una sola tarjeta en la fecha de vencimiento final con la suma, y la cuota próxima (p. ej. la
+	 * del 23/11) no se veía en su día. id negativo (-id_cobro) para no chocar con id_cuenta_cobrar. */
+	function desglosarCuotas(items: IngresoPendienteItem[]): IngresoPendienteItem[] {
+		return items.flatMap((item) =>
+			item.fracciones.length === 0
+				? [item]
+				: item.fracciones.map((f) => ({
+						...item,
+						id: -f.id,
+						titulo: `Cuota ${f.numeroCuota}/${f.totalCuotas} · ${item.titulo}`,
+						monto: f.monto,
+						fechaVencimiento: f.fecha,
+						fracciones: [f]
+					}))
+		);
+	}
 
 	function panoramaItems(id: 1 | 2) {
 		return id === 1 ? panorama1 : panorama2;
@@ -516,8 +535,22 @@
 	 * y el propio calendario — incluido Panorama Actual, venga el cambio de él mismo o de un
 	 * "Establecer como panorama actual" en P1/P2 — queden en sincro sin recargar. */
 	async function handleGuardarFechasCalendario(panoramaId: 0 | 1 | 2, cambios: { id: number; fechaNueva: string }[]) {
-		const result = await actualizarFechasVencimientoCobro(supabase, cambios.map((c) => ({ id: c.id, fecha: c.fechaNueva })));
-		if (!result.success) throw new Error(result.message);
+		// Tarjeta-cuota (id negativo = -id_cobro, ver desglosarCuotas): se reprograma esa cuota, no la cuenta.
+		const deCuotas = cambios.filter((c) => c.id < 0);
+		const deCuentas = cambios.filter((c) => c.id > 0);
+		if (deCuotas.length) {
+			const r = await actualizarFechasCuotasCobro(supabase, deCuotas.map((c) => ({ idCobro: -c.id, fecha: c.fechaNueva })));
+			if (!r.success) throw new Error(r.message);
+		}
+		if (deCuentas.length) {
+			const result = await actualizarFechasVencimientoCobro(supabase, deCuentas.map((c) => ({ id: c.id, fecha: c.fechaNueva })));
+			if (!result.success) throw new Error(result.message);
+		}
+		if (deCuotas.length) {
+			await fetchPanoramas();
+			toast.success(panoramaId === 0 ? 'Fechas actualizadas' : 'Panorama establecido como actual');
+			return;
+		}
 		const mapa = new Map(cambios.map((c) => [c.id, c.fechaNueva]));
 		const parchear = (items: IngresoPendienteItem[]) => items.map((i) => (mapa.has(i.id) ? { ...i, fechaVencimiento: mapa.get(i.id)! } : i));
 		bandeja = parchear(bandeja);
@@ -624,8 +657,8 @@
 		{#key panorama0Version + panorama1Version + panorama2Version}
 			<PanoramaCalendarView
 				panoramas={[
-					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: panorama0Items },
-					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: panoramaItems(p.id) }))
+					{ id: 0, nombre: 'Panorama Actual', subtitulo: 'Estado real de la cartera', modo: 'actual', items: desglosarCuotas(panorama0Items) },
+					...PANORAMAS.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, modo: 'escenario' as const, items: desglosarCuotas(panoramaItems(p.id)) }))
 				]}
 				tipo="ingreso"
 				subtituloDe={(i: IngresoPendienteItem) => `Cliente: ${i.clienteNombre}`}
