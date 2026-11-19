@@ -9,6 +9,10 @@
 		 * recién se escribe en la BD cuando el usuario pulsa "Establecer como panorama actual". */
 		modo: 'actual' | 'escenario';
 	}
+
+	/** Semana/mes que se está viendo, por tipo de calendario (19/11/2026): el calendario se vuelve a montar al cambiar un
+	 * filtro o al guardar, y antes volvía a la semana actual. Vive mientras la app esté abierta. */
+	const navegacion: Record<string, { cursor: number; vista: 'semana' | 'mes' }> = {};
 </script>
 
 <script lang="ts" generics="T extends { id: number; titulo: string; monto: number; fechaVencimiento: string | null; pagado?: boolean }">
@@ -27,6 +31,7 @@
 	// Map compartido, para que confirmar/descartar en un panorama no toque a los otros dos.
 	import { dndzone } from 'svelte-dnd-action';
 	import { ChevronLeft, ChevronRight, Pencil, Eye, Loader2, Lock, Copy, CalendarDays, ArrowUpRight } from '@lucide/svelte';
+	import { untrack } from 'svelte';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 
 	const {
@@ -105,11 +110,16 @@
 		return d;
 	}
 
-	let vista = $state<'semana' | 'mes'>('semana');
+	// Al montar se retoma la semana/mes guardada (valor inicial a propósito: tipo no cambia en vida del componente).
+	const navInicial = untrack(() => navegacion[tipo]);
+	let vista = $state<'semana' | 'mes'>(navInicial?.vista ?? 'semana');
 	/** Fecha ancla de navegación: en vista semana se usa para ubicar la semana (lunes...domingo);
 	 * en vista mes, su año/mes definen el mes mostrado. Se guarda como el día real (no el lunes de
 	 * su semana) para no "saltar" de mes al abrir en un día cercano al inicio/fin de semana. */
-	let cursor = $state(hoyMedianoche());
+	let cursor = $state(navInicial ? new Date(navInicial.cursor) : hoyMedianoche());
+	$effect(() => {
+		navegacion[tipo] = { cursor: cursor.getTime(), vista };
+	});
 
 	let weekStart = $derived(startOfWeek(cursor));
 	let weekDays = $derived(Array.from({ length: 7 }, (_, i) => toISO(addDays(weekStart, i))));

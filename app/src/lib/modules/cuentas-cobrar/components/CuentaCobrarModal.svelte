@@ -543,6 +543,7 @@
 	fraccionesIniciales={fracciones}
 	metodoSugerido={formValues.forma_pago === '3' ? 'por_porcentaje' : undefined}
 	conHitoDeCobro
+	conComentarios
 	onClose={() => (fraccionamientoOpen = false)}
 	onConfirm={onFraccionesConfirmadas}
 	onEliminar={onFraccionamientoEliminado}

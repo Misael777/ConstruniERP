@@ -512,7 +512,7 @@ export async function getPrestatarioDeCuentaCobrar(client: SupabaseClient, cuent
 export async function sincronizarCuotasProgramadas(
 	client: SupabaseClient,
 	idCuentaCobrar: number,
-	fracciones: { fecha: string; monto: number; referencia?: string | null; detraccionJunto?: boolean }[],
+	fracciones: { fecha: string; monto: number; referencia?: string | null; detraccionJunto?: boolean; comentarios?: { fecha: string; texto: string; usuario?: string | null; creado?: string }[] }[],
 	opciones: { sinDetraccion?: boolean } = {}
 ): Promise<{ success: boolean; message: string }> {
 	// Finanzas de Obras: las cuotas de una cuenta de Obra están agrupadas (adelantos/valorizaciones, cobro_grupo) y
@@ -550,6 +550,8 @@ export async function sincronizarCuotasProgramadas(
 		fecha_cobro: f.fecha,
 		estado_cobro: 'programado',
 		...(f.referencia?.trim() ? { referencia: f.referencia.trim().slice(0, 100) } : {}),
+		// Solo si hay comentarios: así una base sin la migración 20261119120000 sigue guardando cuotas sin comentarios.
+		...((f as any).comentarios?.length ? { comentarios: (f as any).comentarios } : {}),
 		...((f as { detraccionJunto?: boolean }).detraccionJunto ? { detraccion_junto: true } : {})
 	}));
 	const { error: insertError } = await client.from(COBRO_TABLE).insert(filas);

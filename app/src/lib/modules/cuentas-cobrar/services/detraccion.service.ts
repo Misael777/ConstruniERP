@@ -142,6 +142,8 @@ export interface FraccionBruta {
 	referencia?: string | null;
 	/** Su detracción se cobra junto con la cuota (casilla bajo el N.° en la Forma de cobranza). */
 	detraccionJunto?: boolean;
+	/** Comentarios con fecha de la cuota (cobros.comentarios, 19/11/2026). */
+	comentarios?: { fecha: string; texto: string; usuario?: string | null; creado?: string }[];
 }
 
 /**
@@ -169,6 +171,7 @@ export function cuotasEditables(cobros: any[]): { fracciones: FraccionBruta[]; r
 			fecha: c.fecha_cobro,
 			monto: r2(Number(c.monto) + (detraccionDe.get(c.id_cobro) ?? 0)),
 			referencia: c.referencia ?? null,
+			...(Array.isArray(c.comentarios) && c.comentarios.length ? { comentarios: c.comentarios } : {}),
 			...(juntoDe.get(c.id_cobro) ? { detraccionJunto: true } : {})
 		}))
 		.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));

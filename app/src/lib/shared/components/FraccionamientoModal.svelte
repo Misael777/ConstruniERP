@@ -16,7 +16,8 @@
 	 * payload al guardar la cuenta — ver sincronizarCuotasProgramadas en cada servicio.
 	 */
 	import { untrack } from 'svelte';
-	import { X, Trash2, Plus, Minus, Loader2 } from '@lucide/svelte';
+	import { X, Trash2, Plus, Minus, Loader2, ChevronDown } from '@lucide/svelte';
+	import { permisosState } from '$lib/stores/permisos.svelte';
 	import { currencyMask, formatCurrency } from '$lib/shared/fieldConfig';
 
 	export interface Fraccion {
@@ -24,6 +25,16 @@
 		monto: number;
 		/** "Hito de cobro": concepto de la cuota (cobros.referencia) — solo Cuentas por Cobrar, ver conHitoDeCobro. */
 		referencia?: string | null;
+		/** Comentarios con fecha de la cuota (cobros.comentarios) — solo con conComentarios. */
+		comentarios?: ComentarioCuota[];
+	}
+
+	export interface ComentarioCuota {
+		fecha: string; // yyyy-mm-dd
+		texto: string;
+		usuario?: string | null;
+		/** Momento en que se escribió (ISO). */
+		creado?: string;
 	}
 
 	let {
@@ -38,6 +49,7 @@
 		onConfirm,
 		onEliminar,
 		conHitoDeCobro = false,
+		conComentarios = false,
 		etiquetaInterruptor
 	}: {
 		open: boolean;
@@ -63,6 +75,9 @@
 		/** A pedido del usuario (Cuentas por Cobrar, igual que la Forma de cobranza de Nueva venta): cada
 		 * fracción lleva su "Hito de cobro" (concepto), que se conserva al re-fraccionar. */
 		conHitoDeCobro?: boolean;
+		/** Pedido del cliente (19/11/2026, Cronograma de Cobranza): cada fracción lleva comentarios con fecha y su
+		 * historial. Solo donde la cuota ya existe y se guarda con sincronizarCuotasProgramadas. */
+		conComentarios?: boolean;
 		/** Texto del interruptor de activar el fraccionamiento; por defecto, el mismo título. */
 		etiquetaInterruptor?: string;
 	} = $props();
@@ -141,6 +156,20 @@
 
 	let activo = $state(fraccionesIniciales.length > 0);
 	let filas = $state<Fraccion[]>([]);
+
+	// Comentarios por fracción (conComentarios): texto y fecha en edición, e historial abierto/cerrado. Por índice de fila.
+	let borradorComentario = $state<Record<number, string>>({});
+	let historialAbierto = $state<Record<number, boolean>>({});
+	const hoyLocal = () => new Date().toLocaleDateString('en-CA');
+	function agregarComentario(i: number) {
+		const texto = (borradorComentario[i] ?? '').trim();
+		if (!texto || !filas[i]) return;
+		const nuevo: ComentarioCuota = { fecha: hoyLocal(), texto: texto.slice(0, 500), usuario: permisosState.userName || null, creado: new Date().toISOString() };
+		filas[i] = { ...filas[i], comentarios: [...(filas[i].comentarios ?? []), nuevo] };
+		borradorComentario[i] = '';
+		historialAbierto[i] = true;
+	}
+	const ddmmaaaa = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}`;
 	let metodo = $state<'montos_iguales' | 'montos_desiguales' | 'por_porcentaje'>('montos_iguales');
 	/** Independiente de "Método de fraccionamiento" (que decide cómo se reparte el MONTO) — esto decide
 	 * cada cuánto avanza la FECHA de una cuota a la siguiente. Arranca en 'mensual' siempre (mismo
@@ -357,7 +386,11 @@
 		if (!sumaOk) return;
 		guardando = true;
 		try {
-			await onConfirm(filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto), referencia: f.referencia ?? null })));
+			// Un comentario escrito pero sin pulsar "+" también se guarda.
+			for (let i = 0; i < filas.length; i++) if (borradorComentario[i]?.trim()) agregarComentario(i);
+			await onConfirm(
+				filas.map((f) => ({ fecha: f.fecha, monto: Number(f.monto), referencia: f.referencia ?? null, ...(f.comentarios?.length ? { comentarios: f.comentarios } : {}) }))
+			);
 			onClose();
 		} catch (err: any) {
 			errorGuardado = err?.message ?? 'No se pudo guardar el fraccionamiento.';
@@ -489,15 +522,77 @@
 									<Trash2 size={16} />
 								</button>
 								{#if conHitoDeCobro}
-									<input
-										type="text"
-										maxlength="100"
-										value={fila.referencia ?? ''}
-										oninput={(e) => (filas[i] = { ...filas[i], referencia: (e.target as HTMLInputElement).value })}
-										placeholder="Hito de cobro (ej. Entrega de planos)"
-										aria-label={`Hito de cobro de la fracción ${i + 1}`}
-										class="basis-full sm:ml-[4.5rem] rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
-									/>
+									<!-- "Condicionante" (pedido del cliente, 19/11/2026): antes este campo no tenía título. Es el hito de cobro (cobros.referencia). -->
+									<label class="basis-full flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+										<span class="w-24 shrink-0 text-xs font-semibold text-slate-600">Condicionante</span>
+										<input
+											type="text"
+											maxlength="100"
+											value={fila.referencia ?? ''}
+											oninput={(e) => (filas[i] = { ...filas[i], referencia: (e.target as HTMLInputElement).value })}
+											placeholder="Ej. Entrega de planos"
+											aria-label={`Condicionante de la fracción ${i + 1}`}
+											class="flex-1 min-w-0 rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+										/>
+									</label>
+								{/if}
+								{#if conComentarios}
+									{@const historial = [...(fila.comentarios ?? [])].reverse()}
+									<div class="basis-full flex flex-col gap-1.5">
+										<span class="text-xs font-semibold text-slate-600">Comentario</span>
+										<div class="flex flex-wrap items-center gap-2">
+											<input
+												type="text"
+												maxlength="500"
+												value={borradorComentario[i] ?? ''}
+												oninput={(e) => (borradorComentario[i] = (e.target as HTMLInputElement).value)}
+												onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); agregarComentario(i); } }}
+												placeholder="Escribir comentario…"
+												aria-label={`Comentario de la fracción ${i + 1}`}
+												class="flex-1 min-w-[10rem] rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+											/>
+											<!-- La fecha es siempre la de hoy y no se edita (pedido del cliente, 19/11/2026). -->
+											<span class="w-28 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm text-slate-500 text-center" title="Fecha del comentario (hoy)">
+												{ddmmaaaa(hoyLocal())}
+											</span>
+											<button
+												type="button"
+												onclick={() => agregarComentario(i)}
+												disabled={!borradorComentario[i]?.trim()}
+												class="p-1.5 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 disabled:opacity-40"
+												title="Agregar comentario"
+												aria-label="Agregar comentario"
+											>
+												<Plus size={16} />
+											</button>
+										</div>
+										<button
+											type="button"
+											onclick={() => (historialAbierto[i] = !historialAbierto[i])}
+											class="flex items-center justify-between rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-semibold text-[#0f3b5e] hover:bg-blue-100"
+											aria-expanded={!!historialAbierto[i]}
+										>
+											<span>Historial de comentarios ({historial.length})</span>
+											<ChevronDown size={14} class={historialAbierto[i] ? 'rotate-180 transition-transform' : 'transition-transform'} />
+										</button>
+										{#if historialAbierto[i]}
+											{#if historial.length}
+												<ul class="flex flex-col divide-y divide-slate-100 rounded-lg border border-slate-100 text-xs">
+													{#each historial as c, k (k)}
+														<li class="px-3 py-1.5">
+															<div class="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+																<span class="font-semibold text-slate-600">{ddmmaaaa(c.fecha)}</span>
+																{#if c.usuario}<span class="truncate">{c.usuario}</span>{/if}
+															</div>
+															<p class="text-slate-700 whitespace-pre-wrap break-words">{c.texto}</p>
+														</li>
+													{/each}
+												</ul>
+											{:else}
+												<p class="px-3 text-xs text-slate-400">Todavía no hay comentarios en esta fracción.</p>
+											{/if}
+										{/if}
+									</div>
 								{/if}
 							</div>
 						{/each}

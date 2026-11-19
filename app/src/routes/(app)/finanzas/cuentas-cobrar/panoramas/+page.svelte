@@ -1133,6 +1133,7 @@
 	fechaVencimiento={cuotasCuentaActual?.fechaVencimiento ?? null}
 	fraccionesIniciales={cuotasFraccionesIniciales}
 	conHitoDeCobro
+	conComentarios
 	onClose={() => (cuotasModalOpen = false)}
 	onConfirm={handleCuotasConfirmadas}
 	onEliminar={handleCuotasEliminadas}
