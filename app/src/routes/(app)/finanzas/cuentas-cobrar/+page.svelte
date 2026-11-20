@@ -457,6 +457,7 @@
 		// Cuenta de un proyecto de Obra (tenga o no adelantos/valorizaciones todavía): se edita en formato factura (18/11/2026).
 		if (item.proyecto?.tipo_venta === 'obra') {
 			selectedId = item.id_cuenta_cobrar;
+			facturaObraSoloLectura = false;
 			facturaObraOpen = true;
 			return;
 		}
@@ -637,6 +638,9 @@
 	let resumenObraRecargar = $state(0);
 	/** Cuenta por cobrar de Obra en formato factura (editar, y último paso del cierre de una venta de Obra). */
 	let facturaObraOpen = $state(false);
+	/** Al llegar desde el cierre de una venta (Comercial), el cuadro se abre solo de lectura: el asesor registra solo el
+	 * adelanto; las valorizaciones y los pagos se proyectan desde Cuentas por Cobrar (lápiz). Pedido del cliente, 19/11/2026. */
+	let facturaObraSoloLectura = $state(false);
 	async function cobrarPagoObra(idCobro: number) {
 		const r = await prepararTransaccionDeCuota(supabase, idCobro);
 		if (!r.success) {
@@ -662,9 +666,11 @@
 			item = data as CuentaCobrar;
 			items = [item, ...items];
 		}
-		// Venta de Obra: se termina de elaborar su cuenta por cobrar en formato factura (valorizaciones y pagos).
+		// Venta de Obra: se muestra su cuenta por cobrar en formato factura, solo de lectura (las valorizaciones no se
+		// registran desde Comercial; se proyectan luego con el lápiz en Cuentas por Cobrar).
 		if (item.proyecto?.tipo_venta === 'obra') {
 			selectedId = item.id_cuenta_cobrar;
+			facturaObraSoloLectura = true;
 			facturaObraOpen = true;
 			return;
 		}
@@ -1378,9 +1384,11 @@
 <CuentaCobrarObraFactura
 	open={facturaObraOpen}
 	idCuentaCobrar={facturaObraOpen ? selectedId : null}
+	soloLectura={facturaObraSoloLectura}
 	recargar={resumenObraRecargar}
 	onClose={() => {
 		facturaObraOpen = false;
+		facturaObraSoloLectura = false;
 		fetchList();
 	}}
 	onSaved={() => fetchList()}
