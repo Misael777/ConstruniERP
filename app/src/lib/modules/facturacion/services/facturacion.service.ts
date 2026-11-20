@@ -431,8 +431,14 @@ export interface TotalesFactura {
  * exactamente la suma de lo cobrado; Valor Venta = Σ valores sin IGV de cada línea; IGV = 18% de eso; y
  * "Monto de redondeo" absorbe la diferencia de centavos para que Importe Total nunca se desvíe de lo
  * realmente cobrado. Detracción (si aplica) = Importe Total × % redondeado al sol (criterio SUNAT). */
-export function calcularTotalesFactura(montosConIgv: number[], sujetaDetraccion: boolean, porcentajeDetraccion: number): TotalesFactura {
+export function calcularTotalesFactura(montosConIgv: number[], sujetaDetraccion: boolean, porcentajeDetraccion: number, sinIgv = false): TotalesFactura {
 	const importeTotal = round2(montosConIgv.reduce((s, m) => s + Number(m || 0), 0));
+	// Comprobante de Venta (documento interno): no está afecto al IGV (pedido de la clienta, 20/11/2026). Valor venta =
+	// importe total e IGV 0 — así tampoco suma IGV de ventas en Control Financiero (igv.service lee factura.monto_igv).
+	if (sinIgv) {
+		const montoDetraccionCv = sujetaDetraccion ? Math.round(importeTotal * (Number(porcentajeDetraccion || 0) / 100)) : 0;
+		return { subTotalVentas: importeTotal, anticipos: 0, descuentos: 0, valorVenta: importeTotal, isc: 0, igv: 0, otrosCargos: 0, otrosTributos: 0, redondeo: 0, importeTotal, montoDetraccion: montoDetraccionCv };
+	}
 	const subTotalVentas = round2(montosConIgv.reduce((s, m) => s + valorSinIgv(m), 0));
 	const valorVenta = subTotalVentas;
 	const igv = round2(valorVenta * IGV_PERU);
@@ -512,7 +518,7 @@ export async function guardarBorradorFactura(
 	}
 
 	const sujeta = String(payload.sujeta_detraccion ?? 'no') === 'si';
-	const t = totalesManual ?? calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0));
+	const t = totalesManual ?? calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujeta, Number(payload.porcentaje_detraccion || 0), tipoComprobante === 'comprobante_venta');
 	const datos: Record<string, unknown> = {
 		...buildWritablePayload(FIELDS_CONFIG, payload),
 		tipo_comprobante: tipoComprobante,

@@ -43,6 +43,7 @@
 	import { generarFacturaPdf, type DatosFacturaPdf } from '$lib/shared/facturaPdf';
 	import { datosPdfDesdeFactura } from '$lib/modules/facturacion/services/facturaPdfDatos';
 	import { DETRACCION_CUENTA_BN_DEFAULT, EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 	import { permisosState } from '$lib/stores/permisos.svelte';
 	import FacturaPreviewModal from './FacturaPreviewModal.svelte';
 	import { leerComprobanteSunat, validarArchivoComprobante, ACEPTA_COMPROBANTE, type MetodoLectura } from '$lib/modules/facturacion/services/leerComprobanteArchivo';
@@ -336,6 +337,7 @@
 	let previewOpen = $state(false);
 	let previewDatos = $state<DatosFacturaPdf | null>(null);
 	let autorizando = $state(false);
+	let confirmarEmision = $state(false);
 
 	// ── Origen de los datos (a pedido del usuario): por CADA documento, un interruptor elige si se arma con
 	// los datos de la transacción (lo de siempre) o leyendo el comprobante ya emitido por SUNAT (PDF, foto o
@@ -590,7 +592,7 @@
 	const lineas = $derived<LineaFactura[]>(modoRuc || modoDevolucionTotal ? lineasDeReferencia : modoDescuentoGlobal ? lineaDescuento : lineasDeTransacciones);
 
 	const sujetaDetraccion = $derived(tipoComprobante !== 'nota_credito' && String(formValues.sujeta_detraccion ?? 'no') === 'si');
-	const totales = $derived.by(() => modoDescuentoGlobal ? totalesDescuento : calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujetaDetraccion, Number(formValues.porcentaje_detraccion || 0)));
+	const totales = $derived.by(() => modoDescuentoGlobal ? totalesDescuento : calcularTotalesFactura(lineas.map((l) => l.monto_total_linea), sujetaDetraccion, Number(formValues.porcentaje_detraccion || 0), tipoComprobante === 'comprobante_venta'));
 
 	function seleccionable(t: TransaccionFacturable): boolean {
 		if (t.id_factura != null) return false;
@@ -1381,10 +1383,16 @@
 					<div class="w-full lg:w-80 shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-4">
 						<h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">Resumen</h3>
 						<div class="flex flex-col gap-1.5 text-sm">
-							<div class="flex justify-between"><span class="text-slate-500">Sub Total Ventas</span><span class="font-medium text-slate-700">{fmt(totales.subTotalVentas)}</span></div>
-							<div class="flex justify-between"><span class="text-slate-500">Valor Venta</span><span class="font-medium text-slate-700">{fmt(totales.valorVenta)}</span></div>
-							<div class="flex justify-between"><span class="text-slate-500">IGV (18%)</span><span class="font-medium text-slate-700">{fmt(totales.igv)}</span></div>
-							<div class="flex justify-between"><span class="text-slate-500">Monto de redondeo</span><span class="font-medium text-slate-700">{fmt(totales.redondeo)}</span></div>
+							{#if tipoComprobante === 'comprobante_venta'}
+								<!-- Comprobante de Venta: no afecto al IGV (no se desglosa). -->
+								<div class="flex justify-between"><span class="text-slate-500">Valor Venta</span><span class="font-medium text-slate-700">{fmt(totales.valorVenta)}</span></div>
+								<p class="text-[11px] text-slate-400">No afecto al IGV.</p>
+							{:else}
+								<div class="flex justify-between"><span class="text-slate-500">Sub Total Ventas</span><span class="font-medium text-slate-700">{fmt(totales.subTotalVentas)}</span></div>
+								<div class="flex justify-between"><span class="text-slate-500">Valor Venta</span><span class="font-medium text-slate-700">{fmt(totales.valorVenta)}</span></div>
+								<div class="flex justify-between"><span class="text-slate-500">IGV (18%)</span><span class="font-medium text-slate-700">{fmt(totales.igv)}</span></div>
+								<div class="flex justify-between"><span class="text-slate-500">Monto de redondeo</span><span class="font-medium text-slate-700">{fmt(totales.redondeo)}</span></div>
+							{/if}
 							<div class="flex justify-between pt-2 mt-1 border-t border-slate-200 text-base"><span class="font-semibold text-[#0f3b5e]">Importe Total</span><span class="font-bold text-[#0f3b5e]">{fmt(totales.importeTotal)}</span></div>
 							{#if sujetaDetraccion}
 								<div class="flex justify-between text-xs pt-1"><span class="text-slate-500">Monto de detracción</span><span class="font-medium text-slate-700">{fmt(totales.montoDetraccion)}</span></div>
@@ -1414,6 +1422,16 @@
 					>
 						<Eye size={14} /> Vista previa
 					</button>
+					<!-- Pedido de la clienta (20/11/2026): botón visible para dejar el documento DEFINITIVO (antes solo estaba
+					     dentro de la Vista previa como "Autorizar y emitir"). Mismo proceso: handleAutorizar. -->
+					<button
+						type="button"
+						onclick={() => { if (validarAntesDeContinuar()) confirmarEmision = true; }}
+						disabled={!puedeContinuar || guardando || autorizando}
+						class="px-4 py-2 text-sm bg-emerald-600 text-white font-semibold rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+					>
+						{#if autorizando}<Loader2 size={14} class="animate-spin" />{:else}<CircleCheck size={14} />{/if} Emitir {nombreDocumento}
+					</button>
 				</div>
 			{:else}
 				<div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 flex-shrink-0">
@@ -1425,5 +1443,17 @@
 
 	<FacturaPreviewModal open={previewOpen} datos={previewDatos} onClose={() => (previewOpen = false)} onAutorizar={handleAutorizar} {autorizando} />
 	<FacturaPreviewModal open={verFacturaOpen} datos={verFacturaDatos} onClose={() => (verFacturaOpen = false)} />
+	<ConfirmModal
+		open={confirmarEmision}
+		title={`Emitir ${nombreDocumento}`}
+		message={`Se emitirá de forma definitiva: se genera el PDF final sin el sello "BORRADOR", se guarda en Drive y las transacciones quedan marcadas como facturadas. Después ya no se podrá editar (solo anular). Importe total: ${fmt(totales.importeTotal)}.`}
+		confirmLabel="Emitir"
+		danger={false}
+		onConfirm={async () => {
+			confirmarEmision = false;
+			await handleAutorizar();
+		}}
+		onClose={() => (confirmarEmision = false)}
+	/>
 	<DocumentPreviewModal open={docsOpen} documents={docsLista} title={docsTitle} onClose={() => (docsOpen = false)} />
 {/if}
