@@ -78,7 +78,9 @@
 	async function handleDescargar() {
 		if (!pdfBase64 || !datos) return;
 		try {
-			await guardarArchivoBinario(pdfBase64, `Factura_${datos.folio ?? 'borrador'}.pdf`, 'application/pdf');
+			// El nombre sigue al tipo de documento (antes siempre "Factura_", también para Comprobantes de Venta).
+			const prefijo = NOMBRE_TIPO_DOCUMENTO[datos.tipoDocumento].replace(/ /g, '_');
+			await guardarArchivoBinario(pdfBase64, `${prefijo}_${datos.folio ?? 'borrador'}.pdf`, 'application/pdf');
 			toast.success('PDF descargado');
 		} catch (err: any) {
 			toast.error(err?.message ?? 'No se pudo descargar el PDF');

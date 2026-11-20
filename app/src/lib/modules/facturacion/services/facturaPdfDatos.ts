@@ -21,7 +21,16 @@ export function datosPdfDesdeFactura(factura: Factura, detalle: FacturaDetalle[]
 		clienteDireccion: factura.cliente_direccion ?? '',
 		moneda: factura.moneda === 'USD' ? 'USD' : 'PEN',
 		observacion: factura.observacion ?? '',
-		lineas: detalle.map((d) => ({ cantidad: Number(d.cantidad), unidad: d.unidad ?? 'Servicio', descripcion: d.descripcion, valorUnitario: Number(d.precio_unitario) })),
+		// `importe` = monto de la línea CON IGV. Sin él, el Comprobante de Venta (que no desglosa IGV) caía a
+		// cantidad × precio_unitario, que es el valor SIN IGV (p. ej. S/ 2,796.61 en vez de S/ 3,300.00).
+		// Mismo respaldo que FacturaModal para detalles antiguos sin monto_total_linea.
+		lineas: detalle.map((d) => ({
+			cantidad: Number(d.cantidad),
+			unidad: d.unidad ?? 'Servicio',
+			descripcion: d.descripcion,
+			valorUnitario: Number(d.precio_unitario),
+			importe: Number(d.monto_total_linea ?? Math.round(Number(d.cantidad) * Number(d.precio_unitario) * 1.18 * 100) / 100)
+		})),
 		subTotalVentas: Number(factura.sub_total_ventas),
 		anticipos: Number(factura.anticipos),
 		descuentos: Number(factura.descuentos),
