@@ -13,9 +13,10 @@
 	import { toast } from '$lib/stores/toast';
 	import { getFechaLocalHoy } from '$lib/shared/dateUtils';
 	import {
-		getResumenCobroObra, crearValorizacion, actualizarValorizacion, eliminarValorizacion, agregarPago, editarPago, eliminarPago,
+		getResumenCobroObra, crearValorizacion, actualizarValorizacion, eliminarValorizacion, agregarPago, editarPago, eliminarPago, eliminarAdelantoVacio,
 		montoBruto, type ResumenCobroObra, type GrupoObra, type PagoObra
 	} from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 
 	let {
 		open,
@@ -81,6 +82,23 @@
 	let formVal = $state<{ idGrupo: number | null; monto: string; observaciones: string } | null>(null);
 	let formPago = $state<{ idGrupo: number; idCobro: number | null; monto: string; fecha: string; partida: string } | null>(null);
 	let guardando = $state(false);
+
+	// Adelanto sin armadas (p. ej. quedó vacío por un registro fallido, 20/11/2026): se puede eliminar; los siguientes se renumeran.
+	let adelantoAEliminar = $state<GrupoObra | null>(null);
+	async function confirmarEliminarAdelanto() {
+		const g = adelantoAEliminar;
+		if (!g) return;
+		let aviso: string | null = null;
+		const listo = await ejecutar(async () => {
+			const r = await eliminarAdelantoVacio(supabase, g.id_grupo);
+			if (r.success) aviso = r.aviso;
+			return r;
+		}, `Adelanto ${g.numero} eliminado.`);
+		if (listo) {
+			adelantoAEliminar = null;
+			if (aviso) toast.info(aviso);
+		}
+	}
 
 	async function ejecutar(fn: () => Promise<{ success: boolean; message?: string }>, ok: string) {
 		if (guardando) return;
@@ -218,8 +236,17 @@
 												{#if comprobantesDe(g) > 0}<button type="button" onclick={() => verComprobante(g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null)} class="text-xs text-blue-600 hover:underline"><i class="fas fa-eye mr-1"></i>Ver{comprobantesDe(g) > 1 ? ` (${comprobantesDe(g)})` : ''}</button>{:else}<span class="text-xs text-slate-400">Sin comprobante</span>{/if}
 											</td>
 											<td class="py-2 px-2 text-xs text-slate-600">{g.observaciones ?? ''}</td>
-											<td class="py-2 px-2 text-center"><span class={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${g.estado === 'completada' ? estadoVal.completada.clase : estadoVal.pendiente.clase}`}>{g.estado === 'completada' ? 'Cobrado' : 'Pendiente'}</span></td>
 											<td class="py-2 px-2 text-center">
+												{#if g.pagos.length === 0}
+													<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500" title="Este adelanto no tiene armadas registradas">Sin armadas</span>
+												{:else}
+													<span class={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${g.estado === 'completada' ? estadoVal.completada.clase : estadoVal.pendiente.clase}`}>{g.estado === 'completada' ? 'Cobrado' : 'Pendiente'}</span>
+												{/if}
+											</td>
+											<td class="py-2 px-2 text-center whitespace-nowrap">
+												{#if g.pagos.length === 0 && puedeGestionar}
+													<button type="button" onclick={() => (adelantoAEliminar = g)} class="p-1 text-rose-500 hover:text-rose-700" title={`Eliminar Adelanto ${g.numero} (sin armadas)`} aria-label={`Eliminar Adelanto ${g.numero}`}><i class="fas fa-trash-alt"></i></button>
+												{/if}
 												<button type="button" onclick={() => (abiertos[`a${g.id_grupo}`] = !abiertos[`a${g.id_grupo}`])} class="p-1 text-slate-500 hover:text-[#0f3b5e]" aria-label="Ver armadas"><i class={`fas fa-chevron-${abiertos[`a${g.id_grupo}`] ? 'up' : 'down'}`}></i></button>
 											</td>
 										</tr>
@@ -227,6 +254,9 @@
 											<tr class="bg-slate-50/60">
 												<td colspan="10" class="px-4 py-2">
 													<p class="text-xs font-bold text-[#0f3b5e] mb-1">Detalle de armadas - Adelanto {g.numero}</p>
+													{#if g.pagos.length === 0}
+														<p class="py-1 text-xs text-slate-400">Este adelanto no tiene armadas registradas.</p>
+													{:else}
 													<table class="w-full text-xs">
 														<thead><tr class="text-slate-500"><th class="py-1 text-center w-10">N.°</th><th class="py-1 text-left">Concepto</th><th class="py-1 text-right">Monto (S/)</th><th class="py-1 text-center">Fecha de pago</th><th class="py-1 text-right">% s/ venta</th><th class="py-1 text-right">% s/ armadas</th><th class="py-1 text-left pl-3">Observaciones</th><th class="py-1 text-center">Comprobante</th></tr></thead>
 														<tbody>
@@ -249,6 +279,7 @@
 															{/each}
 														</tbody>
 													</table>
+													{/if}
 												</td>
 											</tr>
 										{/if}
@@ -392,6 +423,15 @@
 		</div>
 	</div>
 {/if}
+
+<ConfirmModal
+	open={!!adelantoAEliminar}
+	title="Eliminar adelanto"
+	message={adelantoAEliminar ? `¿Eliminar el Adelanto ${adelantoAEliminar.numero}? No tiene armadas registradas, así que no afecta montos, cobros ni transacciones. Los adelantos siguientes se renumeran.` : ''}
+	confirmLabel="Eliminar"
+	onConfirm={confirmarEliminarAdelanto}
+	onClose={() => (adelantoAEliminar = null)}
+/>
 
 <DocumentPreviewModal open={visorAbierto} documents={documentosVenta} initialIndex={visorInicial} title={`Comprobantes - ${titulo}`} onClose={() => (visorAbierto = false)} />
 

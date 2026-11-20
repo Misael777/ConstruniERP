@@ -269,6 +269,13 @@ export async function registrarArmadas(
 	}
 ): Promise<{ success: true; idGrupo: number; numeroAdelanto: number; transacciones: number[] } | { success: false; message: string }> {
 	if (p.armadas.length === 0) return { success: false, message: 'No hay armadas para registrar.' };
+	// Grupo "Adelanto N" creado en esta llamada: si ninguna armada llega a registrarse, se borra para no dejar un
+	// adelanto vacío (incidente 20/11/2026, PROY-289: un intento fallido dejó "Adelanto 2" sin monto y sin forma de quitarlo).
+	let grupoNuevo: number | null = null;
+	const fallar = async (message: string): Promise<{ success: false; message: string }> => {
+		if (grupoNuevo) await descartarGrupoAdelantoVacio(client, grupoNuevo);
+		return { success: false, message };
+	};
 	try {
 		let idGrupo = p.idGrupo ?? null;
 		let numeroAdelanto: number;
@@ -279,6 +286,7 @@ export async function registrarArmadas(
 		} else {
 			const nuevo = await crearGrupo(client, p.idCuentaCobrar, 'adelanto', { id_documento: p.idDocumento ?? null, usuario: p.usuarioNombre });
 			idGrupo = nuevo.id_grupo;
+			grupoNuevo = nuevo.id_grupo;
 			numeroAdelanto = nuevo.numero;
 		}
 		const [{ count: previas }, { count: adelantos }] = await Promise.all([
@@ -312,7 +320,7 @@ export async function registrarArmadas(
 				p.usuarioEmail,
 				p.usuarioNombre
 			);
-			if ('errors' in built) return { success: false, message: `Revisa la ${numeroArmada}.ª armada: ${Object.values(built.errors).join('; ')}` };
+			if ('errors' in built) return await fallar(`Revisa la ${numeroArmada}.ª armada: ${Object.values(built.errors).join('; ')}`);
 			const { data, error } = await client.rpc('fn_confirmar_cobro', {
 				p_id_cuenta_cobrar: p.idCuentaCobrar,
 				p_transaccion_payload: built.insertData,
@@ -325,9 +333,10 @@ export async function registrarArmadas(
 				const texto = /MONTO_EXCEDE_COMPROMETIDO/.test(`${error.hint ?? ''} ${error.message}`)
 					? 'Lo ya cobrado y programado cubre el valor de la venta: ajusta el valor (adenda) o reduce un pago pendiente de valorización.'
 					: translateRpcError(error, []);
-				return { success: false, message: `No se pudo registrar la ${numeroArmada}.ª armada: ${texto}${ya}` };
+				return await fallar(`No se pudo registrar la ${numeroArmada}.ª armada: ${texto}${ya}`);
 			}
 			transacciones.push((data as any).id_transaccion);
+			grupoNuevo = null; // ya tiene una armada: el grupo se queda
 			if (detraccion > 0) {
 				const errDet = await registrarDetraccionArmada(client, {
 					idCuentaCobrar: p.idCuentaCobrar,
@@ -345,7 +354,18 @@ export async function registrarArmadas(
 		}
 		return { success: true, idGrupo: idGrupo!, numeroAdelanto, transacciones };
 	} catch (err: any) {
-		return { success: false, message: err?.message ?? String(err) };
+		return await fallar(err?.message ?? String(err));
+	}
+}
+
+/** Borra un grupo de adelanto solo si sigue sin cuotas (nunca toca uno con cobros). Silencioso: es limpieza. */
+async function descartarGrupoAdelantoVacio(client: SupabaseClient, idGrupo: number): Promise<void> {
+	try {
+		const { count } = await client.from('cobros').select('id_cobro', { count: 'exact', head: true }).eq('id_grupo', idGrupo);
+		if ((count ?? 0) > 0) return;
+		await client.from('cobro_grupo').delete().eq('id_grupo', idGrupo).eq('tipo', 'adelanto');
+	} catch (err) {
+		console.error('[cobranzaObra] No se pudo descartar el adelanto vacío', idGrupo, err);
 	}
 }
 
@@ -420,6 +440,59 @@ export async function actualizarValorizacion(client: SupabaseClient, idGrupo: nu
 	if (montoPlanificado + 0.005 < suma) return { success: false as const, message: `Sus pagos ya suman S/ ${suma.toFixed(2)}: el monto no puede ser menor.` };
 	const { error } = await client.from('cobro_grupo').update({ monto_planificado: r2(montoPlanificado), observaciones: observaciones?.trim() || null }).eq('id_grupo', idGrupo).eq('tipo', 'valorizacion');
 	return error ? { success: false as const, message: error.message } : { success: true as const };
+}
+
+/**
+ * Elimina un adelanto SIN armadas (por ejemplo, uno que quedó vacío por un registro fallido — PROY-289, 20/11/2026) y
+ * renumera los adelantos siguientes para que no queden huecos ("Adelanto 1, 3" → "Adelanto 1, 2"). También corrige el
+ * número en la descripción de las transacciones de esos adelantos ("Adelanto 3 - ADENDA" → "Adelanto 2 - ADENDA").
+ * Nunca toca un adelanto que tenga alguna cuota (cobrada, pendiente o anulada).
+ */
+export async function eliminarAdelantoVacio(client: SupabaseClient, idGrupo: number) {
+	try {
+		const { data: g, error: eg } = await client.from('cobro_grupo').select('id_cuenta_cobrar, tipo, numero').eq('id_grupo', idGrupo).maybeSingle();
+		if (eg) throw eg;
+		if (!g || g.tipo !== 'adelanto') return { success: false as const, message: 'El adelanto ya no existe. Actualiza la pantalla.' };
+		const { count, error: ec } = await client.from('cobros').select('id_cobro', { count: 'exact', head: true }).eq('id_grupo', idGrupo);
+		if (ec) throw ec;
+		if ((count ?? 0) > 0) return { success: false as const, message: `El Adelanto ${g.numero} tiene armadas registradas: no se puede eliminar.` };
+		const { error: ed } = await client.from('cobro_grupo').delete().eq('id_grupo', idGrupo);
+		if (ed) throw ed;
+
+		// Renumerar los siguientes, de menor a mayor (el número que se libera lo toma el siguiente: respeta el UNIQUE).
+		const { data: siguientes } = await client
+			.from('cobro_grupo')
+			.select('id_grupo, numero')
+			.eq('id_cuenta_cobrar', g.id_cuenta_cobrar)
+			.eq('tipo', 'adelanto')
+			.gt('numero', g.numero)
+			.order('numero');
+		const avisos: string[] = [];
+		for (const sg of siguientes ?? []) {
+			const nuevo = sg.numero - 1;
+			const { error: eu } = await client.from('cobro_grupo').update({ numero: nuevo }).eq('id_grupo', sg.id_grupo);
+			if (eu) {
+				avisos.push(`no se pudo renumerar el Adelanto ${sg.numero}`);
+				break;
+			}
+			const { data: cuotas } = await client.from('cobros').select('id_transaccion').eq('id_grupo', sg.id_grupo).not('id_transaccion', 'is', null);
+			const ids = [...new Set((cuotas ?? []).map((c: any) => c.id_transaccion as number))];
+			if (!ids.length) continue;
+			const { data: txs } = await client.from('transaccion').select('id_transaccion, descripcion').in('id_transaccion', ids);
+			const patron = new RegExp(`\\bAdelanto ${sg.numero}\\b`, 'g');
+			for (const t of txs ?? []) {
+				const desc = String(t.descripcion ?? '');
+				if (!patron.test(desc)) continue;
+				patron.lastIndex = 0;
+				const { error: et } = await client.from('transaccion').update({ descripcion: desc.replace(patron, `Adelanto ${nuevo}`) }).eq('id_transaccion', t.id_transaccion);
+				if (et) avisos.push(`la transacción #${t.id_transaccion} conserva su descripción anterior`);
+			}
+		}
+		await client.rpc('fn_recalcular_cuenta_cobrar', { p_id_cuenta_cobrar: g.id_cuenta_cobrar });
+		return { success: true as const, aviso: avisos.length ? `Adelanto eliminado, pero ${avisos.join('; ')}.` : null };
+	} catch (err: any) {
+		return { success: false as const, message: err?.message ?? String(err) };
+	}
 }
 
 /** Solo si no tiene pagos cobrados: borra sus pagos pendientes y la valorización. */

@@ -22,7 +22,8 @@
 	import { createTransaccion, type Transaccion } from '$lib/modules/transacciones/services/transacciones.service';
 	import { createCuentaCobrar, confirmarCobroCobrado, deleteCuentaCobrar } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { permisosState, isAdmin, hasPermiso } from '$lib/stores/permisos.svelte';
-	import { asegurarCuentaObra, registrarArmadas, getResumenCobroObra, type GrupoObra } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+	import { asegurarCuentaObra, registrarArmadas, getResumenCobroObra, eliminarAdelantoVacio, type GrupoObra } from '$lib/modules/cobranza-obra/services/cobranzaObra.service';
+	import ConfirmModal from '$lib/shared/components/ConfirmModal.svelte';
 	import { partirDetraccion, porcentajeDetraccion, sumarDiasHabiles } from '$lib/shared/detraccion';
 	import { cobrarDetraccionConSuArmada } from '$lib/modules/cuentas-cobrar/services/detraccion.service';
 	import { listarContratos, registrarContrato, marcarContratoVigente, type DocumentoContrato, type TipoContrato } from '$lib/modules/cobranza-obra/services/documentosVenta.service';
@@ -256,6 +257,24 @@
 		} catch (err) {
 			console.error('[NuevaVentaModal] No se pudieron cargar los adelantos/contratos de la obra:', err);
 		}
+	}
+
+	// Adelanto registrado SIN armadas (p. ej. quedó vacío por un registro fallido, PROY-289 20/11/2026): el usuario con
+	// permiso lo elimina desde aquí; los adelantos siguientes se renumeran (ver eliminarAdelantoVacio).
+	let adelantoAEliminar = $state<GrupoObra | null>(null);
+	async function confirmarEliminarAdelanto() {
+		const g = adelantoAEliminar;
+		if (!g || !ventaId) return;
+		const r = await eliminarAdelantoVacio(supabase, g.id_grupo);
+		if (!r.success) {
+			toast.error(r.message);
+			return;
+		}
+		adelantoAEliminar = null;
+		if (r.aviso) toast.info(r.aviso);
+		else toast.success(`Adelanto ${g.numero} eliminado.`);
+		await cargarDatosObra(Number(ventaId), true);
+		onSaved();
 	}
 
 	/** Armadas nuevas de una venta de Obra cerrada: qué falta (ninguna es obligatoria). */
@@ -2812,6 +2831,7 @@ async function copiarCodigoGenerado() {
 										mostrarResumen={k === cuentaObra.adelantos.length - 1 && adelantosExtra.length === 0}
 										totalAdelantosGlobal={totalAdelantosObraRegistrados + totalArmadasNuevas}
 										onAgregarAdelanto={k === cuentaObra.adelantos.length - 1 && adelantosExtra.length === 0 && puedeAdelantosAdicionales ? agregarAdelantoExtra : null}
+										onQuitarAdelanto={g.pagos.length === 0 && puedeAdelantosAdicionales ? () => (adelantoAEliminar = g) : null}
 									/>
 								{/each}
 								{#each adelantosExtra as extra, k (extra.id)}
@@ -3249,3 +3269,12 @@ async function copiarCodigoGenerado() {
 		color: #e11d48;
 	}
 </style>
+
+<ConfirmModal
+	open={!!adelantoAEliminar}
+	title="Eliminar adelanto"
+	message={adelantoAEliminar ? `¿Eliminar el Adelanto ${adelantoAEliminar.numero}? No tiene armadas registradas, así que no afecta montos, cobros ni transacciones. Los adelantos siguientes se renumeran.` : ''}
+	confirmLabel="Eliminar"
+	onConfirm={confirmarEliminarAdelanto}
+	onClose={() => (adelantoAEliminar = null)}
+/>

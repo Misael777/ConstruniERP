@@ -30,6 +30,7 @@
 		crearValorizacion,
 		actualizarValorizacion,
 		eliminarValorizacion,
+		eliminarAdelantoVacio,
 		agregarPago,
 		editarPago,
 		eliminarPago,
@@ -146,6 +147,28 @@
 		void recargar;
 		if (open && idCuentaCobrar) cargar();
 	});
+
+	// Adelanto sin armadas (p. ej. quedó vacío por un registro fallido, 20/11/2026): se elimina al confirmar, sin tocar
+	// el borrador de valorizaciones (solo se vuelve a leer el resumen). Los adelantos siguientes se renumeran.
+	let adelantoAEliminar = $state<GrupoObra | null>(null);
+	async function confirmarEliminarAdelanto() {
+		const g = adelantoAEliminar;
+		if (!g || !idCuentaCobrar) return;
+		const res = await eliminarAdelantoVacio(supabase, g.id_grupo);
+		if (!res.success) {
+			toast.error(res.message);
+			return;
+		}
+		adelantoAEliminar = null;
+		if (res.aviso) toast.info(res.aviso);
+		else toast.success(`Adelanto ${g.numero} eliminado.`);
+		try {
+			r = await getResumenCobroObra(supabase, idCuentaCobrar);
+		} catch {
+			/* se verá al reabrir */
+		}
+		onSaved();
+	}
 	$effect(() => {
 		if (open && puedeCabecera && !responsables.length) getEmpleadoOptions(supabase).then((o) => (responsables = o)).catch(() => {});
 	});
@@ -403,8 +426,14 @@
 								<td class="py-2 px-2 pl-5 text-slate-600">{g.numero}</td><td class="py-2 px-2">Adelanto {g.numero}{g.pagos.length > 1 ? ` (${g.pagos.length} armadas)` : ''}</td>
 								<td class="py-2 px-2 text-slate-400">—</td><td class="py-2 px-2">{fmtFecha(ultimaFecha(g))}</td><td class="py-2 px-2 text-slate-600">{g.observaciones ?? ''}</td>
 								<td class="py-2 px-2 text-right">{pct(g.total)}</td><td class="py-2 px-2 text-right font-bold text-[#0f3b5e] tabular-nums">{formatCurrency(g.total)}</td>
-								<td class="py-2 px-2 text-center"><span class={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-semibold ${ESTADO_GRUPO[g.estado].clase}`}>{ESTADO_GRUPO[g.estado].texto}</span></td>
-								<td class="py-2 px-2 text-center">{#if comp}<button type="button" onclick={() => (visor = { url: comp, titulo: `Adelanto ${g.numero}` })} class="p-1 text-slate-500 hover:text-[#0f3b5e]" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{/if}</td>
+								<td class="py-2 px-2 text-center">
+									{#if g.pagos.length === 0}
+										<span class="inline-block px-2 py-0.5 rounded-md border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500" title="Este adelanto no tiene armadas registradas">Sin armadas</span>
+									{:else}
+										<span class={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-semibold ${ESTADO_GRUPO[g.estado].clase}`}>{ESTADO_GRUPO[g.estado].texto}</span>
+									{/if}
+								</td>
+								<td class="py-2 px-2 text-center">{#if g.pagos.length === 0 && puedeLineas}<button type="button" onclick={() => (adelantoAEliminar = g)} class="p-1 text-rose-500 hover:text-rose-700" title={`Eliminar Adelanto ${g.numero} (sin armadas)`} aria-label={`Eliminar Adelanto ${g.numero}`}><i class="fas fa-trash-alt"></i></button>{/if}{#if comp}<button type="button" onclick={() => (visor = { url: comp, titulo: `Adelanto ${g.numero}` })} class="p-1 text-slate-500 hover:text-[#0f3b5e]" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{/if}</td>
 							</tr>
 						{:else}
 							<tr class="border-b border-slate-100"><td colspan="9" class="py-2 px-2 pl-5 text-xs text-slate-400">Sin adelantos (se registran desde Ventas).</td></tr>
@@ -582,5 +611,13 @@
 		onClose();
 	}}
 	onClose={() => (confirmarDescartar = false)}
+/>
+<ConfirmModal
+	open={!!adelantoAEliminar}
+	title="Eliminar adelanto"
+	message={adelantoAEliminar ? `¿Eliminar el Adelanto ${adelantoAEliminar.numero}? No tiene armadas registradas, así que no afecta montos, cobros ni transacciones. Los adelantos siguientes se renumeran.` : ''}
+	confirmLabel="Eliminar"
+	onConfirm={confirmarEliminarAdelanto}
+	onClose={() => (adelantoAEliminar = null)}
 />
 <DocumentPreviewModal open={visor !== null} url={visor?.url ?? ''} title={visor?.titulo ?? ''} onClose={() => (visor = null)} />
