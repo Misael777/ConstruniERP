@@ -31,6 +31,7 @@
 		quitarFeriado,
 		guardarTrabajador,
 		enviarTareo,
+		liberarEnviosSinPago,
 		proyectarPlanillas,
 		exportarTareoXLSX,
 		type ObraTareo,
@@ -266,6 +267,29 @@
 		}
 	}
 
+	// Ticket #133: lo enviado cuyo pago se eliminó de CxP se libera para volver a enviarlo.
+	let liberando = $state(false);
+	async function liberarSinPago() {
+		if (!obra || !datos?.enviadoSinPago || liberando) return;
+		const ok = await confirmar({
+			title: 'Liberar envíos de pagos eliminados',
+			message: `En esta semana hay ${formatCurrency(datos.enviadoSinPago)} marcados como enviados cuyos pagos ya se eliminaron de Cuentas por Pagar. Se quitarán de "Enviado" y volverán a quedar pendientes para enviarlos de nuevo. No se modifica ninguna CxP ni pago.`,
+			confirmLabel: 'Liberar',
+			danger: false
+		});
+		if (!ok) return;
+		liberando = true;
+		try {
+			const monto = await liberarEnviosSinPago(supabase, obra.id_centro_costo, lunes);
+			toast.success(`Liberado ${formatCurrency(monto)}: ya se puede volver a enviar.`);
+			await cargar();
+		} catch (err) {
+			toast.error(`No se pudo liberar. ${describeError(err)}`);
+		} finally {
+			liberando = false;
+		}
+	}
+
 	// ── Editar día ──
 	type Pago = 'completo' | 'medio' | 'sin_pago' | 'otras';
 	// Diagnóstico de marcas (19/11/2026): todas las marcas de la semana del trabajador y por qué cuentan o no.
@@ -469,6 +493,16 @@
 			{#if porRevisar}<span class="text-orange-700"><i class="fas fa-triangle-exclamation"></i> {porRevisar} día{porRevisar === 1 ? '' : 's'} sin marca de salida por revisar</span>{/if}
 			{#if cargando}<i class="fas fa-spinner fa-spin text-blue-500"></i>{/if}
 		</div>
+
+		{#if datos.enviadoSinPago > 0}
+			<div class="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+				<i class="fas fa-triangle-exclamation"></i>
+				<span class="flex-1 min-w-[200px]"><b>{formatCurrency(datos.enviadoSinPago)}</b> figuran como enviados, pero sus pagos se eliminaron de Cuentas por Pagar.{puedeAprobar ? '' : ' Quien aprueba tareos puede liberarlos para reenviarlos.'}</span>
+				{#if puedeAprobar}
+					<button type="button" onclick={liberarSinPago} disabled={liberando} class="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold disabled:opacity-50">{liberando ? 'Liberando…' : 'Liberar para reenviar'}</button>
+				{/if}
+			</div>
+		{/if}
 
 		<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
 			{#each Object.entries(ORIGENES) as [, o]}<span class="flex items-center gap-1.5"><i class={`fas ${o.icono} ${o.color}`}></i>{o.texto}</span>{/each}

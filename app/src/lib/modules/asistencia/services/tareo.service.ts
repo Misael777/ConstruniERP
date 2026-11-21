@@ -85,6 +85,7 @@ export interface TrabajadorGuardado {
 	total: number;
 	enviado: number;
 	fecha_cxp: string | null;
+	tareo_envio?: { monto: number; id_pago: number | null }[] | null;
 }
 
 export interface DiaTareo {
@@ -325,6 +326,8 @@ export interface DatosTareo {
 	/** Por id_personal: todas sus marcas de la semana con el motivo de si cuentan o no. */
 	diagnostico: Record<number, MarcaDiagnostico[]>;
 	semana: { estado: 'borrador' | 'aprobado'; aprobado_por: string | null; aprobado_en: string | null } | null;
+	/** Ticket #133: lo marcado como enviado cuyo pago en CxP ya se eliminó (se puede liberar para reenviar). */
+	enviadoSinPago: number;
 }
 
 /** Carga la semana de la obra: trabajadores asignados, los que marcaron en sus huelleros y los ya enviados. */
@@ -359,7 +362,7 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 
 	const [{ data: marcasCrudas, error: eM }, { data: semana, error: eS }, { data: feriados, error: eF }] = await Promise.all([
 		consultaMarcas,
-		client.from('tareo_semana').select('id_tareo, estado, aprobado_por, aprobado_en, tareo_trabajador(id_personal, bonos, total, enviado, fecha_cxp)').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', lunes).maybeSingle(),
+		client.from('tareo_semana').select('id_tareo, estado, aprobado_por, aprobado_en, tareo_trabajador(id_personal, bonos, total, enviado, fecha_cxp, tareo_envio(monto, id_pago))').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', lunes).maybeSingle(),
 		client.from('tareo_feriado').select('id_feriado, fecha, id_centro_costo, descripcion').gte('fecha', lunes).lte('fecha', domingo).or(`id_centro_costo.is.null,id_centro_costo.eq.${idCentroCosto}`)
 	]);
 	if (eM) throw eM;
@@ -464,7 +467,8 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 		filas,
 		feriados: (feriados ?? []) as FeriadoTareo[],
 		diagnostico,
-		semana: semana ? { estado: semana.estado, aprobado_por: semana.aprobado_por, aprobado_en: semana.aprobado_en } : null
+		semana: semana ? { estado: semana.estado, aprobado_por: semana.aprobado_por, aprobado_en: semana.aprobado_en } : null,
+		enviadoSinPago: r2(guardados.reduce((t, g) => t + (g.tareo_envio ?? []).filter((e) => e.id_pago == null).reduce((u, e) => u + Number(e.monto), 0), 0))
 	};
 }
 
@@ -523,6 +527,13 @@ export interface EnvioTareo {
 	fila: FilaTareo;
 	monto: number;
 	fechaCxp: string;
+}
+
+/** Ticket #133: libera lo enviado cuyo pago se eliminó de CxP (obra y semana), para poder reenviarlo. Devuelve el monto. */
+export async function liberarEnviosSinPago(client: SupabaseClient, idCentroCosto: number, lunes: string): Promise<number> {
+	const { data, error } = await client.rpc('fn_tareo_liberar_envios_sin_pago', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes });
+	if (error) throw error;
+	return Number(data ?? 0);
 }
 
 /** Envía a Cuentas por Pagar (una cuota por trabajador en la planilla de la obra) y aprueba la semana. */
