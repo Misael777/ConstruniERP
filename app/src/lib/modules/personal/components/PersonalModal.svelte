@@ -39,6 +39,8 @@
 	import type { HuelleroElegible } from '$lib/modules/asistencia/services/huelleros.service';
 	import { reducirFoto, subirFotoPersonal, FOTO_MAX_BYTES } from '$lib/modules/personal/services/personalFoto';
 	import { diag } from '$lib/shared/diagnostico.svelte';
+	import { reportarDiagnostico } from '$lib/shared/auditoria';
+	import { cargarFotoUsuario } from '$lib/stores/permisos.svelte';
 	import { borrarArchivosDriveHuerfanos } from '$lib/shared/borrarArchivosDrive';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { esTelefono } from '$lib/shared/accesoRapido';
@@ -219,6 +221,7 @@
 			fotoNuevaUrl = URL.createObjectURL(reducida);
 		} catch (err) {
 			diag('Foto del trabajador: no se pudo leer', { error: String((err as any)?.message ?? err) });
+			reportarDiagnostico('Foto del trabajador: no se pudo leer', `${file.type || 'sin tipo'} · ${file.size} bytes · ${String((err as any)?.message ?? err)}`);
 			toast.error(err instanceof Error ? err.message : 'No se pudo leer la imagen.');
 		} finally {
 			procesandoFoto = false;
@@ -334,6 +337,8 @@
 				try {
 					datos.foto_url = await subirFotoPersonal(fotoNueva, datos.numero_documento ?? '');
 				} catch (err) {
+					// Ticket #121: queda registrado en Prod (auditoria_error) para poder ver por qué no subió.
+					reportarDiagnostico('Foto del trabajador: no se pudo subir', describeError(err));
 					toast.error(`No se pudo subir la foto. ${describeError(err)}`);
 					return;
 				}
@@ -358,6 +363,8 @@
 				return;
 			}
 			toast.success(personal ? 'Ficha actualizada.' : 'Trabajador registrado.');
+			// Ticket #121: si es la ficha del propio usuario, su foto se ve al instante en la cabecera y el menú.
+			void cargarFotoUsuario();
 			quitarFotoNueva();
 			onSaved();
 			onClose();

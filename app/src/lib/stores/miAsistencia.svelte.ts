@@ -19,6 +19,8 @@ export const miJornada = $state({
 	disponible: false,
 	nombre: '',
 	horario: '',
+	/** 'libre' | 'mixto' | 'fijo' (ticket #117: el aviso de horario libre pregunta antes "¿Vas a laborar hoy?"). */
+	tipoHorario: '',
 	/** Marcas desde el lunes de esta semana hasta hoy. */
 	marcasSemana: [] as Marca[],
 	marcando: false
@@ -61,6 +63,7 @@ export async function cargarMiJornada(): Promise<void> {
 		miJornada.disponible = !!datos && HORARIOS_ERP.includes(tipo);
 		miJornada.nombre = datos?.personal.nombre ?? '';
 		miJornada.horario = datos?.horario?.nombre ?? '';
+		miJornada.tipoHorario = tipo;
 		miJornada.marcasSemana = datos?.marcas ?? [];
 	} catch (err) {
 		// Sin conexión u otro error: el botón simplemente no aparece.

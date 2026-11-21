@@ -808,17 +808,17 @@ async function handleSetupPassword(e: Event) {
 		</div>
 	</div>
 {:else}
-<div class="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4">
+<!-- Ticket #124 (rechazo 21/11/2026): "debería ver solo 1 pantalla sin barra". En PC la ventana mide ~790 px de alto y
+     esta tarjeta medía ~830: se compactó (encabezado en una fila, menos márgenes, Snoopy y foto más chicos) y en
+     ventanas bajas se achica un poco más con @media(max-height). -->
+<div class="min-h-dvh bg-slate-50 flex flex-col justify-center items-center p-3 sm:p-4">
 	<div class="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100">
 		<!-- Branding Header -->
-		<div class="bg-brand-marine p-8 text-center flex flex-col items-center">
-			<!-- Insignia hero: halo ambiental en brand-orange (el color de la propia marca) detrás de un
-			     tile redondeado con sombra + anillo sutil para separarlo del fondo, ya que ambos son un
-			     navy casi idéntico — mismo tratamiento que en Sidebar.svelte, más grande acá por ser el
-			     primer momento de marca que ve el usuario. -->
-			<div class="relative mb-3">
-				<div class="absolute inset-0 bg-brand-orange/30 blur-2xl rounded-full scale-125"></div>
-				<div class="relative w-16 h-16 rounded-2xl overflow-hidden shadow-xl shadow-black/40 ring-1 ring-white/10">
+		<div class="bg-brand-marine px-6 py-4 [@media(max-height:720px)]:py-3 flex items-center justify-center gap-3">
+			<!-- Insignia: halo en brand-orange detrás del tile (mismo tratamiento que Sidebar.svelte). -->
+			<div class="relative">
+				<div class="absolute inset-0 bg-brand-orange/30 blur-xl rounded-full scale-125"></div>
+				<div class="relative w-12 h-12 rounded-2xl overflow-hidden shadow-xl shadow-black/40 ring-1 ring-white/10">
 					<img src="/logo.png" alt="Construni ERP" class="w-full h-full object-cover" />
 				</div>
 			</div>
@@ -839,28 +839,28 @@ async function handleSetupPassword(e: Event) {
 					{/if}
 				</div>
 			{/if}
-			<form class="p-8 space-y-6" onsubmit={handleLogin}>
-				<div class="text-center mb-4">
+			<form class="px-7 py-5 [@media(max-height:720px)]:py-4 space-y-4 [@media(max-height:720px)]:space-y-3" onsubmit={handleLogin}>
+				<div class="text-center">
 					<h2 class="text-xl font-bold text-slate-800">Bienvenido de nuevo</h2>
-					<p class="text-sm text-slate-500 mt-1">Ingresa tus credenciales para continuar</p>
+					<p class="text-sm text-slate-500 mt-0.5 [@media(max-height:720px)]:hidden">Ingresa tus credenciales para continuar</p>
 				</div>
 
 				<!-- Maqueta de la clienta (14/11/2026): frase del día con Snoopy y, debajo, la foto o iniciales de quien
 				     entró la última vez en este equipo (si pidió recordar el correo y es el mismo correo escrito). -->
 				{#if frase || perfilVisible}
-					<div class="-mt-4 flex flex-col items-center">
+					<div class="flex flex-col items-center">
 						{#if frase}
-							<div class="w-full grid grid-cols-[4.5rem_minmax(0,1fr)_4.5rem] items-center gap-2">
+							<div class="w-full grid grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2">
 								<div></div>
 								<div class="text-center">
 									<p class="text-sm font-semibold leading-snug text-[#0f2a4a]">“{frase.frase}”</p>
 									{#if frase.autor}<p class="mt-0.5 text-xs text-slate-500">{frase.autor}</p>{/if}
 								</div>
-								<img src="/snoopy-casco.webp" alt="" width="376" height="473" class="h-20 w-auto justify-self-end select-none" draggable="false" />
+								<img src="/snoopy-casco.webp" alt="" width="376" height="473" class="h-16 [@media(max-height:720px)]:h-12 w-auto justify-self-end select-none" draggable="false" />
 							</div>
 						{/if}
 						{#if perfilVisible}
-							<div class="mt-2 w-20 h-20 rounded-full overflow-hidden bg-slate-200 ring-4 ring-white shadow-md flex items-center justify-center" title={perfilVisible.nombre}>
+							<div class="mt-1 w-16 h-16 [@media(max-height:720px)]:w-12 [@media(max-height:720px)]:h-12 rounded-full overflow-hidden bg-slate-200 ring-4 ring-white shadow-md flex items-center justify-center" title={perfilVisible.nombre}>
 								{#if perfilVisible.fotoUrl}
 									<img src={toDriveThumbnailUrl(perfilVisible.fotoUrl, 300)} alt="" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
 								{:else}
@@ -895,7 +895,7 @@ async function handleSetupPassword(e: Event) {
 							id="login-email"
 							bind:value={email}
 							placeholder="ejemplo@construni.com"
-							class="w-full pl-10 pr-3 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
+							class="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
 							required
 						/>
 					</div>
@@ -914,7 +914,7 @@ async function handleSetupPassword(e: Event) {
 							type={showPassword ? "text" : "password"} 
 							bind:value={password}
 							placeholder="••••••••"
-							class="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
+							class="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm"
 							required
 						/>
 						<button 
@@ -952,7 +952,7 @@ async function handleSetupPassword(e: Event) {
 				<button 
 					type="submit" 
 					disabled={isLoading}
-					class="w-full h-12 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 active:scale-[0.98] transition-all shadow-md shadow-blue-600/20 disabled:opacity-70 flex justify-center items-center gap-2"
+					class="w-full h-11 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 active:scale-[0.98] transition-all shadow-md shadow-blue-600/20 disabled:opacity-70 flex justify-center items-center gap-2"
 				>
 					{#if isLoading}
 						<i class="fas fa-spinner fa-spin"></i> Ingresando...
@@ -961,7 +961,7 @@ async function handleSetupPassword(e: Event) {
 					{/if}
 				</button>
 
-				<div class="text-center pt-2">
+				<div class="text-center">
 					<button type="button" onclick={() => { mode = 'setup_password'; errorMessage = ''; setupEmail = ''; setupPassword = ''; setupConfirmPassword = ''; }} class="text-blue-600 hover:text-blue-700 font-semibold text-sm">
 						¿Es tu primera vez? Configura tu contraseña aquí
 					</button>

@@ -18,6 +18,9 @@ export const permisosState = $state<{
   dni: string;
   /** Correo de la sesión (para los módulos solo del superusuario, ver esSuperusuario). */
   email: string;
+  /** Ticket #121: foto del trabajador vinculado a este usuario (personal.foto_url, enlace de Drive) para el círculo
+   * de la cabecera y del menú. null = se muestran las iniciales. */
+  fotoUrl: string | null;
   loaded: boolean;
 }>({
   permisos: [],
@@ -26,6 +29,7 @@ export const permisosState = $state<{
   userInitial: '',
   dni: '',
   email: '',
+  fotoUrl: null,
   loaded: false,
 });
 
@@ -84,7 +88,7 @@ export async function loadPermisos(userId: string): Promise<void> {
 
     permisosState.rolNombre = rolNombre;
     permisosState.userName = nombre;
-    permisosState.userInitial = nombre.charAt(0).toUpperCase();
+    permisosState.userInitial = inicialesDe(nombre);
 
     // Best-effort, aparte de todo lo de arriba: si la columna dni no existe todavía (o cualquier otro
     // fallo), esto NUNCA debe degradar rol/permisos — solo el campo dni se queda vacío.
@@ -96,6 +100,7 @@ export async function loadPermisos(userId: string): Promise<void> {
         // Best-effort — ver comentario arriba.
       }
     })();
+    void cargarFotoUsuario(userId);
 
     // 2. If admin (o developer, mismos permisos), set wildcard — no need to query permissions
     if (ROLES_ADMIN.includes(rolNombre)) {
@@ -154,6 +159,40 @@ export async function loadPermisos(userId: string): Promise<void> {
 }
 
 // --------------- Helpers ---------------
+
+/** "Romina Casallo Echegaray" → "RC" (antes solo la primera letra). */
+export function inicialesDe(nombre: string): string {
+  return (nombre || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .join('') || 'U';
+}
+
+/** Ticket #121: foto del trabajador (RR.HH. → Personal) vinculado a este usuario. Best-effort: si falla, iniciales. */
+export async function cargarFotoUsuario(userId?: string): Promise<void> {
+  try {
+    let uid = userId;
+    if (!uid) {
+      const { data: { session } } = await supabase.auth.getSession();
+      uid = session?.user?.id;
+    }
+    if (!uid) return;
+    const { data: emp } = await supabase.from('empleados').select('id').eq('auth_user_id', uid).maybeSingle();
+    if (!emp?.id) return;
+    const { data: per } = await supabase
+      .from('personal')
+      .select('foto_url')
+      .eq('id_empleado', emp.id)
+      .not('foto_url', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    permisosState.fotoUrl = (per as any)?.foto_url ?? null;
+  } catch {
+    // Sin foto: se muestran las iniciales.
+  }
+}
 
 // Map frontend-only sidebar check permissions to DB database permissions
 /** Check if the current user has a specific permission (or is admin) */

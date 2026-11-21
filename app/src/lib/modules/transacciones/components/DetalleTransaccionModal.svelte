@@ -41,11 +41,13 @@
 	let compartiendo = $state<'propio' | 'tercero' | null>(null);
 	let archivo: Blob | null | undefined = undefined; // undefined = aún no se descargó
 	let imagenFallo = $state(false);
+	let mensajeCompleto = $state(false);
 
 	$effect(() => {
 		if (open) {
 			archivo = undefined;
 			imagenFallo = false;
+			mensajeCompleto = false;
 		}
 	});
 
@@ -73,9 +75,12 @@
 	<!-- Ticket #83: en el celular la ventana se salía por la izquierda (los códigos largos sin espacios del
 	     mensaje, ej. "LNM5_0926_San_Juan_de_…", ensanchaban todo) y había que desplazarse para verla entera.
 	     Ahora el texto largo se corta, nada se sale de lo ancho y todo cabe en una sola vista: encabezado y
-	     márgenes más compactos, los dos botones lado a lado y la captura con un alto máximo. -->
+	     márgenes más compactos, los dos botones lado a lado y la captura con un alto máximo.
+	     Rechazo del 21/11/2026 ("para ingresos sigue apareciendo una lista desplegable"): en un ingreso el mensaje es
+	     más largo y el recibo (PDF autogenerado) más alto, y aún aparecía la barra. Ahora la captura usa solo el alto que
+	     queda libre (96dvh menos lo demás) y el mensaje se muestra en 4 líneas (tocarlo lo despliega); sin barra visible. -->
 	<div class="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-2 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="detalle-tx-titulo">
-		<div class="w-full max-w-lg max-h-[96dvh] overflow-y-auto overflow-x-hidden rounded-2xl bg-white shadow-2xl">
+		<div class="w-full max-w-lg max-h-[96dvh] overflow-y-auto overflow-x-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-2xl bg-white shadow-2xl">
 			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-4 py-2.5 border-b border-slate-100">
 				<div class="flex items-center gap-2 min-w-0">
 					<ReceiptText class="text-[#0f3b5e] shrink-0" size={20} />
@@ -110,7 +115,7 @@
 					<h3 class="mb-1.5 text-sm font-semibold text-[#0f3b5e]">Captura de la transacción</h3>
 					<div class="flex justify-center rounded-xl bg-slate-50 border border-slate-100 p-2">
 						{#if comprobanteUrl && !imagenFallo}
-							<img src={toDriveThumbnailUrl(comprobanteUrl, 900)} alt="Comprobante de la transacción" class="max-h-[42dvh] max-w-full w-auto object-contain rounded-lg shadow-sm bg-white" onerror={() => (imagenFallo = true)} />
+							<img src={toDriveThumbnailUrl(comprobanteUrl, 900)} alt="Comprobante de la transacción" class="max-h-[max(7rem,calc(96dvh-25rem))] sm:max-h-[max(9rem,calc(96dvh-22rem))] max-w-full w-auto object-contain rounded-lg shadow-sm bg-white" onerror={() => (imagenFallo = true)} />
 						{:else}
 							<p class="py-6 text-sm text-slate-400 text-center">{comprobanteUrl ? 'No se pudo mostrar la vista previa del comprobante.' : 'Esta transacción no tiene comprobante adjunto.'}</p>
 						{/if}
@@ -119,7 +124,7 @@
 
 				<div class="flex gap-2.5 rounded-xl bg-blue-50 border border-blue-100 p-3 min-w-0">
 					<Info size={18} class="shrink-0 text-blue-600 mt-0.5" />
-					<p class="min-w-0 text-[13px] sm:text-sm text-slate-700 whitespace-pre-line [overflow-wrap:anywhere]">{mensaje}</p>
+					<button type="button" onclick={() => (mensajeCompleto = !mensajeCompleto)} title={mensajeCompleto ? 'Mostrar menos' : 'Ver el mensaje completo'} class="min-w-0 text-left text-[13px] sm:text-sm text-slate-700 whitespace-pre-line [overflow-wrap:anywhere] {mensajeCompleto ? '' : 'line-clamp-4'}">{mensaje}</button>
 				</div>
 			</div>
 		</div>

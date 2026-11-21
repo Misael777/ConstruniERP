@@ -5,6 +5,7 @@
 	import { MODULE_REGISTRY } from '$lib/config/modules';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { getInfoVersionApp } from '$lib/shared/appVersion';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 
 	let { collapsed = $bindable(false), mobileOpen = $bindable(false) } = $props();
 
@@ -196,8 +197,13 @@
 	<!-- User info at bottom -->
 	{#if permisosState.loaded}
 		<div class={`px-4 py-4 border-t border-white/10 flex items-center ${effectiveCollapsed ? 'justify-center' : 'gap-3'} flex-shrink-0`}>
-			<div class="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
-				{permisosState.userInitial}
+			<div class="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold flex-shrink-0 overflow-hidden">
+				{#if permisosState.fotoUrl}
+					<!-- Ticket #121: foto del trabajador vinculado a este usuario. -->
+					<img src={toDriveThumbnailUrl(permisosState.fotoUrl, 120)} alt="" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+				{:else}
+					{permisosState.userInitial}
+				{/if}
 			</div>
 			{#if !effectiveCollapsed}
 				<div class="min-w-0 flex-1">

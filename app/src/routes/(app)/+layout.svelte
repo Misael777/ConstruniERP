@@ -7,6 +7,8 @@
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import NotificacionesBell from '$lib/components/layout/NotificacionesBell.svelte';
 	import ActualizacionBell from '$lib/components/layout/ActualizacionBell.svelte';
+	import AlertasTareas from '$lib/components/layout/AlertasTareas.svelte';
+	import MiAsistenciaAviso from '$lib/components/MiAsistenciaAviso.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import ConexionAviso from '$lib/shared/components/ConexionAviso.svelte';
 	import { loadPermisos, permisosState, hasPermiso } from '$lib/stores/permisos.svelte';
@@ -20,6 +22,7 @@
 	import ConfirmDialogHost from '$lib/shared/components/ConfirmDialogHost.svelte';
 	import InactividadGuard from '$lib/components/layout/InactividadGuard.svelte';
 	import { getInfoVersionApp, registrarVersionUsuario } from '$lib/shared/appVersion';
+	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import SnoopyLoader, { FONDO_CARGA } from '$lib/shared/components/SnoopyLoader.svelte';
 	import { iniciarSesionAuditoria, registrarCierre, cerrarSesion, esCierreManual } from '$lib/shared/auditoria';
 	import { cargarClientes } from '$lib/stores/clientes.svelte';
@@ -269,6 +272,8 @@
 	<!-- Cierre de sesión tras 10 minutos de inactividad, con aviso para continuar (ver InactividadGuard). -->
 	<InactividadGuard />
 	<DiagnosticoPanel />
+	<!-- Ticket #117: al entrar, quien marca desde el ERP (horario libre o mixto) confirma el inicio de su jornada. -->
+	<MiAsistenciaAviso />
 
 	<div class="flex h-screen bg-brand-gray overflow-hidden">
 		<!-- Main Content -->
@@ -294,13 +299,20 @@
 					<ActualizacionBell />
 					{#key refreshKey}
 						<NotificacionesBell />
+						<!-- Alertas de tareas por vencer de todo el ERP (imagen de la clienta, 20/11/2026). -->
+						<AlertasTareas />
 					{/key}
 					<div class="flex items-center gap-2 pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl">
-						<div class="w-8 h-8 rounded-full bg-[#1a233a] text-white flex items-center justify-center text-xs font-bold">
-							U
+						<!-- Ticket #121: foto del trabajador vinculado (RR.HH. → Personal) o sus iniciales, y su nombre (antes "U" / "Usuario"). -->
+						<div class="w-8 h-8 rounded-full bg-[#1a233a] text-white flex items-center justify-center text-xs font-bold overflow-hidden shrink-0">
+							{#if permisosState.fotoUrl}
+								<img src={toDriveThumbnailUrl(permisosState.fotoUrl, 120)} alt="" referrerpolicy="no-referrer" class="w-full h-full object-cover" />
+							{:else}
+								{permisosState.userInitial || 'U'}
+							{/if}
 						</div>
-						<div class="hidden sm:block">
-							<p class="text-xs font-bold text-slate-800 leading-none mb-1">Usuario</p>
+						<div class="hidden sm:block max-w-[11rem]">
+							<p class="text-xs font-bold text-slate-800 leading-none mb-1 truncate" title={permisosState.userName}>{permisosState.userName || 'Usuario'}</p>
 							<p class="text-[10px] text-brand-orange capitalize font-semibold leading-none">{userRole}</p>
 						</div>
 					</div>
