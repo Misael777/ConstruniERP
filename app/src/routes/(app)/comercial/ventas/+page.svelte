@@ -1110,7 +1110,7 @@ import { getResumenVenta, type ResumenVenta } from '$lib/modules/ventas/services
 	onGenerarComprobante={flujoActivo ? registrarComprobanteFlujo : null}
 />
 
-<ResumenCobroObra open={resumenObraCuenta !== null} idCuentaCobrar={resumenObraCuenta} titulo="Resumen de venta" soloLectura onClose={() => (resumenObraCuenta = null)} onCobrarPago={() => {}} />
+<ResumenCobroObra open={resumenObraCuenta !== null} idCuentaCobrar={resumenObraCuenta} titulo="Resumen de venta · Obra" soloLectura ocultable onClose={() => (resumenObraCuenta = null)} onCobrarPago={() => {}} />
 
 <!-- Resumen de venta (ícono ⓘ en Acciones): solo lectura, borrador o cerrada. -->
 <ResumenCuentaModal

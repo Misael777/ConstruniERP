@@ -7,6 +7,7 @@
 	import { goto } from '$app/navigation';
 	import { TriangleAlert, Users, Layers, Database, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
+	import { crearDetectorDeNovedades } from '$lib/shared/sonido';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { getAlertasTareas, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
 
@@ -14,7 +15,8 @@
 	let abierto = $state(false);
 	let cargando = $state(false);
 	let error = $state('');
-	let pestana = $state<'todas' | 'mias' | 'delegadas'>('todas');
+	// Ticket #137: abre en "Mis tareas" y el número del ícono cuenta solo las propias.
+	let pestana = $state<'todas' | 'mias' | 'delegadas'>('mias');
 	let verTodo = $state(false);
 	let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -36,7 +38,15 @@
 
 	const visibles = $derived(pestana === 'mias' ? alertas.filter(esMia) : pestana === 'delegadas' ? alertas.filter(esDelegada) : alertas);
 	const conteo = $derived({ todas: alertas.length, mias: alertas.filter(esMia).length, delegadas: alertas.filter(esDelegada).length });
-	const urgentes = $derived(alertas.filter((a) => etiquetaVencimiento(a.fecha).urgente).length);
+	const mias = $derived(alertas.filter(esMia));
+	const urgentes = $derived(mias.filter((a) => etiquetaVencimiento(a.fecha).urgente).length);
+
+	// Ticket #130: suena cuando aparece una alerta nueva a mi cargo (no en la primera carga).
+	let cargoUnaVez = $state(false);
+	const detectarNovedad = crearDetectorDeNovedades('alerta');
+	$effect(() => {
+		if (cargoUnaVez) detectarNovedad(mias.length);
+	});
 
 	async function cargar() {
 		if (!permisosState.loaded) return;
@@ -48,6 +58,7 @@
 				proyectos: hasPermiso('ver_proyectos_gestion'),
 				finanzas: hasPermiso('ver_finanzas_cuentas_pendientes')
 			});
+			cargoUnaVez = true;
 		} catch (err: any) {
 			error = err?.message ?? 'No se pudieron cargar las alertas.';
 		} finally {
@@ -59,6 +70,7 @@
 		abierto = !abierto;
 		if (abierto) {
 			verTodo = false;
+			pestana = 'mias';
 			cargar();
 		}
 	}
@@ -86,12 +98,12 @@
 		onclick={alternar}
 		class={`relative ${urgentes > 0 ? 'text-orange-500 hover:text-orange-600' : 'text-slate-400 hover:text-brand-orange'}`}
 		aria-label="Alertas de tareas"
-		title="Alertas de tareas"
+		title={`Alertas de tareas · ${mias.length} mía${mias.length === 1 ? '' : 's'} de ${alertas.length}`}
 	>
 		<TriangleAlert size={18} />
-		{#if alertas.length > 0}
+		{#if mias.length > 0}
 			<span class="absolute -top-1.5 -right-1.5 min-w-[14px] h-3.5 px-0.5 bg-red-500 rounded-full border-2 border-white text-[8px] leading-none text-white font-bold flex items-center justify-center">
-				{alertas.length > 99 ? '99+' : alertas.length}
+				{mias.length > 99 ? '99+' : mias.length}
 			</span>
 		{/if}
 	</button>
@@ -110,7 +122,7 @@
 					{#if cargando}<Loader2 size={14} class="ml-auto animate-spin text-slate-400" />{/if}
 				</div>
 				<div class="mt-3 flex gap-2">
-					{#each [['todas', `Todas (${conteo.todas})`], ['mias', `Mis tareas (${conteo.mias})`], ['delegadas', `Delegadas (${conteo.delegadas})`]] as [valor, texto] (valor)}
+					{#each [['mias', `Mis tareas (${conteo.mias})`], ['delegadas', `Delegadas (${conteo.delegadas})`], ['todas', `Todas (${conteo.todas})`]] as [valor, texto] (valor)}
 						<button
 							type="button"
 							onclick={() => (pestana = valor as typeof pestana)}

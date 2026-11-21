@@ -26,6 +26,7 @@
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
+	import { crearDetectorDeNovedades } from '$lib/shared/sonido';
 	// Módulo de Tickets (ver Documentacion/PlanModuloTicketsYReleases.md) — a pedido explícito del
 	// usuario: los tickets nuevos deben avisar al rol developer. Se agrega como una sección
 	// INDEPENDIENTE dentro de esta misma campanita (propio estado, propio canal Realtime), sin tocar
@@ -415,10 +416,18 @@
 			if (isAdmin()) await cargarAdmin();
 			else await cargarMias();
 			await cargarTickets();
+			cargaInicialHecha = true;
 		} finally {
 			isCargando = false;
 		}
 	}
+
+	// Ticket #130: suena cuando llega algo nuevo a la campana (el número sube), no en la primera carga.
+	let cargaInicialHecha = $state(false);
+	const detectarNovedad = crearDetectorDeNovedades('notificacion');
+	$effect(() => {
+		if (cargaInicialHecha) detectarNovedad(badgeCount);
+	});
 
 	onMount(() => {
 		logNotif(`Campanita montada — suscribiendo a Realtime + polling de respaldo cada ${POLL_INTERVAL_MS / 1000}s.`);

@@ -9,7 +9,8 @@
  *    por cuenta (no por cuota), para que la deuda antigua no infle el contador.
  *
  * "Mis tareas" = soy el responsable de la cuenta. "Delegadas" = la registré yo y el responsable es otra persona.
- * Las alertas sin responsable (Personal, cronograma) solo aparecen en "Todas".
+ * Personal: el responsable es "Responsable de los vencimientos" de la ficha (ticket #125). Sin responsable (o el
+ * cronograma) solo aparecen en "Todas".
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DIAS_AVISO_SCTR, DIAS_AVISO_VENCIMIENTO, hoyLima } from '$lib/modules/personal/services/personal.service';
@@ -68,14 +69,19 @@ export async function getAlertasTareas(client: SupabaseClient, modulos: Record<M
 }
 
 async function alertasPersonal(client: SupabaseClient, hoy: string): Promise<AlertaTarea[]> {
-	const { data, error } = await client
-		.from('personal')
-		.select('id_personal, nombres, apellidos, nombre, sctr_vencimiento, examen_medico_vencimiento')
-		.neq('estado', 'baja')
-		.or(`sctr_vencimiento.lte.${sumarDias(hoy, DIAS_AVISO_SCTR)},examen_medico_vencimiento.lte.${sumarDias(hoy, DIAS_AVISO_VENCIMIENTO)}`);
+	const consultar = (columnas: string) =>
+		client
+			.from('personal')
+			.select(columnas)
+			.neq('estado', 'baja')
+			.or(`sctr_vencimiento.lte.${sumarDias(hoy, DIAS_AVISO_SCTR)},examen_medico_vencimiento.lte.${sumarDias(hoy, DIAS_AVISO_VENCIMIENTO)}`);
+	const BASE = 'id_personal, nombres, apellidos, nombre, sctr_vencimiento, examen_medico_vencimiento';
+	let { data, error } = await consultar(`${BASE}, responsable_vencimientos`);
+	// Base sin la migración 20261121130000 (columna responsable_vencimientos): sin responsable.
+	if (error?.code === '42703' || error?.code === 'PGRST204') ({ data, error } = await consultar(BASE));
 	if (error) throw error;
 	const out: AlertaTarea[] = [];
-	for (const p of data ?? []) {
+	for (const p of (data ?? []) as any[]) {
 		const nombre = [p.nombres, p.apellidos].filter(Boolean).join(' ').trim() || p.nombre || `Trabajador #${p.id_personal}`;
 		const items: [string, string | null, number][] = [
 			['SCTR', p.sctr_vencimiento, DIAS_AVISO_SCTR],

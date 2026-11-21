@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 
-import { calcularFila, jornadaMinutos, tarifas, lunesDe, motivoMarca, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
+import { calcularFila, jornadaMinutos, tarifas, lunesDe, motivoMarca, fraccionDia, textoDias, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
 import type { Horario } from '$lib/modules/personal/services/horarios.service';
 import type { Personal } from '$lib/modules/personal/services/personal.service';
 
@@ -56,7 +56,7 @@ describe('calcularFila', () => {
 	it('pago por hora exacta: horas × (monto ÷ 7 ÷ jornada)', () => {
 		expect(sinHorario.minutos).toBe(480);
 		expect(sinHorario.tarifaHora).toBe(12.5);
-		expect(sinHorario.subtotal).toBe(100);
+		expect(sinHorario.subtotal).toBe(100); // 8 h de 8 h de jornada = 1 día × S/ 100
 		expect(sinHorario.dias[0].origen).toBe('huella');
 	});
 
@@ -67,9 +67,10 @@ describe('calcularFila', () => {
 		expect(fila.porRevisar).toBe(1);
 		expect(fila.diasTrabajados).toBe(2);
 	});
-	it('total = horas × tarifa + bonos; pendiente descuenta lo enviado', () => {
-		const esperado = Math.round(((17 * 60) / 60) * fila.tarifaHora * 100) / 100;
-		expect(fila.subtotal).toBeCloseTo(esperado, 1);
+	it('total = días × S/ por día + bonos; pendiente descuenta lo enviado (ticket #132)', () => {
+		// Dos días con 8.5 h (más de la mitad de la jornada) = 2 días completos.
+		expect(fila.diasPagados).toBe(2);
+		expect(fila.subtotal).toBeCloseTo(2 * fila.tarifaDia, 1);
 		expect(fila.total).toBeCloseTo(fila.subtotal + 50, 2);
 		expect(fila.pendiente).toBeCloseTo(fila.total - 30, 2);
 		expect(fila.fechaCxp).toBe('2026-11-09');
@@ -121,5 +122,21 @@ describe('motivoMarca (diagnóstico de marcas)', () => {
 	});
 	it('no cuenta una marca rechazada por el huellero', () => {
 		expect(motivoMarca({ evento: 27, id_centro_costo: 490, id_dispositivo: 1, pin: '7' }, 490, principal, obra).cuenta).toBe(false);
+	});
+});
+
+describe('fraccionDia (ticket #132: se paga por día o medio día)', () => {
+	it('más de la mitad de la jornada = 1 día; hasta la mitad = ½; sin horas = 0', () => {
+		expect(fraccionDia(0, 570)).toBe(0);
+		expect(fraccionDia(285, 570)).toBe(0.5); // "Medio día" exacto
+		expect(fraccionDia(286, 570)).toBe(1);
+		expect(fraccionDia(628, 570)).toBe(1); // 10:28 h → 1 día (no S/ por hora)
+		expect(fraccionDia(120, 0)).toBe(0.5); // sin jornada: 8 h por defecto
+	});
+	it('textoDias', () => {
+		expect(textoDias(1)).toBe('1 día');
+		expect(textoDias(0.5)).toBe('½ día');
+		expect(textoDias(3.5)).toBe('3½ días');
+		expect(textoDias(0)).toBe('0 días');
 	});
 });

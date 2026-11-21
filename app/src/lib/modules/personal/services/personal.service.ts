@@ -43,6 +43,8 @@ export interface Personal {
 	sctr_poliza: string | null;
 	sctr_vencimiento: string | null;
 	examen_medico_vencimiento: string | null;
+	/** Ticket #125: usuario del ERP (nombre) que renueva el SCTR / examen médico; sus alertas van a su "Mis tareas". */
+	responsable_vencimientos?: string | null;
 	/** Firmó el consentimiento para guardar su huella/rostro (Ley 29733); sin él la biometría no sale del huellero. */
 	consentimiento_biometrico: boolean;
 	consentimiento_fecha: string | null;

@@ -94,6 +94,7 @@
 		sctr_poliza: '',
 		sctr_vencimiento: null,
 		examen_medico_vencimiento: null,
+		responsable_vencimientos: null,
 		consentimiento_biometrico: false,
 		consentimiento_fecha: null,
 		id_empleado: null,
@@ -192,6 +193,14 @@
 	let procesandoFoto = $state(false);
 	// En PC el botón «Cámara» solo volvía a abrir el explorador de archivos (y el aviso de girar la cámara no aplica):
 	// se muestra solo en el teléfono.
+	// Ticket #125: usuarios del ERP (por nombre) para "Responsable de los vencimientos".
+	let responsablesErp = $state<{ value: string; label: string }[]>([]);
+	void supabase
+		.from('empleados')
+		.select('nombre')
+		.eq('estado', 'activo')
+		.order('nombre')
+		.then(({ data }) => (responsablesErp = (data ?? []).filter((e) => e.nombre).map((e) => ({ value: e.nombre as string, label: e.nombre as string }))));
 	let telefono = $state(false);
 	void esTelefono().then((v) => (telefono = v)).catch(() => {});
 	const fotoVista = $derived(fotoNuevaUrl ?? (form.foto_url ? toDriveThumbnailUrl(form.foto_url, 300) : null));
@@ -329,6 +338,7 @@
 			fecha_cese: form.fecha_cese || null,
 			sctr_vencimiento: form.sctr_vencimiento || null,
 			examen_medico_vencimiento: form.examen_medico_vencimiento || null,
+			responsable_vencimientos: form.responsable_vencimientos || null,
 			consentimiento_fecha: form.consentimiento_biometrico ? form.consentimiento_fecha || null : null
 		};
 		guardando = true;
@@ -346,6 +356,8 @@
 			// Al editar, horario, usuario del ERP, consentimiento y huelleros se configuran en Asistencia → Configuración:
 			// no se envían para no pisar lo que se cambió ahí. En un alta van los huelleros de su obra o área.
 			if (personal) for (const k of ['id_horario', 'id_empleado', 'consentimiento_biometrico', 'consentimiento_fecha'] as const) delete (datos as Partial<DatosPersonal>)[k];
+			// Base sin la migración 20261121130000 (columna nueva): si no se eligió responsable, no se envía el campo.
+			if (!datos.responsable_vencimientos) delete (datos as Partial<DatosPersonal>).responsable_vencimientos;
 			// Huelleros: en un alta, los de su obra o área; al editar solo si cambió de obra (se cambian los de la anterior
 			// por los de la nueva, igual que «Mover»); si no, se dejan como estén en Asistencia → Configuración.
 			const obrasFinal = datos.id_centro_costo && !obrasElegidas.includes(datos.id_centro_costo) ? [datos.id_centro_costo, ...obrasElegidas] : obrasElegidas;
@@ -810,7 +822,12 @@
 									<input id="examen_medico_vencimiento" type="date" bind:value={form.examen_medico_vencimiento} aria-label="Vencimiento del examen médico" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
 								</div>
 							</div>
-							{@render nota('El ERP avisa en la lista de Personal 1 semana antes del vencimiento del SCTR y 30 días antes del examen médico.')}
+							<!-- Ticket #125: quién renueva el SCTR y el examen médico; sus alertas le llegan a "Mis tareas" (ícono ⚠). -->
+							{#snippet ctlResponsableVence()}
+								<SelectConSaldo id="responsable_vencimientos" value={form.responsable_vencimientos ?? ''} options={responsablesErp} placeholder="Sin responsable" encabezadoNombre="Usuario" onchange={(v) => (form.responsable_vencimientos = v || null)} />
+							{/snippet}
+							{@render campo('responsable_vencimientos', 'Responsable de los vencimientos', false, ctlResponsableVence)}
+							{@render nota('El ERP avisa 1 semana antes del vencimiento del SCTR y 30 días antes del examen médico, en la lista de Personal y en Alertas de tareas (en "Mis tareas" del responsable).')}
 						{/if}
 					</div>
 				</div>

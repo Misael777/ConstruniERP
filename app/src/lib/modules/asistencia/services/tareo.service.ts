@@ -7,9 +7,11 @@
  * de un huellero sin obra, si el trabajador está asignado a ella). Un ajuste del residente (tareo_ajuste) reemplaza
  * el cálculo; un feriado sin ajuste reconoce la jornada.
  *
- * Pago por hora exacta (decisión del usuario): S/ por día = monto_pago ÷ días calendario del periodo (diaria 1,
- * semanal 7, quincenal 15, mensual 30); tarifa por hora = S/ por día ÷ horas de su jornada (promedio de los días de
- * su horario; sin horario o libre, 8 h). Pago del día = horas reconocidas × tarifa. Total = suma + bonos.
+ * Pago por DÍA o MEDIO DÍA (ticket #132, 21/11/2026: "nosotros no pagamos por horas"; antes era por hora exacta):
+ * S/ por día = monto_pago ÷ días calendario del periodo (diaria 1, semanal 7, quincenal 15, mensual 30). Cada día vale
+ * 1 si las horas reconocidas superan la mitad de su jornada, ½ si hay horas pero no pasan la mitad, y 0 sin horas
+ * (ver fraccionDia). Pago del día = fracción × S/ por día. Total = suma + bonos. La jornada es el promedio de los días
+ * de su horario (sin horario o libre, 8 h); "Medio día" en la edición reconoce justo la mitad → ½ día.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { calcularAsistencia, sumarDias, diaSemana, reloj, duracion, type Marca, type DiaAsistencia } from './asistencia.service';
@@ -97,6 +99,8 @@ export interface DiaTareo {
 	ajuste: AjusteTareo | null;
 	feriado: FeriadoTareo | null;
 	asistencia: DiaAsistencia | null;
+	/** Ticket #132: 1 = día completo, 0.5 = medio día, 0 = sin pago. */
+	fraccion: number;
 	pago: number;
 }
 
@@ -109,6 +113,8 @@ export interface FilaTareo {
 	tarifaHora: number;
 	minutos: number;
 	diasTrabajados: number;
+	/** Ticket #132: días pagados (suma de fracciones: 1 o ½ por día). */
+	diasPagados: number;
 	subtotal: number;
 	bonos: number;
 	total: number;
@@ -133,6 +139,21 @@ export function tarifas(p: Pick<Personal, 'monto_pago' | 'periodicidad_pago'>, j
 	const monto = Number(p.monto_pago ?? 0);
 	const tarifaDia = monto > 0 ? monto / (DIAS_PERIODO[p.periodicidad_pago ?? ''] ?? 30) : 0;
 	return { tarifaDia, tarifaHora: jornadaMin > 0 ? tarifaDia / (jornadaMin / 60) : 0 };
+}
+
+/** Ticket #132: fracción de día que se paga según las horas reconocidas: más de la mitad de la jornada = 1 día,
+ * algo de horas hasta la mitad = ½ día, sin horas = 0. */
+export function fraccionDia(minutos: number, jornadaMin: number): number {
+	if (minutos <= 0) return 0;
+	return minutos > (jornadaMin || JORNADA_POR_DEFECTO_MIN) / 2 ? 1 : 0.5;
+}
+
+/** "1 día", "½ día", "3½ días". */
+export function textoDias(d: number): string {
+	const entero = Math.floor(d);
+	const medio = d - entero >= 0.5;
+	const num = entero === 0 && medio ? '½' : `${entero}${medio ? '½' : ''}`;
+	return `${num} día${d > 1 || d === 0 ? 's' : ''}`;
 }
 
 /** Lunes de la semana de `fecha`. */
@@ -204,7 +225,8 @@ export function calcularFila(
 		} else {
 			estado = 'sin_marcas';
 		}
-		dias.push({ fecha, dia: diaSemana(fecha), estado, minutosHuellero, minutos, origen, ajuste, feriado, asistencia: a, pago: r2((minutos / 60) * tarifaHora) });
+		const fraccion = fraccionDia(minutos, jornadaMin);
+		dias.push({ fecha, dia: diaSemana(fecha), estado, minutosHuellero, minutos, origen, ajuste, feriado, asistencia: a, fraccion, pago: r2(fraccion * tarifaDia) });
 	}
 
 	const minutos = dias.reduce((t, d) => t + d.minutos, 0);
@@ -221,6 +243,7 @@ export function calcularFila(
 		tarifaHora,
 		minutos,
 		diasTrabajados: dias.filter((d) => d.minutos > 0).length,
+		diasPagados: dias.reduce((t, d) => t + d.fraccion, 0),
 		subtotal,
 		bonos,
 		total,
@@ -547,7 +570,7 @@ export async function generarTareoXLSX(obra: ObraTareo, lunes: string, filas: Fi
 
 	const hoja = wb.addWorksheet('Tareo');
 	hoja.addRow([`Tareo semanal · ${obra.codigo} ${obra.nombre}`]).font = { bold: true, size: 13 };
-	hoja.addRow([`Semana del ${ddmm(lunes)} al ${ddmm(fechas[6])}/${fechas[6].slice(0, 4)} · horas reconocidas por día`]);
+	hoja.addRow([`Semana del ${ddmm(lunes)} al ${ddmm(fechas[6])}/${fechas[6].slice(0, 4)} · días pagados (1 = día completo, 0.5 = medio día)`]);
 	hoja.addRow([]);
 	const cab = hoja.addRow(['Trabajador', 'Documento', 'Cargo', ...fechas.map((f, i) => `${DIAS_CORTOS[i]} ${ddmm(f)}`), 'Días', 'Horas', 'S/ día', 'S/ hora', 'Subtotal', 'Bonos', 'Total', 'Enviado a CxP', 'Pendiente', 'Fecha CxP']);
 	cab.font = { bold: true };
@@ -560,8 +583,8 @@ export async function generarTareoXLSX(obra: ObraTareo, lunes: string, filas: Fi
 			nombreCompleto(f.personal),
 			f.personal.numero_documento ?? '',
 			f.personal.cargo ?? '',
-			...f.dias.map((d) => (d.minutos ? r2(d.minutos / 60) : d.estado === 'falta' ? 'F' : d.estado === 'feriado' ? 'FER' : '')),
-			f.diasTrabajados,
+			...f.dias.map((d) => (d.fraccion ? d.fraccion : d.estado === 'falta' ? 'F' : d.estado === 'feriado' ? 'FER' : '')),
+			f.diasPagados,
 			r2(f.minutos / 60),
 			r2(f.tarifaDia),
 			r2(f.tarifaHora),

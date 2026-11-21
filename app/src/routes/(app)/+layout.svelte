@@ -279,8 +279,10 @@
 		<!-- Main Content -->
 		<main class={`flex-1 overflow-y-auto transition-all duration-200 ${sidebarCollapsed ? 'md:ml-[76px]' : 'md:ml-[280px]'}`}>
 			<!-- Placeholder Topbar para Layout General -->
-			<header class="bg-white border-b border-slate-100 h-16 px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
-				<div class="flex items-center gap-4">
+			<!-- Ticket #135: en el celular la fila se compacta (menos margen y separación) para que entren todos los íconos,
+			     incluido el ⚠ de Alertas de tareas. -->
+			<header class="bg-white border-b border-slate-100 h-16 px-3 sm:px-6 flex items-center justify-end sticky top-0 z-20 shadow-sm">
+				<div class="flex items-center gap-2.5 sm:gap-4 min-w-0">
 					{#if versionApp}
 						<button type="button" onclick={tocarVersion} class="text-[11px] font-medium text-slate-400 select-text" title="Versión de la app instalada">v{versionApp}</button>
 					{/if}
@@ -302,7 +304,7 @@
 						<!-- Alertas de tareas por vencer de todo el ERP (imagen de la clienta, 20/11/2026). -->
 						<AlertasTareas />
 					{/key}
-					<div class="flex items-center gap-2 pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl">
+					<div class="flex items-center gap-2 pl-2 sm:pl-4 border-l border-slate-200 cursor-pointer hover:bg-slate-50 p-1 rounded-xl shrink-0">
 						<!-- Ticket #121: foto del trabajador vinculado (RR.HH. → Personal) o sus iniciales, y su nombre (antes "U" / "Usuario"). -->
 						<div class="w-8 h-8 rounded-full bg-[#1a233a] text-white flex items-center justify-center text-xs font-bold overflow-hidden shrink-0">
 							{#if permisosState.fotoUrl}

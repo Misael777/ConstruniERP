@@ -25,6 +25,8 @@
 		/** Sube cuando la página registra un cobro, para volver a leer el resumen. */
 		recargar = 0,
 		soloLectura = false,
+		/** Ticket #129: ojo junto al título que oculta todos los montos (como el Resumen de venta de Consultoría). */
+		ocultable = false,
 		onClose,
 		onCobrarPago
 	}: {
@@ -33,6 +35,7 @@
 		titulo?: string;
 		recargar?: number;
 		soloLectura?: boolean;
+		ocultable?: boolean;
 		onClose: () => void;
 		onCobrarPago: (idCobro: number) => void;
 	} = $props();
@@ -165,13 +168,30 @@
 		visorAbierto = true;
 	}
 	const comprobantesDe = (g: GrupoObra) => g.pagos.filter((p) => p.comprobante_url).length;
+
+	// Ticket #129: con `ocultable` arranca oculto (igual que Consultoría); el ojo del título muestra/oculta todo a la vez.
+	let montosVisibles = $state(false);
+	$effect(() => {
+		if (!open) montosVisibles = false;
+	});
+	const OCULTO = '••••••';
+	const verMontos = $derived(!ocultable || montosVisibles);
+	const m = (n: number) => (verMontos ? formatCurrency(n) : OCULTO);
+	const pctM = (n: number, total?: number) => (verMontos ? pct(n, total) : '••••');
 </script>
 
 {#if open}
 	<div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-2 sm:p-4" role="dialog" aria-modal="true" aria-label={titulo}>
 		<div class="w-full max-w-6xl max-h-[95dvh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
 			<div class="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white px-4 sm:px-6 py-3 border-b border-slate-100">
-				<h2 class="text-xl font-bold text-[#0f3b5e]">{titulo}</h2>
+				<div class="flex items-center gap-2 min-w-0">
+					<h2 class="text-xl font-bold text-[#0f3b5e] truncate">{titulo}</h2>
+					{#if ocultable}
+						<button type="button" onclick={() => (montosVisibles = !montosVisibles)} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0" title={montosVisibles ? 'Ocultar montos' : 'Mostrar montos'} aria-label={montosVisibles ? 'Ocultar montos' : 'Mostrar montos'}>
+							<i class={`fas ${montosVisibles ? 'fa-eye' : 'fa-eye-slash'}`}></i>
+						</button>
+					{/if}
+				</div>
 				<!-- Ticket #106: sin botón "Comprobantes (N)" acá — duplicaba el "Ver" de cada adelanto (mismo visor). -->
 				<div class="ml-auto flex items-center gap-2">
 				<button type="button" onclick={onClose} class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Cerrar"><i class="fas fa-times"></i></button>
@@ -190,9 +210,9 @@
 						<!-- Ticket #106: "Valor venta total del proyecto (S/)" ocupa dos líneas; cada casilla se apoya abajo para que los
 						     cuatro valores queden en la misma línea. -->
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-stretch">
-							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Valor venta total del proyecto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.valorVenta)}</p></div>
-							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Monto de adelanto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{formatCurrency(r.totalAdelantos)}</p></div>
-							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Porcentaje adelanto</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{pct(r.totalAdelantos)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Valor venta total del proyecto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{m(r.valorVenta)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Monto de adelanto (S/)</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{m(r.totalAdelantos)}</p></div>
+							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Porcentaje adelanto</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{pctM(r.totalAdelantos)}</p></div>
 							<div class="flex flex-col justify-end"><p class="text-xs text-slate-500 leading-tight">Fecha de venta</p><p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 font-semibold text-slate-800">{fmtFecha(r.fechaVenta)}</p></div>
 						</div>
 						<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:w-[520px]">
@@ -201,11 +221,11 @@
 									<p class="text-[11px] font-bold text-[#0f3b5e]">{k.t}</p>
 									<div class="mt-1 flex items-center gap-2">
 										<div class="h-2.5 flex-1 rounded-full bg-slate-200 overflow-hidden"><div class={`h-full ${k.color}`} style={`width:${Math.min(k.p, 100)}%`}></div></div>
-										<span class="text-sm font-bold text-[#0f3b5e]">{k.p.toFixed(2)} %</span>
+										<span class="text-sm font-bold text-[#0f3b5e]">{verMontos ? `${k.p.toFixed(2)} %` : '••••'}</span>
 									</div>
 									<div class="mt-1 grid grid-cols-2 gap-2 text-[11px] text-slate-500">
-										<div>{k.a}<p class="text-sm font-bold text-[#0f3b5e]">{formatCurrency(k.av)}</p></div>
-										<div>{k.b}<p class="text-sm font-bold text-[#0f3b5e]">{formatCurrency(Math.max(k.bv, 0))}</p></div>
+										<div>{k.a}<p class="text-sm font-bold text-[#0f3b5e]">{m(k.av)}</p></div>
+										<div>{k.b}<p class="text-sm font-bold text-[#0f3b5e]">{m(Math.max(k.bv, 0))}</p></div>
 									</div>
 								</div>
 							{/each}
@@ -228,9 +248,9 @@
 										<tr class="border-b border-slate-100">
 											<td class="py-2 px-2 text-center font-semibold">{g.numero}</td>
 											<td class="py-2 px-2">Adelanto {g.numero}</td>
-											<td class="py-2 px-2 text-right">{formatCurrency(g.total)}</td>
+											<td class="py-2 px-2 text-right">{m(g.total)}</td>
 											<td class="py-2 px-2 text-center">{fmtFecha(ultimaFecha(g))}</td>
-											<td class="py-2 px-2 text-right">{pct(g.total)}</td>
+											<td class="py-2 px-2 text-right">{pctM(g.total)}</td>
 											<td class="py-2 px-2 text-right">100.00 %</td>
 											<td class="py-2 px-2">
 												{#if comprobantesDe(g) > 0}<button type="button" onclick={() => verComprobante(g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null)} class="text-xs text-blue-600 hover:underline"><i class="fas fa-eye mr-1"></i>Ver{comprobantesDe(g) > 1 ? ` (${comprobantesDe(g)})` : ''}</button>{:else}<span class="text-xs text-slate-400">Sin comprobante</span>{/if}
@@ -262,16 +282,16 @@
 														<tbody>
 															{#each g.pagos as a (a.id_cobro)}
 																<tr class="border-t border-slate-100">
-																	<td class="py-1 text-center">{a.numero}</td><td class="py-1">Armada {a.numero}</td><td class="py-1 text-right">{formatCurrency(a.monto)}</td><td class="py-1 text-center">{fmtFecha(a.fecha)}</td>
-																	<td class="py-1 text-right">{pct(a.monto)}</td><td class="py-1 text-right">{pct(a.monto, g.total)}</td><td class="py-1 pl-3 text-slate-600">{a.observacion ?? ''}</td>
+																	<td class="py-1 text-center">{a.numero}</td><td class="py-1">Armada {a.numero}</td><td class="py-1 text-right">{m(a.monto)}</td><td class="py-1 text-center">{fmtFecha(a.fecha)}</td>
+																	<td class="py-1 text-right">{pctM(a.monto)}</td><td class="py-1 text-right">{pctM(a.monto, g.total)}</td><td class="py-1 pl-3 text-slate-600">{a.observacion ?? ''}</td>
 																	<td class="py-1 text-center">{#if a.comprobante_url}<button type="button" onclick={() => verComprobante(a.comprobante_url)} class="text-blue-600" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{:else}—{/if}</td>
 																</tr>
 																{#if a.detraccion}
 																	{@const d = a.detraccion}
 																	<tr class="bg-amber-50/50">
-																		<td></td><td class="py-1 pl-3 text-amber-800">↳ Detracción – Armada {a.numero}</td><td class="py-1 text-right">{formatCurrency(d.monto)}</td>
+																		<td></td><td class="py-1 pl-3 text-amber-800">↳ Detracción – Armada {a.numero}</td><td class="py-1 text-right">{m(d.monto)}</td>
 																		<td class="py-1 text-center" title="Vence 5 días hábiles después de la armada">{fmtFecha(d.fecha)}</td>
-																		<td class="py-1 text-right">{pct(d.monto)}</td><td class="py-1 text-right">{pct(d.monto, g.total)}</td>
+																		<td class="py-1 text-right">{pctM(d.monto)}</td><td class="py-1 text-right">{pctM(d.monto, g.total)}</td>
 																		<td class="py-1 pl-3">{@render estadoDetraccion(d)}</td>
 																		<td class="py-1 text-center">{#if d.comprobante_url}<button type="button" onclick={() => verComprobante(d.comprobante_url)} class="text-blue-600" aria-label="Ver comprobante de la detracción"><i class="fas fa-eye"></i></button>{:else}—{/if}</td>
 																	</tr>
@@ -289,7 +309,7 @@
 								</tbody>
 							</table>
 						</div>
-						<div class="flex justify-end px-4 py-2 border-t border-slate-100 text-sm"><span class="font-semibold text-slate-700 mr-3">Total adelantos:</span><span class="font-bold text-[#0f3b5e]">{formatCurrency(r.totalAdelantos)}</span></div>
+						<div class="flex justify-end px-4 py-2 border-t border-slate-100 text-sm"><span class="font-semibold text-slate-700 mr-3">Total adelantos:</span><span class="font-bold text-[#0f3b5e]">{m(r.totalAdelantos)}</span></div>
 					</section>
 
 					<!-- Valorizaciones -->
@@ -311,8 +331,8 @@
 												<button type="button" onclick={() => (abiertos[`v${g.id_grupo}`] = !abiertos[`v${g.id_grupo}`])} class="font-bold text-[#0f3b5e] flex items-center gap-2"><i class={`fas fa-chevron-${abiertos[`v${g.id_grupo}`] ? 'down' : 'right'} text-xs`}></i>Valorización {g.numero}</button>
 											</td>
 											<td class="py-2 px-2 text-slate-600">{g.pagos.length ? `Pago ${g.pagos.map((p) => p.numero).join(', ')}` : '—'}</td>
-											<td class="py-2 px-2 text-right font-semibold">{formatCurrency(g.total)}</td>
-											<td class="py-2 px-2 text-right">{pct(g.total)}</td>
+											<td class="py-2 px-2 text-right font-semibold">{m(g.total)}</td>
+											<td class="py-2 px-2 text-right">{pctM(g.total)}</td>
 											<td class="py-2 px-2">
 												<div class="flex items-center gap-2"><div class="h-2 flex-1 rounded-full bg-slate-200 overflow-hidden"><div class="h-full bg-blue-600" style={`width:${Math.min(g.avance, 100)}%`}></div></div><span class="text-xs font-semibold w-14 text-right">{g.avance.toFixed(2)} %</span></div>
 											</td>
@@ -343,7 +363,7 @@
 															{#each g.pagos as p, i (p.id_cobro)}
 																<tr class="border-t border-slate-100">
 																	<td class="py-1 text-center">{g.numero}.{i + 1}</td><td class="py-1">Pago {p.numero}</td><td class="py-1 text-center">{fmtFecha(p.fecha)}</td><td class="py-1">{p.partida ?? ''}</td>
-																	<td class="py-1 text-right">{formatCurrency(p.monto)}</td><td class="py-1 text-right">{pct(p.monto)}</td>
+																	<td class="py-1 text-right">{m(p.monto)}</td><td class="py-1 text-right">{pctM(p.monto)}</td>
 																	<td class="py-1 text-center">
 																		{#if p.estado === 'cobrado' || soloLectura}
 																			<span class={`inline-block px-2 py-0.5 rounded-md border text-[11px] font-semibold ${claseEstadoPago[p.estado]}`}>{etiquetaEstadoPago[p.estado]}</span>
@@ -366,7 +386,7 @@
 																	<tr class="bg-amber-50/50">
 																		<td></td><td class="py-1 pl-3 text-amber-800">↳ Detracción – Pago {p.numero}</td>
 																		<td class="py-1 text-center" title="Vence 5 días hábiles después del pago">{fmtFecha(d.fecha)}</td><td></td>
-																		<td class="py-1 text-right">{formatCurrency(d.monto)}</td><td class="py-1 text-right">{pct(d.monto)}</td>
+																		<td class="py-1 text-right">{m(d.monto)}</td><td class="py-1 text-right">{pctM(d.monto)}</td>
 																		<td class="py-1 text-center">{@render estadoDetraccion(d)}</td>
 																		<td class="py-1 text-center">{#if d.comprobante_url}<button type="button" onclick={() => verComprobante(d.comprobante_url)} class="p-1 text-slate-500" aria-label="Ver comprobante de la detracción"><i class="fas fa-eye"></i></button>{/if}</td>
 																	</tr>
@@ -392,7 +412,7 @@
 							</table>
 						</div>
 						{#if r.sinGrupo.length > 0}
-							<p class="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">Esta cuenta tiene {r.sinGrupo.length} cuota(s) sin valorización asignada (registradas antes): {r.sinGrupo.map((p) => `${formatCurrency(p.monto)} ${fmtFecha(p.fecha)}`).join(' · ')}.</p>
+							<p class="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">Esta cuenta tiene {r.sinGrupo.length} cuota(s) sin valorización asignada (registradas antes): {r.sinGrupo.map((p) => `${m(p.monto)} ${fmtFecha(p.fecha)}`).join(' · ')}.</p>
 						{/if}
 						{#if formVal && formVal.idGrupo === null}
 							<div class="px-4 py-3 border-t border-slate-100 bg-blue-50/50">{@render formularioValorizacion()}</div>
@@ -403,15 +423,15 @@
 							{:else}<span></span>{/if}
 							<table class="text-xs">
 								<tbody>
-									<tr><td class="pr-4 text-slate-600">Total valorizaciones</td><td class="pr-4 text-right">{formatCurrency(r.totalValorizacionesPlan)}</td><td class="text-right">{pct(r.totalValorizacionesPlan)}</td></tr>
-									<tr><td class="pr-4 text-slate-600">Total adelantos</td><td class="pr-4 text-right">{formatCurrency(r.totalAdelantos)}</td><td class="text-right">{pct(r.totalAdelantos)}</td></tr>
-									<tr class="font-bold text-[#0f3b5e]"><td class="pr-4">Total venta</td><td class="pr-4 text-right">{formatCurrency(r.valorVenta)}</td><td class="text-right">100.00 %</td></tr>
+									<tr><td class="pr-4 text-slate-600">Total valorizaciones</td><td class="pr-4 text-right">{m(r.totalValorizacionesPlan)}</td><td class="text-right">{pctM(r.totalValorizacionesPlan)}</td></tr>
+									<tr><td class="pr-4 text-slate-600">Total adelantos</td><td class="pr-4 text-right">{m(r.totalAdelantos)}</td><td class="text-right">{pctM(r.totalAdelantos)}</td></tr>
+									<tr class="font-bold text-[#0f3b5e]"><td class="pr-4">Total venta</td><td class="pr-4 text-right">{m(r.valorVenta)}</td><td class="text-right">100.00 %</td></tr>
 								</tbody>
 							</table>
 						</div>
 						{#if Math.abs(r.diferenciaPlan) >= 0.01}
 							<p class="px-4 py-2 text-xs border-t {r.diferenciaPlan > 0 ? 'text-amber-700 bg-amber-50 border-amber-100' : 'text-rose-700 bg-rose-50 border-rose-100'}">
-								{r.diferenciaPlan > 0 ? `Faltan ${formatCurrency(r.diferenciaPlan)} por programar en valorizaciones para llegar al valor de venta.` : `Las valorizaciones y adelantos superan el valor de venta en ${formatCurrency(-r.diferenciaPlan)}.`}
+								{r.diferenciaPlan > 0 ? `Faltan ${m(r.diferenciaPlan)} por programar en valorizaciones para llegar al valor de venta.` : `Las valorizaciones y adelantos superan el valor de venta en ${m(-r.diferenciaPlan)}.`}
 							</p>
 						{/if}
 					</section>

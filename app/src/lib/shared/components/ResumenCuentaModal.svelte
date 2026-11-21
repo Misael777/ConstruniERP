@@ -276,11 +276,11 @@
 		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
 			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3">
 				<div class="w-11 h-11 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0"><FileText size={20} /></div>
-				<div class="min-w-0"><p class="text-xs text-slate-500">Monto contratado</p><p class="text-xl font-bold text-[#0f3b5e] whitespace-nowrap">{formatCurrency(montoTotal)}</p></div>
+				<div class="min-w-0"><p class="text-xs text-slate-500">Monto contratado</p><p class="text-[clamp(1rem,1.6vw,1.25rem)] font-bold text-[#0f3b5e] whitespace-nowrap tabular-nums">{formatCurrency(montoTotal)}</p></div>
 			</div>
 			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3">
 				<div class="w-11 h-11 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center shrink-0"><Coins size={20} /></div>
-				<div class="min-w-0"><p class="text-xs text-slate-500">Próximo a cobrar</p><p class="text-xl font-bold text-[#0f3b5e] whitespace-nowrap">{#if !visible}<span class="tracking-widest">{OCULTO}</span>{:else}{kpi.proxima ? formatCurrency(kpi.proxima.monto) : '—'}{/if}</p></div>
+				<div class="min-w-0"><p class="text-xs text-slate-500">Próximo a cobrar</p><p class="text-[clamp(1rem,1.6vw,1.25rem)] font-bold text-[#0f3b5e] whitespace-nowrap tabular-nums">{#if !visible}<span class="tracking-widest">{OCULTO}</span>{:else}{kpi.proxima ? formatCurrency(kpi.proxima.monto) : '—'}{/if}</p></div>
 			</div>
 			{#each [{ t: 'Avance de cobranza programada', p: kpi.pctProgramado, a: 'Monto programado', av: kpi.programado, b: 'Saldo por programar', bv: kpi.porProgramar, barra: 'bg-blue-600', punto: 'bg-blue-600' }, { t: 'Avance de cobranza efectiva', p: kpi.pctCobrado, a: 'Total cobrado', av: kpi.cobrado, b: 'Saldo por cobrar', bv: kpi.porCobrar, barra: 'bg-emerald-500', punto: 'bg-emerald-500' }] as k (k.t)}
 				<div class="rounded-xl border border-slate-200 p-3">

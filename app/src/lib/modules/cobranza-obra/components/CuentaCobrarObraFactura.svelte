@@ -234,6 +234,11 @@
 	function nuevaLinea(sugerido: number): Nuevo {
 		return { key: ++secuencia, partida: '', fecha: getFechaLocalHoy(), observacion: '', monto: sugerido > 0 ? r2(sugerido) : null };
 	}
+	// Ticket #127 (Francesca): "Adelantos" y cada "Valorización" arrancan plegados para mantener el orden; al tocar su
+	// fila se despliega el detalle. Clave: 'A' (adelantos) o el id del grupo.
+	let desplegados = $state<Record<string, boolean>>({});
+	const alternarGrupo = (k: string | number) => (desplegados[k] = !desplegados[k]);
+
 	function agregarPagoA(g: GrupoObra) {
 		const usado = g.pagos.filter((p) => !borrarPagos.has(p.id_cobro)).reduce((s, p) => s + Number(pagos[p.id_cobro]?.monto ?? montoBruto(p)), 0) + (nuevosPagos[g.id_grupo] ?? []).reduce((s, n) => s + Number(n.monto ?? 0), 0);
 		nuevosPagos[g.id_grupo] = [...(nuevosPagos[g.id_grupo] ?? []), nuevaLinea(Number(montosVal[g.id_grupo] ?? g.total) - usado)];
@@ -419,8 +424,9 @@
 					</thead>
 					<tbody>
 						<!-- Adelantos (solo lectura) -->
-						<tr class="bg-slate-100 font-bold text-[#0f3b5e]"><td class="py-2 px-2">A</td><td class="py-2 px-2" colspan="5">Adelantos</td><td class="py-2 px-2 text-right tabular-nums">{formatCurrency(r.totalAdelantos)}</td><td></td><td></td></tr>
-						{#each r.adelantos as g (g.id_grupo)}
+						<!-- Ticket #127: "Adelantos" y cada "Valorización" arrancan plegados; al tocar la fila se despliega. -->
+						<tr class="bg-slate-100 font-bold text-[#0f3b5e] cursor-pointer hover:bg-slate-200/70" onclick={() => alternarGrupo('A')} title={desplegados.A ? 'Plegar adelantos' : 'Ver los adelantos'}><td class="py-2 px-2 whitespace-nowrap"><i class={`fas fa-chevron-${desplegados.A ? 'down' : 'right'} text-[10px] mr-1.5 text-slate-500`}></i>A</td><td class="py-2 px-2" colspan="5">Adelantos <span class="font-normal text-[11px] text-slate-500">({r.adelantos.length})</span></td><td class="py-2 px-2 text-right tabular-nums">{formatCurrency(r.totalAdelantos)}</td><td></td><td></td></tr>
+						{#each desplegados.A ? r.adelantos : [] as g (g.id_grupo)}
 							{@const comp = g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null}
 							<tr class="border-b border-slate-100">
 								<td class="py-2 px-2 pl-5 text-slate-600">{g.numero}</td><td class="py-2 px-2">Adelanto {g.numero}{g.pagos.length > 1 ? ` (${g.pagos.length} armadas)` : ''}</td>
@@ -436,7 +442,7 @@
 								<td class="py-2 px-2 text-center">{#if g.pagos.length === 0 && puedeLineas}<button type="button" onclick={() => (adelantoAEliminar = g)} class="p-1 text-rose-500 hover:text-rose-700" title={`Eliminar Adelanto ${g.numero} (sin armadas)`} aria-label={`Eliminar Adelanto ${g.numero}`}><i class="fas fa-trash-alt"></i></button>{/if}{#if comp}<button type="button" onclick={() => (visor = { url: comp, titulo: `Adelanto ${g.numero}` })} class="p-1 text-slate-500 hover:text-[#0f3b5e]" aria-label="Ver comprobante"><i class="fas fa-eye"></i></button>{/if}</td>
 							</tr>
 						{:else}
-							<tr class="border-b border-slate-100"><td colspan="9" class="py-2 px-2 pl-5 text-xs text-slate-400">Sin adelantos (se registran desde Ventas).</td></tr>
+							{#if desplegados.A}<tr class="border-b border-slate-100"><td colspan="9" class="py-2 px-2 pl-5 text-xs text-slate-400">Sin adelantos (se registran desde Ventas).</td></tr>{/if}
 						{/each}
 
 						<!-- Valorizaciones -->
@@ -444,7 +450,7 @@
 							{@const fuera = borrarVals.has(g.id_grupo)}
 							{@const compVal = g.pagos.find((p) => p.comprobante_url)?.comprobante_url ?? null}
 							<tr class={`bg-slate-100 font-bold text-[#0f3b5e] ${fuera ? 'opacity-50 line-through' : ''}`}>
-								<td class="py-1.5 px-2">{g.numero}</td><td class="py-1.5 px-2" colspan="5">Valorización {g.numero}</td>
+								<td class="py-1.5 px-2 whitespace-nowrap cursor-pointer" onclick={() => alternarGrupo(g.id_grupo)}><i class={`fas fa-chevron-${desplegados[g.id_grupo] ? 'down' : 'right'} text-[10px] mr-1.5 text-slate-500`}></i>{g.numero}</td><td class="py-1.5 px-2 cursor-pointer" colspan="5" onclick={() => alternarGrupo(g.id_grupo)} title={desplegados[g.id_grupo] ? 'Plegar' : 'Ver los pagos de esta valorización'}>Valorización {g.numero} <span class="font-normal text-[11px] text-slate-500">({g.pagos.length} pago{g.pagos.length === 1 ? '' : 's'})</span></td>
 								<td class="py-1.5 px-2 text-right">
 									{#if puedeLineas && !fuera && g.estado !== 'completada'}
 										<input type="number" min="0.01" step="0.01" bind:value={montosVal[g.id_grupo]} aria-label={`Monto de la Valorización ${g.numero}`} class={`${celda} text-right font-bold text-[#0f3b5e]`} />
@@ -458,7 +464,7 @@
 									{/if}
 								</td>
 							</tr>
-							{#if !fuera}
+							{#if !fuera && desplegados[g.id_grupo]}
 								{#each g.pagos as p, i (p.id_cobro)}
 									{@const quitado = borrarPagos.has(p.id_cobro)}
 									<tr class={`border-b border-slate-100 ${quitado ? 'opacity-50 line-through' : ''}`}>

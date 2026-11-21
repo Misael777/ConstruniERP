@@ -38,7 +38,9 @@
 		type DiaTareo,
 		type FeriadoTareo,
 		type EstadoAjuste,
-		type DatosTareo
+		type DatosTareo,
+		fraccionDia,
+		textoDias
 	} from '../services/tareo.service';
 
 	const hoy = hoyLima();
@@ -233,9 +235,21 @@
 		}
 		const sinRevisar = envios.filter((e) => e.fila.porRevisar).length;
 		const suma = envios.reduce((t, e) => t + e.monto, 0);
+		// Ticket #133: cada trabajador va a la planilla de SU periodicidad (semanal / quincenal / mensual). Antes el
+		// mensaje decía "la planilla de la obra" y, si alguien cobraba mensual, aparecía una segunda CxP sin aviso.
+		const GRUPO: Record<string, string> = { quincenal: 'quincenal', mensual: 'mensual' };
+		const porPlanilla = new Map<string, { n: number; monto: number }>();
+		for (const e of envios) {
+			const g = GRUPO[e.fila.personal.periodicidad_pago ?? ''] ?? 'semanal';
+			const a = porPlanilla.get(g) ?? { n: 0, monto: 0 };
+			porPlanilla.set(g, { n: a.n + 1, monto: a.monto + e.monto });
+		}
+		const detallePlanillas = [...porPlanilla.entries()]
+			.map(([g, v]) => `Planilla ${g} ${obra!.codigo}: ${formatCurrency(v.monto)} (${v.n} trabajador${v.n === 1 ? '' : 'es'})`)
+			.join(' · ');
 		const ok = await confirmar({
 			title: 'Enviar a Cuentas por Pagar',
-			message: `Se enviarán ${formatCurrency(suma)} de ${envios.length} trabajador${envios.length === 1 ? '' : 'es'} a la planilla de ${obra.codigo} (Cuentas por Pagar, proveedor "Planilla de personal"). La semana queda aprobada a tu nombre.${sinRevisar ? ` Ojo: ${sinRevisar} tiene${sinRevisar === 1 ? '' : 'n'} días sin marca de salida sin revisar (no se pagan).` : ''}`,
+			message: `Se enviarán ${formatCurrency(suma)} de ${envios.length} trabajador${envios.length === 1 ? '' : 'es'} a Cuentas por Pagar (proveedor "Planilla de personal"). ${porPlanilla.size > 1 ? `Van a ${porPlanilla.size} planillas distintas según cada cuánto cobra el trabajador: ` : ''}${detallePlanillas}. En la CxP de cada planilla también figura, aparte, la "Proyección de planilla" del personal que aún no tiene tareo enviado. La semana queda aprobada a tu nombre.${sinRevisar ? ` Ojo: ${sinRevisar} tiene${sinRevisar === 1 ? '' : 'n'} días sin marca de salida sin revisar (no se pagan).` : ''}`,
 			confirmLabel: 'Enviar',
 			danger: false
 		});
@@ -380,7 +394,9 @@
 		title={`${DIAS_SEMANA[d.dia - 1]} ${ddmm(d.fecha)} · ${est.texto || 'Por venir'}${d.origen ? ` · ${ORIGENES[d.origen].texto}` : ''}${d.ajuste?.observacion ? ` · ${d.ajuste.observacion}` : ''}${editable ? ' — clic para editar' : ''}`}
 		class={`w-full min-w-[46px] h-12 rounded-lg border px-1 py-1 flex flex-col items-center justify-center gap-0.5 text-center transition-shadow ${est.clase} ${editable ? 'hover:shadow-md hover:ring-1 hover:ring-blue-300 cursor-pointer' : 'cursor-default'}`}
 	>
-		<span class="text-sm font-bold leading-none">{d.minutos ? horas(d.minutos) : d.estado === 'falta' ? 'F' : d.estado === 'por_venir' ? '' : '—'}</span>
+		<!-- Ticket #132: se paga por día o medio día; lo grande es "1" o "½" y las horas van debajo, chicas. -->
+		<span class="text-base font-extrabold leading-none">{d.fraccion ? (d.fraccion === 1 ? '1' : '½') : d.estado === 'falta' ? 'F' : d.estado === 'por_venir' ? '' : '—'}</span>
+		{#if d.minutos}<span class="text-[9px] leading-none text-slate-500 tabular-nums">{horas(d.minutos)}</span>{/if}
 		<span class="flex items-center gap-1 text-[9px] leading-none">
 			{#if d.origen}<i class={`fas ${ORIGENES[d.origen].icono} ${ORIGENES[d.origen].color}`}></i>{/if}
 			{#if d.estado !== 'asistio' && d.estado !== 'por_venir'}<span class="truncate max-w-[52px]">{est.texto}</span>{/if}
@@ -456,7 +472,7 @@
 
 		<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
 			{#each Object.entries(ORIGENES) as [, o]}<span class="flex items-center gap-1.5"><i class={`fas ${o.icono} ${o.color}`}></i>{o.texto}</span>{/each}
-			<span>· Horas reconocidas (h:mm). {puedeAprobar ? 'Toca un día para corregirlo.' : ''}</span>
+			<span>· Se paga por día: 1 = día completo, ½ = medio día (las horas van debajo). {puedeAprobar ? 'Toca un día para corregirlo.' : ''}</span>
 		</div>
 
 		{#if !filas.length}
@@ -477,7 +493,7 @@
 									{#if fer}<div class="text-[10px] text-sky-600 font-semibold" title={fer.descripcion ?? 'Feriado'}>Feriado</div>{/if}
 								</th>
 							{/each}
-							<th class="px-2 py-2 text-right">Horas</th>
+							<th class="px-2 py-2 text-right">Días</th>
 							<th class="px-2 py-2 text-right">Bonos</th>
 							<th class="px-2 py-2 text-right">Total</th>
 							<th class="px-2 py-2 text-left">Fecha CxP</th>
@@ -497,11 +513,11 @@
 									{#if f.sinMonto}
 										<div class="text-[11px] text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin monto de pago en Personal</div>
 									{:else}
-										<div class="text-[11px] text-slate-500" title={`${etiquetaMonto(f.personal.periodicidad_pago)} ${formatCurrency(Number(f.personal.monto_pago))} · jornada ${duracion(f.jornadaMin)}`}>{formatCurrency(f.tarifaDia)}/día · {formatCurrency(f.tarifaHora)}/h</div>
+										<div class="text-[11px] text-slate-500" title={`${etiquetaMonto(f.personal.periodicidad_pago)} ${formatCurrency(Number(f.personal.monto_pago))} · jornada ${duracion(f.jornadaMin)}`}>{formatCurrency(f.tarifaDia)}/día</div>
 									{/if}
 								</td>
 								{#each f.dias as d (d.fecha)}<td class="px-0.5 py-2">{@render celda(f, d)}</td>{/each}
-								<td class="px-2 py-2 text-right whitespace-nowrap"><div class="font-semibold text-slate-800">{horas(f.minutos)}</div><div class="text-[11px] text-slate-400">{f.diasTrabajados} día{f.diasTrabajados === 1 ? '' : 's'}</div></td>
+								<td class="px-2 py-2 text-right whitespace-nowrap"><div class="text-base font-bold text-slate-800">{textoDias(f.diasPagados)}</div><div class="text-[11px] text-slate-400 tabular-nums">{horas(f.minutos)} h</div></td>
 								<td class="px-2 py-2 text-right">
 									{#if puedeAprobar}
 										<input type="text" inputmode="decimal" bind:value={bonos[id]} onblur={() => guardarFila(f)} placeholder="0.00" class="w-16 px-1.5 py-1 border border-slate-200 rounded-lg text-right text-xs" aria-label="Bonos" />
@@ -547,11 +563,11 @@
 							<div class="min-w-0 flex-1">
 								<div class="font-semibold text-slate-800">{nombreCompleto(f.personal)}</div>
 								{@render botonMarcas(f)}
-								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día · ${formatCurrency(f.tarifaHora)}/h`}</div>
+								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día`}</div>
 							</div>
 							<div class="text-right">
 								<div class="font-bold text-slate-800">{formatCurrency(totalDe(f))}</div>
-								<div class="text-[11px] text-slate-500">{horas(f.minutos)} h · {f.diasTrabajados} d</div>
+								<div class="text-[11px] text-slate-500">{textoDias(f.diasPagados)} · {horas(f.minutos)} h</div>
 							</div>
 						</div>
 						<div class="grid grid-cols-7 gap-1">
@@ -689,7 +705,10 @@
 			<label class="flex flex-col gap-1 text-sm font-medium text-slate-700">Observación
 				<input type="text" bind:value={edObservacion} maxlength="200" placeholder="Ej.: lluvia, se paró la obra a mediodía" class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal" />
 			</label>
-			<div class="text-sm text-slate-600">Importe del día: <b class="text-slate-800">{formatCurrency(Math.round((minutosEditados / 60) * e.fila.tarifaHora * 100) / 100)}</b> <span class="text-xs text-slate-400">({horas(minutosEditados)} h × {formatCurrency(e.fila.tarifaHora)})</span></div>
+			{#if true}
+				{@const fr = fraccionDia(minutosEditados, e.fila.jornadaMin)}
+				<div class="text-sm text-slate-600">Importe del día: <b class="text-slate-800">{formatCurrency(Math.round(fr * e.fila.tarifaDia * 100) / 100)}</b> <span class="text-xs text-slate-400">({fr === 1 ? '1 día' : fr ? '½ día' : 'sin pago'} × {formatCurrency(e.fila.tarifaDia)} · más de la mitad de la jornada = día completo)</span></div>
+			{/if}
 			<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" bind:checked={edTodos} /> Aplicar a todos los trabajadores de esta obra ({todasFilas.length})</label>
 			<div class="flex flex-wrap justify-between gap-2 pt-1">
 				{#if e.dia.ajuste}
