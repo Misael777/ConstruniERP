@@ -2822,7 +2822,7 @@
 	}
 	/** Opciones de un campo con saldo, ya con su grupo y ordenadas por grupo (orden estable dentro de cada uno). */
 	function opcionesConSaldo(field: (typeof formFields)[number]) {
-		const opciones = optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }));
+		const opciones = optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, nombre: opt.nombre, detalle: opt.detalle, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }));
 		if (!esCampoCentroCosto(field) || usaGrupoReceptorPrestamo(field)) return opciones;
 		const rango = (g: string | undefined) => {
 			const i = ORDEN_GRUPO_CENTRO.indexOf(g ?? '');
@@ -3447,7 +3447,7 @@
 {:else if esCuentaPropiaBancaria && medioPagoEsEfectivo}
 			<p class="hidden sm:block mt-1 text-xs text-slate-400">Primero las cuentas de Efectivo; si eliges una cuenta bancaria, el Medio de pago pasa a "Transferencia bancaria".</p>
 		{:else if field.key === 'cuente_origen' && cuentaOrigenEsBancaria && (formValues.tipo === 'egreso' || bloqueadoPorInterna) && cuentasBancoIngresosOrigen.length > 0}
-			<p class="hidden sm:block mt-1 text-xs text-slate-400">Solo cuentas que recibieron algún Ingreso de este Centro de Costo Origen.</p>
+			<p class="hidden sm:block mt-1 text-xs text-slate-400">Solo cuentas que recibieron dinero de este Centro de Costo Origen (Ingreso o Transacción Interna).</p>
 		{:else if (field.key === 'cuente_destino' && cuentaDestinoEsBancaria) || (field.key === 'cuente_origen' && cuentaOrigenEsBancaria)}
 			<p class="hidden sm:block mt-1 text-xs text-slate-400">Se elige entre las cuentas bancarias registradas (Finanzas → Cuentas Bancarias).</p>
 		{:else if field.helpText}

@@ -51,6 +51,10 @@
 		/** Color del punto que se dibuja antes de la etiqueta (ej. Prioridad: rojo/ámbar/verde), tanto en el
 		 * valor elegido como en la lista. undefined = sin punto. */
 		color?: string;
+		/** Nombre corto para la 1.ª línea de la lista (ej. titular de la cuenta). undefined = `label`. */
+		nombre?: string;
+		/** 2.ª línea, más chica, en la lista (ej. "Banco · N.° de cuenta: …"). También entra en la búsqueda. */
+		detalle?: string;
 	}
 
 	let {
@@ -115,7 +119,7 @@
 	const opcionesFiltradas = $derived.by(() => {
 		const q = normalizar(busqueda.trim());
 		if (!q) return options;
-		return options.filter((o) => normalizar(o.label).includes(q));
+		return options.filter((o) => normalizar(`${o.label} ${o.detalle ?? ''}`).includes(q));
 	});
 
 	// Más ancho que el propio botón (a pedido explícito del usuario) — ANCHO_MIN fijo, salvo que el
@@ -147,7 +151,7 @@
 		const fuente = getComputedStyle(buttonEl).fontFamily;
 		lienzoMedida.font = `500 11px ${fuente}`;
 		let nombre = 0;
-		for (const o of options) nombre = Math.max(nombre, lienzoMedida.measureText(o.label).width);
+		for (const o of options) nombre = Math.max(nombre, lienzoMedida.measureText(o.nombre ?? o.label).width, o.detalle ? lienzoMedida.measureText(o.detalle).width * 0.9 : 0);
 		lienzoMedida.font = `600 11px ${fuente}`;
 		let saldo = lienzoMedida.measureText('SALDO ACTUAL').width;
 		for (const o of options) if (o.saldo !== undefined) saldo = Math.max(saldo, lienzoMedida.measureText(formatSaldoOpcion(o)).width);
@@ -338,7 +342,10 @@
 						style={columnasConSaldo}
 						class={`w-full grid items-stretch gap-2 px-3 py-1 text-[11px] text-left border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
 					>
-						<span class="min-w-0 self-center break-words leading-snug" title={opt.label}>{conCortes(opt.label)}</span>
+						<span class="min-w-0 self-center break-words leading-snug" title={opt.label}>
+							{conCortes(opt.nombre ?? opt.label)}
+							{#if opt.detalle}<span class={`block text-[10px] ${opt.value === value ? 'text-blue-600' : 'text-slate-500'}`}>{conCortes(opt.detalle)}</span>{/if}
+						</span>
 						{#if opt.saldo !== undefined}
 							<span class={`flex items-center justify-end border-l border-slate-100 pl-2 font-semibold tabular-nums whitespace-nowrap ${opt.saldo >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSaldoOpcion(opt)}</span>
 						{:else}
@@ -354,7 +361,10 @@
 						class={`w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-left border-b border-slate-100 last:border-b-0 hover:bg-slate-50 ${opt.value === value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-700'}`}
 					>
 						{#if opt.color}<span class="w-2 h-2 rounded-full shrink-0" style={`background-color:${opt.color}`}></span>{/if}
-						<span class="flex-1 min-w-0 break-words leading-snug" title={opt.label}>{conCortes(opt.label)}</span>
+						<span class="flex-1 min-w-0 break-words leading-snug" title={opt.label}>
+							{conCortes(opt.nombre ?? opt.label)}
+							{#if opt.detalle}<span class={`block text-[10px] ${opt.value === value ? 'text-blue-600' : 'text-slate-500'}`}>{conCortes(opt.detalle)}</span>{/if}
+						</span>
 					</button>
 				{/if}
 			{:else}

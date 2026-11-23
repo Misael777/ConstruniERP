@@ -331,7 +331,9 @@ export async function getCuentasBancoUsadasEnIngresos(client: SupabaseClient, id
 		.from(TABLE_NAME)
 		.select('cuente_destino')
 		.eq('estado', 'activo')
-		.eq('tipo', 'ingreso')
+		// También la Transacción Interna recibida (tipo 'transferencia'), a pedido del usuario (23/11/2026): si un
+		// proyecto recibió S/ 1,000 de otro en "MI CAJA EFECTIVO", al pagar debe ofrecer esa caja, no todas.
+		.in('tipo', ['ingreso', 'transferencia'])
 		.eq('id_centro_costo_destino', idCentroCosto)
 		.not('cuente_destino', 'is', null);
 	if (error) throw error;

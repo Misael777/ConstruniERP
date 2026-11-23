@@ -291,5 +291,12 @@ export async function getCuentaBancoOptions(client: SupabaseClient): Promise<Fie
 		.eq('activo', true)
 		.order('titular_cuenta');
 	if (error) throw error;
-	return (data ?? []).map((c: any) => ({ value: c.numero_cuenta, label: `${c.titular_cuenta} - ${c.numero_cuenta}` }));
+	// nombre/detalle (a pedido del usuario, 23/11/2026): en la lista desplegable el N.° de cuenta se ve en su
+	// propia línea, junto al banco. `label` no cambia (se usa en comprobantes y mensajes).
+	return (data ?? []).map((c: any) => ({
+		value: c.numero_cuenta,
+		label: `${c.titular_cuenta} - ${c.numero_cuenta}`,
+		nombre: c.titular_cuenta,
+		detalle: [c.nombre_banco, `N.° de cuenta: ${c.numero_cuenta}`].filter(Boolean).join(' · ')
+	}));
 }

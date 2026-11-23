@@ -19,6 +19,10 @@ export type FieldType = 'text' | 'number' | 'currency' | 'select' | 'date' | 're
 export interface FieldOption {
 	value: string;
 	label: string;
+	/** Opcional, solo para listas que lo muestran (SelectConSaldo): nombre corto en la 1.ª línea y detalle en
+	 * la 2.ª (ej. cuentas bancarias: titular / "Banco · N.° de cuenta"). Sin ellos se muestra `label`. */
+	nombre?: string;
+	detalle?: string;
 }
 
 export interface FieldConfig {
