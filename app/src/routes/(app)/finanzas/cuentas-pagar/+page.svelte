@@ -26,7 +26,11 @@
 		confirmarPagoPagado,
 		getMontoFiltrado,
 		getPrestamistaDeCuentaPagar,
-		getPrestamistasDeCuentasPagar
+		getPrestamistasDeCuentasPagar,
+		esCuentaPlanilla,
+		getTrabajadoresDeCuotasPlanilla,
+		confirmarPagosGlobal,
+		transaccionSugeridaPagoGlobal
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
@@ -727,11 +731,44 @@
 	 * un préstamo. */
 	let prestamistaResumen = $state<string | null>(null);
 
+	// Tickets #134/#122: en una CxP de planilla (tareo) cada cuota muestra su trabajador y cargo, y se pueden
+	// seleccionar varias para pagarlas juntas con una sola transacción (pago global).
+	let planillaResumen = $state<Map<number, { trabajador: string; cargo: string | null }> | null>(null);
+
 	async function openResumen(item: CuentaPagar) {
 		selectedId = item.id_cuenta_pagar;
-		const [, prestamista] = await Promise.all([fetchSelectedPagos(), getPrestamistaDeCuentaPagar(supabase, item).catch(() => null)]);
+		const [, prestamista, esPlanilla] = await Promise.all([
+			fetchSelectedPagos(),
+			getPrestamistaDeCuentaPagar(supabase, item).catch(() => null),
+			esCuentaPlanilla(supabase, item.id_cuenta_pagar).catch(() => false)
+		]);
 		prestamistaResumen = prestamista;
+		planillaResumen = esPlanilla ? await getTrabajadoresDeCuotasPlanilla(supabase, item.id_cuenta_pagar).catch(() => new Map()) : null;
 		resumenOpen = true;
+	}
+
+	// Pago global: abre "Confirmar Pago" con una transacción por la suma de las cuotas elegidas.
+	let pagoGlobalIds = $state<number[] | null>(null);
+	async function pagarSeleccionados(ids: number[]) {
+		if (!selectedId || !ids.length) return;
+		const cuotas = cuotasAMostrar.filter((q) => ids.includes(q.id_pago));
+		const suma = cuotas.reduce((t, q) => t + Number(q.monto), 0);
+		const hoy = new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+		const payload = await transaccionSugeridaPagoGlobal(supabase, selectedId, suma, hoy, cuotas.length).catch(() => null);
+		if (!payload) {
+			toast.error('No se pudo preparar la transacción: la cuenta no tiene Centro de Costo asignado.');
+			return;
+		}
+		transaccionPrefill = payload;
+		pagoGlobalIds = ids;
+		confirmandoPagoId = null;
+		transaccionModalOpen = true;
+	}
+	async function confirmarTransaccionPagoGlobal(payload: Record<string, unknown>, idempotencyKey: string) {
+		const { data: userData } = await supabase.auth.getUser();
+		const result = await confirmarPagosGlobal(supabase, selectedId as number, pagoGlobalIds ?? [], payload, userData?.user?.email ?? null, permisosState.userName || null, idempotencyKey);
+		if (result.success) await Promise.all([fetchList(), fetchSelectedPagos(), fetchMontoFiltrado(), fetchKpis()]);
+		return result;
 	}
 
 	function etiquetaCampo(key: string, value: unknown): string {
@@ -778,7 +815,15 @@
 			const bloqueado = q.id_pago !== -1 && !!q.transaccion?.aprobado && !isAdmin();
 			const estado: CuotaResumen['estado'] =
 				q.estado_pago === 'pagado' ? 'pagado' : q.estado_pago === 'cancelado' ? 'anulado' : esCuotaVencida(q) ? 'vencido' : 'pendiente';
-			return { id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado, editable: q.estado_pago === 'programado' && !bloqueado && q.id_pago === cuotaMasProxima?.id_pago };
+			const t = planillaResumen?.get(q.id_pago);
+			return {
+				id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado,
+				editable: q.estado_pago === 'programado' && !bloqueado && q.id_pago === cuotaMasProxima?.id_pago,
+				trabajador: planillaResumen ? (t?.trabajador ?? q.referencia ?? null) : undefined,
+				cargo: t?.cargo ?? null,
+				// La "Proyección de planilla" es una estimación: no se paga.
+				seleccionable: !!planillaResumen && q.estado_pago === 'programado' && q.id_pago !== -1 && q.referencia !== 'Proyección de planilla' && !bloqueado
+			};
 		})
 	);
 
@@ -901,6 +946,7 @@
 		transaccionModalOpen = false;
 		transaccionPrefill = null;
 		confirmandoPagoId = null;
+		pagoGlobalIds = null;
 	}
 
 	// Campos que llegan ya resueltos con datos reales del pago (ver construirPayloadTransaccionPorPago
@@ -910,7 +956,7 @@
 	// (son datos de CÓMO se paga esta cuota, no de la cuenta — ej. la cuota de un préstamo).
 	const CAMPOS_EDITABLES_CONFIRMAR_PAGO = new Set(['forma_pago', 'medio_pago']);
 	const lockedFieldsConfirmarPago = $derived.by(() => {
-		if (!confirmandoPagoId || !transaccionPrefill) return [];
+		if ((!confirmandoPagoId && !pagoGlobalIds) || !transaccionPrefill) return [];
 		return Object.keys(transaccionPrefill).filter((key) => {
 			const value = transaccionPrefill![key];
 			return value !== null && value !== undefined && value !== '' && !CAMPOS_EDITABLES_CONFIRMAR_PAGO.has(key);
@@ -1281,6 +1327,8 @@
 	montoTotal={Number(selectedCuenta?.monto_comprometido ?? 0)}
 	onClose={() => (resumenOpen = false)}
 	onEditarCuota={editarCuotaDesdeResumen}
+	pagoGlobal={!!planillaResumen}
+	onPagarSeleccionados={pagarSeleccionados}
 />
 <PagoModal
 	open={pagoModalOpen}
@@ -1298,9 +1346,9 @@
 	dynamicOptions={transaccionDynamicOptions}
 	onClose={closeTransaccionModal}
 	onSaved={closeTransaccionModal}
-	onConfirm={confirmandoPagoId ? confirmarTransaccionPago : null}
-	confirmTitle={confirmandoPagoId ? 'Confirmar Pago — Transacción de Respaldo' : null}
-	confirmButtonLabel={confirmandoPagoId ? 'Confirmar Pago' : null}
+	onConfirm={pagoGlobalIds ? confirmarTransaccionPagoGlobal : confirmandoPagoId ? confirmarTransaccionPago : null}
+	confirmTitle={pagoGlobalIds ? `Pago global — ${pagoGlobalIds.length} trabajador${pagoGlobalIds.length === 1 ? '' : 'es'}` : confirmandoPagoId ? 'Confirmar Pago — Transacción de Respaldo' : null}
+	confirmButtonLabel={pagoGlobalIds ? 'Confirmar pago global' : confirmandoPagoId ? 'Confirmar Pago' : null}
 	lockedFields={lockedFieldsConfirmarPago}
 />
 

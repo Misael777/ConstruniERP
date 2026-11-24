@@ -350,8 +350,12 @@ async function checkTransaccionesIncompletas(client: SupabaseClient): Promise<Re
 	const difiere = (a: unknown, b: unknown) => Math.abs(Number(a ?? 0) - Number(b ?? 0)) > 0.01;
 	const montoNoCoincide = (monto: unknown, t: any) => difiere(monto, t.monto_total) && difiere(monto, t.monto_convertido ?? t.monto_total);
 
+	// Tickets #134/#122: una transacción puede pagar varias cuotas (pago global de planilla): se compara la SUMA de
+	// sus cuotas con la transacción.
+	const sumaPorTransaccion = new Map<number, number>();
+	for (const p of pagos) if (p.id_transaccion) sumaPorTransaccion.set(p.id_transaccion, (sumaPorTransaccion.get(p.id_transaccion) ?? 0) + Number(p.monto));
 	const pagosDescuadrados = pagos
-		.filter((p) => p.id_transaccion && porId.has(p.id_transaccion) && montoNoCoincide(p.monto, porId.get(p.id_transaccion)))
+		.filter((p) => p.id_transaccion && porId.has(p.id_transaccion) && montoNoCoincide(sumaPorTransaccion.get(p.id_transaccion), porId.get(p.id_transaccion)))
 		.map((p) => ({ id_pago: p.id_pago, id_transaccion: p.id_transaccion, monto_pago: Number(p.monto), monto_transaccion: Number(porId.get(p.id_transaccion).monto_total) }));
 	const cobrosDescuadrados = cobros
 		.filter((c) => c.id_transaccion && porId.has(c.id_transaccion) && montoNoCoincide(c.monto, porId.get(c.id_transaccion)))

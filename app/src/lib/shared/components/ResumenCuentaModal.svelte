@@ -23,6 +23,11 @@
 		idTransaccion?: number | null;
 		/** Comprobante de la transacción de la cuota (ticket #106, columna "Comprobante" del Resumen de venta). */
 		comprobanteUrl?: string | null;
+		/** Tickets #134/#122 (CxP de planilla): trabajador de la cuota y su cargo. */
+		trabajador?: string | null;
+		cargo?: string | null;
+		/** Se puede marcar para el pago global (cuota pendiente de un trabajador, no la proyección). */
+		seleccionable?: boolean;
 	}
 </script>
 
@@ -58,7 +63,9 @@
 		etiquetaPlan = 'Acuerdo de pago',
 		mostrarHito = false,
 		esObra = false,
-		estiloVenta = false
+		estiloVenta = false,
+		pagoGlobal = false,
+		onPagarSeleccionados
 	}: {
 		open: boolean;
 		titulo: string;
@@ -84,7 +91,30 @@
 		 * o muestra los datos sensibles, tarjetas de avance, columnas Fecha programada/Estado/Comprobante y la
 		 * fila TOTAL CONTRATADO. Cuentas por Cobrar/Pagar siguen con el diseño de siempre. */
 		estiloVenta?: boolean;
+		/** Tickets #134/#122: CxP de planilla — columnas Trabajador y Cargo, y checks para pagar varias cuotas juntas. */
+		pagoGlobal?: boolean;
+		onPagarSeleccionados?: (ids: number[]) => void;
 	} = $props();
+
+	let seleccion = $state<Set<number>>(new Set());
+	$effect(() => {
+		// Al cerrar o cuando cambian las cuotas (ej. tras pagar), se limpia la selección.
+		void cuotas;
+		void open;
+		seleccion = new Set();
+	});
+	const seleccionables = $derived(cuotas.filter((c) => c.seleccionable));
+	const todasMarcadas = $derived(seleccionables.length > 0 && seleccionables.every((c) => seleccion.has(c.id)));
+	const sumaSeleccion = $derived(cuotas.filter((c) => seleccion.has(c.id)).reduce((t, c) => t + c.monto, 0));
+	function alternar(id: number) {
+		const s = new Set(seleccion);
+		if (s.has(id)) s.delete(id);
+		else s.add(id);
+		seleccion = s;
+	}
+	function marcarTodas(v: boolean) {
+		seleccion = v ? new Set(seleccionables.map((c) => c.id)) : new Set();
+	}
 
 	const cuotasOrdenadas = $derived([...cuotas].sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.id - b.id)));
 	// Ticket #102: si el adelanto se pagó en varias armadas, todas se llaman "Adelanto (…armada)" y los abonos o
@@ -198,10 +228,12 @@
 					{:else}
 						<!-- Ticket #77: en celular la tabla se desliza de lado y cada columna conserva su ancho (sin partir el texto). -->
 						<div class="overflow-x-auto overscroll-x-contain rounded-lg border border-slate-200">
-							<table class={`w-full text-sm whitespace-nowrap ${mostrarHito ? 'min-w-[700px]' : 'min-w-[520px]'}`}>
+							<table class={`w-full text-sm whitespace-nowrap ${mostrarHito || pagoGlobal ? 'min-w-[700px]' : 'min-w-[520px]'}`}>
 								<thead>
 									<tr class="bg-slate-50 text-xs font-semibold text-slate-500 border-b border-slate-200">
-										<th class="text-left px-3 py-2">{etiquetaPlan}</th>
+										{#if pagoGlobal}<th class="px-3 py-2 w-8"><input type="checkbox" class="w-4 h-4 rounded border-slate-300 text-blue-600" checked={todasMarcadas} disabled={!seleccionables.length} onchange={(e) => marcarTodas((e.currentTarget as HTMLInputElement).checked)} aria-label="Seleccionar todos los pendientes" /></th>{/if}
+										<th class="text-left px-3 py-2">{pagoGlobal ? `Trabajador / ${etiquetaPlan}` : etiquetaPlan}</th>
+										{#if pagoGlobal}<th class="text-left px-3 py-2">Cargo</th>{/if}
 										{#if mostrarHito}<th class="text-left px-3 py-2 w-[200px] min-w-[200px]">Hito de cobro</th>{/if}
 										<th class="text-right px-3 py-2">Monto</th>
 										<th class="text-right px-3 py-2">Porcentaje</th>
@@ -211,8 +243,17 @@
 								</thead>
 								<tbody class="divide-y divide-slate-100">
 									{#each filas as cuota, i (cuota.id)}
-										<tr>
-											<td class="px-3 py-2 text-slate-700">{nombreDe.get(cuota.id) ?? ''}</td>
+										<tr class={seleccion.has(cuota.id) ? 'bg-blue-50/60' : ''}>
+											{#if pagoGlobal}<td class="px-3 py-2"><input type="checkbox" class="w-4 h-4 rounded border-slate-300 text-blue-600 disabled:opacity-30" checked={seleccion.has(cuota.id)} disabled={!cuota.seleccionable} onchange={() => alternar(cuota.id)} aria-label={`Seleccionar ${cuota.trabajador ?? nombreDe.get(cuota.id) ?? 'cuota'}`} /></td>{/if}
+											{#if pagoGlobal}
+												<td class="px-3 py-2">
+													<div class="font-medium text-slate-800">{cuota.trabajador || '—'}</div>
+													<div class="text-[11px] text-slate-400">{nombreDe.get(cuota.id) ?? ''}</div>
+												</td>
+												<td class="px-3 py-2 text-slate-600">{cuota.cargo || '—'}</td>
+											{:else}
+												<td class="px-3 py-2 text-slate-700">{nombreDe.get(cuota.id) ?? ''}</td>
+											{/if}
 											{#if mostrarHito}<td class="px-3 py-2 text-slate-600 w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words">{cuota.concepto || '—'}</td>{/if}
 											<td class="px-3 py-2 text-right text-slate-700">{formatCurrency(cuota.monto)}</td>
 											<td class="px-3 py-2 text-right text-slate-500">{porcentaje(cuota.monto)}</td>
@@ -237,7 +278,9 @@
 								</tbody>
 								<tfoot>
 									<tr class="bg-emerald-50 font-semibold text-emerald-800 border-t border-emerald-100">
+										{#if pagoGlobal}<td class="px-3 py-2"></td>{/if}
 										<td class="px-3 py-2">{etiquetaTotal}</td>
+										{#if pagoGlobal}<td class="px-3 py-2">—</td>{/if}
 										{#if mostrarHito}<td class="px-3 py-2"></td>{/if}
 										<td class="px-3 py-2 text-right">{formatCurrency(montoTotal)}</td>
 										<td class="px-3 py-2 text-right">100%</td>
@@ -247,13 +290,18 @@
 								</tfoot>
 							</table>
 						</div>
+{#if pagoGlobal}<p class="mt-2 text-xs text-slate-400">Marca a los trabajadores que vas a pagar juntos y usa "Pagar seleccionados": se registra una sola transacción por la suma.</p>{/if}
 {#if !soloLectura}<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}. Las siguientes se habilitan en orden.</p>{/if}
 					{/if}
 				</div>
 			</div>
 			{/if}
 
-			<div class="sticky bottom-0 flex justify-end bg-white px-6 py-4 border-t border-slate-200">
+			<div class="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 bg-white px-6 py-4 border-t border-slate-200">
+				{#if pagoGlobal && !estiloVenta}
+					<span class="mr-auto text-sm font-semibold text-slate-700">{seleccion.size} seleccionado{seleccion.size === 1 ? '' : 's'} · {formatCurrency(sumaSeleccion)}</span>
+					<button type="button" onclick={() => onPagarSeleccionados?.([...seleccion])} disabled={!seleccion.size} class="px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">Pagar seleccionados</button>
+				{/if}
 				<button type="button" onclick={onClose} class={`px-4 py-2 text-sm font-medium rounded-lg border ${estiloVenta ? 'border-orange-400 text-orange-600 hover:bg-orange-50' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}>Cerrar</button>
 			</div>
 		</div>

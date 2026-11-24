@@ -22,7 +22,11 @@
 		aprobarSolicitud,
 		rechazarSolicitud,
 		type SolicitudAprobacion,
-		type EstadoSolicitud
+		type EstadoSolicitud,
+		type CategoriaSolicitud,
+		CATEGORIAS_SOLICITUD,
+		categoriaSolicitud,
+		permisoAprobar
 	} from '$lib/modules/aprobaciones/services/aprobaciones.service';
 	import { sendNotificacionNativa, ensureNotificacionPermission } from '$lib/modules/aprobaciones/services/notificacionNativa';
 	import { guardarArchivoBinario } from '$lib/shared/saveFile';
@@ -73,13 +77,27 @@
 	// cabecera del panel. "Pendientes" filtra las por aprobar; "Aprobadas"/"Rechazadas", las resueltas.
 	let filtroEstadoAdmin = $state<'todas' | 'pendiente' | 'aprobado' | 'rechazado'>('todas');
 	let busquedaAdmin = $state('');
+	// Ticket #131: pestañas por categoría (Finanzas, Ventas, Proyectos, Comercial) y permiso de aprobación por
+	// categoría en Roles y Permisos (aprobar_solicitudes_<categoría>). El administrador ve y aprueba todas.
+	let categoriaAdmin = $state<'todas' | CategoriaSolicitud>('todas');
+	const puedeAprobarCategoria = (c: CategoriaSolicitud) => isAdmin() || hasPermiso(permisoAprobar(c));
+	const esAprobador = () => isAdmin() || CATEGORIAS_SOLICITUD.some((c) => hasPermiso(permisoAprobar(c.id)));
+	const categoriasVisibles = $derived(CATEGORIAS_SOLICITUD.filter((c) => puedeAprobarCategoria(c.id)));
+	const deMisCategorias = (s: SolicitudAprobacion) => puedeAprobarCategoria(categoriaSolicitud(s));
+	const pendientesAprobables = $derived(solicitudesAdmin.filter(deMisCategorias));
+	const conteoCategoria = (c: CategoriaSolicitud) => pendientesAprobables.filter((s) => categoriaSolicitud(s) === c).length;
 	function coincideBusqueda(s: SolicitudAprobacion, q: string): boolean {
+		if (!deMisCategorias(s)) return false;
+		if (categoriaAdmin !== 'todas' && categoriaSolicitud(s) !== categoriaAdmin) return false;
 		return !q || [s.descripcion_entidad, etiquetaEntidad(s.tipo_entidad), etiquetaAccion(s.tipo_accion), descripcionAccion(s), s.solicitado_por, s.resuelto_por].filter(Boolean).join(' ').toLowerCase().includes(q);
 	}
 	const pendientesAdminFiltradas = $derived.by(() => {
 		const q = busquedaAdmin.trim().toLowerCase();
 		return filtroEstadoAdmin === 'todas' || filtroEstadoAdmin === 'pendiente' ? solicitudesAdmin.filter((s) => coincideBusqueda(s, q)) : [];
 	});
+	const gruposPendientes = $derived(
+		CATEGORIAS_SOLICITUD.map((c) => ({ ...c, items: pendientesAdminFiltradas.filter((s) => categoriaSolicitud(s) === c.id) })).filter((g) => g.items.length)
+	);
 	const resueltasFiltradas = $derived.by(() => {
 		const q = busquedaAdmin.trim().toLowerCase();
 		if (filtroEstadoAdmin === 'pendiente') return [];
@@ -89,7 +107,7 @@
 		const q = busquedaAdmin.trim().toLowerCase();
 		return filtroEstadoAdmin === 'todas' ? avisos.filter((a) => coincideBusqueda(a, q)) : [];
 	});
-	const hayFiltroAdmin = $derived(filtroEstadoAdmin !== 'todas' || busquedaAdmin.trim() !== '');
+	const hayFiltroAdmin = $derived(filtroEstadoAdmin !== 'todas' || busquedaAdmin.trim() !== '' || categoriaAdmin !== 'todas');
 
 	// Avisos informativos para el admin: ventas cerradas directo por su asesor, sin pasar por
 	// aprobación (a pedido del usuario) — de solo lectura, sin Aprobar/Rechazar.
@@ -413,7 +431,7 @@
 		}
 		isCargando = true;
 		try {
-			if (isAdmin()) await cargarAdmin();
+			if (esAprobador()) await cargarAdmin();
 			else await cargarMias();
 			await cargarTickets();
 			cargaInicialHecha = true;
@@ -478,8 +496,8 @@
 	// necesitan acción, pero sí que el admin se entere). Solicitante: el badge es solo lo YA resuelto
 	// que todavía no vio — lo "pendiente" se lista pero no cuenta como nuevo.
 	let badgeCount = $derived(
-		isAdmin()
-			? solicitudesAdmin.length + avisos.filter((a) => !a.visto_por_admin).length
+		esAprobador()
+			? pendientesAprobables.length + avisos.filter((a) => !a.visto_por_admin && deMisCategorias(a)).length
 			: misSolicitudes.filter((s) => s.estado !== 'pendiente' && !s.visto_por_solicitante).length
 	);
 
@@ -487,7 +505,7 @@
 		isOpen = !isOpen;
 		if (!isOpen) return;
 		await cargar();
-		if (!isAdmin()) {
+		if (!esAprobador()) {
 			const noVistas = misSolicitudes.filter((s) => s.estado !== 'pendiente' && !s.visto_por_solicitante).map((s) => s.id_solicitud);
 			if (noVistas.length > 0) {
 				const result = await marcarSolicitudesVistas(supabase, noVistas);
@@ -513,8 +531,16 @@
 	}
 
 	async function handleAprobar(s: SolicitudAprobacion) {
-		processingId = s.id_solicitud;
 		errorMsg = '';
+		// Ticket #131: quien aprueba por permiso (no administrador) no puede aprobar su propia solicitud.
+		if (!isAdmin()) {
+			const { data: u } = await supabase.auth.getUser();
+			if (u?.user?.id && s.solicitado_por_id === u.user.id) {
+				errorMsg = 'No puedes aprobar tu propia solicitud: debe aprobarla otra persona.';
+				return;
+			}
+		}
+		processingId = s.id_solicitud;
 		try {
 			const result = await aprobarSolicitud(supabase, s.id_solicitud, permisosState.userName || null);
 			if (!result.success) {
@@ -569,13 +595,13 @@
 		     `sm:` para arriba vuelve al comportamiento de dropdown anclado al botón. -->
 		<div class="fixed left-3 right-3 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96 max-h-[70vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 z-40">
 			<div class="p-4 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl">
-				<h3 class="text-sm font-bold text-slate-800">{isAdmin() ? 'Solicitudes de aprobación' : 'Mis solicitudes'}</h3>
+				<h3 class="text-sm font-bold text-slate-800">{esAprobador() ? 'Solicitudes de aprobación' : 'Mis solicitudes'}</h3>
 				<p class="text-xs text-slate-400 mt-0.5">
-					{isAdmin()
+					{esAprobador()
 						? 'Ediciones/eliminaciones pedidas por usuarios sin rango de administrador.'
 						: 'Estado de tus solicitudes enviadas para aprobación de un administrador.'}
 				</p>
-				{#if isAdmin()}
+				{#if esAprobador()}
 					<div class="mt-2.5 flex gap-2">
 						<div class="relative flex-1 min-w-0">
 							<i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]"></i>
@@ -588,6 +614,16 @@
 							<option value="rechazado">Rechazadas</option>
 						</select>
 					</div>
+					{#if categoriasVisibles.length > 1}
+						<div class="mt-2 flex flex-wrap gap-1.5" role="tablist" aria-label="Categoría">
+							{#each [{ id: 'todas', label: 'Todas' }, ...categoriasVisibles] as c (c.id)}
+								{@const n = c.id === 'todas' ? pendientesAprobables.length : conteoCategoria(c.id as CategoriaSolicitud)}
+								<button type="button" role="tab" aria-selected={categoriaAdmin === c.id} onclick={() => (categoriaAdmin = c.id as typeof categoriaAdmin)} class={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${categoriaAdmin === c.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+									{c.label}{n ? ` (${n})` : ''}
+								</button>
+							{/each}
+						</div>
+					{/if}
 				{/if}
 			</div>
 
@@ -613,7 +649,7 @@
 				<div class="p-8 text-center text-slate-400 text-sm">
 					<i class="fas fa-spinner fa-spin"></i> Cargando...
 				</div>
-			{:else if isAdmin()}
+			{:else if esAprobador()}
 				{#if pendientesAdminFiltradas.length === 0 && resueltasFiltradas.length === 0 && avisosFiltrados.length === 0}
 					<div class="p-8 text-center text-slate-400 text-sm">
 						<i class="fas fa-check-circle text-2xl mb-2 block"></i>
@@ -621,9 +657,10 @@
 					</div>
 				{:else}
 					{#if pendientesAdminFiltradas.length > 0}
-						<p class="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Pendientes de aprobar</p>
+						{#each gruposPendientes as g (g.id)}
+						<p class="mx-3 mt-3 px-2.5 py-1 rounded-md bg-slate-100 text-[11px] font-bold uppercase tracking-wide text-[#0f3b5e]">{g.label} · {g.items.length} pendiente{g.items.length === 1 ? '' : 's'}</p>
 						<div class="divide-y divide-slate-100">
-							{#each pendientesAdminFiltradas as s (s.id_solicitud)}
+							{#each g.items as s (s.id_solicitud)}
 								<div class="p-4">
 									<div class="flex items-start justify-between gap-2 mb-1.5">
 										<div class="min-w-0">
@@ -696,6 +733,7 @@
 								</div>
 							{/each}
 						</div>
+						{/each}
 					{/if}
 
 					{#if resueltasFiltradas.length > 0}

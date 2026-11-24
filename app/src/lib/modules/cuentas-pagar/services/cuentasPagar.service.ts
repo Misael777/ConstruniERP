@@ -1405,3 +1405,73 @@ export async function getProveedorOptions(client: SupabaseClient): Promise<Field
 		label: p.vendedor ? `${p.razon_social} - ${p.vendedor}` : p.razon_social
 	}));
 }
+
+/** Tickets #134/#122: trabajador y cargo de cada cuota de una CxP de planilla (los envíos del tareo). Clave: id_pago. */
+export async function getTrabajadoresDeCuotasPlanilla(
+	client: SupabaseClient,
+	idCuentaPagar: number
+): Promise<Map<number, { trabajador: string; cargo: string | null }>> {
+	const { data, error } = await client
+		.from('tareo_envio')
+		.select('id_pago, planilla!inner(id_cuenta_pagar), tareo_trabajador(personal(nombres, apellidos, nombre, pin, cargo, categoria))')
+		.eq('planilla.id_cuenta_pagar', idCuentaPagar)
+		.not('id_pago', 'is', null);
+	const out = new Map<number, { trabajador: string; cargo: string | null }>();
+	if (error) return out;
+	for (const row of (data ?? []) as any[]) {
+		const p = row.tareo_trabajador?.personal;
+		if (!p || row.id_pago == null) continue;
+		const trabajador = [p.apellidos, p.nombres].filter(Boolean).join(', ') || p.nombre || `Código ${p.pin}`;
+		out.set(row.id_pago as number, { trabajador, cargo: p.cargo || p.categoria || null });
+	}
+	return out;
+}
+
+/**
+ * Tickets #134/#122: pago global de una planilla — varias cuotas programadas de la misma cuenta se pagan con UNA
+ * transacción (fn_confirmar_pagos_global, atómico). El monto de la transacción debe ser la suma de las cuotas.
+ */
+export async function confirmarPagosGlobal(
+	client: SupabaseClient,
+	idCuentaPagar: number,
+	idsPago: number[],
+	transaccionPayload: Record<string, unknown>,
+	usuarioRegistro: string | null,
+	usuarioNombre: string | null = null,
+	idempotencyKey: string | null = null
+): Promise<ServiceResult<Transaccion>> {
+	const built = construirInsertDataTransaccion(transaccionPayload, usuarioRegistro, usuarioNombre);
+	if ('errors' in built) return { success: false, message: 'Revisa los campos marcados', errors: built.errors };
+	const { data, error } = await client.rpc('fn_confirmar_pagos_global', {
+		p_id_cuenta_pagar: idCuentaPagar,
+		p_ids_pago: idsPago,
+		p_transaccion_payload: built.insertData,
+		p_idempotency_key: idempotencyKey
+	});
+	if (error) return { success: false, message: `No se pudo registrar el pago: ${translateRpcError(error, PAGO_FIELDS)}` };
+	await recalcularCuentaPagar(client, idCuentaPagar);
+	return { success: true, message: `Pago registrado: ${idsPago.length} cuota${idsPago.length === 1 ? '' : 's'} con una sola transacción`, data: data as Transaccion };
+}
+
+/** Tickets #134/#122: transacción sugerida para el pago global (misma que la de una cuota, con la suma). */
+export async function transaccionSugeridaPagoGlobal(
+	client: SupabaseClient,
+	idCuentaPagar: number,
+	monto: number,
+	fecha: string,
+	cantidad: number
+): Promise<Record<string, unknown> | null> {
+	const { data: cuenta } = await client
+		.from(TABLE_NAME)
+		.select('id_cuenta_pagar, id_centro_costo, id_proveedor, tipo_documento, num_documento, fotma_pago, proveedor:id_proveedor(razon_social)')
+		.eq(PK_COLUMN, idCuentaPagar)
+		.single();
+	if (!cuenta?.id_centro_costo) return null;
+	const payload = await construirPayloadTransaccionPorPago(client, { ...(cuenta as any), proveedorNombre: (cuenta as any).proveedor?.razon_social }, {
+		monto: Number(monto.toFixed(2)),
+		fecha_pago: fecha,
+		medio_pago: null,
+		referencia: `Pago global de ${cantidad} trabajador${cantidad === 1 ? '' : 'es'}`
+	});
+	return payload;
+}

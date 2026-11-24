@@ -80,7 +80,16 @@
 	// <select> de estado) — ver onFiltroCriterioChange más abajo.
 	// 'documentoPendiente' agregado en ticket #33 (rechazo) — filtra directo al elegirlo, mismo criterio
 	// que 'aprobado'/'desaprobado'/'ingreso'/'egreso'.
-	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'ingreso' | 'egreso' | 'fecha' | 'estado' | 'documentoPendiente';
+	// Ticket #138: Ingreso/Egreso pasaron a ser pestañas sobre la lista (se combinan con el resto de filtros).
+	type FiltroCriterio = '' | 'aprobado' | 'desaprobado' | 'fecha' | 'estado' | 'documentoPendiente';
+	let pestanaTipo = $state<'' | 'ingreso' | 'egreso'>('');
+	function elegirPestanaTipo(t: '' | 'ingreso' | 'egreso') {
+		if (pestanaTipo === t) return;
+		pestanaTipo = t;
+		checkedIds = new Set();
+		pageNum = 1;
+		fetchList();
+	}
 	let filtroCriterio = $state<FiltroCriterio>('');
 	let filtroFecha = $state('');
 	let filtroEstado = $state('');
@@ -316,7 +325,7 @@
 				// siempre.
 				estado: filtroCriterio === 'estado' && filtroEstado !== 'consulta' ? filtroEstado || undefined : undefined,
 				tipoAlcance: filtroCriterio === 'estado' && filtroEstado === 'consulta' ? 'interna' : undefined,
-				tipo: filtroCriterio === 'ingreso' ? 'ingreso' : filtroCriterio === 'egreso' ? 'egreso' : undefined,
+				tipo: pestanaTipo || undefined,
 				documentoPendiente: filtroCriterio === 'documentoPendiente' ? true : undefined
 			});
 			items = result.items;
@@ -782,7 +791,7 @@
 		<div class="relative">
 			<SelectConSaldo
 				value={filtroCriterio}
-				options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'desaprobado', label: 'Desaprobado' }, { value: 'ingreso', label: 'Ingreso' }, { value: 'egreso', label: 'Egreso' }, { value: 'fecha', label: 'Fecha' }, { value: 'estado', label: 'Estado' }, { value: 'documentoPendiente', label: 'Documento pendiente' }]}
+				options={[{ value: '', label: 'Todos' }, { value: 'aprobado', label: 'Aprobado' }, { value: 'desaprobado', label: 'Desaprobado' }, { value: 'fecha', label: 'Fecha' }, { value: 'estado', label: 'Estado' }, { value: 'documentoPendiente', label: 'Documento pendiente' }]}
 				placeholder="Todos"
 				onchange={(v) => (onFiltroCriterioChange(v))}
 			/>
@@ -814,6 +823,20 @@
 		>
 			<Trash2 size={16} /> Eliminar seleccionadas{checkedIds.size > 0 ? ` (${checkedIds.size})` : ''}
 		</button>
+	</div>
+
+	<div class="mb-3 flex gap-1 border-b border-slate-200" role="tablist" aria-label="Tipo de transacción">
+		{#each [{ v: '', t: 'Todas' }, { v: 'ingreso', t: 'Ingresos' }, { v: 'egreso', t: 'Egresos' }] as tab (tab.v)}
+			<button
+				type="button"
+				role="tab"
+				aria-selected={pestanaTipo === tab.v}
+				onclick={() => elegirPestanaTipo(tab.v as '' | 'ingreso' | 'egreso')}
+				class="px-4 py-2 -mb-px text-sm font-semibold border-b-2 transition-colors {pestanaTipo === tab.v ? (tab.v === 'ingreso' ? 'border-emerald-600 text-emerald-700' : tab.v === 'egreso' ? 'border-red-600 text-red-700' : 'border-blue-600 text-blue-700') : 'border-transparent text-slate-500 hover:text-slate-700'}"
+			>
+				{tab.t}{pestanaTipo === tab.v && !loading ? ` (${total})` : ''}
+			</button>
+		{/each}
 	</div>
 
 	<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">

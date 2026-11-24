@@ -645,6 +645,10 @@
 	// resolverNumeroDistrito/distritoParaGuardar más abajo. null mientras no aplica (Consultoría, o
 	// Obra sin distrito elegido todavía).
 	let distritoNumero = $state<number | null>(null);
+	// 24/11/2026 (a pedido de la clienta): el N° ya no es solo automático — se sugiere el siguiente y ellas lo pueden
+	// cambiar. Si ese número ya lo usa otra obra del mismo distrito, se avisa y no se deja guardar.
+	let distritoNumeroOriginal = $state<number | null>(null);
+	let numeroDistritoRepetido = $state<string | null>(null);
 	let clienteNombreGen = $state('');
 
 	function getMesFromFecha() {
@@ -753,6 +757,7 @@
 				provincia = 'Lima';
 				distrito = '';
 				distritoNumero = null;
+				distritoNumeroOriginal = null;
 				contratoFile = null;
 				proformaFiles = [];
 				selectedFinalFileIndex = null;
@@ -831,6 +836,7 @@
 				const match = /^(\D+)(\d+)$/.exec(ubicacionGuardada);
 				distrito = match ? match[1] : ubicacionGuardada;
 				distritoNumero = match ? Number(match[2]) : null;
+				distritoNumeroOriginal = distritoNumero;
 			} else {
 				distrito = ubicacionGuardada;
 				distritoNumero = null;
@@ -910,6 +916,38 @@
 			return 1;
 		}
 	}
+
+	/** Otra venta de Obra que ya usa ese N° en ese distrito (devuelve su código), o null si está libre. */
+	async function buscarNumeroDistritoRepetido(base: string, numero: number, excludeProyectoId: number | null): Promise<string | null> {
+		try {
+			let query = supabase.from('proyecto').select('id_proyecto, ubicacion, nombre_proyecto').eq('tipo_venta', 'obra');
+			if (excludeProyectoId) query = query.neq('id_proyecto', excludeProyectoId);
+			const { data, error } = await query;
+			if (error) throw error;
+			const baseNormalizada = base.trim().toLowerCase();
+			for (const row of (data ?? []) as any[]) {
+				const match = /^(\D+)(\d+)$/.exec(String(row.ubicacion || ''));
+				if (match && match[1].trim().toLowerCase() === baseNormalizada && Number(match[2]) === numero) return row.nombre_proyecto || row.ubicacion;
+			}
+			return null;
+		} catch (err) {
+			console.error('[NuevaVentaModal] Error verificando el número de distrito:', err);
+			return null;
+		}
+	}
+	// Aviso en vivo mientras se escribe el número (o cambia el distrito).
+	$effect(() => {
+		const base = distrito;
+		const numero = distritoNumero;
+		const excludeId = mode === 'edit' ? ventaId : null;
+		numeroDistritoRepetido = null;
+		if (caracteristicasTab !== 'obra' || !base || numero == null) return;
+		const t = setTimeout(async () => {
+			const repetido = await buscarNumeroDistritoRepetido(base, numero, excludeId);
+			if (distrito === base && distritoNumero === numero) numeroDistritoRepetido = repetido;
+		}, 300);
+		return () => clearTimeout(t);
+	});
 
 	/** Dispara resolverNumeroDistrito para el distrito ACTUAL — llamarse solo desde interacción real del
 	 * usuario (elegir/cambiar distrito, o cambiar a la pestaña Obra), nunca durante la carga de una
@@ -1569,6 +1607,21 @@ async function copiarCodigoGenerado() {
 		if (!fechaVenta) {
 			saveError = 'Debes seleccionar la fecha de venta.';
 			return null;
+		}
+		if (caracteristicasTab === 'obra' && distrito) {
+			if (distritoNumero == null || distritoNumero < 1) {
+				saveError = 'Escribe el N° de proyecto en el distrito.';
+				return null;
+			}
+			// Solo se valida si el número es nuevo o se cambió (una venta antigua con número repetido se sigue pudiendo editar).
+			if (distritoNumero !== distritoNumeroOriginal) {
+				const repetido = await buscarNumeroDistritoRepetido(distrito, distritoNumero, mode === 'edit' ? ventaId : null);
+				if (repetido) {
+					numeroDistritoRepetido = repetido;
+					saveError = `El N° ${distritoNumero} ya existe en ${distrito} (${repetido}). Usa otro número.`;
+					return null;
+				}
+			}
 		}
 
 		let clienteId: number | null = null;
@@ -3138,12 +3191,25 @@ async function copiarCodigoGenerado() {
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">N° de proyecto en el distrito</label>
-								<!-- A pedido del usuario: se calcula solo (ver resolverNumeroDistrito/
-								     actualizarNumeroDistrito) contando las ventas de Obra ya registradas en el
-								     distrito elegido arriba — no es un campo que el usuario llene, solo
-								     informativo/de solo lectura. -->
-								<input type="text" readonly value={distritoNumero ?? '—'} class="px-3 py-2 bg-slate-100 border border-slate-200 text-slate-500 rounded-lg text-sm outline-none cursor-not-allowed">
-								<span class="text-[10px] text-slate-400 mt-0.5">Se calcula solo según el distrito elegido.</span>
+								<!-- 24/11/2026 (a pedido de la clienta): se sugiere el siguiente número del distrito (ver
+								     resolverNumeroDistrito) y se puede cambiar; si ya existe en el distrito, aviso y no se guarda. -->
+								<input
+									type="number"
+									min="1"
+									value={distritoNumero ?? ''}
+									oninput={(e) => {
+										const v = (e.currentTarget as HTMLInputElement).value;
+										distritoNumero = v === '' ? null : Math.max(1, Math.trunc(Number(v)) || 1);
+									}}
+									disabled={!documentosCierreListos || !distrito}
+									placeholder={distrito ? 'Ej. 1' : 'Elige el distrito'}
+									class={`px-3 py-2 bg-slate-50 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${numeroDistritoRepetido ? 'border-red-400' : 'border-slate-200'}`}
+								>
+								{#if numeroDistritoRepetido}
+									<span class="text-[11px] text-red-600 font-medium mt-0.5">Ese número ya existe en {distrito}: {numeroDistritoRepetido}</span>
+								{:else}
+									<span class="text-[10px] text-slate-400 mt-0.5">Se sugiere el siguiente del distrito; puedes cambiarlo.</span>
+								{/if}
 							</div>
 							<div class="flex flex-col gap-1">
 								<label class="text-xs font-semibold text-[#0f3b5e]">Mes *</label>

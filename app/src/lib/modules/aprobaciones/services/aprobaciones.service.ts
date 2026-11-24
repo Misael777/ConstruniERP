@@ -55,6 +55,23 @@ export interface SolicitudAprobacion {
 	visto_por_admin: boolean;
 }
 
+/** Ticket #131: categoría de cada solicitud (pestañas de la campana y permiso de aprobación por categoría en Roles). */
+export type CategoriaSolicitud = 'finanzas' | 'ventas' | 'proyectos' | 'comercial';
+export const CATEGORIAS_SOLICITUD: { id: CategoriaSolicitud; label: string }[] = [
+	{ id: 'finanzas', label: 'Finanzas' },
+	{ id: 'ventas', label: 'Ventas' },
+	{ id: 'proyectos', label: 'Proyectos' },
+	{ id: 'comercial', label: 'Comercial' }
+];
+export function categoriaSolicitud(s: Pick<SolicitudAprobacion, 'tipo_entidad' | 'descripcion_entidad'>): CategoriaSolicitud {
+	if (s.tipo_entidad === 'transaccion') return 'finanzas';
+	if (s.tipo_entidad === 'cliente') return 'comercial';
+	if (s.tipo_entidad === 'exportacion') return /cliente/i.test(s.descripcion_entidad ?? '') ? 'comercial' : 'ventas';
+	return 'ventas'; // 'proyecto' = una venta
+}
+/** Permiso (Roles y Permisos) para aprobar las solicitudes de una categoría. El administrador aprueba todas. */
+export const permisoAprobar = (c: CategoriaSolicitud) => `aprobar_solicitudes_${c}`;
+
 export interface ServiceResult {
 	success: boolean;
 	message?: string;

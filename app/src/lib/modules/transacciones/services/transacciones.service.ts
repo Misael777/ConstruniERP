@@ -582,9 +582,20 @@ export async function updateTransaccion(
 		return { success: false, message: 'Debes adjuntar el comprobante (imagen o PDF) de esta transacción.' };
 	}
 
-	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado, cuente_origen, cuente_destino').eq(PK_COLUMN, id).single();
+	const { data: actual } = await client.from(TABLE_NAME).select('aprobado, estado, cuente_origen, cuente_destino, monto_total').eq(PK_COLUMN, id).single();
 	if (actual?.aprobado) {
 		return { success: false, message: BLOQUEADO_POR_APROBACION };
+	}
+
+	// Tickets #134/#122: una transacción puede pagar varias cuotas a la vez (pago global de planilla). Su monto no
+	// se puede cambiar (no se sabría a qué cuota restarlo): para corregirlo se anula y se vuelve a pagar.
+	const { data: pagosVinculados } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id);
+	if ((pagosVinculados?.length ?? 0) > 1 && Math.abs(Number(payload.monto_total) - Number(actual?.monto_total ?? 0)) > 0.009) {
+		return {
+			success: false,
+			message: `Esta transacción paga ${pagosVinculados!.length} cuotas a la vez: su monto no se puede cambiar. Si está mal, anúlala y vuelve a pagar las cuotas.`,
+			errors: { monto_total: 'Paga varias cuotas' }
+		};
 	}
 
 	const saldoCheck = await validarSaldoSuficiente(client, payload, id);
@@ -615,13 +626,21 @@ export async function updateTransaccion(
 	const montoNuevo = Number(payload.monto_total);
 	const fechaNueva = payload.fecha as string;
 
-	const { data: pagoVinculado } = await client.from('pagos').select('id_pago, id_cuenta_pagar').eq('id_transaccion', id).maybeSingle();
-	if (pagoVinculado) {
+	const vinculados = pagosVinculados ?? [];
+	if (vinculados.length === 1) {
+		const pagoVinculado = vinculados[0];
 		await client
 			.from('pagos')
 			.update({ monto: montoNuevo, fecha_pago: fechaNueva, medio_pago: labelPorCodigoMedioPago(payload.medio_pago as string | null) })
 			.eq('id_pago', pagoVinculado.id_pago);
 		await recalcularCuentaPagar(client, pagoVinculado.id_cuenta_pagar);
+	} else if (vinculados.length > 1) {
+		// Pago global: el monto no cambió (ver arriba); se sincronizan fecha y medio de pago de todas sus cuotas.
+		await client
+			.from('pagos')
+			.update({ fecha_pago: fechaNueva, medio_pago: labelPorCodigoMedioPago(payload.medio_pago as string | null) })
+			.eq('id_transaccion', id);
+		for (const idCuenta of new Set(vinculados.map((v) => v.id_cuenta_pagar))) await recalcularCuentaPagar(client, idCuenta);
 	}
 
 	const { data: cobroVinculado } = await client.from('cobros').select('id_cobro, id_cuenta_cobrar').eq('id_transaccion', id).maybeSingle();

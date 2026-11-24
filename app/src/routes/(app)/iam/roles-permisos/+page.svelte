@@ -65,6 +65,16 @@
 			]
 		},
 		{
+			// Ticket #131: quién aprueba las solicitudes de la campana, por categoría (el administrador aprueba todas).
+			id: 'aprobaciones', name: 'Aprobaciones', icon: 'fas fa-check-double', colorClass: 'text-amber-600 bg-amber-50 border-amber-100',
+			submodules: [
+				{ key: 'aprobar_solicitudes_finanzas', label: 'Aprobar solicitudes de Finanzas' },
+				{ key: 'aprobar_solicitudes_ventas', label: 'Aprobar solicitudes de Ventas' },
+				{ key: 'aprobar_solicitudes_proyectos', label: 'Aprobar solicitudes de Proyectos' },
+				{ key: 'aprobar_solicitudes_comercial', label: 'Aprobar solicitudes de Comercial' }
+			]
+		},
+		{
 			id: 'soporte', name: 'Soporte', icon: 'fas fa-life-ring', colorClass: 'text-cyan-600 bg-cyan-50 border-cyan-100',
 			submodules: [
 				{ key: 'ver_soporte', label: 'General Soporte' },
