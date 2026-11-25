@@ -16,6 +16,8 @@
 		TIPOS_DOCUMENTO,
 		SEXOS,
 		REGIMENES,
+		REGIMENES_ANTERIORES,
+		CARGOS_SUGERIDOS,
 		CATEGORIAS,
 		CARGOS_REFERENTE,
 		VINCULOS,
@@ -45,6 +47,20 @@
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { esTelefono } from '$lib/shared/accesoRapido';
 	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
+	import { permisosState } from '$lib/stores/permisos.svelte';
+	import {
+		getDocumentosPersonal,
+		guardarDocumentosPersonal,
+		subirArchivoPersonal,
+		TIPOS_SEGURO,
+		BANCOS,
+		ASEGURADORAS,
+		DIAS_AVISO_SEGURO,
+		DIAS_AVISO_CONTRATO,
+		type ContratoPersonal,
+		type CuentaBancariaPersonal,
+		type SeguroPersonal
+	} from '$lib/modules/personal/services/personalDocumentos.service';
 
 	let {
 		open,
@@ -101,6 +117,8 @@
 		foto_url: null,
 		referente_nombre: '',
 		referente_cargo: null,
+		id_jefe_inmediato: null,
+		modalidad: null,
 		vinculo: null,
 		empleador_nombre: '',
 		empleador_ruc: '',
@@ -137,7 +155,57 @@
 		quitarFotoNueva();
 		obrasElegidas = personal ? obrasDe(personal) : [];
 		cargarCargos(personal?.id_personal ?? null);
+		cargarDocumentos(personal);
 	});
+
+	// ── Ticket #110: contratos, cuentas bancarias y seguros (historiales; se guardan con la ficha) ──
+	let contratos = $state<ContratoPersonal[]>([]);
+	let cuentas = $state<CuentaBancariaPersonal[]>([]);
+	let seguros = $state<SeguroPersonal[]>([]);
+	let docsDisponible = $state(true);
+	let subiendo = $state<string | null>(null);
+
+	async function cargarDocumentos(p: Personal | null) {
+		contratos = [];
+		seguros = [];
+		// Ficha con banco de la versión anterior (un solo campo): se propone como su cuenta principal.
+		const legado = (x: Personal | null): CuentaBancariaPersonal[] =>
+			x?.banco || x?.numero_cuenta || x?.cci ? [{ banco: x.banco ?? '', moneda: 'PEN', numero_cuenta: x.numero_cuenta ?? '', cci: x.cci ?? '', principal: true }] : [];
+		cuentas = legado(p);
+		if (!p) return;
+		try {
+			const d = await getDocumentosPersonal(supabase, p.id_personal);
+			if (personal?.id_personal !== p.id_personal) return;
+			docsDisponible = d.disponible;
+			contratos = d.contratos;
+			seguros = d.seguros;
+			cuentas = d.cuentas.length ? d.cuentas : legado(p);
+		} catch {
+			docsDisponible = false;
+		}
+	}
+
+	async function subirArchivo(e: Event, tipo: 'contrato' | 'seguro', fila: { archivo_url: string | null }, clave: string) {
+		const input = e.currentTarget as HTMLInputElement;
+		const archivo = input.files?.[0];
+		input.value = '';
+		if (!archivo) return;
+		if (archivo.size > 20 * 1024 * 1024) return void toast.error('El archivo pesa más de 20 MB.');
+		subiendo = clave;
+		try {
+			fila.archivo_url = await subirArchivoPersonal(archivo, form.numero_documento ?? '', tipo);
+			toast.success('Archivo subido. Se guarda al pulsar «Guardar cambios».');
+		} catch (err) {
+			reportarDiagnostico(`Personal: no se pudo subir el ${tipo}`, describeError(err));
+			toast.error(`No se pudo subir el archivo. ${describeError(err)}`);
+		} finally {
+			subiendo = null;
+		}
+	}
+	const elegirPrincipal = (i: number) => (cuentas = cuentas.map((c, j) => ({ ...c, principal: i === j })));
+	const opcionesRegimen = $derived(
+		form.regimen && REGIMENES_ANTERIORES.some((r) => r.value === form.regimen) ? [...REGIMENES, ...REGIMENES_ANTERIORES.filter((r) => r.value === form.regimen)] : REGIMENES
+	);
 
 	// Historial de cargos (personal_cargo_historial): varios por trabajador, cada uno con sus fechas. El tramo sin
 	// fecha "hasta" es el cargo actual y se copia a personal.cargo al guardar.
@@ -201,6 +269,19 @@
 		.eq('estado', 'activo')
 		.order('nombre')
 		.then(({ data }) => (responsablesErp = (data ?? []).filter((e) => e.nombre).map((e) => ({ value: e.nombre as string, label: e.nombre as string }))));
+	// Tickets #119/#118: usuarios del ERP (por id) para "Jefe inmediato": solo él (o un administrador) aprueba su tareo.
+	let jefesErp = $state<{ value: string; label: string }[]>([]);
+	void supabase
+		.from('empleados')
+		.select('id, nombre')
+		.eq('estado', 'activo')
+		.order('nombre')
+		.then(({ data }) => (jefesErp = (data ?? []).filter((e) => e.nombre).map((e) => ({ value: String(e.id), label: e.nombre as string }))));
+	const MODALIDADES = [
+		{ value: 'presencial', label: 'Presencial' },
+		{ value: 'remoto', label: 'Remoto' },
+		{ value: 'hibrido', label: 'Híbrido' }
+	];
 	let telefono = $state(false);
 	void esTelefono().then((v) => (telefono = v)).catch(() => {});
 	const fotoVista = $derived(fotoNuevaUrl ?? (form.foto_url ? toDriveThumbnailUrl(form.foto_url, 300) : null));
@@ -283,7 +364,9 @@
 		if (!texto(form.apellidos)) e.apellidos = 'Ingresa los apellidos.';
 		if (!form.regimen) e.regimen = 'Elige el régimen.';
 		if (form.monto_pago && !form.periodicidad_pago) e.periodicidad_pago = 'Elige cada cuánto se le paga ese monto.';
-		if (form.cci && !/^\d{20}$/.test(form.cci.trim())) e.cci = 'El CCI tiene 20 dígitos.';
+		// Ticket #110: el CCI se valida en cada cuenta bancaria de la lista.
+		const cciMal = cuentas.find((c) => c.cci.trim() && !/^\d{20}$/.test(c.cci.trim()));
+		if (cciMal) e.cci = `El CCI de la cuenta ${cciMal.banco || 'sin banco'} tiene que tener 20 dígitos.`;
 		if (form.empleador_ruc && !/^\d{11}$/.test(form.empleador_ruc.trim())) e.empleador_ruc = 'El RUC tiene 11 dígitos.';
 		if (form.fecha_cese && form.fecha_ingreso && form.fecha_cese < form.fecha_ingreso) e.fecha_cese = 'No puede ser anterior al ingreso.';
 		const ec: Record<number, string> = {};
@@ -317,6 +400,8 @@
 			contacto_emergencia_telefono: texto(form.contacto_emergencia_telefono),
 			referente_nombre: texto(form.referente_nombre),
 			referente_cargo: form.referente_cargo || null,
+			id_jefe_inmediato: form.id_jefe_inmediato ? Number(form.id_jefe_inmediato) : null,
+			modalidad: form.modalidad || null,
 			vinculo: form.vinculo || null,
 			empleador_nombre: texto(form.empleador_nombre),
 			empleador_ruc: texto(form.empleador_ruc),
@@ -358,8 +443,18 @@
 			if (personal) for (const k of ['id_horario', 'id_empleado', 'consentimiento_biometrico', 'consentimiento_fecha'] as const) delete (datos as Partial<DatosPersonal>)[k];
 			// Base sin la migración 20261121130000 (columna nueva): si no se eligió responsable, no se envía el campo.
 			if (!datos.responsable_vencimientos) delete (datos as Partial<DatosPersonal>).responsable_vencimientos;
+			// Igual con jefe inmediato y modalidad (migración 20261124120000), si la ficha nunca los tuvo.
+			if (!datos.id_jefe_inmediato && !personal?.id_jefe_inmediato) delete (datos as Partial<DatosPersonal>).id_jefe_inmediato;
+			if (!datos.modalidad && !personal?.modalidad) delete (datos as Partial<DatosPersonal>).modalidad;
 			// Huelleros: en un alta, los de su obra o área; al editar solo si cambió de obra (se cambian los de la anterior
 			// por los de la nueva, igual que «Mover»); si no, se dejan como estén en Asistencia → Configuración.
+			// Ticket #110: la cuenta principal también queda en los campos de siempre (banco, cuenta, CCI).
+			const principal = cuentas.find((c) => c.principal && c.banco.trim()) ?? cuentas.find((c) => c.banco.trim());
+			if (principal) {
+				datos.banco = principal.banco.trim() || null;
+				datos.numero_cuenta = principal.numero_cuenta.trim() || null;
+				datos.cci = principal.cci.trim() || null;
+			}
 			const obrasFinal = datos.id_centro_costo && !obrasElegidas.includes(datos.id_centro_costo) ? [datos.id_centro_costo, ...obrasElegidas] : obrasElegidas;
 			const cambioDeObra = !!personal && [...obrasDe(personal)].sort().join(',') !== [...obrasFinal].sort().join(',');
 			const fotoAnterior = personal?.foto_url ?? null;
@@ -373,6 +468,16 @@
 				onSaved();
 				onClose();
 				return;
+			}
+			if (docsDisponible && (contratos.length || cuentas.length || seguros.length || personal)) {
+				try {
+					await guardarDocumentosPersonal(supabase, idGuardado, { contratos, cuentas, seguros }, permisosState.userName || null);
+				} catch (err) {
+					toast.error(`La ficha se guardó, pero no los contratos, cuentas o seguros. ${describeError(err)}`);
+					onSaved();
+					onClose();
+					return;
+				}
 			}
 			toast.success(personal ? 'Ficha actualizada.' : 'Trabajador registrado.');
 			// Ticket #121: si es la ficha del propio usuario, su foto se ve al instante en la cabecera y el menú.
@@ -475,6 +580,20 @@
 		<h4 class="text-base font-bold text-slate-800">{titulo}</h4>
 		{#if accion}{@render accion()}{/if}
 	</div>
+{/snippet}
+
+{#snippet archivo(fila: { archivo_url: string | null }, tipo: 'contrato' | 'seguro', clave: string)}
+	<span class="flex items-center gap-1.5 min-w-0">
+		{#if fila.archivo_url}
+			<a href={fila.archivo_url} target="_blank" rel="noopener noreferrer" class="text-xs text-blue-600 hover:underline truncate"><i class="fas fa-paperclip"></i> Ver</a>
+			<button type="button" onclick={() => (fila.archivo_url = null)} class="text-[11px] text-slate-400 hover:text-rose-600" title="Quitar archivo" aria-label="Quitar archivo"><i class="fas fa-xmark"></i></button>
+		{:else}
+			<label class={`text-xs font-semibold cursor-pointer ${subiendo === clave ? 'text-slate-400' : 'text-orange-600 hover:underline'}`}>
+				{#if subiendo === clave}<i class="fas fa-spinner fa-spin"></i> Subiendo…{:else}<i class="fas fa-upload"></i> Adjuntar{/if}
+				<input type="file" accept=".pdf,image/*,.doc,.docx" class="hidden" disabled={!!subiendo} onchange={(e) => subirArchivo(e, tipo, fila, clave)} />
+			</label>
+		{/if}
+	</span>
 {/snippet}
 
 {#snippet nota(texto: string)}
@@ -669,10 +788,18 @@
 								<SelectConSaldo id="referente_cargo" value={form.referente_cargo ?? ''} options={[{ value: '', label: 'Sin cargo' }, ...CARGOS_REFERENTE]} placeholder="Selecciona el cargo" encabezadoNombre="Cargo del referente" onchange={(v) => (form.referente_cargo = v || null)} />
 							{/snippet}
 							{@render campo('referente_cargo', 'Cargo del referente', false, ctlRefCargo)}
+							{#snippet ctlJefe()}
+								<SelectConSaldo id="id_jefe_inmediato" value={form.id_jefe_inmediato ? String(form.id_jefe_inmediato) : ''} options={[{ value: '', label: 'Sin jefe inmediato' }, ...jefesErp]} placeholder="Sin jefe inmediato" encabezadoNombre="Usuario" onchange={(v) => (form.id_jefe_inmediato = v ? Number(v) : null)} />
+							{/snippet}
+							{@render campo('id_jefe_inmediato', 'Jefe inmediato', false, ctlJefe, 'Usuario del ERP que aprueba su tareo (además del administrador).')}
+							{#snippet ctlModalidad()}
+								<SelectConSaldo id="modalidad" value={form.modalidad ?? ''} options={[{ value: '', label: 'Sin indicar' }, ...MODALIDADES]} placeholder="Sin indicar" encabezadoNombre="Modalidad" onchange={(v) => (form.modalidad = (v || null) as DatosPersonal['modalidad'])} />
+							{/snippet}
+							{@render campo('modalidad', 'Modalidad', false, ctlModalidad, 'Presencial, remoto o híbrido.')}
 
 							{@render subtitulo('Régimen')}
 							{#snippet ctlRegimen()}
-								<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={REGIMENES} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
+								<SelectConSaldo id="regimen" value={form.regimen ?? ''} options={opcionesRegimen} placeholder="Selecciona el régimen" hasError={!!errores.regimen} encabezadoNombre="Régimen" onchange={elegirRegimen} />
 							{/snippet}
 							{@render campo('regimen', 'Régimen laboral', true, ctlRegimen)}
 							{#snippet ctlTamano()}
@@ -705,6 +832,32 @@
 											: { texto: 'Activo', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' })}
 								</div>
 								<span class="text-xs text-slate-400">Se calcula con la fecha de cese.</span>
+							</div>
+
+							{#snippet accionContrato()}{@render botonNaranja('Agregar contrato', () => (contratos = [{ numero: '', fecha_inicio: hoyIso(), fecha_fin: null, archivo_url: null, observacion: '' }, ...contratos]))}{/snippet}
+							{@render subtitulo('Contratos', docsDisponible ? accionContrato : undefined)}
+							<div class="sm:col-span-2 flex flex-col gap-2">
+								{#if !docsDisponible}
+									<span class="text-xs text-amber-700">Falta actualizar la base de datos para registrar contratos.</span>
+								{:else if !contratos.length}
+									<span class="text-xs text-slate-400 italic">Sin contratos. Pulsa «Agregar contrato»: guarda su número, vigencia y el archivo; el ERP avisa 1 mes antes de que venza.</span>
+								{:else}
+									<div class="border border-slate-200 rounded-xl overflow-hidden">
+										<div class="hidden sm:grid grid-cols-[minmax(0,1fr)_9rem_9rem_8rem_6.5rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+											<span>N.º de contrato</span><span>Desde</span><span>Vence</span><span>Archivo</span><span>Estado</span><span class="sr-only">Quitar</span>
+										</div>
+										{#each contratos as c, i (c.id_contrato ?? `n${i}`)}
+											<div class="grid grid-cols-2 sm:grid-cols-[minmax(0,1fr)_9rem_9rem_8rem_6.5rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
+												<input bind:value={c.numero} maxlength="60" placeholder="Ej. 015-2026" aria-label="Número de contrato" class="col-span-2 sm:col-span-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input type="date" bind:value={c.fecha_inicio} aria-label="Desde" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input type="date" value={c.fecha_fin ?? ''} oninput={(e) => (c.fecha_fin = e.currentTarget.value || null)} aria-label="Vencimiento" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												{@render archivo(c, 'contrato', `c${i}`)}
+												<span>{@render insignia(estadoVence(c.fecha_fin, DIAS_AVISO_CONTRATO))}</span>
+												<button type="button" onclick={() => (contratos = contratos.filter((_, j) => j !== i))} title="Quitar contrato" aria-label="Quitar contrato" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+											</div>
+										{/each}
+									</div>
+								{/if}
 							</div>
 
 							{@render subtitulo('Historial de obras, huelleros y referentes')}
@@ -766,7 +919,7 @@
 													<input type="date" value={c.fecha_fin ?? ''} oninput={(e) => (c.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
 												</label>
 												<span class="col-span-2 sm:col-span-1 flex flex-col gap-0.5 min-w-0">
-													<input id={`cargo_${i}`} bind:value={c.cargo} maxlength="100" placeholder="Ej. Maestro de obra" aria-label="Cargo" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400" />
+													<input id={`cargo_${i}`} bind:value={c.cargo} list="cargos-sugeridos" maxlength="100" placeholder="Elige o escribe el cargo" aria-label="Cargo" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400" />
 													<span class="text-[11px] text-slate-400">{duracionCargo(c)}</span>
 												</span>
 												<span>{@render insignia(estadoCargo(c))}</span>
@@ -778,6 +931,7 @@
 								{/if}
 								{#if errores.cargos}<span class="text-xs text-rose-600">{errores.cargos}</span>{/if}
 							</div>
+							<datalist id="cargos-sugeridos">{#each CARGOS_SUGERIDOS as c}<option value={c}></option>{/each}</datalist>
 							{@render nota('Cada tramo conserva su cargo, sin fechas superpuestas. El que no tiene fecha «Hasta» es el cargo vigente; si su «Desde» es futuro queda como Programado.')}
 						{:else if seccion === 'beneficios'}
 							<div class="sm:col-span-2 flex flex-col items-center text-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10">
@@ -786,13 +940,33 @@
 								<p class="text-sm text-slate-500 max-w-md">Esta sección queda reservada para gratificaciones, bonos y su proyección en cuentas por pagar. Todavía no se guardan en el ERP.</p>
 							</div>
 						{:else if seccion === 'pagos'}
-							{@render subtitulo('Datos de pago')}
-							{#snippet ctlBanco()}<input id="banco" bind:value={form.banco} maxlength="60" placeholder="Ej. BCP" class={inputClase('banco')} />{/snippet}
-							{@render campo('banco', 'Banco', false, ctlBanco)}
-							{#snippet ctlCuenta()}<input id="numero_cuenta" bind:value={form.numero_cuenta} maxlength="30" class={inputClase('numero_cuenta')} />{/snippet}
-							{@render campo('numero_cuenta', 'Número de cuenta (haberes)', false, ctlCuenta)}
-							{#snippet ctlCci()}<input id="cci" bind:value={form.cci} maxlength="20" inputmode="numeric" class={inputClase('cci')} />{/snippet}
-							{@render campo('cci', 'CCI', false, ctlCci, '20 dígitos.')}
+							{#snippet accionCuenta()}{@render botonNaranja('Agregar cuenta', () => (cuentas = [...cuentas, { banco: '', moneda: 'PEN', numero_cuenta: '', cci: '', principal: !cuentas.length }]))}{/snippet}
+							{@render subtitulo('Cuentas bancarias', docsDisponible ? accionCuenta : undefined)}
+							<div class="sm:col-span-2 flex flex-col gap-2">
+								{#if !docsDisponible}
+									<span class="text-xs text-amber-700">Falta actualizar la base de datos para registrar varias cuentas.</span>
+								{:else if !cuentas.length}
+									<span class="text-xs text-slate-400 italic">Sin cuentas. Puede tener varias (BCP, BBVA, Interbank…); la principal es la que se usa para pagarle.</span>
+								{:else}
+									<div class="border border-slate-200 rounded-xl overflow-hidden">
+										<div class="hidden sm:grid grid-cols-[minmax(0,1fr)_5.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+											<span>Banco</span><span>Moneda</span><span>N.º de cuenta</span><span>CCI</span><span>Principal</span><span class="sr-only">Quitar</span>
+										</div>
+										{#each cuentas as c, i (c.id_cuenta ?? `n${i}`)}
+											<div class="grid grid-cols-2 sm:grid-cols-[minmax(0,1fr)_5.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
+												<input bind:value={c.banco} list="bancos-personal" maxlength="60" placeholder="Banco" aria-label="Banco" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<select bind:value={c.moneda} aria-label="Moneda" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm"><option value="PEN">S/</option><option value="USD">US$</option></select>
+												<input bind:value={c.numero_cuenta} maxlength="30" placeholder="N.º de cuenta" aria-label="Número de cuenta" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input bind:value={c.cci} maxlength="20" inputmode="numeric" placeholder="CCI (20 dígitos)" aria-label="CCI" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<label class="flex items-center gap-1.5 text-xs text-slate-600"><input type="radio" name="cuenta-principal" checked={c.principal} onchange={() => elegirPrincipal(i)} /> Principal</label>
+												<button type="button" onclick={() => (cuentas = cuentas.filter((_, j) => j !== i))} title="Quitar cuenta" aria-label="Quitar cuenta" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								<datalist id="bancos-personal">{#each BANCOS as b}<option value={b}></option>{/each}</datalist>
+								{#if errores.cci}<span class="text-xs text-rose-600">{errores.cci}</span>{/if}
+							</div>
 
 							{@render subtitulo('Afiliación previsional')}
 							{#snippet ctlPension()}
@@ -804,13 +978,42 @@
 								{@render campo('cuspp', 'CUSPP', false, ctlCuspp)}
 							{/if}
 
-							{@render subtitulo('Seguros y salud ocupacional')}
+							{#snippet accionSeguro()}{@render botonNaranja('Agregar seguro', () => (seguros = [{ tipo: 'sctr_salud', aseguradora: '', poliza: '', fecha_inicio: hoyIso(), fecha_fin: null, archivo_url: null }, ...seguros]))}{/snippet}
+							{@render subtitulo('Seguros (SCTR salud, SCTR pensión y Vida Ley)', docsDisponible ? accionSeguro : undefined)}
+							<div class="sm:col-span-2 flex flex-col gap-2">
+								{#if !docsDisponible}
+									<span class="text-xs text-amber-700">Falta actualizar la base de datos para registrar el historial de seguros.</span>
+								{:else if !seguros.length}
+									<span class="text-xs text-slate-400 italic">Sin seguros registrados. Cada mes se agrega el SCTR de salud y el de pensión (con su archivo); el historial queda completo.</span>
+								{:else}
+									<div class="border border-slate-200 rounded-xl overflow-hidden">
+										<div class="hidden sm:grid grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+											<span>Seguro</span><span>Aseguradora</span><span>Póliza</span><span>Desde</span><span>Hasta</span><span>Archivo</span><span>Estado</span><span class="sr-only">Quitar</span>
+										</div>
+										{#each seguros as s, i (s.id_seguro ?? `n${i}`)}
+											<div class="grid grid-cols-2 sm:grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
+												<select bind:value={s.tipo} aria-label="Tipo de seguro" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm">{#each TIPOS_SEGURO as t}<option value={t.value}>{t.label}</option>{/each}</select>
+												<input bind:value={s.aseguradora} list="aseguradoras-personal" maxlength="100" placeholder="Aseguradora" aria-label="Aseguradora" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input bind:value={s.poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input type="date" bind:value={s.fecha_inicio} aria-label="Desde" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<input type="date" value={s.fecha_fin ?? ''} oninput={(e) => (s.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												{@render archivo(s, 'seguro', `s${i}`)}
+												<span>{@render insignia(i === seguros.findIndex((x) => x.tipo === s.tipo) ? estadoVence(s.fecha_fin, DIAS_AVISO_SEGURO[s.tipo]) : { texto: 'Anterior', clase: 'bg-slate-100 text-slate-500 border-slate-200' })}</span>
+												<button type="button" onclick={() => (seguros = seguros.filter((_, j) => j !== i))} title="Quitar seguro" aria-label="Quitar seguro" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								<datalist id="aseguradoras-personal">{#each ASEGURADORAS as a}<option value={a}></option>{/each}</datalist>
+							</div>
+
+							{@render subtitulo('Salud ocupacional')}
 							<div class="sm:col-span-2 border border-slate-200 rounded-xl overflow-hidden">
 								<div class="hidden sm:grid grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
 									<span>Cobertura</span><span>Póliza o documento</span><span>Vencimiento</span><span>Estado</span>
 								</div>
 								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 text-sm">
-									<span class="font-medium text-slate-800">SCTR</span>
+									<span class="font-medium text-slate-800">SCTR <span class="block text-[11px] font-normal text-slate-400">registro anterior</span></span>
 									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.sctr_vencimiento, 7))}</span>
 									<input id="sctr_poliza" bind:value={form.sctr_poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza SCTR" class="col-span-2 sm:col-span-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
 									<input id="sctr_vencimiento" type="date" bind:value={form.sctr_vencimiento} aria-label="Vencimiento del SCTR" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
@@ -827,7 +1030,7 @@
 								<SelectConSaldo id="responsable_vencimientos" value={form.responsable_vencimientos ?? ''} options={responsablesErp} placeholder="Sin responsable" encabezadoNombre="Usuario" onchange={(v) => (form.responsable_vencimientos = v || null)} />
 							{/snippet}
 							{@render campo('responsable_vencimientos', 'Responsable de los vencimientos', false, ctlResponsableVence)}
-							{@render nota('El ERP avisa 1 semana antes del vencimiento del SCTR y 30 días antes del examen médico, en la lista de Personal y en Alertas de tareas (en "Mis tareas" del responsable).')}
+							{@render nota('El ERP avisa 1 semana antes del vencimiento del SCTR, 30 días antes de Vida Ley, del examen médico y de los contratos, en Alertas de tareas ("Mis tareas" del responsable de los vencimientos).')}
 						{/if}
 					</div>
 				</div>

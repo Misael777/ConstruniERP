@@ -81,10 +81,47 @@ async function alertasPersonal(client: SupabaseClient, hoy: string): Promise<Ale
 	if (error?.code === '42703' || error?.code === 'PGRST204') ({ data, error } = await consultar(BASE));
 	if (error) throw error;
 	const out: AlertaTarea[] = [];
+	const nombreDe = (p: any) => [p?.nombres, p?.apellidos].filter(Boolean).join(' ').trim() || p?.nombre || 'Trabajador';
+
+	// Ticket #110: seguros (SCTR salud, SCTR pensión, Vida Ley) y contratos — avisa por el ÚLTIMO de cada tipo.
+	const SEGURO: Record<string, [string, number]> = { sctr_salud: ['SCTR salud', 7], sctr_pension: ['SCTR pensión', 7], vida_ley: ['Vida Ley', 30] };
+	const conSctrNuevo = new Set<number>();
+	const [{ data: segs }, { data: conts }] = await Promise.all([
+		client.from('personal_seguro').select('id_personal, tipo, fecha_fin, personal!inner(nombres, apellidos, nombre, estado, responsable_vencimientos)').not('fecha_fin', 'is', null).neq('personal.estado', 'baja'),
+		client.from('personal_contrato').select('id_personal, numero, fecha_fin, personal!inner(nombres, apellidos, nombre, estado, responsable_vencimientos)').not('fecha_fin', 'is', null).neq('personal.estado', 'baja')
+	]);
+	const ultimo = new Map<string, any>();
+	for (const s of (segs ?? []) as any[]) {
+		if (s.tipo !== 'vida_ley') conSctrNuevo.add(s.id_personal);
+		const k = `${s.id_personal}:${s.tipo}`;
+		if (!ultimo.has(k) || ultimo.get(k).fecha_fin < s.fecha_fin) ultimo.set(k, s);
+	}
+	for (const c of (conts ?? []) as any[]) {
+		const k = `${c.id_personal}:contrato`;
+		if (!ultimo.has(k) || ultimo.get(k).fecha_fin < c.fecha_fin) ultimo.set(k, { ...c, tipo: 'contrato' });
+	}
+	for (const [k, x] of ultimo) {
+		const [que, aviso] = x.tipo === 'contrato' ? [`Contrato${x.numero ? ` ${x.numero}` : ''}`, 30] : SEGURO[x.tipo] ?? [x.tipo, 7];
+		const per = Array.isArray(x.personal) ? x.personal[0] : x.personal;
+		if (diasHasta(x.fecha_fin, hoy) > aviso) continue;
+		out.push({
+			id: `rrhh-${k}`,
+			modulo: 'rrhh',
+			titulo: `${que} · ${nombreDe(per)}`,
+			detalle: diasHasta(x.fecha_fin, hoy) < 0 ? 'Renovar: ya venció' : 'Renovar antes del vencimiento',
+			fecha: x.fecha_fin,
+			prioridad: diasHasta(x.fecha_fin, hoy) <= 3 ? 'alta' : 'media',
+			responsable: per?.responsable_vencimientos ?? null,
+			registradoPor: null,
+			href: '/rrhh/personal'
+		});
+	}
+
 	for (const p of (data ?? []) as any[]) {
 		const nombre = [p.nombres, p.apellidos].filter(Boolean).join(' ').trim() || p.nombre || `Trabajador #${p.id_personal}`;
 		const items: [string, string | null, number][] = [
-			['SCTR', p.sctr_vencimiento, DIAS_AVISO_SCTR],
+			// El SCTR de la versión anterior (un solo campo) solo avisa si aún no tiene SCTR en el historial de seguros.
+			['SCTR', conSctrNuevo.has(p.id_personal) ? null : p.sctr_vencimiento, DIAS_AVISO_SCTR],
 			['Examen médico', p.examen_medico_vencimiento, DIAS_AVISO_VENCIMIENTO]
 		];
 		for (const [que, fecha, aviso] of items) {
@@ -96,7 +133,8 @@ async function alertasPersonal(client: SupabaseClient, hoy: string): Promise<Ale
 				detalle: diasHasta(fecha, hoy) < 0 ? 'Renovar: ya venció' : 'Renovar antes del vencimiento',
 				fecha,
 				prioridad: diasHasta(fecha, hoy) <= 3 ? 'alta' : 'media',
-				responsable: null,
+				// Ticket #125 (rechazado 24/11/2026): la alerta va a "Mis tareas" del responsable de los vencimientos.
+				responsable: p.responsable_vencimientos ?? null,
 				registradoPor: null,
 				href: '/rrhh/personal'
 			});

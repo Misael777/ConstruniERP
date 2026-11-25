@@ -23,7 +23,17 @@ export interface Personal {
 	direccion: string | null;
 	contacto_emergencia_nombre: string | null;
 	contacto_emergencia_telefono: string | null;
-	regimen: 'construccion_civil' | 'contrata' | 'subcontrata' | 'general' | null;
+	regimen:
+		| 'general'
+		| 'construccion_civil'
+		| 'microempresa'
+		| 'pequena_empresa'
+		| 'locacion_servicios'
+		| 'practicas_preprofesionales'
+		| 'practicas_profesionales'
+		| 'contrata'
+		| 'subcontrata'
+		| null;
 	/** Especialidad (CATEGORIAS) si el régimen es de obreros; ver usaCategoria. */
 	categoria: string | null;
 	cargo: string | null;
@@ -54,6 +64,12 @@ export interface Personal {
 	/** Referente: quién lo trajo o responde por él en obra (p. ej. su subcontratista). */
 	referente_nombre: string | null;
 	referente_cargo: string | null;
+	/** Tickets #119/#118: usuario del ERP (empleados.id) que aprueba su tareo. Sin la migración 20261124120000 no viene. */
+	id_jefe_inmediato?: number | null;
+	/** Modalidad de trabajo (se muestra en el tareo de Consultoría). */
+	modalidad?: 'presencial' | 'remoto' | 'hibrido' | null;
+	/** Ticket #110: método "Registro manual": marca su ingreso y salida desde el ERP aunque su horario sea fijo. */
+	registro_manual?: boolean;
 	/** Vínculo: en planilla propia o personal de un subcontratista (null = según el régimen; ver vinculoDe). */
 	vinculo: 'planilla_propia' | 'subcontratista' | null;
 	/** Empresa empleadora si es de un subcontratista (vacío en planilla propia = la propia empresa). */
@@ -96,11 +112,43 @@ export const SEXOS = [
 	{ value: 'M', label: 'Masculino' },
 	{ value: 'F', label: 'Femenino' }
 ];
+/** Ticket #110 (punto 1): regímenes laborales y modalidades contractuales y formativas, como pidió la clienta. */
 export const REGIMENES = [
-	{ value: 'construccion_civil', label: 'Construcción civil' },
-	{ value: 'contrata', label: 'Contrata' },
-	{ value: 'subcontrata', label: 'Subcontrata' },
-	{ value: 'general', label: 'Régimen general' }
+	{ value: 'general', label: 'Régimen general', grupo: 'Regímenes laborales (planilla)' },
+	{ value: 'construccion_civil', label: 'Régimen especial de construcción civil', grupo: 'Regímenes laborales (planilla)' },
+	{ value: 'microempresa', label: 'Régimen especial de microempresa', grupo: 'Regímenes laborales (planilla)' },
+	{ value: 'pequena_empresa', label: 'Régimen especial de pequeña empresa', grupo: 'Regímenes laborales (planilla)' },
+	{ value: 'locacion_servicios', label: 'Locación de servicios', grupo: 'Modalidades de vinculación contractual y formativas' },
+	{ value: 'practicas_preprofesionales', label: 'Convenio de prácticas preprofesionales', grupo: 'Modalidades de vinculación contractual y formativas' },
+	{ value: 'practicas_profesionales', label: 'Convenio de prácticas profesionales', grupo: 'Modalidades de vinculación contractual y formativas' }
+];
+/** Valores de la versión anterior: se siguen mostrando en las fichas que los tienen hasta que se cambien. */
+export const REGIMENES_ANTERIORES = [
+	{ value: 'contrata', label: 'Contrata (anterior)', grupo: 'Anterior' },
+	{ value: 'subcontrata', label: 'Subcontrata (anterior)', grupo: 'Anterior' }
+];
+export const TODOS_REGIMENES = [...REGIMENES, ...REGIMENES_ANTERIORES];
+/** Ticket #110 (punto 2): cargos sugeridos (el campo sigue aceptando cualquier texto). */
+export const CARGOS_SUGERIDOS = [
+	'Residente de obra',
+	'Administrador de obra',
+	'Asistente de obra',
+	'SSOMA',
+	'Maestro de obra',
+	'Capataz',
+	'Operador de máquina',
+	'Soldador',
+	'Operario de pintura',
+	'Operario de limpieza',
+	'Operario',
+	'Oficial',
+	'Ayudante',
+	'Almacenero',
+	'Vigilante',
+	'Arquitecto',
+	'Ingeniero civil',
+	'Asistente administrativo',
+	'Contador'
 ];
 /** Cargo del referente (a pedido del usuario). Para agregar otro, súmalo aquí. */
 export const CARGOS_REFERENTE = ['Subcontratista', 'Contratista'].map((v) => ({ value: v, label: v }));
@@ -303,7 +351,7 @@ async function sincronizarObras(client: SupabaseClient, idPersonal: number, obra
 }
 
 /** Campos de asistencia que se editan desde Asistencia → Configuración. */
-export type DatosAsistenciaPersonal = Pick<DatosPersonal, 'id_horario' | 'id_empleado' | 'consentimiento_biometrico' | 'consentimiento_fecha'>;
+export type DatosAsistenciaPersonal = Pick<DatosPersonal, 'id_horario' | 'id_empleado' | 'consentimiento_biometrico' | 'consentimiento_fecha' | 'registro_manual'>;
 
 /** Guarda solo la configuración de asistencia (horario, usuario del ERP, consentimiento) y los huelleros donde marca. */
 export async function guardarAsistenciaPersonal(client: SupabaseClient, idPersonal: number, datos: DatosAsistenciaPersonal, huelleros: number[]): Promise<void> {
@@ -314,6 +362,8 @@ export async function guardarAsistenciaPersonal(client: SupabaseClient, idPerson
 			id_empleado: datos.id_empleado,
 			consentimiento_biometrico: datos.consentimiento_biometrico,
 			consentimiento_fecha: datos.consentimiento_biometrico ? datos.consentimiento_fecha || null : null,
+			// Base sin la migración 20261125120000: la columna no existe; solo se envía si se activó.
+			...(datos.registro_manual !== undefined ? { registro_manual: datos.registro_manual } : {}),
 			updated_at: new Date().toISOString()
 		})
 		.eq('id_personal', idPersonal);

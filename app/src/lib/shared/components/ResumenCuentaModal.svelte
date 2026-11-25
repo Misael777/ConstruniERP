@@ -65,7 +65,8 @@
 		esObra = false,
 		estiloVenta = false,
 		pagoGlobal = false,
-		onPagarSeleccionados
+		onPagarSeleccionados,
+		cuadrePlanilla = null
 	}: {
 		open: boolean;
 		titulo: string;
@@ -94,7 +95,20 @@
 		/** Tickets #134/#122: CxP de planilla — columnas Trabajador y Cargo, y checks para pagar varias cuotas juntas. */
 		pagoGlobal?: boolean;
 		onPagarSeleccionados?: (ids: number[]) => void;
+		/** Tickets #133/#134: CxP de planilla — cuánto vino del tareo, cuánto es proyección y su desglose por trabajador. */
+		cuadrePlanilla?: {
+			enviado: number;
+			nEnviado: number;
+			proyeccion: number;
+			detalle: { trabajador: string; concepto: 'estimado' | 'saldo_tareo' | 'aprobado' | 'reserva'; dias: number | null; fecha: string; monto: number }[];
+		} | null;
 	} = $props();
+	const CONCEPTO_PROY: Record<string, string> = {
+		estimado: 'Estimado: días aún sin tareo',
+		saldo_tareo: 'Saldo del tareo por enviar',
+		aprobado: 'Tareo aprobado, falta enviarlo',
+		reserva: 'Reserva programada'
+	};
 
 	let seleccion = $state<Set<number>>(new Set());
 	$effect(() => {
@@ -291,6 +305,34 @@
 							</table>
 						</div>
 {#if pagoGlobal}<p class="mt-2 text-xs text-slate-400">Marca a los trabajadores que vas a pagar juntos y usa "Pagar seleccionados": se registra una sola transacción por la suma.</p>{/if}
+{#if cuadrePlanilla}
+	<div class="mt-4 rounded-xl border border-slate-200 overflow-hidden">
+		<h4 class="px-4 py-2 text-sm font-semibold text-[#0f3b5e] bg-slate-50 border-b border-slate-200">Cómo se compone el monto de esta planilla</h4>
+		<div class="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 text-sm">
+			<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2"><span class="block text-xs text-emerald-700">Enviado desde el tareo ({cuadrePlanilla.nEnviado} cuota{cuadrePlanilla.nEnviado === 1 ? '' : 's'})</span><b class="text-emerald-800 tabular-nums">{formatCurrency(cuadrePlanilla.enviado)}</b></div>
+			<div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2"><span class="block text-xs text-amber-700">+ Proyección (aún no enviado)</span><b class="text-amber-800 tabular-nums">{formatCurrency(cuadrePlanilla.proyeccion)}</b></div>
+			<div class="rounded-lg border border-slate-200 bg-white px-3 py-2"><span class="block text-xs text-slate-500">= Monto total de la CxP</span><b class="text-[#0f3b5e] tabular-nums">{formatCurrency(cuadrePlanilla.enviado + cuadrePlanilla.proyeccion)}</b></div>
+		</div>
+		{#if cuadrePlanilla.proyeccion > 0}
+			{#if cuadrePlanilla.detalle.length}
+				<div class="overflow-x-auto">
+					<table class="w-full text-xs min-w-[520px]">
+						<thead class="bg-slate-50 text-slate-500"><tr><th class="px-3 py-1.5 text-left">Trabajador</th><th class="px-3 py-1.5 text-left">Detalle de la proyección</th><th class="px-3 py-1.5 text-right">Días</th><th class="px-3 py-1.5 text-center">Fecha</th><th class="px-3 py-1.5 text-right">Monto</th></tr></thead>
+						<tbody class="divide-y divide-slate-100">
+							{#each cuadrePlanilla.detalle as d, i (i)}
+								<tr><td class="px-3 py-1.5 text-slate-700">{d.trabajador}</td><td class="px-3 py-1.5 text-slate-500">{CONCEPTO_PROY[d.concepto] ?? d.concepto}</td><td class="px-3 py-1.5 text-right tabular-nums">{d.dias ?? '—'}</td><td class="px-3 py-1.5 text-center">{new Date(`${d.fecha}T12:00:00`).toLocaleDateString('es-PE')}</td><td class="px-3 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(d.monto)}</td></tr>
+							{/each}
+						</tbody>
+						<tfoot><tr class="bg-amber-50 font-semibold"><td class="px-3 py-1.5" colspan="4">Total proyección</td><td class="px-3 py-1.5 text-right tabular-nums">{formatCurrency(cuadrePlanilla.detalle.reduce((t, d) => t + d.monto, 0))}</td></tr></tfoot>
+					</table>
+				</div>
+				<p class="px-3 py-2 text-[11px] text-slate-400">La proyección es una estimación para separar fondos: no se paga. Cuando el jefe aprueba y se envía el tareo de cada trabajador, su parte sale de la proyección y aparece arriba como cuota con su nombre.</p>
+			{:else}
+				<p class="px-3 py-2 text-xs text-slate-400">Proyección calculada antes de esta versión: su detalle por trabajador aparece en cuanto se vuelva a calcular (al enviar, aprobar o reservar tareo de este periodo).</p>
+			{/if}
+		{/if}
+	</div>
+{/if}
 {#if !soloLectura}<p class="mt-2 text-xs text-slate-400">Solo la cuota pendiente más próxima está habilitada: toca su estado para editarla o registrar su {textoPagado === 'Cobrado' ? 'cobro' : 'pago'}. Las siguientes se habilitan en orden.</p>{/if}
 					{/if}
 				</div>
@@ -321,14 +363,16 @@
 			{/each}
 		</div>
 
-		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3">
+		<!-- Ticket #129 (rechazado 24/11/2026, "todo descuadrado"): dentro del modal, 4 tarjetas por fila dejaban los montos
+		     fuera del recuadro; van de 2 en 2 y el monto se achica si no cabe. -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3 min-w-0">
 				<div class="w-11 h-11 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0"><FileText size={20} /></div>
-				<div class="min-w-0"><p class="text-xs text-slate-500">Monto contratado</p><p class="text-[clamp(1rem,1.6vw,1.25rem)] font-bold text-[#0f3b5e] whitespace-nowrap tabular-nums">{formatCurrency(montoTotal)}</p></div>
+				<div class="min-w-0"><p class="text-xs text-slate-500">Monto contratado</p><p class="text-lg font-bold text-[#0f3b5e] tabular-nums break-words">{#if !visible}<span class="tracking-widest">{OCULTO}</span>{:else}{formatCurrency(montoTotal)}{/if}</p></div>
 			</div>
-			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3">
+			<div class="rounded-xl border border-slate-200 p-3 flex items-center gap-3 min-w-0">
 				<div class="w-11 h-11 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center shrink-0"><Coins size={20} /></div>
-				<div class="min-w-0"><p class="text-xs text-slate-500">Próximo a cobrar</p><p class="text-[clamp(1rem,1.6vw,1.25rem)] font-bold text-[#0f3b5e] whitespace-nowrap tabular-nums">{#if !visible}<span class="tracking-widest">{OCULTO}</span>{:else}{kpi.proxima ? formatCurrency(kpi.proxima.monto) : '—'}{/if}</p></div>
+				<div class="min-w-0"><p class="text-xs text-slate-500">Próximo a cobrar</p><p class="text-lg font-bold text-[#0f3b5e] tabular-nums break-words">{#if !visible}<span class="tracking-widest">{OCULTO}</span>{:else}{kpi.proxima ? formatCurrency(kpi.proxima.monto) : '—'}{/if}</p></div>
 			</div>
 			{#each [{ t: 'Avance de cobranza programada', p: kpi.pctProgramado, a: 'Monto programado', av: kpi.programado, b: 'Saldo por programar', bv: kpi.porProgramar, barra: 'bg-blue-600', punto: 'bg-blue-600' }, { t: 'Avance de cobranza efectiva', p: kpi.pctCobrado, a: 'Total cobrado', av: kpi.cobrado, b: 'Saldo por cobrar', bv: kpi.porCobrar, barra: 'bg-emerald-500', punto: 'bg-emerald-500' }] as k (k.t)}
 				<div class="rounded-xl border border-slate-200 p-3">
@@ -338,8 +382,8 @@
 						<span class="text-xs font-bold text-[#0f3b5e] whitespace-nowrap">{visible ? `${k.p.toFixed(2)}%` : '••••'}</span>
 					</div>
 					<div class="mt-1 grid grid-cols-2 gap-2 text-[11px] text-slate-500">
-						<div>{k.a}<p class="text-sm font-bold text-[#0f3b5e] whitespace-nowrap">{visible ? formatCurrency(k.av) : OCULTO}</p></div>
-						<div>{k.b}<p class="text-sm font-bold text-[#0f3b5e] whitespace-nowrap">{visible ? formatCurrency(k.bv) : OCULTO}</p></div>
+						<div>{k.a}<p class="text-sm font-bold text-[#0f3b5e] tabular-nums break-words">{visible ? formatCurrency(k.av) : OCULTO}</p></div>
+						<div>{k.b}<p class="text-sm font-bold text-[#0f3b5e] tabular-nums break-words">{visible ? formatCurrency(k.bv) : OCULTO}</p></div>
 					</div>
 				</div>
 			{/each}

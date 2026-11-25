@@ -17,6 +17,8 @@ export interface MiFicha {
 	obra: string | null;
 	fecha_ingreso: string | null;
 	fecha_cese: string | null;
+	/** Ticket #110: método "Registro manual": marca desde el ERP aunque su horario sea fijo. */
+	registro_manual?: boolean;
 }
 
 export interface MiAsistencia {

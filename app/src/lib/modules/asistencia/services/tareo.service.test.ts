@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
 
 
-import { calcularFila, jornadaMinutos, tarifas, lunesDe, motivoMarca, fraccionDia, textoDias, type MarcaTareo, type AjusteTareo, type FeriadoTareo } from './tareo.service';
+import {
+	calcularFila,
+	jornadaMinutos,
+	tarifas,
+	lunesDe,
+	motivoMarca,
+	fraccionDia,
+	textoDias,
+	aprobacionDe,
+	estaAprobado,
+	proyectarFila,
+	fraccionPrevista,
+	periodoConsultoria,
+	calcularFilaConsultoria,
+	esCentroObra,
+	type MarcaTareo,
+	type AjusteTareo,
+	type FeriadoTareo
+} from './tareo.service';
 import type { Horario } from '$lib/modules/personal/services/horarios.service';
 import type { Personal } from '$lib/modules/personal/services/personal.service';
 
@@ -138,5 +156,88 @@ describe('fraccionDia (ticket #132: se paga por día o medio día)', () => {
 		expect(textoDias(0.5)).toBe('½ día');
 		expect(textoDias(3.5)).toBe('3½ días');
 		expect(textoDias(0)).toBe('0 días');
+	});
+});
+
+describe('aprobación del jefe inmediato (tickets #118/#119)', () => {
+	it('aprobado solo si el total no cambió; lo enviado antes vale como aprobado', () => {
+		expect(aprobacionDe({ aprobadoMonto: null, enviado: 0 }, 500)).toBe('pendiente');
+		expect(aprobacionDe({ aprobadoMonto: 500, enviado: 0 }, 500)).toBe('aprobado');
+		expect(aprobacionDe({ aprobadoMonto: 500, enviado: 0 }, 550)).toBe('cambio');
+		expect(aprobacionDe({ aprobadoMonto: null, enviado: 200 }, 500)).toBe('previo');
+		expect(estaAprobado('cambio')).toBe(false);
+		expect(estaAprobado('previo')).toBe(true);
+	});
+});
+
+describe('proyección (ticket #118)', () => {
+	// Lunes y martes registrados (hoy = martes 03/11); miércoles a sábado previstos según el horario civil.
+	const marcas = [m('2026-11-02', '07:30'), m('2026-11-02', '17:00'), m('2026-11-03', '07:30'), m('2026-11-03', '17:00')];
+	const f = calcularFila(persona(), civil, marcas, [], [], null, LUNES, '2026-11-03');
+	const p = proyectarFila(f, '2026-11-03');
+	it('acumulado = lo registrado; por completar = días previstos × S/ día', () => {
+		expect(p.dias.filter((d) => d.registrado).length).toBe(2);
+		expect(p.acumulado).toBeCloseTo(2 * f.tarifaDia, 2);
+		// Mié–Vie día completo; sábado 5.5 h de jornada promedio 8:10 → más de la mitad = 1; domingo descanso.
+		expect(p.diasPrevistos).toBe(4);
+		expect(p.porCompletar).toBeCloseTo(4 * f.tarifaDia, 2);
+	});
+	it('día previsto: descanso = 0, sin horario lunes a sábado, fuera de contrato = 0', () => {
+		expect(fraccionPrevista(persona(), civil, f.jornadaMin, '2026-11-08')).toBe(0);
+		expect(fraccionPrevista(persona(), null, 480, '2026-11-07')).toBe(1);
+		expect(fraccionPrevista(persona(), null, 480, '2026-11-08')).toBe(0);
+		expect(fraccionPrevista(persona({ fecha_cese: '2026-11-04' }), null, 480, '2026-11-05')).toBe(0);
+	});
+});
+
+describe('Consultoría (ticket #118)', () => {
+	it('periodos: quincenas 1–15 y 16–fin de mes, o mes completo', () => {
+		expect(periodoConsultoria('quincenal', '2026-11-10')).toEqual({ inicio: '2026-11-01', fin: '2026-11-15' });
+		expect(periodoConsultoria('quincenal', '2026-11-20')).toEqual({ inicio: '2026-11-16', fin: '2026-11-30' });
+		expect(periodoConsultoria('quincenal', '2026-02-16')).toEqual({ inicio: '2026-02-16', fin: '2026-02-28' });
+		expect(periodoConsultoria('mensual', '2026-12-31')).toEqual({ inicio: '2026-12-01', fin: '2026-12-31' });
+	});
+	it('base del periodo menos las faltas × S/ día (ej. 2 500 quincenal con una falta = −166.67)', () => {
+		// L-V 08:00–17:00 (sin sábado). Quincena 16–30/11/2026, hoy = 30/11: marca todos los días hábiles menos el 18.
+		const lv: Horario = { ...civil, horario_dia: [1, 2, 3, 4, 5].map((dia) => ({ dia, hora_entrada: '08:00', hora_salida: '17:00', refrigerio_inicio: '12:00', refrigerio_fin: '13:00' })) };
+		const habiles = ['2026-11-16', '2026-11-17', '2026-11-19', '2026-11-20', '2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-30'];
+		const marcasQ = habiles.flatMap((d) => [m(d, '08:00'), m(d, '17:00')]);
+		const pq = persona({ periodicidad_pago: 'quincenal', monto_pago: 2500 });
+		const base = calcularFila(pq, lv, marcasQ, [], [], { id_personal: 7, bonos: 100, total: 0, enviado: 0, fecha_cxp: null }, '2026-11-16', '2026-11-30', true, 15);
+		const c = calcularFilaConsultoria(base, 'quincenal', 5, 'Corporativo');
+		expect(c.diasBase).toBe(15);
+		expect(c.diasReconocidos).toBe(14);
+		expect(c.ajuste).toBeCloseTo(-166.67, 2);
+		expect(c.fila.total).toBeCloseTo(2500 - 166.67 + 100, 2);
+		// Remoto: la falta sin marca no descuenta (solo los días editados como falta).
+		const remoto = calcularFilaConsultoria({ ...base, personal: { ...pq, modalidad: 'remoto' } }, 'quincenal', 5, 'Corporativo');
+		expect(remoto.diasReconocidos).toBe(15);
+		expect(remoto.ajuste).toBe(0);
+	});
+	it('obra = proyecto que no es de consultoría', () => {
+		expect(esCentroObra({ tipo: 'proyecto', proyecto: { tipo_venta: 'obra' } })).toBe(true);
+		expect(esCentroObra({ tipo: 'proyecto', proyecto: null })).toBe(true);
+		expect(esCentroObra({ tipo: 'proyecto', proyecto: [{ tipo_venta: 'consultoria' }] })).toBe(false);
+		expect(esCentroObra({ tipo: 'bolsa general', proyecto: null })).toBe(false);
+		expect(esCentroObra(null)).toBe(false);
+	});
+});
+
+describe('horas extra (ticket #117)', () => {
+	// Martes 03/11: entra 07:30 y marca la salida 19:00 (su horario sale 17:00).
+	const marcas = [m('2026-11-03', '07:30'), m('2026-11-03', '19:00')];
+	it('salir tarde no suma horas: cuenta hasta su hora de salida', () => {
+		const f = calcularFila(persona(), civil, marcas, [], [], null, LUNES, '2026-11-09');
+		expect(f.dias[1].minutos).toBe(510); // 07:30–17:00 menos refrigerio
+		expect(f.dias[1].extraHuellero).toBe(120);
+		expect(f.extrasMonto).toBe(0);
+	});
+	it('las horas extra que registra el jefe se pagan por hora y suman al total', () => {
+		const extra = { id_personal: 7, fecha: '2026-11-03', minutos: 120, observacion: 'Vaciado', registrado_por: 'Jefe' };
+		const f = calcularFila(persona(), civil, marcas, [], [], null, LUNES, '2026-11-09', true, 7, [extra]);
+		expect(f.extrasMin).toBe(120);
+		expect(f.extrasMonto).toBeCloseTo(2 * f.tarifaHora, 2);
+		expect(f.total).toBeCloseTo(f.subtotal + f.extrasMonto, 2);
+		expect(f.dias[1].extra?.minutos).toBe(120);
 	});
 });

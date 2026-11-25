@@ -53,11 +53,15 @@
 		cargando = true;
 		error = '';
 		try {
-			alertas = await getAlertasTareas(supabase, {
-				rrhh: hasPermiso('ver_rrhh_personal'),
+			// Ticket #125: el responsable de los vencimientos (SCTR, examen médico) ve los suyos aunque su rol no tenga
+			// acceso a Personal; quien sí lo tiene ve todos.
+			const verRrhh = hasPermiso('ver_rrhh_personal');
+			const lista = await getAlertasTareas(supabase, {
+				rrhh: true,
 				proyectos: hasPermiso('ver_proyectos_gestion'),
 				finanzas: hasPermiso('ver_finanzas_cuentas_pendientes')
 			});
+			alertas = lista.filter((a) => a.modulo !== 'rrhh' || verRrhh || esMia(a));
 			cargoUnaVez = true;
 		} catch (err: any) {
 			error = err?.message ?? 'No se pudieron cargar las alertas.';

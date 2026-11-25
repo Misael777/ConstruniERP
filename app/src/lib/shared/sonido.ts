@@ -1,10 +1,13 @@
 /**
  * Ticket #130: sonido para notificaciones y alertas (app y escritorio). Un "ding-dong" corto generado con Web Audio
  * (sin archivo de audio: funciona igual en navegador, Tauri Windows y Tauri Android). Los navegadores solo permiten
- * sonar después de que el usuario tocó la página alguna vez; antes de eso falla en silencio (nunca rompe la app).
+ * sonar después de que el usuario tocó la página alguna vez; antes de eso el aviso queda PENDIENTE y suena con el
+ * primer toque, clic o tecla (rechazado 24/11/2026: "no me suena nada" — al abrir la app con avisos pendientes no
+ * sonaba porque el audio aún estaba bloqueado y el aviso se perdía).
  */
 let ctx: AudioContext | null = null;
 let ultimo = 0;
+let pendiente: 'notificacion' | 'alerta' | null = null;
 
 function contexto(): AudioContext | null {
 	if (typeof window === 'undefined') return null;
@@ -18,13 +21,22 @@ function contexto(): AudioContext | null {
 if (typeof window !== 'undefined') {
 	const desbloquear = () => {
 		try {
-			void contexto()?.resume();
+			const c = contexto();
+			if (!c) return;
+			void c.resume().then(() => {
+				if (pendiente) {
+					const tipo = pendiente;
+					pendiente = null;
+					sonarAviso(tipo);
+				}
+			});
 		} catch {
 			/* sin audio */
 		}
 	};
-	window.addEventListener('pointerdown', desbloquear, { once: true, capture: true });
-	window.addEventListener('keydown', desbloquear, { once: true, capture: true });
+	// No "once": si el primer toque no alcanzó a desbloquear el audio, el siguiente lo intenta de nuevo.
+	window.addEventListener('pointerdown', desbloquear, { capture: true });
+	window.addEventListener('keydown', desbloquear, { capture: true });
 }
 
 /** Tipo de sonido: 'notificacion' (campana) o 'alerta' (⚠, un tono más grave). */
@@ -33,7 +45,13 @@ export function sonarAviso(tipo: 'notificacion' | 'alerta' = 'notificacion'): vo
 		// Varias novedades juntas (campana y alertas a la vez): un solo sonido.
 		if (Date.now() - ultimo < 1500) return;
 		const c = contexto();
-		if (!c || c.state !== 'running') return;
+		if (!c) return;
+		if (c.state !== 'running') {
+			// Aún sin permiso de audio: suena en cuanto el usuario toque la pantalla.
+			pendiente = pendiente === 'notificacion' ? pendiente : tipo;
+			void c.resume().catch(() => {});
+			return;
+		}
 		ultimo = Date.now();
 		const notas = tipo === 'alerta' ? [659.25, 523.25] : [880, 1174.66];
 		notas.forEach((frecuencia, i) => {
@@ -54,11 +72,11 @@ export function sonarAviso(tipo: 'notificacion' | 'alerta' = 'notificacion'): vo
 	}
 }
 
-/** Suena cuando el contador SUBE respecto de la lectura anterior (no en la primera carga). */
+/** Suena al abrir la app si ya hay algo pendiente (primera lectura > 0) y después cada vez que el contador SUBE. */
 export function crearDetectorDeNovedades(tipo: 'notificacion' | 'alerta') {
 	let anterior: number | null = null;
 	return (actual: number) => {
-		if (anterior !== null && actual > anterior) sonarAviso(tipo);
+		if (anterior === null ? actual > 0 : actual > anterior) sonarAviso(tipo);
 		anterior = actual;
 	};
 }

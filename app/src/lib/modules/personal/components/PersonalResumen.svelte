@@ -7,7 +7,7 @@
 	import {
 		TIPOS_DOCUMENTO,
 		SEXOS,
-		REGIMENES,
+		TODOS_REGIMENES as REGIMENES,
 		usaCategoria,
 		etiquetaCategoria,
 		PERIODICIDADES_PAGO,

@@ -27,7 +27,7 @@
 		CATEGORIAS,
 		usaCategoria,
 		etiquetaCategoria,
-		REGIMENES,
+		TODOS_REGIMENES as REGIMENES,
 		etiqueta,
 		nombreCompleto,
 		fichaIncompleta,

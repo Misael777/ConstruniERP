@@ -1406,6 +1406,37 @@ export async function getProveedorOptions(client: SupabaseClient): Promise<Field
 	}));
 }
 
+/** Tickets #133/#134 (rechazados 24/11/2026, "que todo tenga sentido numéricamente"): de qué se compone la
+ * "Proyección de planilla" de una CxP — por trabajador: días aún sin tareo estimados, saldo del tareo sin enviar,
+ * tareo aprobado sin enviar o reserva programada (tabla planilla_proyeccion, migración 20261125120000). */
+export interface DetalleProyeccion {
+	trabajador: string;
+	concepto: 'estimado' | 'saldo_tareo' | 'aprobado' | 'reserva';
+	dias: number | null;
+	fecha: string;
+	monto: number;
+}
+export async function getDetalleProyeccionPlanilla(client: SupabaseClient, idCuentaPagar: number): Promise<DetalleProyeccion[]> {
+	const { data, error } = await client
+		.from('planilla_proyeccion')
+		.select('concepto, dias, fecha, monto, planilla!inner(id_cuenta_pagar), personal(nombres, apellidos, nombre, pin)')
+		.eq('planilla.id_cuenta_pagar', idCuentaPagar)
+		.order('fecha');
+	if (error) return [];
+	return ((data ?? []) as any[])
+		.map((r) => {
+			const p = Array.isArray(r.personal) ? r.personal[0] : r.personal;
+			return {
+				trabajador: [p?.apellidos, p?.nombres].filter(Boolean).join(', ') || p?.nombre || `Código ${p?.pin ?? ''}`,
+				concepto: r.concepto,
+				dias: r.dias != null ? Number(r.dias) : null,
+				fecha: r.fecha,
+				monto: Number(r.monto)
+			};
+		})
+		.sort((a, b) => a.trabajador.localeCompare(b.trabajador, 'es'));
+}
+
 /** Tickets #134/#122: trabajador y cargo de cada cuota de una CxP de planilla (los envíos del tareo). Clave: id_pago. */
 export async function getTrabajadoresDeCuotasPlanilla(
 	client: SupabaseClient,

@@ -1,36 +1,46 @@
 <script lang="ts">
 	/**
-	 * Tareo semanal por obra (RRHH → Asistencia, pestaña "Tareo semanal por obra"; pedido del cliente con imagen de
-	 * referencia, 06/11/2026). El residente revisa las horas de cada trabajador según el huellero, corrige días
-	 * (Editar día), marca feriados, agrega bonos, elige la Fecha CxP y envía a Cuentas por Pagar: cada envío es una
-	 * cuota de la planilla de la obra (una CxP por obra y periodo, proveedor "PLANILLA DE PERSONAL"). Se puede enviar
-	 * una parte y el resto queda como saldo pendiente. Cálculo y datos: tareo.service.ts. Sin el permiso
-	 * aprobar_tareo la vista es de solo lectura (y se puede exportar a Excel).
+	 * Tareo semanal por obra (RRHH → Asistencia → Tareo → Obra; pedido del cliente con imagen de referencia, 06/11/2026).
+	 * El residente revisa los días de cada trabajador según el huellero, corrige días (Editar día), marca feriados, agrega
+	 * bonos y elige la Fecha CxP. Cálculo y datos: tareo.service.ts.
+	 *
+	 * Tickets #118/#119 (24/11/2026):
+	 * - Vista REAL: cada trabajador queda "Pendiente" hasta que su JEFE INMEDIATO (Personal) o un administrador lo aprueba.
+	 *   Ya no hay botones de envío por fila: se seleccionan y se envían juntos, y solo lo aprobado va a Cuentas por Pagar
+	 *   (quien tiene aprobar_tareo envía). Si el total cambia después de aprobar, vuelve a pedir aprobación.
+	 *   El jefe sin permiso de envío ve solo a sus trabajadores, su asistencia, el monto y Aprobar; la Fecha CxP y lo
+	 *   enviado quedan ocultos tras el ojo.
+	 * - Vista PROYECCIÓN: días registrados hasta hoy + días previstos según el horario, total proyectado, fondo separado
+	 *   y reserva de pago (cuota "Proyección de planilla" en CxP con la fecha elegida).
 	 */
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
 	import { confirmar } from '$lib/stores/confirmDialog.svelte';
-	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
+	import { hasPermiso, isAdmin, permisosState } from '$lib/stores/permisos.svelte';
 	import { describeError } from '$lib/shared/describeError';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 	import { DIAS_SEMANA } from '$lib/modules/personal/services/horarios.service';
 	import { nombreCompleto, hoyLima, etiquetaMonto } from '$lib/modules/personal/services/personal.service';
-	import { sumarDias, duracion, reloj } from '../services/asistencia.service';
+	import { sumarDias, duracion } from '../services/asistencia.service';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
+	import EditarDiaTareo from './EditarDiaTareo.svelte';
 	import {
-		ESTADOS_AJUSTE,
 		ESTADOS_CELDA,
 		ORIGENES,
 		lunesDe,
 		getObrasTareo,
 		cargarTareo,
-		guardarAjuste,
-		quitarAjuste,
 		agregarFeriado,
 		quitarFeriado,
 		guardarTrabajador,
 		enviarTareo,
+		aprobarTareo,
+		guardarFondo,
+		reservarTareo,
+		aprobacionDe,
+		estaAprobado,
+		proyectarFila,
 		liberarEnviosSinPago,
 		proyectarPlanillas,
 		exportarTareoXLSX,
@@ -38,15 +48,16 @@
 		type FilaTareo,
 		type DiaTareo,
 		type FeriadoTareo,
-		type EstadoAjuste,
 		type DatosTareo,
-		fraccionDia,
+		type EstadoAprobacion,
 		textoDias
 	} from '../services/tareo.service';
 
 	const hoy = hoyLima();
 	const CLAVE_OBRA = 'construni_tareo_obra';
-	const puedeAprobar = hasPermiso('aprobar_tareo');
+	/** Envía a CxP, edita días, bonos, Fecha CxP y feriados (permiso aprobar_tareo; el administrador también). */
+	const puedeEnviar = hasPermiso('aprobar_tareo');
+	const esAdmin = isAdmin();
 	const usuario = () => permisosState.userName || null;
 
 	let obras = $state<ObraTareo[]>([]);
@@ -55,13 +66,23 @@
 	let datos = $state<DatosTareo | null>(null);
 	let cargando = $state(false);
 	let enviando = $state(false);
+	let vista = $state<'real' | 'proyeccion'>('real');
 
 	const obra = $derived(obras.find((o) => String(o.id_centro_costo) === idObra) ?? null);
 	const fechas = $derived(Array.from({ length: 7 }, (_, i) => sumarDias(lunes, i)));
-	const todasFilas = $derived(datos?.filas ?? []);
 
-	// Filtro por referente (a pedido del usuario): la tabla, los totales, la exportación y el envío a CxP se limitan a
-	// los trabajadores de ese referente (p. ej. para pagar a un subcontratista). '' = todos.
+	// ── Jefe inmediato (#119) ──
+	const esJefeDe = (f: FilaTareo) => permisosState.empleadoId != null && f.personal.id_jefe_inmediato === permisosState.empleadoId;
+	const puedeAprobarFila = (f: FilaTareo) => esAdmin || esJefeDe(f);
+	/** Sin permiso de envío y jefe de alguien: ve solo a sus trabajadores. */
+	const soloMios = $derived(!puedeEnviar && !esAdmin && (datos?.filas ?? []).some(esJefeDe));
+	const todasFilas = $derived((datos?.filas ?? []).filter((f) => !soloMios || esJefeDe(f)));
+	/** El jefe (sin permiso de envío) no ve Fecha CxP ni lo enviado, salvo que lo muestre con el ojo. */
+	let verPago = $state(false);
+	const mostrarPago = $derived(puedeEnviar || verPago);
+
+	// Filtro por referente / subcontratista (a pedido del usuario): la tabla, los totales, la exportación y el envío se
+	// limitan a los trabajadores de ese referente. '' = todos.
 	const SIN_REFERENTE = '__sin__';
 	let referente = $state('');
 	const nombreRef = (f: FilaTareo) => (f.personal.referente_nombre ?? '').trim();
@@ -69,9 +90,9 @@
 		const nombres = [...new Set(todasFilas.map(nombreRef).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 		const cargo = (n: string) => todasFilas.find((f) => nombreRef(f) === n)?.personal.referente_cargo;
 		return [
-			{ value: '', label: 'Todos los referentes' },
+			{ value: '', label: 'Todos los subcontratistas' },
 			...nombres.map((n) => ({ value: n, label: cargo(n) ? `${n} · ${cargo(n)}` : n })),
-			...(todasFilas.some((f) => !nombreRef(f)) ? [{ value: SIN_REFERENTE, label: 'Sin referente' }] : [])
+			...(todasFilas.some((f) => !nombreRef(f)) ? [{ value: SIN_REFERENTE, label: 'Sin subcontratista / referente' }] : [])
 		];
 	});
 	const filas = $derived(
@@ -85,7 +106,7 @@
 	const cajaColor = (tono: keyof typeof TONOS_CAJA) => `rounded-xl border px-3 py-2 text-sm focus:ring-2 disabled:opacity-60 ${TONOS_CAJA[tono]}`;
 	const opcionesObra = $derived(obras.map((o) => ({ value: String(o.id_centro_costo), label: `${o.codigo} · ${o.nombre}` })));
 
-	// ── Lo que el residente escribe por fila (bonos, Fecha CxP, monto a enviar) ──
+	// ── Lo que se escribe por fila (bonos, Fecha CxP, monto a enviar) ──
 	let bonos = $state<Record<number, string>>({});
 	let fechaCxp = $state<Record<number, string>>({});
 	let monto = $state<Record<number, string>>({});
@@ -96,18 +117,26 @@
 		const n = Number(String(v ?? '').replace(',', '.'));
 		return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 	};
-	const totalDe = (f: FilaTareo) => Math.round((f.subtotal + num(bonos[f.personal.id_personal])) * 100) / 100;
+	const totalDe = (f: FilaTareo) => Math.round((f.subtotal + f.extrasMonto + num(bonos[f.personal.id_personal])) * 100) / 100;
 	const pendienteDe = (f: FilaTareo) => Math.max(Math.round((totalDe(f) - f.enviado) * 100) / 100, 0);
 	const montoDe = (f: FilaTareo) => num(monto[f.personal.id_personal]);
+	const aprob = (f: FilaTareo): EstadoAprobacion => aprobacionDe(f, totalDe(f));
+	const aprobada = (f: FilaTareo) => estaAprobado(aprob(f));
+	/** Se puede marcar para aprobar (jefe/admin, sin aprobar) o para enviar (permiso de envío, aprobado con saldo). */
+	const seleccionable = (f: FilaTareo) => (puedeAprobarFila(f) && !aprobada(f) && totalDe(f) > 0) || (puedeEnviar && aprobada(f) && pendienteDe(f) > 0);
 
 	const totalSemana = $derived(filas.reduce((t, f) => t + totalDe(f), 0));
 	const totalEnviado = $derived(filas.reduce((t, f) => t + f.enviado, 0));
 	const saldoPendiente = $derived(filas.reduce((t, f) => t + pendienteDe(f), 0));
 	const seleccionados = $derived(filas.filter((f) => seleccion[f.personal.id_personal]));
-	const totalSeleccionado = $derived(seleccionados.reduce((t, f) => t + montoDe(f), 0));
-	const conPendiente = $derived(filas.filter((f) => pendienteDe(f) > 0));
-	const todosMarcados = $derived(conPendiente.length > 0 && conPendiente.every((f) => seleccion[f.personal.id_personal]));
+	const totalSeleccionado = $derived(seleccionados.reduce((t, f) => t + (aprobada(f) ? montoDe(f) : totalDe(f)), 0));
+	const marcables = $derived(filas.filter(seleccionable));
+	const todosMarcados = $derived(marcables.length > 0 && marcables.every((f) => seleccion[f.personal.id_personal]));
 	const porRevisar = $derived(filas.reduce((t, f) => t + f.porRevisar, 0));
+	const pendientesAprobacion = $derived(filas.filter((f) => !aprobada(f) && totalDe(f) > 0).length);
+	const porAprobarSel = $derived(seleccionados.filter((f) => puedeAprobarFila(f) && !aprobada(f) && totalDe(f) > 0));
+	const porEnviarSel = $derived(seleccionados.filter((f) => aprobada(f) && pendienteDe(f) > 0));
+	const aprobadosConSaldo = $derived(filas.filter((f) => aprobada(f) && pendienteDe(f) > 0));
 	const feriadoDe = (fecha: string) => datos?.feriados.find((x) => x.fecha === fecha) ?? null;
 
 	function iniciarFormulario(lista: FilaTareo[]) {
@@ -124,6 +153,7 @@
 		fechaCxp = fc;
 		monto = mo;
 		seleccion = {};
+		selProy = {};
 	}
 
 	async function cargar() {
@@ -132,6 +162,8 @@
 		try {
 			datos = await cargarTareo(supabase, obra.id_centro_costo, lunes, hoy);
 			iniciarFormulario(datos.filas);
+			fondoTexto = datos.semana?.fondo_separado != null ? datos.semana.fondo_separado.toFixed(2) : '';
+			fechaReserva = sumarDias(lunes, 5);
 		} catch (err) {
 			toast.error(`No se pudo cargar el tareo. ${describeError(err)}`);
 			datos = null;
@@ -186,7 +218,7 @@
 
 	// ── Bonos y Fecha CxP: se guardan al salir del campo ──
 	async function guardarFila(f: FilaTareo) {
-		if (!puedeAprobar || !obra) return;
+		if (!puedeEnviar || !obra) return;
 		const id = f.personal.id_personal;
 		if (num(bonos[id]) === f.bonos && (fechaCxp[id] || null) === f.fechaCxp) return;
 		try {
@@ -212,21 +244,53 @@
 
 	function marcarTodos(v: boolean) {
 		const s: Record<number, boolean> = {};
-		if (v) for (const f of filas) if (pendienteDe(f) > 0) s[f.personal.id_personal] = true;
+		if (v) for (const f of marcables) s[f.personal.id_personal] = true;
 		seleccion = s;
 	}
 
-	// ── Envío a Cuentas por Pagar ──
+	// ── Aprobación del jefe inmediato (#119) ──
+	let aprobando = $state(false);
+	async function aprobar(lista: FilaTareo[]) {
+		if (!obra || aprobando) return;
+		const items = lista.filter((f) => puedeAprobarFila(f) && !aprobada(f) && totalDe(f) > 0);
+		if (!items.length) {
+			toast.error('No hay trabajadores por aprobar en la selección.');
+			return;
+		}
+		const sinRevisar = items.filter((f) => f.porRevisar).length;
+		const suma = items.reduce((t, f) => t + totalDe(f), 0);
+		const ok = await confirmar({
+			title: 'Aprobar tareo',
+			message: `Se aprobará el tareo de ${items.length} trabajador${items.length === 1 ? '' : 'es'} por ${formatCurrency(suma)} (semana ${tituloSemana}). Si después cambia la asistencia o los bonos, habrá que aprobarlo de nuevo.${sinRevisar ? ` Ojo: ${sinRevisar} tiene${sinRevisar === 1 ? '' : 'n'} días sin marca de salida sin revisar (no se pagan).` : ''}`,
+			confirmLabel: 'Aprobar',
+			danger: false
+		});
+		if (!ok) return;
+		aprobando = true;
+		try {
+			const n = await aprobarTareo(supabase, obra.id_centro_costo, lunes, items.map((f) => ({ fila: f, total: totalDe(f) })));
+			toast.success(`Tareo aprobado: ${n} trabajador${n === 1 ? '' : 'es'}.`);
+			await cargar();
+		} catch (err) {
+			toast.error(`No se pudo aprobar. ${describeError(err)}`);
+		} finally {
+			aprobando = false;
+		}
+	}
+
+	// ── Envío a Cuentas por Pagar: solo lo aprobado (#118) ──
 	async function enviar(lista: FilaTareo[], completo = false) {
 		if (!obra || enviando) return;
+		const sinAprobar = lista.filter((f) => !aprobada(f) && pendienteDe(f) > 0);
 		const envios = lista
+			.filter(aprobada)
 			.map((f) => {
 				const id = f.personal.id_personal;
 				return { fila: { ...f, bonos: num(bonos[id]), total: totalDe(f) }, monto: completo ? pendienteDe(f) : montoDe(f), fechaCxp: fechaCxp[id] || fechaComun || sumarDias(lunes, 6) };
 			})
 			.filter((e) => e.monto > 0);
 		if (!envios.length) {
-			toast.error('No hay montos por enviar.');
+			toast.error(sinAprobar.length ? 'Lo seleccionado aún no tiene la aprobación del jefe inmediato.' : 'No hay montos por enviar.');
 			return;
 		}
 		const excede = envios.find((e) => e.monto - pendienteDe(e.fila) > 0.005);
@@ -234,10 +298,8 @@
 			toast.error(`${nombreCompleto(excede.fila.personal)}: el monto a enviar supera lo pendiente (${formatCurrency(pendienteDe(excede.fila))}).`);
 			return;
 		}
-		const sinRevisar = envios.filter((e) => e.fila.porRevisar).length;
 		const suma = envios.reduce((t, e) => t + e.monto, 0);
-		// Ticket #133: cada trabajador va a la planilla de SU periodicidad (semanal / quincenal / mensual). Antes el
-		// mensaje decía "la planilla de la obra" y, si alguien cobraba mensual, aparecía una segunda CxP sin aviso.
+		// Ticket #133: cada trabajador va a la planilla de SU periodicidad (semanal / quincenal / mensual).
 		const GRUPO: Record<string, string> = { quincenal: 'quincenal', mensual: 'mensual' };
 		const porPlanilla = new Map<string, { n: number; monto: number }>();
 		for (const e of envios) {
@@ -250,7 +312,7 @@
 			.join(' · ');
 		const ok = await confirmar({
 			title: 'Enviar a Cuentas por Pagar',
-			message: `Se enviarán ${formatCurrency(suma)} de ${envios.length} trabajador${envios.length === 1 ? '' : 'es'} a Cuentas por Pagar (proveedor "Planilla de personal"). ${porPlanilla.size > 1 ? `Van a ${porPlanilla.size} planillas distintas según cada cuánto cobra el trabajador: ` : ''}${detallePlanillas}. En la CxP de cada planilla también figura, aparte, la "Proyección de planilla" del personal que aún no tiene tareo enviado. La semana queda aprobada a tu nombre.${sinRevisar ? ` Ojo: ${sinRevisar} tiene${sinRevisar === 1 ? '' : 'n'} días sin marca de salida sin revisar (no se pagan).` : ''}`,
+			message: `Se enviarán ${formatCurrency(suma)} de ${envios.length} trabajador${envios.length === 1 ? '' : 'es'} aprobado${envios.length === 1 ? '' : 's'} a Cuentas por Pagar (proveedor "Planilla de personal"). ${porPlanilla.size > 1 ? `Van a ${porPlanilla.size} planillas distintas según cada cuánto cobra el trabajador: ` : ''}${detallePlanillas}.${sinAprobar.length ? ` ${sinAprobar.length} seleccionado${sinAprobar.length === 1 ? '' : 's'} sin aprobar no se envía${sinAprobar.length === 1 ? '' : 'n'}.` : ''}`,
 			confirmLabel: 'Enviar',
 			danger: false
 		});
@@ -280,8 +342,8 @@
 		if (!ok) return;
 		liberando = true;
 		try {
-			const monto = await liberarEnviosSinPago(supabase, obra.id_centro_costo, lunes);
-			toast.success(`Liberado ${formatCurrency(monto)}: ya se puede volver a enviar.`);
+			const m = await liberarEnviosSinPago(supabase, obra.id_centro_costo, lunes);
+			toast.success(`Liberado ${formatCurrency(m)}: ya se puede volver a enviar.`);
 			await cargar();
 		} catch (err) {
 			toast.error(`No se pudo liberar. ${describeError(err)}`);
@@ -290,78 +352,89 @@
 		}
 	}
 
-	// ── Editar día ──
-	type Pago = 'completo' | 'medio' | 'sin_pago' | 'otras';
-	// Diagnóstico de marcas (19/11/2026): todas las marcas de la semana del trabajador y por qué cuentan o no.
+	// ── Proyección (#118) ──
+	let selProy = $state<Record<number, boolean>>({});
+	let fondoTexto = $state('');
+	let fechaReserva = $state('');
+	let reservando = $state(false);
+	let verReservas = $state(false);
+	const proy = $derived(filas.map((f) => ({ f, p: proyectarFila(f, hoy) })));
+	const totalProyectadoDe = (x: { f: FilaTareo; p: ReturnType<typeof proyectarFila> }) => Math.round((x.p.acumulado + x.p.porCompletar + x.f.extrasMonto + num(bonos[x.f.personal.id_personal])) * 100) / 100;
+	const totProy = $derived({
+		acumulado: proy.reduce((t, x) => t + x.p.acumulado, 0),
+		porCompletar: proy.reduce((t, x) => t + x.p.porCompletar, 0),
+		bonos: proy.reduce((t, x) => t + num(bonos[x.f.personal.id_personal]), 0),
+		total: proy.reduce((t, x) => t + totalProyectadoDe(x), 0)
+	});
+	const fondo = $derived(num(fondoTexto));
+	const faltaSeparar = $derived(Math.max(Math.round((totProy.total - fondo) * 100) / 100, 0));
+	const proySel = $derived(proy.filter((x) => selProy[x.f.personal.id_personal]));
+	const todosProy = $derived(proy.length > 0 && proy.every((x) => selProy[x.f.personal.id_personal]));
+	const conReserva = $derived(filas.filter((f) => f.reservaMonto));
+	const corte = $derived(hoy < fechas[0] ? null : hoy > fechas[6] ? fechas[6] : hoy);
+
+	async function guardarFondoSemana() {
+		if (!puedeEnviar || !obra) return;
+		const actual = datos?.semana?.fondo_separado ?? null;
+		const nuevo = fondoTexto.trim() === '' ? null : num(fondoTexto);
+		if (nuevo === actual) return;
+		try {
+			await guardarFondo(supabase, obra.id_centro_costo, lunes, nuevo);
+			if (datos) datos.semana = { ...(datos.semana ?? { estado: 'borrador', aprobado_por: null, aprobado_en: null, fondo_separado: null }), fondo_separado: nuevo };
+			toast.success('Fondo separado guardado.');
+		} catch (err) {
+			toast.error(`No se pudo guardar el fondo. ${describeError(err)}`);
+		}
+	}
+
+	async function programarReserva() {
+		if (!obra || reservando) return;
+		if (!fechaReserva) {
+			toast.error('Elige la fecha de la reserva para pago.');
+			return;
+		}
+		const items = proySel.map((x) => ({ idPersonal: x.f.personal.id_personal, monto: totalProyectadoDe(x) })).filter((i) => i.monto > 0);
+		if (!items.length) {
+			toast.error('Selecciona trabajadores con monto proyectado.');
+			return;
+		}
+		const suma = items.reduce((t, i) => t + i.monto, 0);
+		const ok = await confirmar({
+			title: 'Programar reserva',
+			message: `Se reservarán ${formatCurrency(suma)} de ${items.length} trabajador${items.length === 1 ? '' : 'es'} para el ${ddmm(fechaReserva)}/${fechaReserva.slice(0, 4)} en la CxP de la planilla (cuota "Proyección de planilla"). Al aprobar el tareo real se ajusta esta reserva sin duplicar el compromiso, y al enviarlo sale de la proyección.`,
+			confirmLabel: 'Reservar',
+			danger: false
+		});
+		if (!ok) return;
+		reservando = true;
+		try {
+			await reservarTareo(supabase, obra.id_centro_costo, lunes, items, fechaReserva, usuario());
+			toast.success(`Reserva programada: ${formatCurrency(suma)}.`);
+			await cargar();
+		} catch (err) {
+			toast.error(`No se pudo programar la reserva. ${describeError(err)}`);
+		} finally {
+			reservando = false;
+		}
+	}
+
+	async function quitarReserva(f: FilaTareo) {
+		if (!obra) return;
+		try {
+			await reservarTareo(supabase, obra.id_centro_costo, lunes, [{ idPersonal: f.personal.id_personal, monto: 0 }], f.reservaFecha ?? sumarDias(lunes, 6), usuario());
+			toast.success('Reserva quitada.');
+			await cargar();
+		} catch (err) {
+			toast.error(`No se pudo quitar la reserva. ${describeError(err)}`);
+		}
+	}
+
+	// ── Editar día / diagnóstico ──
+	let edicion = $state<{ fila: FilaTareo; dia: DiaTareo } | null>(null);
 	let diag = $state<FilaTareo | null>(null);
 	const marcasDe = (f: FilaTareo) => datos?.diagnostico?.[f.personal.id_personal] ?? [];
 	const noCuentan = (f: FilaTareo) => marcasDe(f).filter((m) => !m.cuenta).length;
 	const MODOS: Record<number, string> = { 1: 'Huella', 15: 'Rostro', 0: 'Clave', 3: 'Clave', 4: 'Tarjeta' };
-
-	let edicion = $state<{ fila: FilaTareo; dia: DiaTareo } | null>(null);
-	let edEstado = $state<EstadoAjuste>('asistio');
-	let edPago = $state<Pago>('completo');
-	let edHoras = $state('0');
-	let edMinutos = $state('0');
-	let edObservacion = $state('');
-	let edTodos = $state(false);
-	let guardandoDia = $state(false);
-
-	const minutosEditados = $derived.by(() => {
-		if (!edicion) return 0;
-		const j = edicion.fila.jornadaMin;
-		if (edPago === 'completo') return j;
-		if (edPago === 'medio') return Math.round(j / 2);
-		if (edPago === 'sin_pago') return 0;
-		return Math.max(0, Math.min(1440, Math.round(Number(edHoras || 0) * 60 + Number(edMinutos || 0))));
-	});
-
-	function abrirDia(fila: FilaTareo, dia: DiaTareo) {
-		if (dia.estado === 'por_venir' || dia.estado === 'fuera_contrato') return;
-		edicion = { fila, dia };
-		const base = dia.ajuste?.minutos_reconocidos ?? (dia.minutos || dia.minutosHuellero);
-		edEstado = dia.ajuste?.estado ?? (dia.estado === 'feriado' || dia.estado === 'falta' || dia.estado === 'sin_trabajo' ? dia.estado : 'asistio');
-		const j = fila.jornadaMin;
-		edPago = base === j ? 'completo' : base === Math.round(j / 2) ? 'medio' : base === 0 && dia.estado !== 'pendiente' ? 'sin_pago' : 'otras';
-		edHoras = String(Math.floor(base / 60));
-		edMinutos = String(base % 60);
-		edObservacion = dia.ajuste?.observacion ?? '';
-		edTodos = false;
-	}
-
-	function cambiarEstado(v: EstadoAjuste) {
-		edEstado = v;
-		if (v === 'falta' || v === 'sin_trabajo') edPago = 'sin_pago';
-		else if (v === 'feriado') edPago = 'completo';
-	}
-
-	async function guardarDia() {
-		if (!edicion || !obra || guardandoDia) return;
-		guardandoDia = true;
-		try {
-			const ids = edTodos ? todasFilas.map((f) => f.personal.id_personal) : [edicion.fila.personal.id_personal];
-			await guardarAjuste(supabase, ids, obra.id_centro_costo, edicion.dia.fecha, { estado: edEstado, minutos: minutosEditados, observacion: edObservacion }, usuario());
-			toast.success(edTodos ? `Día aplicado a los ${ids.length} trabajadores de la obra.` : 'Día actualizado.');
-			edicion = null;
-			await cargar();
-		} catch (err) {
-			toast.error(`No se pudo guardar el día. ${describeError(err)}`);
-		} finally {
-			guardandoDia = false;
-		}
-	}
-
-	async function restaurarDia() {
-		if (!edicion || !obra) return;
-		try {
-			await quitarAjuste(supabase, edicion.fila.personal.id_personal, obra.id_centro_costo, edicion.dia.fecha);
-			toast.success('El día vuelve a lo que marcó el huellero.');
-			edicion = null;
-			await cargar();
-		} catch (err) {
-			toast.error(`No se pudo quitar el ajuste. ${describeError(err)}`);
-		}
-	}
 
 	// ── Feriados ──
 	let feriadosAbierto = $state(false);
@@ -406,14 +479,15 @@
 	const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
 	const horas = (min: number) => (min ? `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}` : '—');
 	const tituloSemana = $derived(`${ddmm(fechas[0])} – ${ddmm(fechas[6])}/${fechas[6].slice(0, 4)}`);
+	const fr = (x: number) => (x === 1 ? '1' : x === 0.5 ? '½' : x ? String(x) : '0');
 </script>
 
 {#snippet celda(f: FilaTareo, d: DiaTareo)}
 	{@const est = ESTADOS_CELDA[d.estado]}
-	{@const editable = puedeAprobar && d.estado !== 'por_venir' && d.estado !== 'fuera_contrato'}
+	{@const editable = (puedeEnviar || puedeAprobarFila(f)) && d.estado !== 'por_venir' && d.estado !== 'fuera_contrato'}
 	<button
 		type="button"
-		onclick={() => editable && abrirDia(f, d)}
+		onclick={() => editable && (edicion = { fila: f, dia: d })}
 		disabled={!editable}
 		title={`${DIAS_SEMANA[d.dia - 1]} ${ddmm(d.fecha)} · ${est.texto || 'Por venir'}${d.origen ? ` · ${ORIGENES[d.origen].texto}` : ''}${d.ajuste?.observacion ? ` · ${d.ajuste.observacion}` : ''}${editable ? ' — clic para editar' : ''}`}
 		class={`w-full min-w-[46px] h-12 rounded-lg border px-1 py-1 flex flex-col items-center justify-center gap-0.5 text-center transition-shadow ${est.clase} ${editable ? 'hover:shadow-md hover:ring-1 hover:ring-blue-300 cursor-pointer' : 'cursor-default'}`}
@@ -423,9 +497,30 @@
 		{#if d.minutos}<span class="text-[9px] leading-none text-slate-500 tabular-nums">{horas(d.minutos)}</span>{/if}
 		<span class="flex items-center gap-1 text-[9px] leading-none">
 			{#if d.origen}<i class={`fas ${ORIGENES[d.origen].icono} ${ORIGENES[d.origen].color}`}></i>{/if}
-			{#if d.estado !== 'asistio' && d.estado !== 'por_venir'}<span class="truncate max-w-[52px]">{est.texto}</span>{/if}
+			{#if d.extra}<span class="font-bold text-violet-700" title="Horas extra registradas por el jefe">+{horas(d.extra.minutos)}</span>{:else if d.estado !== 'asistio' && d.estado !== 'por_venir'}<span class="truncate max-w-[52px]">{est.texto}</span>{/if}
 		</span>
 	</button>
+{/snippet}
+
+{#snippet chipAprobacion(f: FilaTareo)}
+	{@const e = aprob(f)}
+	<div class="flex flex-col items-center gap-1 min-w-[96px]">
+		{#if e === 'aprobado' || e === 'previo'}
+			<span class="inline-flex flex-col items-center rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700" title={f.aprobadoEn ? `Aprobado el ${new Date(f.aprobadoEn).toLocaleString('es-PE')}` : 'Enviado antes de que existiera la aprobación'}>
+				<span class="text-xs font-bold"><i class="fas fa-circle-check"></i> Aprobado</span>
+				<span class="text-[10px] text-emerald-700/80 truncate max-w-[120px]">{e === 'previo' ? 'enviado antes' : (f.aprobadoPor ?? 'Jefe inmediato')}</span>
+			</span>
+		{:else if totalDe(f) <= 0}
+			<span class="text-[11px] text-slate-300">—</span>
+		{:else}
+			<span class={`text-xs font-semibold ${e === 'cambio' ? 'text-amber-700' : 'text-orange-600'}`} title={e === 'cambio' ? `Se aprobó ${formatCurrency(f.aprobadoMonto ?? 0)}; el total cambió` : 'Falta la aprobación del jefe inmediato'}>
+				{e === 'cambio' ? 'Cambió: aprobar de nuevo' : 'Pendiente'}
+			</span>
+			{#if puedeAprobarFila(f)}
+				<button type="button" onclick={() => aprobar([f])} disabled={aprobando} class="px-2.5 py-1 rounded-lg bg-orange-500 text-white text-[11px] font-semibold hover:bg-orange-600 disabled:opacity-40">Aprobar tareo</button>
+			{/if}
+		{/if}
+	</div>
 {/snippet}
 
 <div class="flex flex-col gap-4">
@@ -438,8 +533,8 @@
 					<SelectConSaldo id="tareo-obra" value={idObra} options={opcionesObra} placeholder="Elige la obra…" encabezadoNombre="Obra" claseBoton={cajaColor('blue')} onchange={elegirObra} />
 				</div>
 				<div class="flex flex-col gap-1.5 min-w-0">
-					<label for="tareo-referente" class="text-sm font-semibold text-violet-700 flex items-center gap-1.5"><i class="fas fa-user-tie text-violet-500 text-xs"></i> Referente</label>
-					<SelectConSaldo id="tareo-referente" value={referente} options={opcionesReferente} placeholder="Todos los referentes" encabezadoNombre="Referente" claseBoton={cajaColor('violet')} disabled={!obra || !todasFilas.length} onchange={(v) => (referente = v)} />
+					<label for="tareo-referente" class="text-sm font-semibold text-violet-700 flex items-center gap-1.5"><i class="fas fa-user-tie text-violet-500 text-xs"></i> Subcontratista asociado</label>
+					<SelectConSaldo id="tareo-referente" value={referente} options={opcionesReferente} placeholder="Todos los subcontratistas" encabezadoNombre="Subcontratista o referente" claseBoton={cajaColor('violet')} disabled={!obra || !todasFilas.length} onchange={(v) => (referente = v)} />
 				</div>
 			</div>
 			<div class="flex flex-wrap items-end gap-2">
@@ -451,22 +546,37 @@
 						<button type="button" onclick={() => moverSemana(7)} disabled={!obra} class="px-2.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40" aria-label="Semana siguiente"><i class="fas fa-chevron-right"></i></button>
 					</div>
 				</div>
-				{#if puedeAprobar}
+				{#if puedeEnviar}
 					<button type="button" onclick={() => { feFecha = ''; feDescripcion = ''; feTodas = false; feriadosAbierto = true; }} disabled={!obra} class="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-2"><i class="fas fa-umbrella-beach text-sky-600"></i> Configurar feriado</button>
 				{/if}
 				<button type="button" onclick={exportar} disabled={!obra || !filas.length} class="px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-2"><i class="fas fa-file-excel text-emerald-600"></i> Exportar Excel</button>
 			</div>
 		</div>
-		{#if obra && puedeAprobar}
-			<div class="flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3">
-				<div class="flex flex-col gap-1.5">
-					<label for="tareo-fecha-comun" class="text-xs font-medium text-slate-600">Fecha común de CxP</label>
-					<input id="tareo-fecha-comun" type="date" bind:value={fechaComun} class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm" />
-				</div>
-				<button type="button" onclick={aplicarFechaComun} class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 hover:bg-slate-50">
-					Aplicar a {seleccionados.length ? `seleccionados (${seleccionados.length})` : 'todos'}
-				</button>
-				<span class="text-xs text-slate-400">Fecha en que se programa el pago en Cuentas por Pagar.</span>
+		{#if obra}
+			<div class="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+				{#if puedeEnviar}
+					<div class="flex rounded-xl border border-slate-200 bg-white p-0.5 text-sm" role="tablist" aria-label="Vista del tareo">
+						<button type="button" role="tab" aria-selected={vista === 'real'} onclick={() => (vista = 'real')} class={`px-4 py-1.5 rounded-lg font-semibold ${vista === 'real' ? 'bg-orange-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Real</button>
+						<button type="button" role="tab" aria-selected={vista === 'proyeccion'} onclick={() => (vista = 'proyeccion')} class={`px-4 py-1.5 rounded-lg font-semibold ${vista === 'proyeccion' ? 'bg-orange-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Proyección</button>
+					</div>
+				{/if}
+				{#if vista === 'real' && puedeEnviar}
+					<div class="flex flex-col gap-1.5">
+						<label for="tareo-fecha-comun" class="text-xs font-medium text-slate-600">Fecha común CxP</label>
+						<input id="tareo-fecha-comun" type="date" bind:value={fechaComun} class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm" />
+					</div>
+					<button type="button" onclick={aplicarFechaComun} class="px-3 py-1.5 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600">
+						Aplicar a {seleccionados.length ? `seleccionados (${seleccionados.length})` : 'todos'}
+					</button>
+				{/if}
+				{#if vista === 'real' && !puedeEnviar}
+					<button type="button" onclick={() => (verPago = !verPago)} class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2" title="Fecha de CxP y lo enviado">
+						<i class={`fas ${verPago ? 'fa-eye-slash' : 'fa-eye'}`}></i> {verPago ? 'Ocultar' : 'Ver'} datos de pago
+					</button>
+				{/if}
+				{#if vista === 'proyeccion' && corte}
+					<span class="text-sm text-slate-600 rounded-lg border border-slate-200 px-3 py-1.5"><i class="fas fa-calendar-day text-slate-400"></i> Corte de asistencia: <b>{DIAS_SEMANA[(new Date(corte + 'T12:00:00Z').getUTCDay() + 6) % 7].toLowerCase()} {ddmm(corte)}</b></span>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -485,40 +595,41 @@
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600 px-1">
 			<span class="font-semibold text-slate-800">{obra.codigo} · {obra.nombre}</span>
 			<span>Semana {tituloSemana}</span>
-			{#if datos.semana?.estado === 'aprobado'}
-				<span class="text-emerald-700"><i class="fas fa-circle-check"></i> Aprobado{datos.semana.aprobado_por ? ` por ${datos.semana.aprobado_por}` : ''}{datos.semana.aprobado_en ? ` el ${new Date(datos.semana.aprobado_en).toLocaleDateString('es-PE')}` : ''}</span>
-			{:else}
-				<span class="text-slate-400">Borrador (sin enviar)</span>
+			{#if vista === 'real' && pendientesAprobacion}
+				<span class="rounded-lg bg-orange-50 border border-orange-200 px-2.5 py-0.5 font-semibold text-orange-700">Pendientes de aprobación: {pendientesAprobacion}</span>
 			{/if}
+			{#if vista === 'real'}<span class="text-xs text-blue-700"><i class="fas fa-circle-info"></i> Aprobación a cargo del jefe inmediato.</span>{/if}
+			{#if soloMios}<span class="text-xs text-slate-500">Ves solo a los trabajadores de los que eres jefe inmediato.</span>{/if}
 			{#if porRevisar}<span class="text-orange-700"><i class="fas fa-triangle-exclamation"></i> {porRevisar} día{porRevisar === 1 ? '' : 's'} sin marca de salida por revisar</span>{/if}
 			{#if cargando}<i class="fas fa-spinner fa-spin text-blue-500"></i>{/if}
 		</div>
 
-		{#if datos.enviadoSinPago > 0}
+		{#if datos.enviadoSinPago > 0 && puedeEnviar}
 			<div class="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
 				<i class="fas fa-triangle-exclamation"></i>
-				<span class="flex-1 min-w-[200px]"><b>{formatCurrency(datos.enviadoSinPago)}</b> figuran como enviados, pero sus pagos se eliminaron de Cuentas por Pagar.{puedeAprobar ? '' : ' Quien aprueba tareos puede liberarlos para reenviarlos.'}</span>
-				{#if puedeAprobar}
-					<button type="button" onclick={liberarSinPago} disabled={liberando} class="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold disabled:opacity-50">{liberando ? 'Liberando…' : 'Liberar para reenviar'}</button>
-				{/if}
+				<span class="flex-1 min-w-[200px]"><b>{formatCurrency(datos.enviadoSinPago)}</b> figuran como enviados, pero sus pagos se eliminaron de Cuentas por Pagar.</span>
+				<button type="button" onclick={liberarSinPago} disabled={liberando} class="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold disabled:opacity-50">{liberando ? 'Liberando…' : 'Liberar para reenviar'}</button>
 			</div>
 		{/if}
 
-		<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
-			{#each Object.entries(ORIGENES) as [, o]}<span class="flex items-center gap-1.5"><i class={`fas ${o.icono} ${o.color}`}></i>{o.texto}</span>{/each}
-			<span>· Se paga por día: 1 = día completo, ½ = medio día (las horas van debajo). {puedeAprobar ? 'Toca un día para corregirlo.' : ''}</span>
-		</div>
-
 		{#if !filas.length}
-			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">{todasFilas.length ? 'Ningún trabajador de esta obra tiene ese referente.' : 'Esta obra no tiene trabajadores activos ni marcas en la semana.'}</div>
+			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">{todasFilas.length ? 'Ningún trabajador de esta obra tiene ese subcontratista o referente.' : 'Esta obra no tiene trabajadores activos ni marcas en la semana.'}</div>
+		{:else if vista === 'proyeccion'}
+			{@render vistaProyeccion()}
 		{:else}
+			<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 px-1">
+				{#each Object.entries(ORIGENES) as [, o]}<span class="flex items-center gap-1.5"><i class={`fas ${o.icono} ${o.color}`}></i>{o.texto}</span>{/each}
+				<span>· Se paga por día: 1 = día completo, ½ = medio día (las horas van debajo). {puedeEnviar ? 'Toca un día para corregirlo.' : ''}</span>
+			</div>
+
 			<!-- Escritorio: tabla -->
 			<div class="hidden md:block bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
 				<table class="w-full text-sm">
 					<thead class="bg-slate-50 text-slate-600 text-xs">
 						<tr>
-							{#if puedeAprobar}<th class="px-2 py-2 w-8"><input type="checkbox" checked={todosMarcados} disabled={!conPendiente.length} onchange={(e) => marcarTodos((e.currentTarget as HTMLInputElement).checked)} aria-label="Seleccionar todos" /></th>{/if}
+							<th class="px-2 py-2 w-8"><input type="checkbox" checked={todosMarcados} disabled={!marcables.length} onchange={(e) => marcarTodos((e.currentTarget as HTMLInputElement).checked)} aria-label="Seleccionar todos" /></th>
 							<th class="px-2 py-2 text-left min-w-[150px]">Trabajador</th>
+							<th class="px-2 py-2 text-left">Subcontratista</th>
 							{#each fechas as f, i}
 								{@const fer = feriadoDe(f)}
 								<th class={`px-1 py-2 text-center ${f === hoy ? 'text-blue-700' : ''}`}>
@@ -528,57 +639,60 @@
 								</th>
 							{/each}
 							<th class="px-2 py-2 text-right">Días</th>
+							<th class="px-2 py-2 text-right">S/ día</th>
+							<th class="px-2 py-2 text-right" title="Horas extra registradas por el jefe inmediato (por hora)">Horas extra</th>
 							<th class="px-2 py-2 text-right">Bonos</th>
 							<th class="px-2 py-2 text-right">Total</th>
-							<th class="px-2 py-2 text-left">Fecha CxP</th>
-							<th class="px-2 py-2 text-right">A enviar</th>
-							{#if puedeAprobar}<th class="px-2 py-2"></th>{/if}
+							<th class="px-2 py-2 text-center">Aprobación</th>
+							{#if mostrarPago}
+								<th class="px-2 py-2 text-left">Fecha CxP</th>
+								<th class="px-2 py-2 text-right">Monto a enviar</th>
+							{/if}
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-slate-100">
 						{#each filas as f (f.personal.id_personal)}
 							{@const id = f.personal.id_personal}
 							<tr class="align-middle">
-								{#if puedeAprobar}<td class="px-2 py-2 text-center"><input type="checkbox" bind:checked={seleccion[id]} disabled={pendienteDe(f) <= 0} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} /></td>{/if}
+								<td class="px-2 py-2 text-center"><input type="checkbox" bind:checked={seleccion[id]} disabled={!seleccionable(f)} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} /></td>
 								<td class="px-2 py-2">
 									<div class="font-medium text-slate-800">{nombreCompleto(f.personal)}</div>
 									{@render botonMarcas(f)}
 									<div class="text-[11px] text-slate-400">{f.personal.cargo ?? f.personal.categoria ?? ''}{f.personal.id_centro_costo !== obra.id_centro_costo ? ' · de otra obra' : ''}</div>
 									{#if f.sinMonto}
 										<div class="text-[11px] text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin monto de pago en Personal</div>
-									{:else}
-										<div class="text-[11px] text-slate-500" title={`${etiquetaMonto(f.personal.periodicidad_pago)} ${formatCurrency(Number(f.personal.monto_pago))} · jornada ${duracion(f.jornadaMin)}`}>{formatCurrency(f.tarifaDia)}/día</div>
 									{/if}
 								</td>
+								<td class="px-2 py-2 text-xs text-slate-600">{nombreRef(f) || '—'}</td>
 								{#each f.dias as d (d.fecha)}<td class="px-0.5 py-2">{@render celda(f, d)}</td>{/each}
 								<td class="px-2 py-2 text-right whitespace-nowrap"><div class="text-base font-bold text-slate-800">{textoDias(f.diasPagados)}</div><div class="text-[11px] text-slate-400 tabular-nums">{horas(f.minutos)} h</div></td>
+								<td class="px-2 py-2 text-right text-xs text-slate-600 whitespace-nowrap" title={`${etiquetaMonto(f.personal.periodicidad_pago)} ${formatCurrency(Number(f.personal.monto_pago ?? 0))} · jornada ${duracion(f.jornadaMin)}`}>{f.sinMonto ? '—' : formatCurrency(f.tarifaDia)}</td>
+								<td class="px-2 py-2 text-right whitespace-nowrap">{#if f.extrasMin}<div class="text-xs font-semibold text-violet-700">{formatCurrency(f.extrasMonto)}</div><div class="text-[11px] text-slate-400">{horas(f.extrasMin)} h</div>{:else}<span class="text-slate-300">—</span>{/if}</td>
 								<td class="px-2 py-2 text-right">
-									{#if puedeAprobar}
+									{#if puedeEnviar}
 										<input type="text" inputmode="decimal" bind:value={bonos[id]} onblur={() => guardarFila(f)} placeholder="0.00" class="w-16 px-1.5 py-1 border border-slate-200 rounded-lg text-right text-xs" aria-label="Bonos" />
 									{:else}{formatCurrency(f.bonos)}{/if}
 								</td>
 								<td class="px-2 py-2 text-right whitespace-nowrap">
 									<div class="font-semibold text-slate-800">{formatCurrency(totalDe(f))}</div>
-									{#if f.enviado}<div class="text-[11px] text-emerald-700">Enviado {formatCurrency(f.enviado)}</div>{/if}
+									{#if mostrarPago && f.enviado}<div class="text-[11px] text-emerald-700">Enviado {formatCurrency(f.enviado)}</div>{/if}
 								</td>
-								<td class="px-2 py-2">
-									{#if puedeAprobar}
-										<input type="date" bind:value={fechaCxp[id]} onchange={() => guardarFila(f)} class="w-[118px] px-1 py-1 border border-slate-200 rounded-lg text-xs" aria-label="Fecha CxP" />
-									{:else}{f.fechaCxp ? ddmm(f.fechaCxp) : '—'}{/if}
-								</td>
-								<td class="px-2 py-2 text-right">
-									{#if puedeAprobar && pendienteDe(f) > 0}
-										<input type="text" inputmode="decimal" bind:value={monto[id]} class="w-20 px-1.5 py-1 border border-slate-200 rounded-lg text-right text-xs" aria-label="Monto a enviar" />
-										{#if montoDe(f) && montoDe(f) < pendienteDe(f)}<div class="text-[11px] text-amber-700">Queda {formatCurrency(pendienteDe(f) - montoDe(f))}</div>{/if}
-									{:else if pendienteDe(f) <= 0 && f.enviado}
-										<span class="text-[11px] text-emerald-700 font-semibold"><i class="fas fa-check"></i> Completo</span>
-									{:else}<span class="text-slate-300">—</span>{/if}
-								</td>
-								{#if puedeAprobar}
+								<td class="px-2 py-2 text-center">{@render chipAprobacion(f)}</td>
+								{#if mostrarPago}
 									<td class="px-2 py-2">
-										<button type="button" onclick={() => enviar([f])} disabled={enviando || !montoDe(f) || pendienteDe(f) <= 0} class="px-2.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-30" title="Enviar a cuenta por pagar" aria-label={`Enviar a cuenta por pagar: ${nombreCompleto(f.personal)}`}>
-											<i class="fas fa-paper-plane"></i>
-										</button>
+										{#if puedeEnviar}
+											<input type="date" bind:value={fechaCxp[id]} onchange={() => guardarFila(f)} class="w-[118px] px-1 py-1 border border-slate-200 rounded-lg text-xs" aria-label="Fecha CxP" />
+										{:else}{f.fechaCxp ? ddmm(f.fechaCxp) : '—'}{/if}
+									</td>
+									<td class="px-2 py-2 text-right">
+										{#if puedeEnviar && aprobada(f) && pendienteDe(f) > 0}
+											<input type="text" inputmode="decimal" bind:value={monto[id]} class="w-20 px-1.5 py-1 border border-slate-200 rounded-lg text-right text-xs" aria-label="Monto a enviar" />
+											{#if montoDe(f) && montoDe(f) < pendienteDe(f)}<div class="text-[11px] text-amber-700">Queda {formatCurrency(pendienteDe(f) - montoDe(f))}</div>{/if}
+										{:else if pendienteDe(f) <= 0 && f.enviado}
+											<span class="text-[11px] text-emerald-700 font-semibold"><i class="fas fa-check"></i> Enviado</span>
+										{:else if pendienteDe(f) > 0}
+											<span class="text-xs text-slate-500 tabular-nums">{formatCurrency(pendienteDe(f))}</span>
+										{:else}<span class="text-slate-300">—</span>{/if}
 									</td>
 								{/if}
 							</tr>
@@ -593,11 +707,11 @@
 					{@const id = f.personal.id_personal}
 					<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-3 flex flex-col gap-2">
 						<div class="flex items-start gap-2">
-							{#if puedeAprobar}<input type="checkbox" class="mt-1" bind:checked={seleccion[id]} disabled={pendienteDe(f) <= 0} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} />{/if}
+							<input type="checkbox" class="mt-1" bind:checked={seleccion[id]} disabled={!seleccionable(f)} aria-label={`Seleccionar ${nombreCompleto(f.personal)}`} />
 							<div class="min-w-0 flex-1">
 								<div class="font-semibold text-slate-800">{nombreCompleto(f.personal)}</div>
 								{@render botonMarcas(f)}
-								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día`}</div>
+								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día`}{nombreRef(f) ? ` · ${nombreRef(f)}` : ''}</div>
 							</div>
 							<div class="text-right">
 								<div class="font-bold text-slate-800">{formatCurrency(totalDe(f))}</div>
@@ -612,39 +726,143 @@
 								</div>
 							{/each}
 						</div>
-						{#if puedeAprobar}
+						<div class="flex items-center justify-between gap-2">
+							{@render chipAprobacion(f)}
+							{#if mostrarPago}
+								<span class="text-[11px] {f.enviado ? 'text-emerald-700' : 'text-slate-400'}">{f.enviado ? `Enviado ${formatCurrency(f.enviado)}${pendienteDe(f) ? ` · pendiente ${formatCurrency(pendienteDe(f))}` : ''}` : 'Sin enviar'}</span>
+							{/if}
+						</div>
+						{#if puedeEnviar}
 							<div class="grid grid-cols-3 gap-2 text-xs">
 								<label class="flex flex-col gap-1 text-slate-500">Bonos<input type="text" inputmode="decimal" bind:value={bonos[id]} onblur={() => guardarFila(f)} placeholder="0.00" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-right" /></label>
 								<label class="flex flex-col gap-1 text-slate-500">Fecha CxP<input type="date" bind:value={fechaCxp[id]} onchange={() => guardarFila(f)} class="px-1 py-1.5 border border-slate-200 rounded-lg text-sm" /></label>
-								<label class="flex flex-col gap-1 text-slate-500">A enviar<input type="text" inputmode="decimal" bind:value={monto[id]} disabled={pendienteDe(f) <= 0} class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-right disabled:bg-slate-50" /></label>
-							</div>
-							<div class="flex items-center justify-between gap-2">
-								<span class="text-[11px] {f.enviado ? 'text-emerald-700' : 'text-slate-400'}">{f.enviado ? `Enviado ${formatCurrency(f.enviado)}${pendienteDe(f) ? ` · pendiente ${formatCurrency(pendienteDe(f))}` : ' · completo'}` : 'Sin enviar'}</span>
-								<button type="button" onclick={() => enviar([f])} disabled={enviando || !montoDe(f) || pendienteDe(f) <= 0} class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-30"><i class="fas fa-paper-plane"></i> Enviar a CxP</button>
+								<label class="flex flex-col gap-1 text-slate-500">A enviar<input type="text" inputmode="decimal" bind:value={monto[id]} disabled={!aprobada(f) || pendienteDe(f) <= 0} class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-right disabled:bg-slate-50" /></label>
 							</div>
 						{/if}
 					</div>
 				{/each}
 			</div>
 
-			<!-- Totales y envío -->
-			<div class="sticky bottom-0 bg-white border border-slate-200 rounded-2xl shadow-lg p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+			<!-- Totales, aprobación y envío -->
+			<div class="sticky bottom-0 bg-white border border-slate-200 rounded-2xl shadow-lg p-3 flex flex-col lg:flex-row lg:items-center gap-3">
 				<div class="flex flex-wrap gap-x-5 gap-y-1 text-sm flex-1">
-					<span class="text-slate-500">Total semana <b class="text-slate-800">{formatCurrency(totalSemana)}</b></span>
-					<span class="text-slate-500">Enviado <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b></span>
-					<span class="text-slate-500">Saldo pendiente <b class={saldoPendiente ? 'text-amber-700' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b></span>
+					<span class="text-slate-500">Total del periodo <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
 					{#if seleccionados.length}<span class="text-slate-500">Seleccionados ({seleccionados.length}) <b class="text-blue-700">{formatCurrency(totalSeleccionado)}</b></span>{/if}
+					{#if mostrarPago}
+						<span class="text-slate-500">Enviado <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b></span>
+						<span class="text-slate-500">Saldo pendiente <b class={saldoPendiente ? 'text-amber-700' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b></span>
+					{/if}
 				</div>
-				{#if puedeAprobar}
-					<div class="flex flex-wrap gap-2">
-						<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !seleccionados.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40">Enviar seleccionados a CxP</button>
-						<button type="button" onclick={() => enviar(filas, true)} disabled={enviando || saldoPendiente <= 0} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : referente ? 'Enviar total del referente' : 'Enviar total de la obra'}</button>
-					</div>
-				{/if}
+				<div class="flex flex-wrap items-end gap-2">
+					{#if esAdmin || filas.some(esJefeDe)}
+						<div class="flex flex-col items-center gap-0.5">
+							<span class="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded px-2">Jefe inmediato</span>
+							<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} class="px-3 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50 disabled:opacity-40">
+								<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
+							</button>
+						</div>
+					{/if}
+					{#if puedeEnviar}
+						<div class="flex flex-col items-center gap-0.5">
+							<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
+							<span class="text-[10px] text-slate-400">Requiere aprobación del jefe inmediato</span>
+						</div>
+						<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40" title="Envía el saldo de todos los trabajadores ya aprobados">
+							Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
+						</button>
+					{/if}
+				</div>
 			</div>
 		{/if}
 	{/if}
 </div>
+
+{#snippet vistaProyeccion()}
+	<div class="flex items-center gap-2 px-1">
+		<span class="text-lg font-bold text-slate-800">Vista:</span>
+		<span class="rounded-lg bg-orange-50 border border-orange-200 px-3 py-0.5 text-lg font-extrabold text-orange-600">PROYECCIÓN</span>
+		<span class="text-sm text-slate-500">Separar fondos antes del sábado.</span>
+	</div>
+	<div class="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+		<table class="w-full text-sm">
+			<thead class="bg-slate-50 text-slate-600 text-xs">
+				<tr>
+					<th rowspan="2" class="px-2 py-2 w-8"><input type="checkbox" checked={todosProy} onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).checked; const s: Record<number, boolean> = {}; if (v) for (const x of proy) s[x.f.personal.id_personal] = true; selProy = s; }} aria-label="Seleccionar todos" /></th>
+					<th rowspan="2" class="px-2 py-2 text-left min-w-[150px]">Trabajador</th>
+					<th rowspan="2" class="px-2 py-2 text-left">Cargo</th>
+					<th rowspan="2" class="px-2 py-2 text-left">Subcontratista</th>
+					{#if fechas.some((f) => f <= hoy)}<th colspan={fechas.filter((f) => f <= hoy).length} class="px-1 pt-2 text-center text-blue-700 bg-blue-50/60">Registrado</th>{/if}
+					{#if fechas.some((f) => f > hoy)}<th colspan={fechas.filter((f) => f > hoy).length} class="px-1 pt-2 text-center text-slate-500 bg-slate-100/60">Previsto</th>{/if}
+					<th rowspan="2" class="px-2 py-2 text-right">Tarifa diaria</th>
+					<th rowspan="2" class="px-2 py-2 text-right">Acumulado real S/</th>
+					<th rowspan="2" class="px-2 py-2 text-right">Por completar S/</th>
+					<th rowspan="2" class="px-2 py-2 text-right">Bonos previstos S/</th>
+					<th rowspan="2" class="px-2 py-2 text-right">Total proyectado S/</th>
+				</tr>
+				<tr>
+					{#each fechas as f, i}<th class={`px-1 pb-2 text-center font-semibold ${f <= hoy ? 'bg-blue-50/60' : 'bg-slate-100/60'}`}>{DIAS_SEMANA[i].slice(0, 1)}</th>{/each}
+				</tr>
+			</thead>
+			<tbody class="divide-y divide-slate-100">
+				{#each proy as x (x.f.personal.id_personal)}
+					{@const id = x.f.personal.id_personal}
+					<tr>
+						<td class="px-2 py-2 text-center"><input type="checkbox" bind:checked={selProy[id]} aria-label={`Seleccionar ${nombreCompleto(x.f.personal)}`} /></td>
+						<td class="px-2 py-2">
+							<div class="font-semibold text-slate-800">{nombreCompleto(x.f.personal)}</div>
+							<div class="text-[11px] text-blue-600">{x.f.personal.tipo_documento} {x.f.personal.numero_documento ?? ''}</div>
+							{#if x.f.reservaMonto}<div class="text-[11px] text-violet-700"><i class="fas fa-calendar-check"></i> Reservado {formatCurrency(x.f.reservaMonto)}{x.f.reservaFecha ? ` · ${ddmm(x.f.reservaFecha)}` : ''}</div>{/if}
+						</td>
+						<td class="px-2 py-2 text-xs text-slate-600">{x.f.personal.cargo ?? x.f.personal.categoria ?? ''}</td>
+						<td class="px-2 py-2 text-xs text-slate-600">{nombreRef(x.f) || '—'}</td>
+						{#each x.p.dias as d (d.fecha)}
+							<td class={`px-1 py-2 text-center tabular-nums ${d.registrado ? 'font-bold text-slate-800' : 'text-slate-400'}`}>
+								{#if d.registrado}{x.f.dias.find((y) => y.fecha === d.fecha)?.estado === 'falta' ? 'F' : fr(d.fraccion)}{:else}{d.fraccion ? `${fr(d.fraccion)} P` : '—'}{/if}
+							</td>
+						{/each}
+						<td class="px-2 py-2 text-right tabular-nums">{x.f.sinMonto ? '—' : formatCurrency(x.f.tarifaDia)}</td>
+						<td class="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(x.p.acumulado)}</td>
+						<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(x.p.porCompletar)}</td>
+						<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(num(bonos[id]))}</td>
+						<td class="px-2 py-2 text-right tabular-nums font-extrabold text-slate-900">{formatCurrency(totalProyectadoDe(x))}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+	<div class="rounded-2xl border border-orange-100 bg-orange-50/60 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+		<span class="text-lg font-bold text-orange-600">Totales de la proyección</span>
+		<span class="text-blue-700">Total acumulado <b>{formatCurrency(totProy.acumulado)}</b></span>
+		<span class="text-blue-700">Por completar <b>{formatCurrency(totProy.porCompletar)}</b></span>
+		<span class="text-blue-700">Bonos previstos <b>{formatCurrency(totProy.bonos)}</b></span>
+		<span class="ml-auto rounded-xl bg-orange-100 px-3 py-1 text-center"><span class="block text-[11px] font-bold text-orange-700">TOTAL PROYECTADO</span><b class="text-lg text-orange-700">{formatCurrency(totProy.total)}</b></span>
+	</div>
+	<p class="px-1 text-xs italic text-slate-500">P = proyectado · Los días futuros no son asistencia registrada: se prevén según el horario de cada trabajador.</p>
+	<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+		<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
+			<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(totProy.total)}</b>
+		</div>
+		<label class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
+			<span class="font-bold text-slate-800">Fondo separado</span>
+			<input type="text" inputmode="decimal" bind:value={fondoTexto} onblur={guardarFondoSemana} disabled={!puedeEnviar} placeholder="0.00" class="w-32 px-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-semibold" aria-label="Fondo separado" />
+		</label>
+		<div class="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-3 flex items-center justify-between gap-2">
+			<span class="font-bold text-orange-700">Falta separar</span><b class="text-xl text-orange-600">{formatCurrency(faltaSeparar)}</b>
+		</div>
+	</div>
+	<div class="flex flex-wrap items-end gap-3">
+		<label class="flex flex-col gap-1 text-sm font-semibold text-slate-700">Reserva para pago
+			<input type="date" bind:value={fechaReserva} class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal" />
+		</label>
+		<button type="button" onclick={programarReserva} disabled={reservando || !proySel.length} class="px-4 py-2 rounded-xl bg-orange-500 text-white text-sm font-bold hover:bg-orange-600 disabled:opacity-40">
+			<i class="fas fa-calendar-plus"></i> {reservando ? 'Programando…' : `Programar reserva de seleccionados${proySel.length ? ` (${proySel.length})` : ''}`}
+		</button>
+		<button type="button" onclick={() => (verReservas = true)} class="px-4 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50">
+			<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
+		</button>
+	</div>
+	<p class="px-1 text-xs italic text-slate-500">Al aprobar el tareo real, se ajusta esta reserva sin duplicar el compromiso.</p>
+{/snippet}
 
 {#snippet botonMarcas(f: FilaTareo)}
 	{@const n = marcasDe(f).length}
@@ -659,6 +877,41 @@
 		{n ? `${n} marca${n === 1 ? '' : 's'}` : 'Sin marcas'}{nc ? ` · ${nc} no cuenta${nc === 1 ? '' : 'n'}` : ''}
 	</button>
 {/snippet}
+
+<!-- Reservas de la semana -->
+{#if verReservas}
+	<div class="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Reservas">
+		<div class="w-full sm:max-w-lg bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl p-5 flex flex-col gap-3 max-h-[92vh] overflow-y-auto">
+			<div class="flex items-start justify-between gap-3">
+				<div>
+					<h2 class="text-lg font-bold text-slate-800">Reservas de la semana</h2>
+					<p class="text-sm text-slate-500">{obra?.codigo} · {tituloSemana}</p>
+				</div>
+				<button type="button" onclick={() => (verReservas = false)} class="text-slate-400 hover:text-slate-600 p-1" aria-label="Cerrar"><i class="fas fa-times"></i></button>
+			</div>
+			<p class="text-xs text-slate-500">Cada reserva figura en Cuentas por Pagar como "Proyección de planilla" en su fecha. Si el tareo ya se aprobó, se usa el monto aprobado; al enviarlo, la reserva sale de la proyección.</p>
+			{#if !conReserva.length}
+				<p class="text-sm text-slate-400">No hay reservas programadas en esta semana.</p>
+			{:else}
+				<div class="flex flex-col divide-y divide-slate-100 rounded-xl border border-slate-100">
+					{#each conReserva as f (f.personal.id_personal)}
+						<div class="px-3 py-2 flex items-center gap-3 text-sm">
+							<div class="flex-1 min-w-0">
+								<div class="font-medium text-slate-800">{nombreCompleto(f.personal)}</div>
+								<div class="text-xs text-slate-500">{f.reservaFecha ? `Para el ${ddmm(f.reservaFecha)}/${f.reservaFecha.slice(0, 4)}` : ''}{f.aprobadoMonto != null && !f.enviado ? ` · aprobado ${formatCurrency(f.aprobadoMonto)}` : ''}{f.enviado ? ' · ya enviado a CxP' : ''}</div>
+							</div>
+							<b class="tabular-nums">{formatCurrency(f.reservaMonto ?? 0)}</b>
+							{#if puedeEnviar}<button type="button" onclick={() => quitarReserva(f)} class="text-rose-600 text-xs hover:underline">Quitar</button>{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<div class="flex justify-end">
+				<button type="button" onclick={() => (verReservas = false)} class="px-4 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">Cerrar</button>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <!-- Diagnóstico de marcas -->
 {#if diag}
@@ -705,57 +958,18 @@
 	</div>
 {/if}
 
-<!-- Editar día -->
-{#if edicion}
-	{@const e = edicion}
-	<div class="fixed inset-0 z-[120] flex items-end sm:items-center justify-center bg-slate-900/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Editar día">
-		<div class="w-full sm:max-w-md bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl p-5 flex flex-col gap-3 max-h-[92vh] overflow-y-auto">
-			<div>
-				<h2 class="text-lg font-bold text-slate-800">Editar día</h2>
-				<p class="text-sm text-slate-500">{nombreCompleto(e.fila.personal)} · {DIAS_SEMANA[e.dia.dia - 1]} {ddmm(e.dia.fecha)}</p>
-			</div>
-			<div class="rounded-xl bg-slate-50 border border-slate-100 p-3 text-xs text-slate-600 flex flex-col gap-1">
-				<span><b>Huellero:</b> {e.dia.asistencia?.marcas.length ? e.dia.asistencia.marcas.map((m) => `${reloj(m.minuto)} (${m.huellero})`).join(' · ') : 'sin marcas'}</span>
-				<span><b>Horas según huellero:</b> {duracion(e.dia.minutosHuellero)} · jornada {duracion(e.fila.jornadaMin)}</span>
-				{#if e.dia.ajuste}<span class="text-amber-700"><i class="fas fa-pen"></i> Modificado{e.dia.ajuste.usuario ? ` por ${e.dia.ajuste.usuario}` : ''}</span>{/if}
-			</div>
-			<label class="flex flex-col gap-1 text-sm font-medium text-slate-700">Estado
-				<select value={edEstado} onchange={(ev) => cambiarEstado((ev.currentTarget as HTMLSelectElement).value as EstadoAjuste)} class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal">
-					{#each ESTADOS_AJUSTE as op}<option value={op.value}>{op.label}</option>{/each}
-				</select>
-			</label>
-			<fieldset class="flex flex-col gap-1.5">
-				<legend class="text-sm font-medium text-slate-700 mb-1">Pago reconocido</legend>
-				{#each [['completo', `Día completo (${duracion(e.fila.jornadaMin)})`], ['medio', `Medio día (${duracion(Math.round(e.fila.jornadaMin / 2))})`], ['sin_pago', 'Sin pago'], ['otras', 'Otras horas']] as [v, t]}
-					<label class="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name="tareo-pago" value={v} bind:group={edPago} /> {t}</label>
-				{/each}
-				{#if edPago === 'otras'}
-					<div class="flex items-center gap-2 pl-6">
-						<input type="number" min="0" max="24" bind:value={edHoras} class="w-16 px-2 py-1 border border-slate-200 rounded-lg text-sm" aria-label="Horas" /> h
-						<input type="number" min="0" max="59" step="5" bind:value={edMinutos} class="w-16 px-2 py-1 border border-slate-200 rounded-lg text-sm" aria-label="Minutos" /> min
-					</div>
-				{/if}
-			</fieldset>
-			<label class="flex flex-col gap-1 text-sm font-medium text-slate-700">Observación
-				<input type="text" bind:value={edObservacion} maxlength="200" placeholder="Ej.: lluvia, se paró la obra a mediodía" class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal" />
-			</label>
-			{#if true}
-				{@const fr = fraccionDia(minutosEditados, e.fila.jornadaMin)}
-				<div class="text-sm text-slate-600">Importe del día: <b class="text-slate-800">{formatCurrency(Math.round(fr * e.fila.tarifaDia * 100) / 100)}</b> <span class="text-xs text-slate-400">({fr === 1 ? '1 día' : fr ? '½ día' : 'sin pago'} × {formatCurrency(e.fila.tarifaDia)} · más de la mitad de la jornada = día completo)</span></div>
-			{/if}
-			<label class="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" bind:checked={edTodos} /> Aplicar a todos los trabajadores de esta obra ({todasFilas.length})</label>
-			<div class="flex flex-wrap justify-between gap-2 pt-1">
-				{#if e.dia.ajuste}
-					<button type="button" onclick={restaurarDia} class="px-3 py-2 rounded-lg text-sm text-slate-600 hover:bg-slate-50 border border-slate-200"><i class="fas fa-rotate-left"></i> Volver al huellero</button>
-				{:else}<span></span>{/if}
-				<div class="flex gap-2">
-					<button type="button" onclick={() => (edicion = null)} class="px-4 py-2 rounded-lg border border-slate-200 text-sm">Cancelar</button>
-					<button type="button" onclick={guardarDia} disabled={guardandoDia} class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{guardandoDia ? 'Guardando…' : 'Guardar'}</button>
-				</div>
-			</div>
-		</div>
-	</div>
-{/if}
+<EditarDiaTareo
+	{edicion}
+	idCentroCosto={obra?.id_centro_costo ?? null}
+	idsTodos={todasFilas.map((f) => f.personal.id_personal)}
+	puedeEditarDia={puedeEnviar}
+	puedeExtra={!!edicion && puedeAprobarFila(edicion.fila)}
+	onClose={() => (edicion = null)}
+	onSaved={async () => {
+		edicion = null;
+		await cargar();
+	}}
+/>
 
 <!-- Feriados -->
 {#if feriadosAbierto && obra}

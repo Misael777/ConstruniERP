@@ -21,6 +21,8 @@ export const permisosState = $state<{
   /** Ticket #121: foto del trabajador vinculado a este usuario (personal.foto_url, enlace de Drive) para el círculo
    * de la cabecera y del menú. null = se muestran las iniciales. */
   fotoUrl: string | null;
+  /** Tickets #119/#118: id del empleado (empleados.id) conectado; con él se sabe de quién es jefe inmediato. */
+  empleadoId: number | null;
   loaded: boolean;
 }>({
   permisos: [],
@@ -30,6 +32,7 @@ export const permisosState = $state<{
   dni: '',
   email: '',
   fotoUrl: null,
+  empleadoId: null,
   loaded: false,
 });
 
@@ -58,6 +61,7 @@ export async function loadPermisos(userId: string): Promise<void> {
     const { data: empleado, error: empError } = await supabase
       .from('empleados')
       .select(`
+        id,
         nombre,
         rol_id,
         roles ( nombre )
@@ -88,6 +92,7 @@ export async function loadPermisos(userId: string): Promise<void> {
 
     permisosState.rolNombre = rolNombre;
     permisosState.userName = nombre;
+    permisosState.empleadoId = typeof (empleado as any).id === 'number' ? (empleado as any).id : null;
     permisosState.userInitial = inicialesDe(nombre);
 
     // Best-effort, aparte de todo lo de arriba: si la columna dni no existe todavía (o cualquier otro

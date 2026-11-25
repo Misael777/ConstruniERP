@@ -28,7 +28,7 @@
 	let cargando = $state(true);
 	let guardando = $state(false);
 
-	let form = $state<DatosAsistenciaPersonal>({ id_horario: null, id_empleado: null, consentimiento_biometrico: false, consentimiento_fecha: null });
+	let form = $state<DatosAsistenciaPersonal>({ id_horario: null, id_empleado: null, consentimiento_biometrico: false, consentimiento_fecha: null, registro_manual: false });
 	let elegidos = $state<number[]>([]);
 	let errorFecha = $state('');
 
@@ -38,7 +38,8 @@
 			id_horario: trabajador.id_horario ?? null,
 			id_empleado: trabajador.id_empleado ?? null,
 			consentimiento_biometrico: !!trabajador.consentimiento_biometrico,
-			consentimiento_fecha: trabajador.consentimiento_fecha ?? null
+			consentimiento_fecha: trabajador.consentimiento_fecha ?? null,
+			registro_manual: !!trabajador.registro_manual
 		};
 		elegidos = (trabajador.personal_huellero ?? []).map((v) => v.id_dispositivo);
 		errorFecha = '';
@@ -93,7 +94,8 @@
 	const metodos = $derived([
 		{ texto: 'Sistema ERP', icono: 'fa-desktop', activo: !!form.id_empleado, ayuda: 'Al elegir su usuario del ERP' },
 		{ texto: 'Huellero', icono: 'fa-fingerprint', activo: elegidos.length > 0, ayuda: 'Al asociar un huellero' },
-		{ texto: 'Biometría en el ERP', icono: 'fa-lock', activo: form.consentimiento_biometrico, ayuda: 'Con el consentimiento firmado' }
+		{ texto: 'Biometría en el ERP', icono: 'fa-lock', activo: form.consentimiento_biometrico, ayuda: 'Con el consentimiento firmado' },
+		{ texto: 'Registro manual', icono: 'fa-hand-pointer', activo: !!form.registro_manual && !!form.id_empleado, ayuda: 'Marca su ingreso y salida desde el ERP aunque su horario sea fijo' }
 	]);
 
 	const hayCambios = $derived(
@@ -101,6 +103,7 @@
 			form.id_empleado !== (trabajador.id_empleado ?? null) ||
 			form.consentimiento_biometrico !== !!trabajador.consentimiento_biometrico ||
 			(form.consentimiento_fecha ?? null) !== (trabajador.consentimiento_fecha ?? null) ||
+			!!form.registro_manual !== !!trabajador.registro_manual ||
 			[...elegidos].sort().join(',') !== (trabajador.personal_huellero ?? []).map((v) => v.id_dispositivo).sort().join(',')
 	);
 
@@ -109,7 +112,9 @@
 		if (errorFecha) return void toast.error(errorFecha);
 		guardando = true;
 		try {
-			await guardarAsistenciaPersonal(supabase, trabajador.id_personal, form, elegidos);
+			// registro_manual solo viaja si se usa (base sin la migración 20261125120000 no tiene la columna).
+			const usaManual = !!form.registro_manual || !!trabajador.registro_manual;
+			await guardarAsistenciaPersonal(supabase, trabajador.id_personal, { ...form, registro_manual: usaManual ? !!form.registro_manual : undefined }, elegidos);
 			toast.success('Configuración de asistencia guardada.');
 			onSaved();
 		} catch (err) {
@@ -164,7 +169,7 @@
 
 		<!-- Métodos de registro -->
 		{@render subtitulo('Métodos de registro', 'Puede tener más de uno; se activan con los datos de abajo.')}
-		<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
 			{#each metodos as m}
 				<span class={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${m.activo ? 'border-orange-200 bg-orange-50/60 text-slate-800' : 'border-slate-200 text-slate-400'}`} title={m.ayuda}>
 					<i class={`fas ${m.activo ? 'fa-square-check text-orange-500' : 'fa-square text-slate-300'}`}></i>
@@ -177,6 +182,10 @@
 			<SelectConSaldo id="cfg_usuario" value={form.id_empleado ? String(form.id_empleado) : ''} options={[{ value: '', label: 'Sin usuario (no marca desde el ERP)' }, ...usuariosErp]} placeholder="Sin usuario" encabezadoNombre="Usuario del ERP" onchange={(v) => (form.id_empleado = v ? Number(v) : null)} />
 			<span class="text-xs text-slate-400">Con horario libre o mixto, esa persona registra su ingreso y salida desde Inicio → «Mi asistencia».</span>
 		</div>
+		<label class={`flex items-start gap-2 text-sm ${form.id_empleado ? 'text-slate-700' : 'text-slate-400'}`}>
+			<input type="checkbox" class="mt-0.5" bind:checked={form.registro_manual} disabled={!form.id_empleado} />
+			<span><b>Registro manual de asistencia</b> — con cualquier horario (también fijo), al entrar al ERP le pregunta si comienza su jornada y puede marcar su ingreso y salida desde «Mi asistencia». {form.id_empleado ? '' : 'Primero elige su usuario del ERP.'}</span>
+		</label>
 
 		<!-- Dispositivos asociados -->
 		{@render subtitulo('Dispositivos asociados')}

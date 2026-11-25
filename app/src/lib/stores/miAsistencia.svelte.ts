@@ -60,7 +60,8 @@ export async function cargarMiJornada(): Promise<void> {
 		const hoy = hoyLima();
 		const datos = await getMiAsistencia(supabase, lunesDe(hoy), hoy);
 		const tipo = datos?.horario?.tipo ?? 'fijo';
-		miJornada.disponible = !!datos && HORARIOS_ERP.includes(tipo);
+		// Ticket #110: con "Registro manual" activado marca desde el ERP con cualquier horario.
+		miJornada.disponible = !!datos && (HORARIOS_ERP.includes(tipo) || !!datos.personal.registro_manual);
 		miJornada.nombre = datos?.personal.nombre ?? '';
 		miJornada.horario = datos?.horario?.nombre ?? '';
 		miJornada.tipoHorario = tipo;

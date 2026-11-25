@@ -66,10 +66,16 @@
 		rechazado: misSolicitudes.filter((s) => s.estado === 'rechazado').length,
 		todas: misSolicitudes.length
 	});
+	// Ticket #131 (rechazado 24/11/2026: "para los demás usuarios que no son administrador no hay"): las mismas
+	// pestañas por categoría también en "Mis solicitudes".
+	let categoriaMias = $state<'todas' | CategoriaSolicitud>('todas');
+	const conteoCategoriaMias = (c: 'todas' | CategoriaSolicitud) =>
+		misSolicitudes.filter((s) => (filtroEstadoMias === 'todas' || s.estado === filtroEstadoMias) && (c === 'todas' || categoriaSolicitud(s) === c)).length;
 	const misSolicitudesFiltradas = $derived.by(() => {
 		const q = busquedaMias.trim().toLowerCase();
 		return misSolicitudes
 			.filter((s) => filtroEstadoMias === 'todas' || s.estado === filtroEstadoMias)
+			.filter((s) => categoriaMias === 'todas' || categoriaSolicitud(s) === categoriaMias)
 			.filter((s) => !q || [s.descripcion_entidad, etiquetaEntidad(s.tipo_entidad), etiquetaAccion(s.tipo_accion), descripcionAccion(s), s.resuelto_por].filter(Boolean).join(' ').toLowerCase().includes(q))
 			.sort((a, b) => (a.estado === 'pendiente') === (b.estado === 'pendiente') ? (a.created_at < b.created_at ? 1 : -1) : a.estado === 'pendiente' ? -1 : 1);
 	});
@@ -800,6 +806,14 @@
 							</button>
 						{/each}
 					</div>
+					<div class="flex flex-wrap gap-1.5" role="tablist" aria-label="Categoría">
+						{#each [{ id: 'todas', label: 'Todas' }, ...CATEGORIAS_SOLICITUD] as c (c.id)}
+							{@const n = conteoCategoriaMias(c.id as 'todas' | CategoriaSolicitud)}
+							<button type="button" role="tab" aria-selected={categoriaMias === c.id} onclick={() => (categoriaMias = c.id as typeof categoriaMias)} class={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors ${categoriaMias === c.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+								{c.label}{n ? ` (${n})` : ''}
+							</button>
+						{/each}
+					</div>
 					<div class="relative">
 						<i class="fas fa-search absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
 						<input type="text" bind:value={busquedaMias} placeholder="Buscar solicitud..." class="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-blue-200" />
@@ -810,6 +824,9 @@
 						<div class="p-4">
 							<div class="flex items-start justify-between gap-2 mb-1.5">
 								<div class="min-w-0">
+									<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-blue-50 text-blue-700 border border-blue-100 mr-1.5">
+										{CATEGORIAS_SOLICITUD.find((c) => c.id === categoriaSolicitud(s))?.label ?? ''}
+									</span>
 									<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200 mr-1.5">
 										{etiquetaEntidad(s.tipo_entidad)}
 									</span>

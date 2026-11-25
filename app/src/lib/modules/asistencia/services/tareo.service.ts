@@ -12,6 +12,12 @@
  * 1 si las horas reconocidas superan la mitad de su jornada, ½ si hay horas pero no pasan la mitad, y 0 sin horas
  * (ver fraccionDia). Pago del día = fracción × S/ por día. Total = suma + bonos. La jornada es el promedio de los días
  * de su horario (sin horario o libre, 8 h); "Medio día" en la edición reconoce justo la mitad → ½ día.
+ *
+ * Tickets #118/#119 (24/11/2026, migración 20261124120000): cada trabajador queda "Pendiente" hasta que su JEFE
+ * INMEDIATO (personal.id_jefe_inmediato) o un administrador lo aprueba; solo lo aprobado se envía a CxP, y si el total
+ * cambia después hay que aprobarlo de nuevo. Vista Proyección (Obra): días registrados + días previstos, fondo separado y
+ * reservas (cuota "Proyección de planilla" en CxP). Pestaña Consultoría: tareo por quincena o mes del personal que no es
+ * de obra (ver cargarTareoConsultoria).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { calcularAsistencia, sumarDias, diaSemana, reloj, duracion, type Marca, type DiaAsistencia } from './asistencia.service';
@@ -72,6 +78,16 @@ export interface AjusteTareo {
 	usuario: string | null;
 }
 
+/** Ticket #117: horas extra del día que registra el jefe inmediato (o un administrador); se pagan por hora. */
+export interface ExtraTareo {
+	id_personal: number;
+	id_centro_costo?: number;
+	fecha: string;
+	minutos: number;
+	observacion: string | null;
+	registrado_por: string | null;
+}
+
 export interface FeriadoTareo {
 	id_feriado: number;
 	fecha: string;
@@ -86,6 +102,11 @@ export interface TrabajadorGuardado {
 	enviado: number;
 	fecha_cxp: string | null;
 	tareo_envio?: { monto: number; id_pago: number | null }[] | null;
+	aprobado_monto?: number | null;
+	aprobado_por?: string | null;
+	aprobado_en?: string | null;
+	reserva_monto?: number | null;
+	reserva_fecha?: string | null;
 }
 
 export interface DiaTareo {
@@ -103,6 +124,10 @@ export interface DiaTareo {
 	/** Ticket #132: 1 = día completo, 0.5 = medio día, 0 = sin pago. */
 	fraccion: number;
 	pago: number;
+	/** Ticket #117: lo que el huellero marca después de su hora de salida (no se paga solo; sirve de referencia). */
+	extraHuellero: number;
+	/** Horas extra registradas por el jefe inmediato (se pagan por hora). */
+	extra: ExtraTareo | null;
 }
 
 export interface FilaTareo {
@@ -125,6 +150,16 @@ export interface FilaTareo {
 	/** Días sin salida o con algo que revisar. */
 	porRevisar: number;
 	sinMonto: boolean;
+	/** Tickets #118/#119: total aprobado por el jefe inmediato (null = sin aprobar) y quién/cuándo. */
+	aprobadoMonto: number | null;
+	aprobadoPor: string | null;
+	aprobadoEn: string | null;
+	/** Reserva programada desde la vista Proyección (monto y fecha de la cuota proyectada en CxP). */
+	reservaMonto: number | null;
+	reservaFecha: string | null;
+	/** Ticket #117: horas extra registradas por el jefe en el periodo y su importe (minutos × S/ por hora). */
+	extrasMin: number;
+	extrasMonto: number;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -179,21 +214,29 @@ export function calcularFila(
 	guardado: TrabajadorGuardado | null,
 	lunes: string,
 	hoy: string,
-	asignado = true
+	asignado = true,
+	/** Días del periodo desde `lunes` (7 = semana; Consultoría usa la quincena o el mes). */
+	nDias = 7,
+	extras: ExtraTareo[] = []
 ): FilaTareo {
-	const domingo = sumarDias(lunes, 6);
+	const domingo = sumarDias(lunes, nDias - 1);
 	const asistencia = calcularAsistencia(marcas, horario, lunes, domingo, hoy, { ingreso: p.fecha_ingreso, cese: p.fecha_cese });
 	const porFecha = new Map(asistencia.map((d) => [d.fecha, d]));
 	const jornadaMin = jornadaMinutos(horario);
 	const { tarifaDia, tarifaHora } = tarifas(p, jornadaMin);
 
 	const dias: DiaTareo[] = [];
-	for (let i = 0; i < 7; i++) {
+	for (let i = 0; i < nDias; i++) {
 		const fecha = sumarDias(lunes, i);
 		const a = porFecha.get(fecha) ?? null;
 		const ajuste = ajustes.find((x) => x.fecha === fecha && x.id_personal === p.id_personal) ?? null;
 		const feriado = asignado ? (feriados.find((f) => f.fecha === fecha) ?? null) : null;
 		const minutosHuellero = a?.trabajados ?? 0;
+		// Ticket #117: con horario fijo, salir después de la hora de salida no suma: cuenta hasta su salida normal.
+		// Las horas extra las registra el jefe inmediato (ExtraTareo).
+		const extraHuellero = a?.programado ? (a.extra ?? 0) : 0;
+		const minutosJornada = Math.max(0, minutosHuellero - extraHuellero);
+		const extra = extras.find((x) => x.fecha === fecha && x.id_personal === p.id_personal) ?? null;
 		let estado: EstadoCelda;
 		let minutos = 0;
 		let origen: OrigenDia = origenDeMarcas((a?.marcas ?? []) as MarcaTareo[]);
@@ -208,13 +251,13 @@ export function calcularFila(
 			// Feriado: se reconoce la jornada si era día de trabajo (o lo trabajado, si es más).
 			const laborable = a?.programado ? minutosDelDia(a.programado) : horario && !esLibre(horario) ? 0 : diaSemana(fecha) < 7 ? jornadaMin : 0;
 			estado = 'feriado';
-			minutos = Math.max(laborable, minutosHuellero);
+			minutos = Math.max(laborable, minutosJornada);
 			origen = 'feriado';
 		} else if (!a) {
 			estado = 'por_venir';
-		} else if (minutosHuellero > 0) {
+		} else if (minutosJornada > 0) {
 			estado = 'asistio';
-			minutos = minutosHuellero;
+			minutos = minutosJornada;
 		} else if (a.estado === 'incompleto') {
 			estado = 'pendiente';
 		} else if (a.estado === 'en_curso') {
@@ -227,13 +270,15 @@ export function calcularFila(
 			estado = 'sin_marcas';
 		}
 		const fraccion = fraccionDia(minutos, jornadaMin);
-		dias.push({ fecha, dia: diaSemana(fecha), estado, minutosHuellero, minutos, origen, ajuste, feriado, asistencia: a, fraccion, pago: r2(fraccion * tarifaDia) });
+		dias.push({ fecha, dia: diaSemana(fecha), estado, minutosHuellero, minutos, origen, ajuste, feriado, asistencia: a, fraccion, pago: r2(fraccion * tarifaDia), extraHuellero, extra });
 	}
+	const extrasMin = dias.reduce((t, d) => t + (d.extra?.minutos ?? 0), 0);
+	const extrasMonto = r2((extrasMin / 60) * tarifaHora);
 
 	const minutos = dias.reduce((t, d) => t + d.minutos, 0);
 	const subtotal = r2(dias.reduce((t, d) => t + d.pago, 0));
 	const bonos = Number(guardado?.bonos ?? 0);
-	const total = r2(subtotal + bonos);
+	const total = r2(subtotal + extrasMonto + bonos);
 	const enviado = Number(guardado?.enviado ?? 0);
 	return {
 		personal: p,
@@ -252,8 +297,69 @@ export function calcularFila(
 		pendiente: r2(Math.max(total - enviado, 0)),
 		fechaCxp: guardado?.fecha_cxp ?? null,
 		porRevisar: dias.filter((d) => d.estado === 'pendiente').length,
-		sinMonto: !(Number(p.monto_pago ?? 0) > 0)
+		sinMonto: !(Number(p.monto_pago ?? 0) > 0),
+		aprobadoMonto: guardado?.aprobado_monto != null ? Number(guardado.aprobado_monto) : null,
+		aprobadoPor: guardado?.aprobado_por ?? null,
+		aprobadoEn: guardado?.aprobado_en ?? null,
+		reservaMonto: guardado?.reserva_monto != null ? Number(guardado.reserva_monto) : null,
+		reservaFecha: guardado?.reserva_fecha ?? null,
+		extrasMin,
+		extrasMonto
 	};
+}
+
+// ─────────────────────────── Aprobación (tickets #118/#119) ───────────────────────────
+
+/** aprobado: el jefe aprobó este mismo total. cambio: aprobó otro total (hay que aprobar de nuevo). previo: se envió
+ * antes de que existiera la aprobación (vale como aprobado). pendiente: sin aprobar. */
+export type EstadoAprobacion = 'aprobado' | 'cambio' | 'previo' | 'pendiente';
+
+export function aprobacionDe(f: Pick<FilaTareo, 'aprobadoMonto' | 'enviado'>, totalActual: number): EstadoAprobacion {
+	if (f.aprobadoMonto == null) return f.enviado > 0 ? 'previo' : 'pendiente';
+	return Math.abs(f.aprobadoMonto - totalActual) <= 0.005 ? 'aprobado' : 'cambio';
+}
+export const estaAprobado = (e: EstadoAprobacion) => e === 'aprobado' || e === 'previo';
+
+// ─────────────────────────── Proyección (ticket #118) ───────────────────────────
+
+export interface DiaProyectado {
+	fecha: string;
+	dia: number;
+	/** true = día ya registrado (hasta hoy); false = previsto. */
+	registrado: boolean;
+	fraccion: number;
+}
+
+export interface ProyeccionFila {
+	dias: DiaProyectado[];
+	/** Lo ya ganado según la asistencia registrada (hasta hoy). */
+	acumulado: number;
+	/** Días previstos (desde mañana) × S/ por día. */
+	porCompletar: number;
+	diasPrevistos: number;
+}
+
+/** Fracción prevista de un día futuro según su horario: día de trabajo = 1 (½ si su jornada de ese día no pasa la
+ * mitad de la normal); descanso = 0; sin horario fijo, de lunes a sábado. Fuera de contrato = 0. */
+export function fraccionPrevista(p: Pick<Personal, 'fecha_ingreso' | 'fecha_cese'>, horario: Horario | null, jornadaMin: number, fecha: string): number {
+	if ((p.fecha_ingreso && fecha < p.fecha_ingreso) || (p.fecha_cese && fecha > p.fecha_cese)) return 0;
+	const dia = diaSemana(fecha);
+	if (!horario || esLibre(horario) || !horario.horario_dia.length) return dia < 7 ? 1 : 0;
+	const hd = horario.horario_dia.find((x) => x.dia === dia);
+	return hd ? fraccionDia(minutosDelDia(hd), jornadaMin) : 0;
+}
+
+/** Proyección de la semana de un trabajador: lo registrado hasta hoy y lo previsto desde mañana. Pura. */
+export function proyectarFila(f: FilaTareo, hoy: string): ProyeccionFila {
+	const dias = f.dias.map((d) => {
+		const registrado = d.fecha <= hoy;
+		// Un día futuro ya marcado como feriado (o editado) se prevé con lo reconocido; si no, según su horario.
+		const fraccion = registrado || d.estado !== 'por_venir' ? d.fraccion : fraccionPrevista(f.personal, f.horario, f.jornadaMin, d.fecha);
+		return { fecha: d.fecha, dia: d.dia, registrado, fraccion };
+	});
+	const acumulado = r2(f.dias.filter((d) => d.fecha <= hoy).reduce((t, d) => t + d.pago, 0));
+	const diasPrevistos = dias.filter((d) => !d.registrado).reduce((t, d) => t + d.fraccion, 0);
+	return { dias, acumulado, porCompletar: r2(diasPrevistos * f.tarifaDia), diasPrevistos };
 }
 
 // ─────────────────────────── Datos ───────────────────────────
@@ -271,7 +377,15 @@ async function idsPorObra(client: SupabaseClient, idCentroCosto: number): Promis
 	return error ? [] : (data ?? []).map((x) => x.id_personal as number);
 }
 
-/** Obras con personal activo asignado (principal u otra de sus obras) o con un huellero instalado. */
+/** Ticket #118: un centro es de OBRA si es un proyecto que no es de consultoría. El personal cuya obra o área
+ * principal no es de obra (consultoría, corporativo, bolsa general, sin centro) va a la pestaña Consultoría. */
+export function esCentroObra(c: { tipo?: string | null; proyecto?: { tipo_venta?: string | null } | { tipo_venta?: string | null }[] | null } | null | undefined): boolean {
+	if (!c || c.tipo !== 'proyecto') return false;
+	const pr = Array.isArray(c.proyecto) ? c.proyecto[0] : c.proyecto;
+	return (pr?.tipo_venta ?? null) !== 'consultoria';
+}
+
+/** Obras (ver esCentroObra) con personal activo asignado (principal u otra de sus obras) o con un huellero instalado. */
 export async function getObrasTareo(client: SupabaseClient): Promise<ObraTareo[]> {
 	const [{ data: per, error: e1 }, { data: disp, error: e2 }, { data: otras }] = await Promise.all([
 		client.from('personal').select('id_centro_costo').eq('estado', 'activo').not('id_centro_costo', 'is', null),
@@ -282,10 +396,10 @@ export async function getObrasTareo(client: SupabaseClient): Promise<ObraTareo[]
 	if (e2) throw e2;
 	const ids = [...new Set([...(per ?? []), ...(disp ?? []), ...(otras ?? [])].map((x) => x.id_centro_costo as number))];
 	if (!ids.length) return [];
-	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre, proyecto(nombre_proyecto)').in('id_centro_costo', ids).order('codigo');
+	const { data, error } = await client.from('centro_costo').select('id_centro_costo, codigo, nombre, tipo, proyecto(nombre_proyecto, tipo_venta)').in('id_centro_costo', ids).order('codigo');
 	if (error) throw error;
 	// El centro de un proyecto se llama solo con su número: se muestra el nombre del proyecto.
-	return (data ?? []).map((c: any) => ({ id_centro_costo: c.id_centro_costo, ...nombreCentro(c)! }));
+	return (data ?? []).filter((c: any) => esCentroObra(c)).map((c: any) => ({ id_centro_costo: c.id_centro_costo, ...nombreCentro(c)! }));
 }
 
 /** Diagnóstico de marcas (pedido del usuario, 19/11/2026): TODAS las marcas del trabajador en la semana, cuenten o
@@ -325,16 +439,39 @@ export interface DatosTareo {
 	feriados: FeriadoTareo[];
 	/** Por id_personal: todas sus marcas de la semana con el motivo de si cuentan o no. */
 	diagnostico: Record<number, MarcaDiagnostico[]>;
-	semana: { estado: 'borrador' | 'aprobado'; aprobado_por: string | null; aprobado_en: string | null } | null;
+	semana: { estado: 'borrador' | 'aprobado'; aprobado_por: string | null; aprobado_en: string | null; fondo_separado: number | null } | null;
 	/** Ticket #133: lo marcado como enviado cuyo pago en CxP ya se eliminó (se puede liberar para reenviar). */
 	enviadoSinPago: number;
 }
+
+/** Horas extra del periodo (#117). Sin la migración 20261125120000 (tabla tareo_extra): ninguna. */
+async function cargarExtras(client: SupabaseClient, ids: number[], desde: string, hasta: string, idCentroCosto?: number): Promise<ExtraTareo[]> {
+	if (!ids.length) return [];
+	let q = client.from('tareo_extra').select('id_personal, id_centro_costo, fecha, minutos, observacion, registrado_por').in('id_personal', ids).gte('fecha', desde).lte('fecha', hasta);
+	if (idCentroCosto) q = q.eq('id_centro_costo', idCentroCosto);
+	const { data, error } = await q;
+	return error ? [] : ((data ?? []) as ExtraTareo[]);
+}
+
+/** Ticket #117: el jefe inmediato (o un administrador) registra las horas extra del día (0 = quitarlas). */
+export async function registrarHorasExtra(client: SupabaseClient, idPersonal: number, idCentroCosto: number, fecha: string, minutos: number, observacion: string): Promise<void> {
+	const { error } = await client.rpc('fn_tareo_horas_extra', {
+		p_id_personal: idPersonal,
+		p_id_centro_costo: idCentroCosto,
+		p_fecha: fecha,
+		p_minutos: Math.max(0, Math.round(minutos)),
+		p_observacion: observacion.trim() || null
+	});
+	if (error) throw error;
+}
+
+const CAMPOS_GUARDADO = 'id_personal, bonos, total, enviado, fecha_cxp, aprobado_monto, aprobado_por, aprobado_en, reserva_monto, reserva_fecha, tareo_envio(monto, id_pago)';
 
 /** Carga la semana de la obra: trabajadores asignados, los que marcaron en sus huelleros y los ya enviados. */
 export async function cargarTareo(client: SupabaseClient, idCentroCosto: number, lunes: string, hoy: string): Promise<DatosTareo> {
 	const domingo = sumarDias(lunes, 6);
 	// Obra principal por su FK: con personal_obra hay dos caminos de personal a centro_costo (PGRST201).
-	const seleccion = '*, centro_costo!personal_id_centro_costo_fkey(codigo, nombre), horario(*, horario_dia(*))';
+	const seleccion = '*, centro_costo!personal_id_centro_costo_fkey(codigo, nombre, tipo, proyecto(tipo_venta)), horario(*, horario_dia(*))';
 
 	// Asignados: obra principal o cualquiera de sus obras (personal_obra).
 	const idsObra = await idsPorObra(client, idCentroCosto);
@@ -362,7 +499,13 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 
 	const [{ data: marcasCrudas, error: eM }, { data: semana, error: eS }, { data: feriados, error: eF }] = await Promise.all([
 		consultaMarcas,
-		client.from('tareo_semana').select('id_tareo, estado, aprobado_por, aprobado_en, tareo_trabajador(id_personal, bonos, total, enviado, fecha_cxp, tareo_envio(monto, id_pago))').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', lunes).maybeSingle(),
+		client
+			.from('tareo_semana')
+			.select(`id_tareo, estado, aprobado_por, aprobado_en, fondo_separado, tareo_trabajador(${CAMPOS_GUARDADO})`)
+			.eq('id_centro_costo', idCentroCosto)
+			.eq('semana_inicio', lunes)
+			.eq('periodo', 'semanal')
+			.maybeSingle(),
 		client.from('tareo_feriado').select('id_feriado, fecha, id_centro_costo, descripcion').gte('fecha', lunes).lte('fecha', domingo).or(`id_centro_costo.is.null,id_centro_costo.eq.${idCentroCosto}`)
 	]);
 	if (eM) throw eM;
@@ -390,14 +533,21 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 	// Activos en algún día de la semana (o con marcas / ya enviados).
 	const pinsConMarca = new Set(marcasValidas.map((m) => m.pin));
 	const idsGuardados = new Set(guardados.map((g) => g.id_personal));
+	// Ticket #122/#118: el personal de Consultoría, Corporativo u oficina (su obra o área principal no es de obra) va al
+	// tareo de Consultoría aunque marque en el huellero de una obra; aquí solo si ya tenía tareo guardado en esta obra.
 	const trabajadores = [...(asignados ?? []), ...extra].filter(
-		(p) => pinsConMarca.has(p.pin) || idsGuardados.has(p.id_personal) || ((!p.fecha_ingreso || p.fecha_ingreso <= domingo) && (!p.fecha_cese || p.fecha_cese >= lunes) && p.estado === 'activo')
+		(p) =>
+			(p.id_centro_costo == null || esCentroObra(p.centro_costo) || idsGuardados.has(p.id_personal)) &&
+			(pinsConMarca.has(p.pin) || idsGuardados.has(p.id_personal) || ((!p.fecha_ingreso || p.fecha_ingreso <= domingo) && (!p.fecha_cese || p.fecha_cese >= lunes) && p.estado === 'activo'))
 	);
 
 	const ids = trabajadores.map((p) => p.id_personal as number);
-	const { data: ajustes, error: eAj } = ids.length
-		? await client.from('tareo_ajuste').select('id_personal, fecha, estado, minutos_reconocidos, observacion, usuario').in('id_personal', ids).eq('id_centro_costo', idCentroCosto).gte('fecha', lunes).lte('fecha', domingo)
-		: { data: [], error: null };
+	const [{ data: ajustes, error: eAj }, extrasSemana] = await Promise.all([
+		ids.length
+			? client.from('tareo_ajuste').select('id_personal, fecha, estado, minutos_reconocidos, observacion, usuario').in('id_personal', ids).eq('id_centro_costo', idCentroCosto).gte('fecha', lunes).lte('fecha', domingo)
+			: Promise.resolve({ data: [], error: null }),
+		cargarExtras(client, ids, lunes, domingo, idCentroCosto)
+	]);
 	if (eAj) throw eAj;
 
 	const marcasPorPin = new Map<string, MarcaTareo[]>();
@@ -427,7 +577,9 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 				guardados.find((g) => g.id_personal === p.id_personal) ?? null,
 				lunes,
 				hoy,
-				p.id_centro_costo === idCentroCosto || idsObra.includes(p.id_personal)
+				p.id_centro_costo === idCentroCosto || idsObra.includes(p.id_personal),
+				7,
+				extrasSemana
 			);
 		})
 		.sort((a, b) => nombreCompleto(a.personal).localeCompare(nombreCompleto(b.personal), 'es'));
@@ -467,7 +619,9 @@ export async function cargarTareo(client: SupabaseClient, idCentroCosto: number,
 		filas,
 		feriados: (feriados ?? []) as FeriadoTareo[],
 		diagnostico,
-		semana: semana ? { estado: semana.estado, aprobado_por: semana.aprobado_por, aprobado_en: semana.aprobado_en } : null,
+		semana: semana
+			? { estado: semana.estado, aprobado_por: semana.aprobado_por, aprobado_en: semana.aprobado_en, fondo_separado: semana.fondo_separado != null ? Number(semana.fondo_separado) : null }
+			: null,
 		enviadoSinPago: r2(guardados.reduce((t, g) => t + (g.tareo_envio ?? []).filter((e) => e.id_pago == null).reduce((u, e) => u + Number(e.monto), 0), 0))
 	};
 }
@@ -511,16 +665,52 @@ export async function quitarFeriado(client: SupabaseClient, idFeriado: number): 
 	if (error) throw error;
 }
 
-/** Bonos y Fecha CxP de un trabajador (borrador de la semana). */
-export async function guardarTrabajador(client: SupabaseClient, idCentroCosto: number, lunes: string, idPersonal: number, bonos: number, fechaCxp: string | null): Promise<void> {
+export type PeriodoTareo = 'semanal' | 'quincenal' | 'mensual';
+
+/** Bonos y Fecha CxP de un trabajador (borrador de la semana, o de la quincena/mes en Consultoría). */
+export async function guardarTrabajador(client: SupabaseClient, idCentroCosto: number, lunes: string, idPersonal: number, bonos: number, fechaCxp: string | null, periodo: PeriodoTareo = 'semanal'): Promise<void> {
 	const { error } = await client.rpc('fn_tareo_guardar_trabajador', {
 		p_id_centro_costo: idCentroCosto,
 		p_semana_inicio: lunes,
 		p_id_personal: idPersonal,
 		p_bonos: bonos,
-		p_fecha_cxp: fechaCxp
+		p_fecha_cxp: fechaCxp,
+		p_periodo: periodo
 	});
 	if (error) throw error;
+}
+
+/** Tickets #118/#119: el jefe inmediato (o un administrador) aprueba el total de esos trabajadores. */
+export async function aprobarTareo(client: SupabaseClient, idCentroCosto: number, inicio: string, filas: { fila: FilaTareo; total: number }[], periodo: PeriodoTareo = 'semanal'): Promise<number> {
+	const items = filas.map(({ fila, total }) => ({
+		id_personal: fila.personal.id_personal,
+		nombre: nombreCompleto(fila.personal),
+		minutos: fila.minutos,
+		tarifa_hora: Math.round(fila.tarifaHora * 10_000) / 10_000,
+		total: r2(total)
+	}));
+	const { data, error } = await client.rpc('fn_tareo_aprobar', { p_id_centro_costo: idCentroCosto, p_inicio: inicio, p_items: items, p_periodo: periodo });
+	if (error) throw error;
+	return Number(data ?? 0);
+}
+
+/** Ticket #118 (Proyección): fondo separado de la obra en la semana (null = sin dato). */
+export async function guardarFondo(client: SupabaseClient, idCentroCosto: number, lunes: string, monto: number | null): Promise<void> {
+	const { error } = await client.rpc('fn_tareo_fondo', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_monto: monto });
+	if (error) throw error;
+}
+
+/** Ticket #118 (Proyección): reserva el monto proyectado de esos trabajadores para la fecha (monto 0 = quitar). */
+export async function reservarTareo(client: SupabaseClient, idCentroCosto: number, lunes: string, items: { idPersonal: number; monto: number }[], fecha: string, usuario: string | null): Promise<number> {
+	const { data, error } = await client.rpc('fn_tareo_reservar', {
+		p_id_centro_costo: idCentroCosto,
+		p_semana_inicio: lunes,
+		p_items: items.map((i) => ({ id_personal: i.idPersonal, monto: r2(i.monto) })),
+		p_fecha: fecha,
+		p_usuario: usuario
+	});
+	if (error) throw error;
+	return Number(data ?? 0);
 }
 
 export interface EnvioTareo {
@@ -530,14 +720,14 @@ export interface EnvioTareo {
 }
 
 /** Ticket #133: libera lo enviado cuyo pago se eliminó de CxP (obra y semana), para poder reenviarlo. Devuelve el monto. */
-export async function liberarEnviosSinPago(client: SupabaseClient, idCentroCosto: number, lunes: string): Promise<number> {
-	const { data, error } = await client.rpc('fn_tareo_liberar_envios_sin_pago', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes });
+export async function liberarEnviosSinPago(client: SupabaseClient, idCentroCosto: number, lunes: string, periodo: PeriodoTareo = 'semanal'): Promise<number> {
+	const { data, error } = await client.rpc('fn_tareo_liberar_envios_sin_pago', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_periodo: periodo });
 	if (error) throw error;
 	return Number(data ?? 0);
 }
 
-/** Envía a Cuentas por Pagar (una cuota por trabajador en la planilla de la obra) y aprueba la semana. */
-export async function enviarTareo(client: SupabaseClient, idCentroCosto: number, lunes: string, envios: EnvioTareo[], usuario: string | null): Promise<number> {
+/** Envía a Cuentas por Pagar (una cuota por trabajador en la planilla de la obra). Solo lo aprobado (#118). */
+export async function enviarTareo(client: SupabaseClient, idCentroCosto: number, lunes: string, envios: EnvioTareo[], usuario: string | null, periodo: PeriodoTareo = 'semanal'): Promise<number> {
 	const items = envios.map((e) => ({
 		id_personal: e.fila.personal.id_personal,
 		minutos: e.fila.minutos,
@@ -548,7 +738,7 @@ export async function enviarTareo(client: SupabaseClient, idCentroCosto: number,
 		fecha_cxp: e.fechaCxp,
 		nombre: nombreCompleto(e.fila.personal)
 	}));
-	const { data, error } = await client.rpc('fn_tareo_enviar', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_items: items, p_usuario: usuario });
+	const { data, error } = await client.rpc('fn_tareo_enviar', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_items: items, p_usuario: usuario, p_periodo: periodo });
 	if (error) throw error;
 	return (data as { enviados?: number } | null)?.enviados ?? 0;
 }
@@ -557,6 +747,152 @@ export async function enviarTareo(client: SupabaseClient, idCentroCosto: number,
 export async function proyectarPlanillas(client: SupabaseClient): Promise<void> {
 	const { error } = await client.rpc('fn_planilla_proyectar_todo');
 	if (error && error.code !== 'PGRST202' && error.code !== '42883') console.warn('No se pudo proyectar la planilla:', error.message);
+}
+
+// ─────────────────────────── Consultoría (ticket #118) ───────────────────────────
+
+export type GrupoConsultoria = 'quincenal' | 'mensual';
+
+const finDeMes = (f: string) => sumarDias(`${sumarDias(`${f.slice(0, 7)}-28`, 4).slice(0, 7)}-01`, -1);
+
+/** Periodo de pago que contiene `fecha`: quincena (1–15 / 16–fin de mes) o mes completo. */
+export function periodoConsultoria(grupo: GrupoConsultoria, fecha: string): { inicio: string; fin: string } {
+	const ym = fecha.slice(0, 7);
+	if (grupo === 'mensual') return { inicio: `${ym}-01`, fin: finDeMes(fecha) };
+	return Number(fecha.slice(8)) <= 15 ? { inicio: `${ym}-01`, fin: `${ym}-15` } : { inicio: `${ym}-16`, fin: finDeMes(fecha) };
+}
+
+const diasEntre = (desde: string, hasta: string) => Math.round((Date.parse(`${hasta}T12:00:00Z`) - Date.parse(`${desde}T12:00:00Z`)) / 86_400_000) + 1;
+
+export interface FilaConsultoria {
+	/** Días del periodo (calcularFila); subtotal = base + ajuste y total = subtotal + bonos (ver calcularFilaConsultoria). */
+	fila: FilaTareo;
+	idCentroCosto: number | null;
+	centro: string;
+	/** 15 (quincena) o 30 (mes): divisor del S/ por día. */
+	diasBase: number;
+	diasReconocidos: number;
+	/** Monto del periodo según Personal. */
+	base: number;
+	/** (días reconocidos − días base) × S/ por día: negativo si faltó. */
+	ajuste: number;
+}
+
+/** Cuánto se descuenta de un día (0, ½ o 1): faltas sin marcas en su horario fijo (salvo trabajo remoto, que no marca),
+ * días editados con menos de una jornada, medio día y días fuera de su contrato. Los días por venir no descuentan. */
+export function descuentoDia(d: DiaTareo, horario: Horario | null, remoto: boolean): number {
+	if (d.estado === 'fuera_contrato') return 1;
+	if (d.estado === 'por_venir') return 0;
+	const laborable = !!d.asistencia?.programado || ((!horario || esLibre(horario)) && d.dia < 7);
+	if (d.ajuste) return d.ajuste.estado === 'falta' || d.ajuste.estado === 'sin_trabajo' || laborable ? 1 - d.fraccion : 0;
+	if (d.estado === 'falta') return remoto ? 0 : 1;
+	if (d.estado === 'asistio') return laborable ? 1 - d.fraccion : 0;
+	return 0;
+}
+
+/** Fila de Consultoría: sueldo del periodo ajustado por asistencia. Pura (sobre una fila ya calculada). */
+export function calcularFilaConsultoria(f: FilaTareo, grupo: GrupoConsultoria, idCentroCosto: number | null, centro: string): FilaConsultoria {
+	const diasBase = DIAS_PERIODO[grupo];
+	const base = r2(Number(f.personal.monto_pago ?? 0));
+	const remoto = f.personal.modalidad === 'remoto';
+	const descuento = f.dias.reduce((t, d) => t + descuentoDia(d, f.horario, remoto), 0);
+	const diasReconocidos = Math.max(0, Math.min(diasBase, diasBase - descuento));
+	const ajuste = r2((diasReconocidos - diasBase) * f.tarifaDia);
+	const subtotal = r2(base + ajuste);
+	const total = r2(subtotal + f.extrasMonto + f.bonos);
+	return {
+		fila: { ...f, subtotal, total, diasPagados: diasReconocidos, pendiente: r2(Math.max(total - f.enviado, 0)) },
+		idCentroCosto,
+		centro,
+		diasBase,
+		diasReconocidos,
+		base,
+		ajuste
+	};
+}
+
+function aMarcaTareo(m: any): { pin: string; marca: MarcaTareo } {
+	const lima = new Date(Date.parse(m.marcado_en) - LIMA_MS);
+	const disp = m.asistencia_dispositivo as { nombre: string | null } | { nombre: string | null }[] | null;
+	return {
+		pin: m.pin,
+		marca: {
+			fecha: lima.toISOString().slice(0, 10),
+			minuto: lima.getUTCHours() * 60 + lima.getUTCMinutes(),
+			huellero: (Array.isArray(disp) ? disp[0]?.nombre : disp?.nombre) ?? (m.id_dispositivo ? 'Huellero' : 'ERP (Mi asistencia)'),
+			modo: m.modo_verificacion ?? null,
+			manual: m.id_dispositivo == null
+		}
+	};
+}
+
+/** Tareo de Consultoría del periodo: personal que cobra por quincena o mes y cuya obra o área principal no es de obra
+ * (o lo que ya se guardó/envió en ese periodo). Sus marcas cuentan de cualquier huellero o de «Mi asistencia». */
+export async function cargarTareoConsultoria(client: SupabaseClient, grupo: GrupoConsultoria, inicio: string, hoy: string): Promise<FilaConsultoria[]> {
+	const { fin } = periodoConsultoria(grupo, inicio);
+	const nDias = diasEntre(inicio, fin);
+	const seleccion = '*, centro_costo!personal_id_centro_costo_fkey(codigo, nombre, tipo, proyecto(nombre_proyecto, tipo_venta)), horario(*, horario_dia(*))';
+	const [{ data: per, error: eP }, { data: semanas, error: eS }] = await Promise.all([
+		client.from('personal').select(seleccion).eq('periodicidad_pago', grupo).neq('estado', 'baja'),
+		client.from('tareo_semana').select(`id_centro_costo, tareo_trabajador(${CAMPOS_GUARDADO})`).eq('semana_inicio', inicio).eq('periodo', grupo)
+	]);
+	if (eP) throw eP;
+	if (eS) throw eS;
+	const guardados = new Map<string, TrabajadorGuardado>();
+	for (const s of (semanas ?? []) as any[]) for (const t of (s.tareo_trabajador ?? []) as TrabajadorGuardado[]) guardados.set(`${s.id_centro_costo}:${t.id_personal}`, t);
+	const guardadoDe = (p: any) => (p.id_centro_costo ? (guardados.get(`${p.id_centro_costo}:${p.id_personal}`) ?? null) : null);
+
+	const trabajadores = ((per ?? []) as any[]).filter(
+		(p) => !esCentroObra(p.centro_costo) && (guardadoDe(p) || (p.estado === 'activo' && (!p.fecha_ingreso || p.fecha_ingreso <= fin) && (!p.fecha_cese || p.fecha_cese >= inicio)))
+	);
+	if (!trabajadores.length) return [];
+	const ids = trabajadores.map((p) => p.id_personal as number);
+	const pins = [...new Set(trabajadores.map((p) => String(p.pin)))];
+
+	const [{ data: marcas, error: eM }, { data: ajustes, error: eA }, { data: feriados, error: eF }, extrasPeriodo] = await Promise.all([
+		client
+			.from('asistencia_marcacion')
+			.select('pin, marcado_en, evento, modo_verificacion, id_dispositivo, asistencia_dispositivo(nombre)')
+			.gte('marcado_en', `${inicio}T00:00:00-05:00`)
+			.lt('marcado_en', `${sumarDias(fin, 1)}T00:00:00-05:00`)
+			.in('pin', pins)
+			.order('marcado_en'),
+		client.from('tareo_ajuste').select('id_personal, id_centro_costo, fecha, estado, minutos_reconocidos, observacion, usuario').in('id_personal', ids).gte('fecha', inicio).lte('fecha', fin),
+		client.from('tareo_feriado').select('id_feriado, fecha, id_centro_costo, descripcion').gte('fecha', inicio).lte('fecha', fin),
+		cargarExtras(client, ids, inicio, fin)
+	]);
+	if (eM) throw eM;
+	if (eA) throw eA;
+	if (eF) throw eF;
+
+	const marcasPorPin = new Map<string, MarcaTareo[]>();
+	for (const m of marcas ?? []) {
+		if (m.evento != null && m.evento >= EVENTO_RECHAZO) continue;
+		const { pin, marca } = aMarcaTareo(m);
+		marcasPorPin.set(pin, [...(marcasPorPin.get(pin) ?? []), marca]);
+	}
+
+	return trabajadores
+		.map((p) => {
+			const h = p.horario ? ({ ...p.horario, horario_dia: [...(p.horario.horario_dia ?? [])].sort((a: any, b: any) => a.dia - b.dia) } as Horario) : null;
+			const idCentro = (p.id_centro_costo as number | null) ?? null;
+			const fila = calcularFila(
+				p as Personal,
+				h,
+				marcasPorPin.get(p.pin) ?? [],
+				((ajustes ?? []) as any[]).filter((a) => a.id_centro_costo === idCentro) as AjusteTareo[],
+				((feriados ?? []) as FeriadoTareo[]).filter((f) => f.id_centro_costo == null || f.id_centro_costo === idCentro),
+				guardadoDe(p),
+				inicio,
+				hoy,
+				true,
+				nDias,
+				extrasPeriodo.filter((x) => x.id_centro_costo === idCentro)
+			);
+			const centro = p.centro_costo ? (nombreCentro(p.centro_costo)?.nombre ?? p.centro_costo.nombre ?? '') : '';
+			return calcularFilaConsultoria(fila, grupo, idCentro, centro);
+		})
+		.sort((a, b) => nombreCompleto(a.fila.personal).localeCompare(nombreCompleto(b.fila.personal), 'es'));
 }
 
 // ─────────────────────────── Excel ───────────────────────────

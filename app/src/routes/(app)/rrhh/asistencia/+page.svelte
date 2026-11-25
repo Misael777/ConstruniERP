@@ -3,7 +3,8 @@
 	 * Asistencia por trabajador: eliges trabajador y periodo y se ve el día a día (entrada, salida, horas,
 	 * tardanza, horas extra, faltas) contra su horario, con los totales del periodo. El periodo por defecto
 	 * sigue su periodicidad de pago. Se abre también desde Personal (?p=id_personal).
-	 * Pestaña "Tareo semanal por obra" (?tab=tareo): ver TareoSemanal.svelte.
+	 * Pestaña "Tareo" (?tab=tareo): Obra (TareoSemanal.svelte, semanal, vistas Real y Proyección) y Consultoría
+	 * (TareoConsultoria.svelte, quincenal o mensual). Tickets #118/#119.
 	 * Pestaña "Configuración" (?tab=config&p=id): horario, métodos de registro, huelleros y consentimiento del
 	 * trabajador (ConfiguracionAsistencia.svelte; antes estaba en la ficha de Personal).
 	 */
@@ -17,6 +18,7 @@
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import TareoSemanal from '$lib/modules/asistencia/components/TareoSemanal.svelte';
+	import TareoConsultoria from '$lib/modules/asistencia/components/TareoConsultoria.svelte';
 	import ConfiguracionAsistencia from '$lib/modules/asistencia/components/ConfiguracionAsistencia.svelte';
 	import { getPersonal, nombreCompleto, hoyLima, type Personal } from '$lib/modules/personal/services/personal.service';
 	import { DIAS_SEMANA, esLibre, hhmm, resumenHorario, type Horario } from '$lib/modules/personal/services/horarios.service';
@@ -42,6 +44,15 @@
 		const q = new URLSearchParams(page.url.searchParams);
 		if (t !== 'trabajador') q.set('tab', t);
 		else q.delete('tab');
+		goto(`?${q.toString()}`, { replaceState: true, keepFocus: true, noScroll: true });
+	}
+	// Ticket #118: el tareo tiene dos pestañas, Obra (semanal) y Consultoría (quincena o mes).
+	let tareoTipo = $state<'obra' | 'consultoria'>(page.url.searchParams.get('tareo') === 'consultoria' ? 'consultoria' : 'obra');
+	function elegirTareoTipo(t: 'obra' | 'consultoria') {
+		tareoTipo = t;
+		const q = new URLSearchParams(page.url.searchParams);
+		if (t === 'consultoria') q.set('tareo', t);
+		else q.delete('tareo');
 		goto(`?${q.toString()}`, { replaceState: true, keepFocus: true, noScroll: true });
 	}
 	let personal = $state<Personal[]>([]);
@@ -254,7 +265,7 @@
 		<span class="font-bold text-slate-800 text-2xl">Asistencia</span>
 		<p class="text-sm text-slate-500 mt-1">
 			{tab === 'tareo'
-				? 'Tareo de la semana por obra: revisa y corrige las horas de cada trabajador, agrega bonos y envíalo a Cuentas por Pagar.'
+				? 'Tareo: revisa la asistencia de cada trabajador; su jefe inmediato lo aprueba y lo aprobado se envía a Cuentas por Pagar.'
 				: tab === 'config'
 					? 'Elige un trabajador para configurar su horario, cómo registra su asistencia y en qué huelleros marca.'
 					: 'Elige un trabajador y el periodo: verás cada día con su entrada, salida, horas, tardanzas y horas extra según su horario.'}
@@ -262,13 +273,19 @@
 		<div class="mt-3 -mb-5 flex gap-1" role="tablist">
 			<button role="tab" aria-selected={tab === 'trabajador'} onclick={() => elegirTab('trabajador')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'trabajador' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-user-clock mr-1"></i> Por trabajador</button>
 			<button role="tab" aria-selected={tab === 'config'} onclick={() => elegirTab('config')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'config' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-sliders mr-1"></i> Configuración</button>
-			<button role="tab" aria-selected={tab === 'tareo'} onclick={() => elegirTab('tareo')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'tareo' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-helmet-safety mr-1"></i> Tareo semanal por obra</button>
+			<button role="tab" aria-selected={tab === 'tareo'} onclick={() => elegirTab('tareo')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'tareo' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-helmet-safety mr-1"></i> Tareo</button>
 		</div>
 	</div>
 
 	<div class="flex-1 overflow-y-auto p-4 sm:p-6">
 		{#if tab === 'tareo'}
-		<div class="max-w-[1400px] mx-auto"><TareoSemanal /></div>
+		<div class="max-w-[1400px] mx-auto flex flex-col gap-4">
+			<div class="flex gap-6 border-b border-slate-200" role="tablist" aria-label="Tipo de tareo">
+				<button role="tab" aria-selected={tareoTipo === 'obra'} onclick={() => elegirTareoTipo('obra')} class={`px-2 pb-2 text-lg font-bold border-b-[3px] -mb-px ${tareoTipo === 'obra' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Obra</button>
+				<button role="tab" aria-selected={tareoTipo === 'consultoria'} onclick={() => elegirTareoTipo('consultoria')} class={`px-2 pb-2 text-lg font-bold border-b-[3px] -mb-px ${tareoTipo === 'consultoria' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Consultoría</button>
+			</div>
+			{#if tareoTipo === 'obra'}<TareoSemanal />{:else}<TareoConsultoria />{/if}
+		</div>
 		{:else if tab === 'config'}
 		<div class="max-w-[1000px] mx-auto flex flex-col gap-4">
 			<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 flex flex-col gap-1.5">

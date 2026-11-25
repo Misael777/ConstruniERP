@@ -29,6 +29,8 @@
 		getPrestamistasDeCuentasPagar,
 		esCuentaPlanilla,
 		getTrabajadoresDeCuotasPlanilla,
+		getDetalleProyeccionPlanilla,
+		type DetalleProyeccion,
 		confirmarPagosGlobal,
 		transaccionSugeridaPagoGlobal
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
@@ -734,6 +736,20 @@
 	// Tickets #134/#122: en una CxP de planilla (tareo) cada cuota muestra su trabajador y cargo, y se pueden
 	// seleccionar varias para pagarlas juntas con una sola transacción (pago global).
 	let planillaResumen = $state<Map<number, { trabajador: string; cargo: string | null }> | null>(null);
+	// Tickets #133/#134: desglose de la "Proyección de planilla" por trabajador, para que el total cuadre.
+	let detalleProyeccion = $state<DetalleProyeccion[]>([]);
+	const cuadrePlanilla = $derived.by(() => {
+		if (!planillaResumen) return null;
+		const vivas = cuotasAMostrar.filter((q) => q.estado_pago !== 'cancelado' && q.id_pago !== -1);
+		const proy = vivas.filter((q) => q.referencia === 'Proyección de planilla');
+		const tareo = vivas.filter((q) => q.referencia !== 'Proyección de planilla');
+		return {
+			enviado: tareo.reduce((t, q) => t + Number(q.monto), 0),
+			nEnviado: tareo.length,
+			proyeccion: proy.reduce((t, q) => t + Number(q.monto), 0),
+			detalle: detalleProyeccion
+		};
+	});
 
 	async function openResumen(item: CuentaPagar) {
 		selectedId = item.id_cuenta_pagar;
@@ -743,7 +759,12 @@
 			esCuentaPlanilla(supabase, item.id_cuenta_pagar).catch(() => false)
 		]);
 		prestamistaResumen = prestamista;
-		planillaResumen = esPlanilla ? await getTrabajadoresDeCuotasPlanilla(supabase, item.id_cuenta_pagar).catch(() => new Map()) : null;
+		[planillaResumen, detalleProyeccion] = esPlanilla
+			? await Promise.all([
+					getTrabajadoresDeCuotasPlanilla(supabase, item.id_cuenta_pagar).catch(() => new Map()),
+					getDetalleProyeccionPlanilla(supabase, item.id_cuenta_pagar).catch(() => [])
+				])
+			: [null, []];
 		resumenOpen = true;
 	}
 
@@ -1329,6 +1350,7 @@
 	onEditarCuota={editarCuotaDesdeResumen}
 	pagoGlobal={!!planillaResumen}
 	onPagarSeleccionados={pagarSeleccionados}
+	cuadrePlanilla={cuadrePlanilla}
 />
 <PagoModal
 	open={pagoModalOpen}
