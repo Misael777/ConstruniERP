@@ -7,11 +7,15 @@
 	 *  - Luego (o directo en horario mixto): "¿Estás comenzando tu jornada a las HH:MM?". "Sí" registra el ingreso
 	 *    (la hora la pone el servidor); "Todavía no" vuelve a preguntar en 15 minutos.
 	 * La decisión del día se guarda en este equipo (localStorage); si no se puede guardar, solo vuelve a preguntar.
+	 *
+	 * Cambio pedido por la clienta (25/11/2026): con HORARIO LIBRE solo se pregunta "¿Vas a laborar hoy?" — "Sí" registra
+	 * el día como jornada completa y "No", como no laborado (fn_mi_asistencia_declarar, se guarda en la base; no se pide
+	 * hora de ingreso). Ya no aparece "¿Estás comenzando tu jornada?" para horario libre; sí para los demás.
 	 */
 	import { onMount, onDestroy } from 'svelte';
 	import { Clock, Play, Loader2 } from '@lucide/svelte';
 	import { hoyLima } from '$lib/modules/personal/services/personal.service';
-	import { miJornada, cargarMiJornada, marcarMiJornada, jornadaHoy, minutoLima } from '$lib/stores/miAsistencia.svelte';
+	import { miJornada, cargarMiJornada, marcarMiJornada, declararHoy, jornadaHoy, minutoLima } from '$lib/stores/miAsistencia.svelte';
 	import { reloj } from '$lib/modules/asistencia/services/asistencia.service';
 
 	const REPETIR_MIN = 15;
@@ -43,6 +47,11 @@
 	function revisar() {
 		ahora = Date.now();
 		if (paso !== 'cerrado' || !miJornada.cargado || !miJornada.disponible || miJornada.marcando) return;
+		// Horario libre: una sola pregunta al día, guardada en la base.
+		if (esLibre) {
+			if (miJornada.hoyLabora === null) paso = 'laboras';
+			return;
+		}
 		// Ya registró algo hoy (ingreso o ingreso y salida): no se pregunta.
 		if (jornadaHoy().tramos.length > 0) return;
 		const d = leer();
@@ -51,13 +60,11 @@
 		paso = esLibre && !d?.laboro ? 'laboras' : 'comienzas';
 	}
 
-	function noLaboro() {
-		guardar({ noLaboro: true });
-		paso = 'cerrado';
+	async function noLaboro() {
+		if (await declararHoy(false)) paso = 'cerrado';
 	}
-	function siLaboro() {
-		guardar({ laboro: true });
-		paso = 'comienzas';
+	async function siLaboro() {
+		if (await declararHoy(true)) paso = 'cerrado';
 	}
 	function todaviaNo() {
 		guardar({ posponerHasta: Date.now() + REPETIR_MIN * 60_000 });
@@ -87,10 +94,10 @@
 			<div class="p-5">
 				{#if paso === 'laboras'}
 					<h2 id="mi-asistencia-aviso-titulo" class="text-lg font-bold text-slate-800">¿Vas a laborar hoy?</h2>
-					<p class="mt-1 text-sm text-slate-500">Tu horario es libre. Si hoy trabajas, registramos tu ingreso.</p>
+					<p class="mt-1 text-sm text-slate-500">Tu horario es libre: si hoy trabajas, el día cuenta como jornada completa. No necesitas marcar hora de ingreso.</p>
 					<div class="mt-5 flex flex-col gap-2">
-						<button type="button" onclick={siLaboro} class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold">Sí, hoy laboro</button>
-						<button type="button" onclick={noLaboro} class="w-full py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50">Hoy no laboro</button>
+						<button type="button" onclick={siLaboro} disabled={miJornada.marcando} class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold disabled:opacity-60">{miJornada.marcando ? 'Registrando…' : 'Sí, hoy laboro'}</button>
+						<button type="button" onclick={noLaboro} disabled={miJornada.marcando} class="w-full py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 disabled:opacity-60">Hoy no laboro</button>
 					</div>
 				{:else}
 					<h2 id="mi-asistencia-aviso-titulo" class="text-lg font-bold text-slate-800">

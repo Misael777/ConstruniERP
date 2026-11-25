@@ -6,6 +6,7 @@
 	 * "Huelleros donde marca" no depende de la obra: al elegir obra o área se marcan solos sus huelleros (y se
 	 * desmarcan los de la anterior), pero se puede elegir cualquiera, p. ej. el de oficina.
 	 */
+	import { untrack } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
@@ -140,6 +141,14 @@
 
 	$effect(() => {
 		if (!open) return;
+		const p = personal;
+		// Ticket #121 (la foto "no aparece"): este efecto solo debe correr al abrir la ficha o cambiar de trabajador.
+		// quitarFotoNueva() lee fotoNuevaUrl, y sin untrack el efecto quedaba suscrito a ella: al elegir una foto se
+		// volvía a ejecutar, borraba la foto recién elegida y reiniciaba el formulario (sin ningún error visible).
+		untrack(() => iniciarFicha(p));
+	});
+
+	function iniciarFicha(personal: Personal | null) {
 		const base: DatosPersonal = { ...VACIO };
 		if (personal) for (const k of Object.keys(VACIO) as (keyof DatosPersonal)[]) (base as any)[k] = personal[k] ?? VACIO[k];
 		// Llegó desde el huellero (solo trae su nombre en un texto): se propone primera palabra = nombres, resto =
@@ -156,7 +165,7 @@
 		obrasElegidas = personal ? obrasDe(personal) : [];
 		cargarCargos(personal?.id_personal ?? null);
 		cargarDocumentos(personal);
-	});
+	}
 
 	// ── Ticket #110: contratos, cuentas bancarias y seguros (historiales; se guardan con la ficha) ──
 	let contratos = $state<ContratoPersonal[]>([]);

@@ -7,7 +7,7 @@ import { supabase } from '$lib/supabaseClient';
 import { toast } from '$lib/stores/toast';
 import { hoyLima } from '$lib/modules/personal/services/personal.service';
 import { reloj, type Marca } from '$lib/modules/asistencia/services/asistencia.service';
-import { getMiAsistencia, marcarMiAsistencia, jornadaDelDia } from '$lib/modules/asistencia/services/miAsistencia.service';
+import { getMiAsistencia, marcarMiAsistencia, declararMiJornada, jornadaDelDia } from '$lib/modules/asistencia/services/miAsistencia.service';
 
 const LIMA_MS = 5 * 3_600_000;
 /** Tipos de horario que marcan desde el ERP. */
@@ -23,6 +23,8 @@ export const miJornada = $state({
 	tipoHorario: '',
 	/** Marcas desde el lunes de esta semana hasta hoy. */
 	marcasSemana: [] as Marca[],
+	/** Horario libre: respuesta de hoy a "¿Vas a laborar hoy?" (null = aún no). */
+	hoyLabora: null as boolean | null,
 	marcando: false
 });
 
@@ -66,11 +68,30 @@ export async function cargarMiJornada(): Promise<void> {
 		miJornada.horario = datos?.horario?.nombre ?? '';
 		miJornada.tipoHorario = tipo;
 		miJornada.marcasSemana = datos?.marcas ?? [];
+		miJornada.hoyLabora = datos?.hoyLabora ?? null;
 	} catch (err) {
 		// Sin conexión u otro error: el botón simplemente no aparece.
 		console.warn('[MiAsistencia] No se pudo cargar la jornada:', err);
 	} finally {
 		miJornada.cargado = true;
+	}
+}
+
+/** Horario libre (#117, 25/11/2026): "Sí, hoy laboro" = jornada completa; "Hoy no laboro" = día no laborado. */
+export async function declararHoy(labora: boolean): Promise<boolean> {
+	if (miJornada.marcando) return false;
+	miJornada.marcando = true;
+	try {
+		const r = await declararMiJornada(supabase, labora);
+		miJornada.hoyLabora = r.labora;
+		if (r.respetado) toast.info('Tu jornada de hoy ya la registró tu jefe o el residente.');
+		else toast.success(labora ? 'Registrado: hoy cuenta como jornada completa.' : 'Registrado: hoy no laboras.');
+		return true;
+	} catch (err: any) {
+		toast.error(err?.message ?? 'No se pudo registrar. Revisa tu conexión e inténtalo de nuevo.');
+		return false;
+	} finally {
+		miJornada.marcando = false;
 	}
 }
 

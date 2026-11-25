@@ -23,6 +23,9 @@ export interface MiFicha {
 
 export interface MiAsistencia {
 	personal: MiFicha;
+	/** Horario libre (#117, 25/11/2026): lo que respondió hoy a "¿Vas a laborar hoy?" (o lo que puso el residente);
+	 * null = aún no responde. */
+	hoyLabora: boolean | null;
 	horario: Horario | null;
 	marcas: Marca[];
 }
@@ -36,9 +39,17 @@ export async function getMiAsistencia(client: SupabaseClient, desde: string, has
 	if (!data) return null;
 	return {
 		personal: data.personal,
+		hoyLabora: typeof data.hoy_labora === 'boolean' ? data.hoy_labora : null,
 		horario: data.horario,
 		marcas: (data.marcas ?? []).filter(marcaValida).map(aMarca)
 	};
+}
+
+/** Horario libre: declara si hoy labora (sí = jornada completa en el tareo). Devuelve lo que quedó registrado. */
+export async function declararMiJornada(client: SupabaseClient, labora: boolean): Promise<{ labora: boolean; respetado: boolean }> {
+	const { data, error } = await client.rpc('fn_mi_asistencia_declarar', { p_labora: labora });
+	if (error) throw new Error(error.message);
+	return { labora: !!data?.labora, respetado: !!data?.respetado };
 }
 
 /** Registra un ingreso o una salida (el servidor decide la hora). Devuelve la hora registrada (ISO). */
