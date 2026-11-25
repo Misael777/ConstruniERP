@@ -1423,10 +1423,9 @@
 		// esta Categoría se alcanza tanto con Origen=Corporativo como con Clase=Otro en Destino), NO se
 		// limpia — mismo criterio, poder reasignar cuál de nuestros centros financia el préstamo, o a
 		// quién se le presta, sin perder la Categoría ya elegida.
-		const mantenerPrestamoOtorgado =
-			(key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') &&
-			formValues.tipo === 'egreso' &&
-			((claseEsOtroPrestamoOTributo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado');
+		// Clasificación 24/11/2026: en Egreso la Categoría depende solo de la Clase, así que cambiar Origen o Destino ya
+		// no la invalida.
+		const mantenerPrestamoOtorgado = (key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && formValues.tipo === 'egreso';
 		if ((key === 'tipo' || key === 'id_centro_costo_origen' || key === 'id_centro_costo_destino') && !mantenerPrestamo && !mantenerPrestamoOtorgado) {
 			formValues.categoria = '';
 			categoriaObraGrupo = '';
@@ -1571,8 +1570,25 @@
 	// categoriaEsPrestamoOtorgado, justo abajo, ya necesita leerlo — TypeScript exige que un `let`
 	// exista antes de su primera referencia en el archivo, aunque sea dentro de un $derived que recién
 	// se evalúa después.
-	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo' | 'tributo';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo' | 'tributo' | 'donacion' | 'diezmo';
 	let claseDestino = $state<ClaseDestino>('');
+	// Clasificación de transacciones (Excel de la clienta, 24/11/2026): en un EGRESO la Categoría depende SOLO de la
+	// Clase ("no habrá más categorías para esta clase") — ya no del tipo de proyecto del Centro de Costo Origen
+	// (Obra/Consultoría/Corporativo). Las transacciones antiguas conservan su categoría (se sigue mostrando al editar).
+	const OTROS_EGRESO = ['Honorarios', 'Alquileres', 'Servicios', 'Subcontrata', 'Compras', 'Movilidad', 'Préstamo', 'Otros'];
+	const CATEGORIAS_POR_CLASE: Record<Exclude<ClaseDestino, ''>, string[]> = {
+		cliente: ['Devolución'],
+		empleados: ['Honorarios', 'Préstamos otorgado'],
+		prestamo: ['Reembolso'],
+		proveedores: ['Alquileres', 'Servicios', 'Subcontrata', 'Compras', 'Movilidad'],
+		subcontratista: ['Planilla', 'Reembolso - Compra de materiales', 'Máquinas y herramientas', 'Otros'],
+		tributo: ['IGV', 'Renta', 'Multa', 'Fraccionamiento', 'Otros'],
+		otro: OTROS_EGRESO,
+		donacion: OTROS_EGRESO,
+		diezmo: OTROS_EGRESO
+	};
+	/** Clases cuyo Centro de Costo Destino es el mismo que "Otro" (Obra, Consultoría, Corporativo, tipo Otro). */
+	const claseComoOtro = (c: string) => c === 'otro' || c === 'tributo' || c === 'donacion' || c === 'diezmo';
 	// "Otro", "Préstamo" y "Tributo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
 	// optionsFor/catalogoDetalleActual más abajo): Categoría vuelve a ser un selector PLANO (sin la
 	// cascada Grupo→Subcategoría de Obra/Consultoría/Corporativo) — la diferencia entre las tres está en
@@ -1581,7 +1597,7 @@
 	// de Costo Destino" (ver optionsFor: "Otro"/"Tributo" muestran Obra/Consultoría/Corporativo/Otro,
 	// "Préstamo" muestra específicamente los de tipo 'prestamo', ej. "Persona Externa"). Se agrupan acá
 	// para no repetir la triple condición en cada sitio.
-	const claseEsOtroPrestamoOTributo = $derived(claseDestino === 'otro' || claseDestino === 'prestamo' || claseDestino === 'tributo');
+	const claseEsOtroPrestamoOTributo = $derived(claseComoOtro(claseDestino) || claseDestino === 'prestamo');
 
 	// A pedido explícito del usuario: en Ingreso, apenas Categoría="Préstamo" (en Nueva Y en Editar) —
 	// ver optionsFor, que deja de acotar "Proyecto" a solo Corporativo y muestra TODOS los centros de
@@ -1620,9 +1636,13 @@
 	// A pedido explícito del usuario, al CREAR (no al editar) una transacción Egreso con cualquiera de
 	// las dos, tampoco se crea la transacción acá: se registra como Cuenta por Cobrar (ver handleSubmit
 	// y el botón "Cuentas por Cobrar" más abajo en el template).
+	// Clasificación 24/11/2026 (decisión del usuario): "Préstamos otorgado" (Clase Empleados) y "Préstamo" (Clase Otro,
+	// Donación o Diezmo) abren el flujo de préstamo otorgado; Clase Préstamo + "Reembolso" es un egreso normal.
 	const categoriaEsPrestamoOtorgado = $derived(
 		formValues.tipo === 'egreso' &&
-			((claseEsOtroPrestamoOTributo && formValues.categoria === 'Préstamo') || formValues.categoria === 'Préstamo Otorgado')
+			(((claseDestino === 'otro' || claseDestino === 'donacion' || claseDestino === 'diezmo') && formValues.categoria === 'Préstamo') ||
+				(claseDestino === 'empleados' && formValues.categoria === 'Préstamos otorgado') ||
+				formValues.categoria === 'Préstamo Otorgado')
 	);
 	// Confirmar el pago de una cuota (onConfirm) con Categoría "Préstamo" es devolver un préstamo RECIBIDO,
 	// no otorgar uno: no se desvía a Cuentas por Cobrar.
@@ -2065,20 +2085,10 @@
 		// limpia, igual que el resto de campos que dependen de Destino en handleInput, para no dejar
 		// guardado un valor que ya no aparece en la lista de opciones. Si esCorporativo sigue siendo true
 		// (Origen=Corporativo), esa lista sigue aplicando igual, no se limpia.
-		const clasePreviaEraPlana = clasePrevia === 'otro' || clasePrevia === 'prestamo' || clasePrevia === 'tributo';
-		const claseNuevaEsPlana = value === 'otro' || value === 'prestamo' || value === 'tributo';
-		if (clasePreviaEraPlana && !claseNuevaEsPlana && !esCorporativo) {
-			formValues.categoria = '';
-		}
-		// Espejo, al ENTRAR a "Otro"/"Préstamo"/"Tributo": si la Categoría ya elegida no es una de las del
-		// catálogo reducido que corresponde (Inyecciones/Préstamo para Otro/Préstamo, ver
-		// CATEGORIA_OTRO_EGRESO; IGV/Renta/Multa para Tributo, ver CATEGORIA_TRIBUTO_EGRESO) — ej. venía
-		// de las 8 de Corporativo — se limpia, para no dejar seleccionado un valor que ya no aparece en la
-		// lista que se va a mostrar.
-		const categoriasValidas = value === 'tributo' ? ['IGV', 'Renta', 'Multa'] : ['Inyecciones', 'Préstamo'];
-		if (claseNuevaEsPlana && !categoriasValidas.includes(formValues.categoria)) {
-			formValues.categoria = '';
-		}
+		void clasePrevia;
+		// Clasificación 24/11/2026: la Categoría sale de la Clase; si la elegida no está en la lista de la nueva, se limpia.
+		const validas = value ? (CATEGORIAS_POR_CLASE[value as Exclude<ClaseDestino, ''>] ?? []) : [];
+		if (formValues.categoria && !validas.includes(formValues.categoria)) formValues.categoria = '';
 	}
 	// "Subcontratista" filtra los centros de costo de proveedores cuyo "Producto y Servicio" es
 	// 'SUBCONTRATISTA - OBRA' (centro_costo.tipo='subcontratista', ver sincronizarTipoCentroCostoProveedor
@@ -2096,6 +2106,8 @@
 	// el orden era arbitrario (proveedores, subcontratista, empleados, cliente, otro, prestamo, tributo).
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
 		{ value: 'cliente', label: 'Cliente' },
+		{ value: 'diezmo', label: 'Diezmo' },
+		{ value: 'donacion', label: 'Donación' },
 		{ value: 'empleados', label: 'Empleados' },
 		{ value: 'prestamo', label: 'Préstamo' },
 		{ value: 'proveedores', label: 'Proveedores' },
@@ -2132,7 +2144,7 @@
 			else if (centroCostoTipoMap[destinoId] === 'prestamo') claseDestino = 'prestamo';
 			// "Tributo" no tiene un tipo de Centro de Costo dedicado (mismo Destino que "Otro", ver
 			// optionsFor) — se distingue por la Categoría ya guardada, único indicio disponible al editar.
-			else if (['IGV', 'Renta', 'Multa'].includes((transaccion as any)?.categoria ?? formValues.categoria ?? '')) claseDestino = 'tributo';
+			else if (['IGV', 'Renta', 'Multa', 'Fraccionamiento'].includes((transaccion as any)?.categoria ?? formValues.categoria ?? '')) claseDestino = 'tributo';
 			else claseDestino = 'otro';
 		}
 	});
@@ -2410,8 +2422,10 @@
 	// "Préstamo" elegido ahí terminaba siendo solo el GRUPO — la Categoría real quedaba en la
 	// Subcategoría elegida (ej. "Tarjeta de Crédito Pierina"), nunca el literal "Préstamo" que
 	// categoriaEsPrestamoOtorgado espera.
+	// Clasificación 24/11/2026: en Egreso la Categoría sale de la Clase — ya no hay cascada por tipo de proyecto
+	// (el Detalle se llena a mano). Se conserva el código de los catálogos por si se vuelve a pedir.
 	const catalogoDetalleActual = $derived(
-		formValues.tipo !== 'egreso' || claseEsOtroPrestamoOTributo
+		formValues.tipo !== 'egreso' || claseEsOtroPrestamoOTributo || true
 			? []
 			: esProyectoDeObra
 				? TIPOS_GASTO_OBRA
@@ -2658,7 +2672,7 @@
 				// que se le da a una persona sin vínculo formal en el sistema, o el pago de un tributo —
 				// ver categoria más abajo, esCorporativo). "Tributo" no tiene un tipo de Centro de Costo
 				// propio, reusa esta misma lista sin restringir más.
-				if (claseDestino === 'otro' || claseDestino === 'tributo') {
+				if (claseComoOtro(claseDestino)) {
 					const TIPOS_CLASE_OTRO = new Set(['otro', 'consultoria', 'obra', 'bolsa general']);
 					const opcionesOtro = centroCostoOptionsTodos.filter((o) => TIPOS_CLASE_OTRO.has(centroCostoTipoMap[o.value]));
 					// Si el Destino ya guardado (ver el fallback a 'otro' en el $effect de arriba, al editar)
@@ -2728,8 +2742,13 @@
 		// o Corporativo, con Clase="Otro"/"Préstamo"/"Tributo" igual se muestra la lista reducida, no
 		// CATEGORIA_OBRA_EGRESO/CATEGORIA_CORPORATIVO_EGRESO. Tributo reemplaza a la categoría genérica
 		// "Impuestos" (ya quitada de esos catálogos) para TODOS los tipos de Centro de Costo.
-		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseDestino === 'tributo') return CATEGORIA_TRIBUTO_EGRESO;
-		if (field.key === 'categoria' && formValues.tipo === 'egreso' && claseEsOtroPrestamoOTributo) return CATEGORIA_OTRO_EGRESO;
+		// Clasificación 24/11/2026: en Egreso la lista sale SOLO de la Clase (sin Clase todavía, vacía). Si la transacción
+		// ya tenía otra categoría (versiones anteriores o la que trae una cuota de CxP), se agrega para no perderla.
+		if (field.key === 'categoria' && formValues.tipo === 'egreso') {
+			const lista = (claseDestino ? (CATEGORIAS_POR_CLASE[claseDestino] ?? []) : []).map((v) => ({ value: v, label: v }));
+			if (formValues.categoria && !lista.some((o) => o.value === formValues.categoria)) lista.push({ value: formValues.categoria, label: formValues.categoria });
+			return lista;
+		}
 		// A pedido del usuario: Ingreso con Persona/Empresa de tipo Préstamo usa las categorías de
 		// Corporativo (Inyecciones/Préstamo), sin importar a qué Proyecto vaya el ingreso.
 		if (field.key === 'categoria' && origenEsTipoPrestamo) return CATEGORIA_CORPORATIVO_INGRESO;
@@ -3580,11 +3599,9 @@
 						     Categoría | Clase, Ver comprobante | Adjuntar nuevo comprobante — y debajo los centros
 						     de costo. En celular todo baja a una columna (los dos botones siguen lado a lado). -->
 						<div class="flex flex-col gap-3 sm:gap-4">
+							<!-- Clasificación 24/11/2026 (Excel de la clienta): Tipo | Categoría, y debajo Clase | Vincular con cuenta por pagar. -->
 							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
 								{@render fieldBlock(tipoField)}
-								{#if muestraVinculo}{@render vinculoBlock()}{/if}
-							</div>
-							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
 								{#if catalogoDetalleActual.length > 0}
 									<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
 									     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
@@ -3613,6 +3630,8 @@
 								{:else}
 									{@render fieldBlock(categoriaField)}
 								{/if}
+							</div>
+							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
 									{#if formValues.tipo === 'egreso'}
 										<div>
 											<label for="tr-clase-destino" class="text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1 block">Clase</label>
@@ -3629,6 +3648,7 @@
 											<p class="hidden sm:block mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
 										</div>
 									{/if}
+								{#if muestraVinculo}{@render vinculoBlock()}{/if}
 							</div>
 								{#if esDetraccion}
 									<div>

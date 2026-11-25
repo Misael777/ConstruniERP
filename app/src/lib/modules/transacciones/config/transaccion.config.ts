@@ -217,6 +217,16 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			// validatePayload/construirInsertDataTransaccion — sin esta entrada, ese guardado fallaba con
 			// "Categoría tiene un valor no permitido" (ver fieldConfig.ts), un bug real ya corregido acá.
 			{ value: 'Préstamo Otorgado', label: 'Préstamo Otorgado' },
+			// Clasificación de transacciones por Clase (Excel de la clienta, 24/11/2026; ver CATEGORIAS_POR_CLASE en
+			// TransaccionModal.svelte). Las que ya existían en este catálogo no se repiten.
+			{ value: 'Devolución', label: 'Devolución' },
+			{ value: 'Préstamos otorgado', label: 'Préstamos otorgado' },
+			{ value: 'Reembolso', label: 'Reembolso' },
+			{ value: 'Planilla', label: 'Planilla' },
+			{ value: 'Reembolso - Compra de materiales', label: 'Reembolso - Compra de materiales' },
+			{ value: 'Máquinas y herramientas', label: 'Máquinas y herramientas' },
+			{ value: 'Fraccionamiento', label: 'Fraccionamiento' },
+			{ value: 'Otros', label: 'Otros' },
 			// Subcategorías del dropdown en cascada de Obra + Egreso y Corporativo + Egreso (ver
 			// TIPOS_GASTO_OBRA/TIPOS_GASTO_CORPORATIVO en TransaccionModal.svelte) — el valor final que se
 			// guarda en `categoria` es la subcategoría elegida (ej. "Acero 6mm"), no la categoría
