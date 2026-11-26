@@ -12,6 +12,10 @@
 	 *   enviado quedan ocultos tras el ojo.
 	 * - Vista PROYECCIÓN: días registrados hasta hoy + días previstos según el horario, total proyectado, fondo separado
 	 *   y reserva de pago (cuota "Proyección de planilla" en CxP con la fecha elegida).
+	 * - #118 rechazado (26/11/2026, maqueta de la clienta): la Proyección también proyecta al PERSONAL. Requerimientos de
+	 *   personal por cargo (requeridos, asignados, faltantes, costo estimado y aptitudes requeridas), por obra o por semana
+	 *   según elija cada obra; los trabajadores se agrupan por cargo y muestran si cumplen las aptitudes (ficha de
+	 *   Personal). Presupuesto disponible escrito a mano, junto al saldo real de la obra, y Saldo disponible.
 	 */
 	import { onMount } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
@@ -25,6 +29,8 @@
 	import { sumarDias, duracion } from '../services/asistencia.service';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import EditarDiaTareo from './EditarDiaTareo.svelte';
+	import RequerimientoModal from './RequerimientoModal.svelte';
+	import { getSaldosVigentesCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import {
 		ESTADOS_CELDA,
 		ORIGENES,
@@ -44,6 +50,18 @@
 		liberarEnviosSinPago,
 		proyectarPlanillas,
 		exportarTareoXLSX,
+		cargarPlanTareo,
+		guardarModoRequerimiento,
+		guardarRequerimiento,
+		eliminarRequerimiento,
+		copiarRequerimientosSemanaAnterior,
+		guardarPresupuesto,
+		catalogoAptitudes,
+		cumpleAptitudes,
+		mismoTexto,
+		type PlanTareo,
+		type RequerimientoTareo,
+		type ModoRequerimiento,
 		type ObraTareo,
 		type FilaTareo,
 		type DiaTareo,
@@ -164,6 +182,7 @@
 			iniciarFormulario(datos.filas);
 			fondoTexto = datos.semana?.fondo_separado != null ? datos.semana.fondo_separado.toFixed(2) : '';
 			fechaReserva = sumarDias(lunes, 5);
+			void cargarPlan();
 		} catch (err) {
 			toast.error(`No se pudo cargar el tareo. ${describeError(err)}`);
 			datos = null;
@@ -358,6 +377,140 @@
 	let fechaReserva = $state('');
 	let reservando = $state(false);
 	let verReservas = $state(false);
+
+	// ── Requerimientos de personal, aptitudes y presupuesto (#118, 26/11/2026) ──
+	let plan = $state<PlanTareo | null>(null);
+	let saldoObra = $state<number | null>(null);
+	let presupuestoTexto = $state('');
+	let aptitudesSugeridas = $state<string[]>([]);
+	let reqEditando = $state<RequerimientoTareo | null>(null);
+	let guardandoReq = $state(false);
+	let gruposCerrados = $state<Record<string, boolean>>({});
+	const r2 = (n: number) => Math.round(n * 100) / 100;
+
+	async function cargarPlan() {
+		if (!obra) return;
+		const id = obra.id_centro_costo;
+		const semana = lunes;
+		const [p, saldos, apt] = await Promise.all([
+			cargarPlanTareo(supabase, id, semana),
+			getSaldosVigentesCentroCosto(supabase, [id]),
+			catalogoAptitudes(supabase).catch(() => [] as string[])
+		]);
+		if (obra?.id_centro_costo !== id || lunes !== semana) return;
+		plan = p;
+		saldoObra = saldos[id]?.saldo ?? null;
+		aptitudesSugeridas = apt;
+		presupuestoTexto = p.presupuesto != null ? p.presupuesto.toFixed(2) : '';
+	}
+
+	const cargoDe = (f: FilaTareo) => (f.personal.cargo ?? f.personal.categoria ?? '').trim();
+	type ItemProy = (typeof proy)[number];
+	interface GrupoProy {
+		clave: string;
+		req: RequerimientoTareo | null;
+		titulo: string;
+		items: ItemProy[];
+	}
+	/** Trabajadores agrupados por requerimiento (mismo cargo); el resto va en "Otros cargos". */
+	const grupos = $derived.by((): GrupoProy[] => {
+		const reqs = plan?.requerimientos ?? [];
+		const usados = new Set<number>();
+		const res: GrupoProy[] = reqs.map((r, i) => {
+			const items = proy.filter((x) => !usados.has(x.f.personal.id_personal) && mismoTexto(cargoDe(x.f), r.cargo));
+			for (const x of items) usados.add(x.f.personal.id_personal);
+			return { clave: `r${r.id_requerimiento ?? i}`, req: r, titulo: r.cargo, items };
+		});
+		const otros = proy.filter((x) => !usados.has(x.f.personal.id_personal));
+		if (otros.length || !res.length) res.push({ clave: 'otros', req: null, titulo: reqs.length ? 'Otros cargos (sin requerimiento)' : 'Personal de la obra', items: otros });
+		return res;
+	});
+	const totalGrupo = (g: GrupoProy) => r2(g.items.reduce((t, x) => t + totalProyectadoDe(x), 0));
+	/** Lo proyectado de los asignados + las vacantes × tarifa (la de referencia o el promedio) × días previstos. */
+	function costoEstimado(g: GrupoProy): number {
+		const asignado = totalGrupo(g);
+		if (!g.req) return asignado;
+		const faltan = Math.max(g.req.cantidad - g.items.length, 0);
+		if (!faltan) return asignado;
+		const tarifa = g.req.tarifa_dia ?? (g.items.length ? g.items.reduce((t, x) => t + x.f.tarifaDia, 0) / g.items.length : 0);
+		const dias = g.items.length ? g.items.reduce((t, x) => t + x.p.dias.reduce((s, d) => s + d.fraccion, 0), 0) / g.items.length : 6;
+		return r2(asignado + faltan * tarifa * dias);
+	}
+	const costoRequerimientos = $derived(grupos.filter((g) => g.req).reduce((t, g) => t + costoEstimado(g), 0));
+	const presupuesto = $derived(presupuestoTexto.trim() === '' ? null : num(presupuestoTexto));
+	const saldoDisponible = $derived.by(() => (presupuesto == null ? null : r2(presupuesto - totProy.total)));
+
+	async function guardarPresupuestoSemana() {
+		if (!obra || !puedeEnviar || !plan?.disponible) return;
+		const nuevo = presupuesto;
+		if (nuevo === plan.presupuesto) return;
+		try {
+			await guardarPresupuesto(supabase, obra.id_centro_costo, lunes, nuevo);
+			plan.presupuesto = nuevo;
+			toast.success('Presupuesto guardado.');
+		} catch (err) {
+			toast.error(`No se pudo guardar el presupuesto. ${describeError(err)}`);
+		}
+	}
+	function usarSaldoObra() {
+		if (saldoObra == null) return;
+		presupuestoTexto = Math.max(saldoObra, 0).toFixed(2);
+		void guardarPresupuestoSemana();
+	}
+
+	function nuevoRequerimiento() {
+		if (!obra || !plan) return;
+		reqEditando = { id_centro_costo: obra.id_centro_costo, semana_inicio: plan.modo === 'semana' ? lunes : null, cargo: '', cantidad: 1, aptitudes: [], tarifa_dia: null };
+	}
+	async function guardarReq(r: RequerimientoTareo) {
+		guardandoReq = true;
+		try {
+			await guardarRequerimiento(supabase, r, usuario());
+			reqEditando = null;
+			toast.success('Requerimiento guardado.');
+			await cargarPlan();
+		} catch (err) {
+			toast.error(`No se pudo guardar el requerimiento. ${describeError(err)}`);
+		} finally {
+			guardandoReq = false;
+		}
+	}
+	async function borrarReq(r: RequerimientoTareo) {
+		if (!r.id_requerimiento) return;
+		const ok = await confirmar({ title: 'Quitar requerimiento', message: `Se quitará el requerimiento de ${r.cantidad} × ${r.cargo}. Los trabajadores no cambian.`, confirmLabel: 'Quitar', danger: true });
+		if (!ok) return;
+		try {
+			await eliminarRequerimiento(supabase, r.id_requerimiento);
+			await cargarPlan();
+		} catch (err) {
+			toast.error(`No se pudo quitar. ${describeError(err)}`);
+		}
+	}
+	async function cambiarModo(m: ModoRequerimiento) {
+		if (!obra || !plan || plan.modo === m) return;
+		try {
+			await guardarModoRequerimiento(supabase, obra.id_centro_costo, m, usuario());
+			toast.success(m === 'obra' ? 'Los requerimientos de esta obra valen para todas las semanas.' : 'Los requerimientos de esta obra se registran semana por semana.');
+			await cargarPlan();
+		} catch (err) {
+			toast.error(`No se pudo cambiar. ${describeError(err)}`);
+		}
+	}
+	async function copiarAnterior() {
+		if (!obra) return;
+		try {
+			const n = await copiarRequerimientosSemanaAnterior(supabase, obra.id_centro_costo, lunes, usuario());
+			if (n) toast.success(`Se copiaron ${n} requerimiento${n === 1 ? '' : 's'} de la semana anterior.`);
+			else toast.info('La semana anterior no tiene requerimientos.');
+			await cargarPlan();
+		} catch (err) {
+			toast.error(`No se pudo copiar. ${describeError(err)}`);
+		}
+	}
+	function verPersonal(g: GrupoProy) {
+		gruposCerrados[g.clave] = false;
+		setTimeout(() => document.getElementById(`grupo-${g.clave}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+	}
 	const proy = $derived(filas.map((f) => ({ f, p: proyectarFila(f, hoy) })));
 	const totalProyectadoDe = (x: { f: FilaTareo; p: ReturnType<typeof proyectarFila> }) => Math.round((x.p.acumulado + x.p.porCompletar + x.f.extrasMonto + num(bonos[x.f.personal.id_personal])) * 100) / 100;
 	const totProy = $derived({
@@ -778,11 +931,98 @@
 </div>
 
 {#snippet vistaProyeccion()}
-	<div class="flex items-center gap-2 px-1">
+	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
 		<span class="text-lg font-bold text-slate-800">Vista:</span>
 		<span class="rounded-lg bg-orange-50 border border-orange-200 px-3 py-0.5 text-lg font-extrabold text-orange-600">PROYECCIÓN</span>
-		<span class="text-sm text-slate-500">Separar fondos antes del sábado.</span>
+		{#if plan?.disponible}
+			<span class="hidden sm:block h-6 w-px bg-slate-300"></span>
+			<label class="flex items-center gap-2 text-sm text-slate-700">
+				Presupuesto disponible
+				<span class="relative">
+					<span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">S/</span>
+					<input type="text" inputmode="decimal" bind:value={presupuestoTexto} onblur={guardarPresupuestoSemana} disabled={!puedeEnviar} placeholder="0.00" class="w-36 pl-8 pr-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-bold" aria-label="Presupuesto disponible" />
+				</span>
+			</label>
+			{#if saldoObra != null}
+				<span class="text-xs text-slate-500">Disponible en la obra: <b class={saldoObra < 0 ? 'text-rose-600' : 'text-emerald-700'}>{formatCurrency(saldoObra)}</b>
+					{#if puedeEnviar}<button type="button" onclick={usarSaldoObra} class="ml-1 text-blue-600 hover:underline">Usar este monto</button>{/if}
+				</span>
+			{/if}
+		{:else}
+			<span class="text-sm text-slate-500">Separar fondos antes del sábado.</span>
+		{/if}
 	</div>
+
+	{#if plan?.disponible}
+		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 flex flex-col gap-3">
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="text-lg font-bold text-slate-800">Requerimientos de personal</span>
+				{#if puedeEnviar}
+					<div class="flex rounded-lg border border-slate-200 p-0.5 text-xs" role="tablist" aria-label="Requerimientos por obra o por semana">
+						<button type="button" role="tab" aria-selected={plan.modo === 'obra'} onclick={() => cambiarModo('obra')} title="Los mismos requerimientos para todas las semanas" class={`px-2.5 py-1 rounded-md font-semibold ${plan.modo === 'obra' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Por obra</button>
+						<button type="button" role="tab" aria-selected={plan.modo === 'semana'} onclick={() => cambiarModo('semana')} title="Cada semana con sus propios requerimientos" class={`px-2.5 py-1 rounded-md font-semibold ${plan.modo === 'semana' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Por semana</button>
+					</div>
+					<span class="ml-auto flex flex-wrap gap-2">
+						{#if plan.modo === 'semana'}<button type="button" onclick={copiarAnterior} class="px-3 py-1.5 rounded-xl border border-slate-200 text-sm text-slate-700 hover:bg-slate-50"><i class="fas fa-copy"></i> Copiar de la semana anterior</button>{/if}
+						<button type="button" onclick={nuevoRequerimiento} class="px-3 py-1.5 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50">+ Agregar requerimiento</button>
+					</span>
+				{/if}
+			</div>
+			{#if !plan.requerimientos.length}
+				<p class="text-sm text-slate-400 italic">Sin requerimientos {plan.modo === 'semana' ? 'para esta semana' : 'para esta obra'}. Agrega el personal que se necesita (cargo, cuántos y qué aptitudes) para ver los faltantes y el costo estimado.</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead class="bg-slate-50 text-xs text-slate-600">
+							<tr>
+								<th class="px-2 py-2 text-left">Cargo requerido</th>
+								<th class="px-2 py-2 text-left">Aptitudes requeridas</th>
+								<th class="px-2 py-2 text-center">Requeridos</th>
+								<th class="px-2 py-2 text-center">Asignados</th>
+								<th class="px-2 py-2 text-center">Faltantes</th>
+								<th class="px-2 py-2 text-right">Costo estimado</th>
+								<th class="px-2 py-2 text-center">Acción</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-slate-100">
+							{#each grupos.filter((g) => g.req) as g (g.clave)}
+								{@const r = g.req!}
+								{@const faltan = r.cantidad - g.items.length}
+								<tr>
+									<td class="px-2 py-2 font-semibold text-slate-800">{r.cargo}</td>
+									<td class="px-2 py-2">
+										<div class="flex flex-wrap gap-1">
+											{#each r.aptitudes as a (a)}<span class="rounded-md bg-blue-50 border border-blue-100 px-1.5 py-0.5 text-xs text-blue-700">{a}</span>{:else}<span class="text-xs text-slate-400">—</span>{/each}
+										</div>
+									</td>
+									<td class="px-2 py-2 text-center tabular-nums">{r.cantidad}</td>
+									<td class="px-2 py-2 text-center tabular-nums">{g.items.length}</td>
+									<td class={`px-2 py-2 text-center tabular-nums font-bold ${faltan > 0 ? 'text-rose-600' : faltan < 0 ? 'text-amber-600' : 'text-emerald-600'}`} title={faltan < 0 ? `${-faltan} más de lo requerido` : ''}>{faltan > 0 ? faltan : faltan < 0 ? `+${-faltan}` : 0}</td>
+									<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(costoEstimado(g))}</td>
+									<td class="px-2 py-2">
+										<div class="flex items-center justify-center gap-1">
+											<button type="button" onclick={() => verPersonal(g)} disabled={!g.items.length} class="px-2.5 py-1 rounded-lg border border-orange-400 text-orange-600 text-xs font-bold hover:bg-orange-50 disabled:opacity-40">Ver personal</button>
+											{#if puedeEnviar}
+												<button type="button" onclick={() => (reqEditando = { ...r, aptitudes: [...r.aptitudes] })} class="w-7 h-7 rounded-full text-slate-500 hover:bg-slate-100" title="Editar" aria-label="Editar requerimiento"><i class="fas fa-pen text-xs"></i></button>
+												<button type="button" onclick={() => borrarReq(r)} class="w-7 h-7 rounded-full text-rose-500 hover:bg-rose-50" title="Quitar" aria-label="Quitar requerimiento"><i class="fas fa-trash-can text-xs"></i></button>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+						<tfoot>
+							<tr class="border-t border-slate-200 text-sm">
+								<td colspan="5" class="px-2 py-2 text-right font-semibold text-slate-600">Costo estimado de los requerimientos</td>
+								<td class="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(costoRequerimientos)}</td>
+								<td></td>
+							</tr>
+						</tfoot>
+					</table>
+				</div>
+			{/if}
+		</div>
+	{/if}
 	<div class="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
 		<table class="w-full text-sm">
 			<thead class="bg-slate-50 text-slate-600 text-xs">
@@ -790,6 +1030,7 @@
 					<th rowspan="2" class="px-2 py-2 w-8"><input type="checkbox" checked={todosProy} onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).checked; const s: Record<number, boolean> = {}; if (v) for (const x of proy) s[x.f.personal.id_personal] = true; selProy = s; }} aria-label="Seleccionar todos" /></th>
 					<th rowspan="2" class="px-2 py-2 text-left min-w-[150px]">Trabajador</th>
 					<th rowspan="2" class="px-2 py-2 text-left">Cargo</th>
+					{#if plan?.disponible}<th rowspan="2" class="px-2 py-2 text-left">Aptitudes (match)</th>{/if}
 					<th rowspan="2" class="px-2 py-2 text-left">Subcontratista</th>
 					{#if fechas.some((f) => f <= hoy)}<th colspan={fechas.filter((f) => f <= hoy).length} class="px-1 pt-2 text-center text-blue-700 bg-blue-50/60">Registrado</th>{/if}
 					{#if fechas.some((f) => f > hoy)}<th colspan={fechas.filter((f) => f > hoy).length} class="px-1 pt-2 text-center text-slate-500 bg-slate-100/60">Previsto</th>{/if}
@@ -804,8 +1045,23 @@
 				</tr>
 			</thead>
 			<tbody class="divide-y divide-slate-100">
-				{#each proy as x (x.f.personal.id_personal)}
+				{#each grupos as g (g.clave)}
+					{#if (plan?.requerimientos.length ?? 0) > 0}
+						<tr id={`grupo-${g.clave}`} class="bg-blue-50/70">
+							<td colspan={plan?.disponible ? 17 : 16} class="px-2 py-1.5">
+								<button type="button" onclick={() => (gruposCerrados[g.clave] = !gruposCerrados[g.clave])} class="flex flex-wrap items-center gap-2 text-left w-full">
+									<i class={`fas fa-chevron-${gruposCerrados[g.clave] ? 'right' : 'down'} text-xs text-slate-500`}></i>
+									<span class="font-bold text-slate-800">{g.titulo}</span>
+									<span class="text-slate-600">· {g.items.length} trabajador{g.items.length === 1 ? '' : 'es'}{g.req ? ` de ${g.req.cantidad}` : ''} · <b>{formatCurrency(totalGrupo(g))}</b></span>
+									{#each g.req?.aptitudes ?? [] as a (a)}<span class="rounded-md bg-white border border-blue-100 px-1.5 py-0.5 text-xs text-blue-700">{a}</span>{/each}
+								</button>
+							</td>
+						</tr>
+					{/if}
+					{#if !gruposCerrados[g.clave]}
+					{#each g.items as x (x.f.personal.id_personal)}
 					{@const id = x.f.personal.id_personal}
+					{@const match = g.req && g.req.aptitudes.length ? cumpleAptitudes(x.f.personal.aptitudes, g.req.aptitudes) : null}
 					<tr>
 						<td class="px-2 py-2 text-center"><input type="checkbox" bind:checked={selProy[id]} aria-label={`Seleccionar ${nombreCompleto(x.f.personal)}`} /></td>
 						<td class="px-2 py-2">
@@ -814,6 +1070,19 @@
 							{#if x.f.reservaMonto}<div class="text-[11px] text-violet-700"><i class="fas fa-calendar-check"></i> Reservado {formatCurrency(x.f.reservaMonto)}{x.f.reservaFecha ? ` · ${ddmm(x.f.reservaFecha)}` : ''}</div>{/if}
 						</td>
 						<td class="px-2 py-2 text-xs text-slate-600">{x.f.personal.cargo ?? x.f.personal.categoria ?? ''}</td>
+						{#if plan?.disponible}
+							<td class="px-2 py-2 text-xs">
+								{#if match}
+									<span class={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-semibold ${match.tiene === match.total ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`} title={match.faltan.length ? `Le falta: ${match.faltan.join(', ')}` : 'Tiene todas las aptitudes requeridas'}>
+										<i class={`fas ${match.tiene === match.total ? 'fa-check' : 'fa-triangle-exclamation'}`}></i> Cumple {match.tiene}/{match.total}
+									</span>
+								{:else if x.f.personal.aptitudes?.length}
+									<span class="text-slate-500" title={x.f.personal.aptitudes.join(', ')}>{x.f.personal.aptitudes.length} aptitud{x.f.personal.aptitudes.length === 1 ? '' : 'es'}</span>
+								{:else}
+									<span class="text-slate-300">—</span>
+								{/if}
+							</td>
+						{/if}
 						<td class="px-2 py-2 text-xs text-slate-600">{nombreRef(x.f) || '—'}</td>
 						{#each x.p.dias as d (d.fecha)}
 							<td class={`px-1 py-2 text-center tabular-nums ${d.registrado ? 'font-bold text-slate-800' : 'text-slate-400'}`}>
@@ -826,6 +1095,8 @@
 						<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(num(bonos[id]))}</td>
 						<td class="px-2 py-2 text-right tabular-nums font-extrabold text-slate-900">{formatCurrency(totalProyectadoDe(x))}</td>
 					</tr>
+					{/each}
+					{/if}
 				{/each}
 			</tbody>
 		</table>
@@ -838,10 +1109,26 @@
 		<span class="ml-auto rounded-xl bg-orange-100 px-3 py-1 text-center"><span class="block text-[11px] font-bold text-orange-700">TOTAL PROYECTADO</span><b class="text-lg text-orange-700">{formatCurrency(totProy.total)}</b></span>
 	</div>
 	<p class="px-1 text-xs italic text-slate-500">P = proyectado · Los días futuros no son asistencia registrada: se prevén según el horario de cada trabajador.</p>
-	<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+	{#if plan?.disponible}
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+			<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
+				<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(totProy.total)}</b>
+			</div>
+			<div class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
+				<span class="font-bold text-slate-800">Presupuesto disponible</span><b class="text-xl text-slate-900">{presupuesto == null ? '—' : formatCurrency(presupuesto)}</b>
+			</div>
+			<div class={`rounded-2xl border px-4 py-3 flex items-center justify-between gap-2 ${saldoDisponible != null && saldoDisponible < 0 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+				<span class={`font-bold ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>Saldo disponible</span>
+				<b class={`text-xl ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? 'Escribe el presupuesto' : formatCurrency(saldoDisponible)}</b>
+			</div>
+		</div>
+	{/if}
+	<div class={`grid grid-cols-1 ${plan?.disponible ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-3`}>
+		{#if !plan?.disponible}
 		<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
 			<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(totProy.total)}</b>
 		</div>
+		{/if}
 		<label class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
 			<span class="font-bold text-slate-800">Fondo separado</span>
 			<input type="text" inputmode="decimal" bind:value={fondoTexto} onblur={guardarFondoSemana} disabled={!puedeEnviar} placeholder="0.00" class="w-32 px-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-semibold" aria-label="Fondo separado" />
@@ -957,6 +1244,8 @@
 		</div>
 	</div>
 {/if}
+
+<RequerimientoModal open={!!reqEditando} inicial={reqEditando} sugerencias={aptitudesSugeridas} guardando={guardandoReq} onguardar={guardarReq} oncerrar={() => (reqEditando = null)} />
 
 <EditarDiaTareo
 	{edicion}

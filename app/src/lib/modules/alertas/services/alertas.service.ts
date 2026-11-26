@@ -244,3 +244,41 @@ export function etiquetaVencimiento(fecha: string, hoy = hoyLima()): { texto: st
 	const f = new Date(`${fecha}T12:00:00Z`);
 	return { texto: f.toLocaleDateString('es-PE', { day: 'numeric', month: 'short', timeZone: 'UTC' }), urgente: false };
 }
+
+// ─────────────── Ticket #112: "Tareas de hoy" — aplazar o completar una alerta (por usuario) ───────────────
+
+export interface EstadoTarea {
+	id_alerta: string;
+	estado: 'aplazada' | 'completada';
+	aplazada_hasta: string | null;
+	fecha_alerta: string | null;
+}
+
+/** Lo que el usuario hizo con sus alertas. Sin la migración 20261127150000: vacío (todas pendientes). */
+export async function getEstadosTareas(client: SupabaseClient): Promise<Map<string, EstadoTarea>> {
+	const { data, error } = await client.from('tarea_estado').select('id_alerta, estado, aplazada_hasta, fecha_alerta');
+	if (error) return new Map();
+	return new Map(((data ?? []) as EstadoTarea[]).map((e) => [e.id_alerta, e]));
+}
+
+/** Aplaza (hasta una fecha), completa o devuelve a pendiente (estado null) una alerta. */
+export async function guardarEstadoTarea(client: SupabaseClient, alerta: AlertaTarea, estado: 'aplazada' | 'completada' | null, aplazadaHasta: string | null = null): Promise<void> {
+	if (!estado) {
+		const { error } = await client.from('tarea_estado').delete().eq('id_alerta', alerta.id);
+		if (error) throw error;
+		return;
+	}
+	const { data: u } = await client.auth.getUser();
+	const { error } = await client.from('tarea_estado').upsert(
+		{ auth_user_id: u.user?.id, id_alerta: alerta.id, estado, aplazada_hasta: estado === 'aplazada' ? aplazadaHasta : null, fecha_alerta: alerta.fecha, updated_at: new Date().toISOString() },
+		{ onConflict: 'auth_user_id,id_alerta' }
+	);
+	if (error) throw error;
+}
+
+/** En qué pestaña va una alerta: completada (si no cambió de fecha), aplazada (hasta una fecha futura) o hoy. */
+export function pestanaTarea(a: AlertaTarea, e: EstadoTarea | undefined, hoy = hoyLima()): 'hoy' | 'aplazada' | 'completada' {
+	if (!e || (e.fecha_alerta && e.fecha_alerta !== a.fecha)) return 'hoy';
+	if (e.estado === 'completada') return 'completada';
+	return e.aplazada_hasta && e.aplazada_hasta > hoy ? 'aplazada' : 'hoy';
+}

@@ -9,7 +9,8 @@
 	import { supabase } from '$lib/supabaseClient';
 	import { crearDetectorDeNovedades } from '$lib/shared/sonido';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
-	import { getAlertasTareas, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
+	import { hoyLima } from '$lib/modules/personal/services/personal.service';
+	import { getAlertasTareas, getEstadosTareas, pestanaTarea, type EstadoTarea, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
 
 	let alertas = $state<AlertaTarea[]>([]);
 	let abierto = $state(false);
@@ -34,11 +35,16 @@
 
 	const yo = $derived((permisosState.userName || '').trim().toLowerCase());
 	const esMia = (a: AlertaTarea) => !!yo && (a.responsable ?? '').trim().toLowerCase() === yo;
-	const esDelegada = (a: AlertaTarea) => !!yo && !!a.responsable && !esMia(a) && (a.registradoPor ?? '').trim().toLowerCase() === yo;
+	// Ticket #128: en "Delegadas" solo las que delegué a otra persona y vencen HOY.
+	const hoy = hoyLima();
+	const esDelegada = (a: AlertaTarea) => !!yo && !!a.responsable && !esMia(a) && (a.registradoPor ?? '').trim().toLowerCase() === yo && (a.fecha ?? '').slice(0, 10) === hoy;
 
 	const visibles = $derived(pestana === 'mias' ? alertas.filter(esMia) : pestana === 'delegadas' ? alertas.filter(esDelegada) : alertas);
 	const conteo = $derived({ todas: alertas.length, mias: alertas.filter(esMia).length, delegadas: alertas.filter(esDelegada).length });
 	const mias = $derived(alertas.filter(esMia));
+	// Ticket #112: botón "Tareas de hoy" con las mías pendientes (sin las aplazadas ni completadas).
+	let estadosTareas = $state<Map<string, EstadoTarea>>(new Map());
+	const tareasHoy = $derived(mias.filter((a) => pestanaTarea(a, estadosTareas.get(a.id), hoy) === 'hoy').length);
 	const urgentes = $derived(mias.filter((a) => etiquetaVencimiento(a.fecha).urgente).length);
 
 	// Ticket #130: suena cuando aparece una alerta nueva a mi cargo (no en la primera carga).
@@ -53,15 +59,12 @@
 		cargando = true;
 		error = '';
 		try {
-			// Ticket #125: el responsable de los vencimientos (SCTR, examen médico) ve los suyos aunque su rol no tenga
-			// acceso a Personal; quien sí lo tiene ve todos.
-			const verRrhh = hasPermiso('ver_rrhh_personal');
-			const lista = await getAlertasTareas(supabase, {
-				rrhh: true,
-				proyectos: hasPermiso('ver_proyectos_gestion'),
-				finanzas: hasPermiso('ver_finanzas_cuentas_pendientes')
-			});
-			alertas = lista.filter((a) => a.modulo !== 'rrhh' || verRrhh || esMia(a));
+			// Ticket #143: cada área se asigna en Roles y Permisos → Alertas de tareas. Ticket #125: las que están a cargo de
+			// la persona (p. ej. el responsable de los vencimientos) le llegan siempre, aunque su rol no tenga el área.
+			const area = { rrhh: hasPermiso('ver_alertas_rrhh'), proyectos: hasPermiso('ver_alertas_proyectos'), finanzas: hasPermiso('ver_alertas_finanzas') };
+			const [lista, est] = await Promise.all([getAlertasTareas(supabase, { rrhh: true, proyectos: true, finanzas: true }), getEstadosTareas(supabase)]);
+			estadosTareas = est;
+			alertas = lista.filter((a) => area[a.modulo] || esMia(a));
 			cargoUnaVez = true;
 		} catch (err: any) {
 			error = err?.message ?? 'No se pudieron cargar las alertas.';
@@ -96,7 +99,13 @@
 	});
 </script>
 
-<div class="relative">
+<div class="relative flex items-center gap-3">
+	<a href="/mis-tareas" class="relative text-slate-400 hover:text-brand-orange" aria-label="Tareas de hoy" title={`Tareas de hoy · ${tareasHoy} pendiente${tareasHoy === 1 ? '' : 's'}`}>
+		<i class="fas fa-clipboard-list text-[17px]"></i>
+		{#if tareasHoy > 0}
+			<span class="absolute -top-1.5 -right-2 min-w-[14px] h-3.5 px-0.5 bg-orange-500 rounded-full border-2 border-white text-[8px] leading-none text-white font-bold flex items-center justify-center">{tareasHoy > 99 ? '99+' : tareasHoy}</span>
+		{/if}
+	</a>
 	<button
 		type="button"
 		onclick={alternar}
@@ -142,7 +151,7 @@
 				<p class="px-4 py-6 text-center text-xs text-rose-600">{error}</p>
 			{:else if !visibles.length}
 				<p class="px-4 py-8 text-center text-sm text-slate-400">
-					{cargando ? 'Cargando…' : pestana === 'todas' ? 'No hay tareas por vencer. ¡Todo al día!' : pestana === 'mias' ? 'No tienes tareas a tu cargo por vencer.' : 'No hay tareas que hayas delegado por vencer.'}
+					{cargando ? 'Cargando…' : pestana === 'todas' ? 'No hay tareas por vencer. ¡Todo al día!' : pestana === 'mias' ? 'No tienes tareas a tu cargo por vencer.' : 'No hay tareas que hayas delegado a otra persona para hoy.'}
 				</p>
 			{:else}
 				{#each GRUPOS as grupo (grupo.modulo)}
@@ -170,13 +179,14 @@
 						</ul>
 					{/if}
 				{/each}
-				{#if GRUPOS.some((g) => visibles.filter((a) => a.modulo === g.modulo).length > MAX_POR_GRUPO)}
-					<div class="p-3 flex justify-center border-t border-slate-100">
+				<div class="p-3 flex justify-center gap-2 border-t border-slate-100">
+					{#if GRUPOS.some((g) => visibles.filter((a) => a.modulo === g.modulo).length > MAX_POR_GRUPO)}
 						<button type="button" onclick={() => (verTodo = !verTodo)} class="px-4 py-1.5 rounded-lg border border-blue-200 text-xs font-semibold text-blue-700 hover:bg-blue-50">
-							{verTodo ? 'Ver menos' : 'Ver todas las tareas'}
+							{verTodo ? 'Ver menos' : 'Ver todas'}
 						</button>
-					</div>
-				{/if}
+					{/if}
+					<button type="button" onclick={() => { abierto = false; goto('/mis-tareas'); }} class="px-4 py-1.5 rounded-lg bg-orange-500 text-xs font-semibold text-white hover:bg-orange-600">Tareas de hoy</button>
+				</div>
 			{/if}
 		</div>
 	{/if}

@@ -695,9 +695,124 @@ export async function aprobarTareo(client: SupabaseClient, idCentroCosto: number
 }
 
 /** Ticket #118 (Proyección): fondo separado de la obra en la semana (null = sin dato). */
-export async function guardarFondo(client: SupabaseClient, idCentroCosto: number, lunes: string, monto: number | null): Promise<void> {
-	const { error } = await client.rpc('fn_tareo_fondo', { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_monto: monto });
+export async function guardarFondo(client: SupabaseClient, idCentroCosto: number, lunes: string, monto: number | null, periodo: PeriodoTareo = 'semanal'): Promise<void> {
+	const args: Record<string, unknown> = { p_id_centro_costo: idCentroCosto, p_semana_inicio: lunes, p_monto: monto };
+	if (periodo !== 'semanal') args.p_periodo = periodo;
+	const { error } = await client.rpc('fn_tareo_fondo', args);
 	if (error) throw error;
+}
+
+// ─────────────────── Requerimientos de personal y aptitudes (ticket #118, 26/11/2026) ───────────────────
+
+export type ModoRequerimiento = 'obra' | 'semana';
+
+export interface RequerimientoTareo {
+	id_requerimiento?: number;
+	id_centro_costo: number;
+	/** null = vale para todas las semanas de la obra. */
+	semana_inicio: string | null;
+	cargo: string;
+	cantidad: number;
+	aptitudes: string[];
+	/** S/ por día de referencia para estimar el costo de las vacantes (si no, el promedio de los asignados). */
+	tarifa_dia: number | null;
+}
+
+export interface PlanTareo {
+	/** false si la base aún no tiene la migración 20261127120000. */
+	disponible: boolean;
+	modo: ModoRequerimiento;
+	requerimientos: RequerimientoTareo[];
+	/** Presupuesto escrito a mano para el periodo. */
+	presupuesto: number | null;
+	/** Fondo separado del periodo. */
+	fondo: number | null;
+}
+
+const normalizar = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+export const mismoTexto = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && normalizar(a) === normalizar(b);
+
+/** Cuántas de las aptitudes requeridas tiene el trabajador. Pura. */
+export function cumpleAptitudes(delTrabajador: string[] | null | undefined, requeridas: string[]): { tiene: number; total: number; faltan: string[] } {
+	const propias = (delTrabajador ?? []).map(normalizar);
+	const faltan = requeridas.filter((r) => !propias.includes(normalizar(r)));
+	return { tiene: requeridas.length - faltan.length, total: requeridas.length, faltan };
+}
+
+/** Requerimientos (según el modo de la obra), presupuesto y fondo del periodo. Nunca lanza por falta de migración. */
+export async function cargarPlanTareo(client: SupabaseClient, idCentroCosto: number, inicio: string, periodo: PeriodoTareo = 'semanal'): Promise<PlanTareo> {
+	const [{ data: cfg, error: eC }, { data: reqs, error: eR }, { data: sem }] = await Promise.all([
+		client.from('tareo_obra_config').select('requerimiento_modo').eq('id_centro_costo', idCentroCosto).maybeSingle(),
+		client.from('tareo_requerimiento').select('*').eq('id_centro_costo', idCentroCosto).order('id_requerimiento'),
+		client.from('tareo_semana').select('presupuesto_disponible, fondo_separado').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', inicio).eq('periodo', periodo).maybeSingle()
+	]);
+	if (eC || eR) return { disponible: false, modo: 'obra', requerimientos: [], presupuesto: null, fondo: (sem as any)?.fondo_separado != null ? Number((sem as any).fondo_separado) : null };
+	const modo = ((cfg as any)?.requerimiento_modo ?? 'obra') as ModoRequerimiento;
+	const requerimientos = ((reqs ?? []) as any[])
+		.filter((r) => (modo === 'obra' ? r.semana_inicio == null : r.semana_inicio === inicio))
+		.map((r) => ({ ...r, cantidad: Number(r.cantidad), tarifa_dia: r.tarifa_dia != null ? Number(r.tarifa_dia) : null, aptitudes: r.aptitudes ?? [] }) as RequerimientoTareo);
+	const s = sem as any;
+	return {
+		disponible: true,
+		modo,
+		requerimientos,
+		presupuesto: s?.presupuesto_disponible != null ? Number(s.presupuesto_disponible) : null,
+		fondo: s?.fondo_separado != null ? Number(s.fondo_separado) : null
+	};
+}
+
+export async function guardarModoRequerimiento(client: SupabaseClient, idCentroCosto: number, modo: ModoRequerimiento, usuario: string | null): Promise<void> {
+	const { error } = await client.from('tareo_obra_config').upsert({ id_centro_costo: idCentroCosto, requerimiento_modo: modo, usuario, updated_at: new Date().toISOString() });
+	if (error) throw error;
+}
+
+export async function guardarRequerimiento(client: SupabaseClient, r: RequerimientoTareo, usuario: string | null): Promise<void> {
+	const fila = {
+		id_centro_costo: r.id_centro_costo,
+		semana_inicio: r.semana_inicio,
+		cargo: r.cargo.trim().slice(0, 100),
+		cantidad: Math.max(1, Math.min(999, Math.round(r.cantidad))),
+		aptitudes: [...new Set(r.aptitudes.map((a) => a.trim()).filter(Boolean))],
+		tarifa_dia: r.tarifa_dia != null && r.tarifa_dia > 0 ? r2(r.tarifa_dia) : null,
+		usuario
+	};
+	const { error } = r.id_requerimiento
+		? await client.from('tareo_requerimiento').update(fila).eq('id_requerimiento', r.id_requerimiento)
+		: await client.from('tareo_requerimiento').insert(fila);
+	if (error) throw error;
+}
+
+export async function eliminarRequerimiento(client: SupabaseClient, idRequerimiento: number): Promise<void> {
+	const { error } = await client.from('tareo_requerimiento').delete().eq('id_requerimiento', idRequerimiento);
+	if (error) throw error;
+}
+
+/** Copia a `lunes` los requerimientos de la semana anterior (modo por semana). Devuelve cuántos copió. */
+export async function copiarRequerimientosSemanaAnterior(client: SupabaseClient, idCentroCosto: number, lunes: string, usuario: string | null): Promise<number> {
+	const { data, error } = await client.from('tareo_requerimiento').select('*').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', sumarDias(lunes, -7));
+	if (error) throw error;
+	const filas = ((data ?? []) as any[]).map((r) => ({ id_centro_costo: idCentroCosto, semana_inicio: lunes, cargo: r.cargo, cantidad: r.cantidad, aptitudes: r.aptitudes ?? [], tarifa_dia: r.tarifa_dia, usuario }));
+	if (!filas.length) return 0;
+	const { error: e2 } = await client.from('tareo_requerimiento').insert(filas);
+	if (e2) throw e2;
+	return filas.length;
+}
+
+export async function guardarPresupuesto(client: SupabaseClient, idCentroCosto: number, inicio: string, monto: number | null, periodo: PeriodoTareo = 'semanal'): Promise<void> {
+	const { error } = await client.rpc('fn_tareo_presupuesto', { p_id_centro_costo: idCentroCosto, p_semana_inicio: inicio, p_monto: monto, p_periodo: periodo });
+	if (error) throw error;
+}
+
+/** Aptitudes ya usadas (de trabajadores y requerimientos), para sugerirlas. */
+export async function catalogoAptitudes(client: SupabaseClient): Promise<string[]> {
+	const [{ data: p }, { data: r }] = await Promise.all([
+		client.from('personal').select('aptitudes').neq('estado', 'baja'),
+		client.from('tareo_requerimiento').select('aptitudes')
+	]);
+	const todas = [...((p ?? []) as any[]), ...((r ?? []) as any[])].flatMap((x) => (x.aptitudes ?? []) as string[]);
+	const vistos = new Map<string, string>();
+	for (const a of todas) if (a?.trim() && !vistos.has(normalizar(a))) vistos.set(normalizar(a), a.trim());
+	return [...vistos.values()].sort((a, b) => a.localeCompare(b, 'es'));
 }
 
 /** Ticket #118 (Proyección): reserva el monto proyectado de esos trabajadores para la fecha (monto 0 = quitar). */
@@ -814,6 +929,19 @@ export function calcularFilaConsultoria(f: FilaTareo, grupo: GrupoConsultoria, i
 		base,
 		ajuste
 	};
+}
+
+/** Ticket #118 (26/11/2026): Proyección de Consultoría y Corporativo = sueldo completo del periodo. Lo registrado hasta
+ * hoy (días transcurridos menos sus descuentos) y lo que falta por completar hasta el cierre. Pura. */
+export function proyectarConsultoria(c: FilaConsultoria, hoy: string): { diasRegistrados: number; diasPrevistos: number; acumulado: number; porCompletar: number } {
+	const remoto = c.fila.personal.modalidad === 'remoto';
+	const pasados = c.fila.dias.filter((d) => d.fecha <= hoy && d.estado !== 'fuera_contrato');
+	const descuento = pasados.reduce((t, d) => t + descuentoDia(d, c.fila.horario, remoto), 0);
+	const diasRegistrados = Math.max(0, Math.min(c.diasReconocidos, pasados.length - descuento));
+	const diasPrevistos = Math.max(0, c.diasReconocidos - diasRegistrados);
+	const subtotal = r2(c.base + c.ajuste);
+	const acumulado = r2(Math.min(subtotal, diasRegistrados * c.fila.tarifaDia));
+	return { diasRegistrados, diasPrevistos, acumulado, porCompletar: r2(Math.max(subtotal - acumulado, 0)) };
 }
 
 function aMarcaTareo(m: any): { pin: string; marca: MarcaTareo } {

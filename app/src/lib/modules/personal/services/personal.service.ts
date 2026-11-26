@@ -11,6 +11,8 @@ import { CENTRO_COSTO_SELECT, nombreCentro } from '$lib/modules/asistencia/servi
 
 export interface Personal {
 	id_personal: number;
+	/** Ticket #118: lo que sabe hacer en campo (etiquetas libres). Sin la migración 20261127120000: undefined. */
+	aptitudes?: string[] | null;
 	pin: string;
 	nombre: string | null;
 	tipo_documento: 'DNI' | 'CE' | 'PAS';
@@ -129,27 +131,41 @@ export const REGIMENES_ANTERIORES = [
 ];
 export const TODOS_REGIMENES = [...REGIMENES, ...REGIMENES_ANTERIORES];
 /** Ticket #110 (punto 2): cargos sugeridos (el campo sigue aceptando cualquier texto). */
-export const CARGOS_SUGERIDOS = [
-	'Residente de obra',
-	'Administrador de obra',
-	'Asistente de obra',
-	'SSOMA',
-	'Maestro de obra',
-	'Capataz',
-	'Operador de máquina',
-	'Soldador',
-	'Operario de pintura',
-	'Operario de limpieza',
-	'Operario',
-	'Oficial',
-	'Ayudante',
-	'Almacenero',
-	'Vigilante',
-	'Arquitecto',
-	'Ingeniero civil',
-	'Asistente administrativo',
-	'Contador'
+/** Cargos por área (ticket #110, lista de la clienta del 26/11/2026). En la ficha se eligen de una lista agrupada;
+ * se puede escribir otro con «Otro…». */
+export const CARGOS_POR_AREA: { area: string; grupos: { grupo: string; cargos: string[] }[] }[] = [
+	{
+		area: 'Consultoría',
+		grupos: [
+			{ grupo: 'Dirección y diseño', cargos: ['Director de proyectos', 'Coordinador de proyectos', 'Arquitecto proyectista', 'Ingeniero estructural', 'Ingeniero sanitario', 'Ingeniero electricista', 'Especialista en seguridad', 'Especialista en instalaciones mecánicas', 'Especialista en gas natural'] },
+			{ grupo: 'BIM y dibujo técnico', cargos: ['BIM Manager', 'Coordinador BIM', 'Modelador BIM Arquitectura', 'Modelador BIM Estructural', 'Modelador BIM MEP (general)', 'Modelador BIM Eléctrico', 'Modelador BIM Sanitario', 'Modelador BIM Gas', 'Modelador BIM HVAC (mecánicas)', 'Dibujante CAD'] },
+			{ grupo: 'Asistencia técnica y gestión', cargos: ['Asistente de arquitectura', 'Asistente de ingeniería', 'Especialista en licencias', 'Gestor de trámites', 'Topógrafo', 'Calicatero', 'Practicante de arquitectura', 'Practicante de ingeniería'] }
+		]
+	},
+	{
+		area: 'Obra',
+		grupos: [
+			{ grupo: 'Personal técnico y administrativo', cargos: ['Gerente de obra', 'Ingeniero residente', 'Ingeniero de campo', 'Ingeniero de oficina técnica', 'Ingeniero de calidad', 'Supervisor de obra', 'Prevencionista de riesgos (SSOMA)', 'Asistente de obra', 'Administrador de obra', 'Almacenero', 'Topógrafo'] },
+			{ grupo: 'Personal obrero – Jefatura', cargos: ['Maestro de obra', 'Capataz'] },
+			{ grupo: 'Personal obrero – Operarios', cargos: ['Operario carpintero', 'Operario fierrero', 'Operario albañil', 'Operario gasfitero', 'Operario electricista', 'Operario soldador', 'Operario drywallero', 'Operario andamiero', 'Operario enchapador', 'Operario pintor', 'Operador de maquinaria'] },
+			{ grupo: 'Personal obrero – Oficiales', cargos: ['Oficial carpintero', 'Oficial fierrero', 'Oficial albañil', 'Oficial gasfitero', 'Oficial electricista', 'Oficial soldador', 'Oficial drywallero', 'Oficial andamiero', 'Oficial enchapador', 'Oficial pintor'] },
+			{ grupo: 'Personal obrero – Ayudantes', cargos: ['Ayudante carpintero', 'Ayudante fierrero', 'Ayudante albañil', 'Ayudante gasfitero', 'Ayudante electricista', 'Ayudante soldador', 'Ayudante drywallero', 'Ayudante andamiero', 'Ayudante enchapador', 'Ayudante pintor', 'Ayudante general'] }
+		]
+	},
+	{
+		area: 'Administración y corporativo',
+		grupos: [
+			{ grupo: 'Dirección y gerencia', cargos: ['Director general', 'Gerente general', 'Gerente de operaciones', 'Gerente comercial', 'Gerente de administración y finanzas'] },
+			{ grupo: 'Administración y finanzas', cargos: ['Administrador general', 'Asistente administrativo', 'Auxiliar administrativo', 'Contador', 'Asistente contable', 'Analista financiero', 'Tesorero', 'Practicante administrativo'] },
+			{ grupo: 'Recursos humanos', cargos: ['Jefe de recursos humanos', 'Asistente de recursos humanos'] },
+			{ grupo: 'Logística y compras', cargos: ['Jefe de logística', 'Asistente de logística', 'Encargado de compras', 'Almacenero'] },
+			{ grupo: 'Comercial y marketing', cargos: ['Jefe comercial', 'Asesor comercial', 'Asistente comercial', 'Coordinador de marketing', 'Community manager', 'Diseñador gráfico'] },
+			{ grupo: 'Servicios generales', cargos: ['Recepcionista', 'Personal de limpieza', 'Personal de vigilancia', 'Personal de mantenimiento', 'Conductor'] }
+		]
+	}
 ];
+/** Todos los cargos de la lista (sin repetir). */
+export const CARGOS_SUGERIDOS = [...new Set(CARGOS_POR_AREA.flatMap((a) => a.grupos.flatMap((g) => g.cargos)))];
 /** Cargo del referente (a pedido del usuario). Para agregar otro, súmalo aquí. */
 export const CARGOS_REFERENTE = ['Subcontratista', 'Contratista'].map((v) => ({ value: v, label: v }));
 
@@ -438,30 +454,57 @@ export async function eliminarPersonalPermanente(client: SupabaseClient, id: num
 	void borrarArchivosDriveHuerfanos(client, [antes?.foto_url]); // ticket #123
 }
 
-/** Un tramo del historial de cargos (personal_cargo_historial). fecha_fin vacía = cargo actual. */
+/** Ticket #144: aptitud técnica de un cargo con su nivel. */
+export type NivelAptitud = 'basico' | 'intermedio' | 'avanzado';
+export const NIVELES_APTITUD: { value: NivelAptitud; label: string }[] = [
+	{ value: 'basico', label: 'Básico' },
+	{ value: 'intermedio', label: 'Intermedio' },
+	{ value: 'avanzado', label: 'Avanzado' }
+];
+export interface AptitudCargo {
+	actividad: string;
+	nivel: NivelAptitud | null;
+}
+
+/** Un tramo del historial de cargos (personal_cargo_historial). fecha_fin vacía = cargo vigente. Ticket #144: puede haber
+ * un cargo PRINCIPAL vigente y varios SECUNDARIOS a la vez, cada uno con sus aptitudes técnicas. */
 export interface CargoHistorial {
 	id_cargo_historial?: number;
 	cargo: string;
 	fecha_inicio: string;
 	fecha_fin: string | null;
 	observacion: string | null;
+	clasificacion?: 'principal' | 'secundario';
+	aptitudes?: AptitudCargo[];
 }
 
 /** Historial de cargos de un trabajador, del más reciente al más antiguo. */
 export async function getCargosHistorial(client: SupabaseClient, idPersonal: number): Promise<CargoHistorial[]> {
-	const { data, error } = await client
-		.from('personal_cargo_historial')
-		.select('id_cargo_historial, cargo, fecha_inicio, fecha_fin, observacion')
-		.eq('id_personal', idPersonal)
-		.order('fecha_inicio', { ascending: false });
+	const consultar = (cols: string) => client.from('personal_cargo_historial').select(cols).eq('id_personal', idPersonal).order('fecha_inicio', { ascending: false });
+	let { data, error } = await consultar('id_cargo_historial, cargo, fecha_inicio, fecha_fin, observacion, clasificacion, aptitudes');
+	// Sin la migración 20261127140000: sin clasificación ni aptitudes (todos principales).
+	if (error?.code === '42703' || error?.code === 'PGRST204') ({ data, error } = await consultar('id_cargo_historial, cargo, fecha_inicio, fecha_fin, observacion'));
 	if (error) throw error;
-	return (data ?? []) as CargoHistorial[];
+	return ((data ?? []) as any[]).map((t) => ({ ...t, clasificacion: t.clasificacion ?? 'principal', aptitudes: Array.isArray(t.aptitudes) ? t.aptitudes : [] })) as CargoHistorial[];
 }
 
-/** El cargo actual: el tramo sin fecha de fin más reciente (o null si no hay ninguno abierto). */
-export function cargoActual(tramos: CargoHistorial[]): string | null {
-	const abiertos = tramos.filter((t) => !t.fecha_fin && t.cargo.trim()).sort((a, b) => b.fecha_inicio.localeCompare(a.fecha_inicio));
+/** ¿El tramo sigue abierto (vigente o programado)? */
+export const cargoAbierto = (t: CargoHistorial, hoy: string) => !!t.cargo.trim() && (!t.fecha_fin || t.fecha_fin >= hoy);
+
+/** El cargo PRINCIPAL vigente (el más reciente ya iniciado; si no, el próximo programado), o null. */
+export function cargoActual(tramos: CargoHistorial[], hoy = hoyLima()): string | null {
+	const abiertos = tramos
+		.filter((t) => cargoAbierto(t, hoy) && (t.clasificacion ?? 'principal') === 'principal')
+		.sort((a, b) => Number(a.fecha_inicio > hoy) - Number(b.fecha_inicio > hoy) || b.fecha_inicio.localeCompare(a.fecha_inicio));
 	return abiertos[0]?.cargo.trim() ?? null;
+}
+
+/** Aptitudes de los cargos abiertos (sin repetir): pasan a personal.aptitudes, que usa el tareo. */
+export function aptitudesDeCargos(tramos: CargoHistorial[], hoy = hoyLima()): string[] {
+	const vistos = new Map<string, string>();
+	for (const t of tramos.filter((t) => cargoAbierto(t, hoy)))
+		for (const a of t.aptitudes ?? []) if (a.actividad?.trim()) vistos.set(a.actividad.trim().toLowerCase(), a.actividad.trim());
+	return [...vistos.values()];
 }
 
 /** Guarda el historial tal como quedó en la ficha: borra los tramos quitados, actualiza los existentes e inserta los nuevos. */
@@ -474,20 +517,120 @@ export async function guardarCargosHistorial(client: SupabaseClient, idPersonal:
 		const { error } = await client.from('personal_cargo_historial').delete().in('id_cargo_historial', quitar);
 		if (error) throw error;
 	}
+	let conExtras = true;
 	const fila = (t: CargoHistorial) => ({
 		id_personal: idPersonal,
 		cargo: t.cargo.trim(),
 		fecha_inicio: t.fecha_inicio,
 		fecha_fin: t.fecha_fin || null,
-		observacion: t.observacion?.trim() || null
+		observacion: t.observacion?.trim() || null,
+		...(conExtras
+			? { clasificacion: t.clasificacion ?? 'principal', aptitudes: (t.aptitudes ?? []).filter((a) => a.actividad?.trim()).map((a) => ({ actividad: a.actividad.trim(), nivel: a.nivel ?? null })) }
+			: {})
 	});
+	const sinColumna = (e: { code?: string } | null) => e?.code === '42703' || e?.code === 'PGRST204';
 	for (const t of tramos.filter((t) => t.id_cargo_historial)) {
-		const { error } = await client.from('personal_cargo_historial').update(fila(t)).eq('id_cargo_historial', t.id_cargo_historial!);
+		let { error } = await client.from('personal_cargo_historial').update(fila(t)).eq('id_cargo_historial', t.id_cargo_historial!);
+		if (sinColumna(error)) {
+			conExtras = false;
+			({ error } = await client.from('personal_cargo_historial').update(fila(t)).eq('id_cargo_historial', t.id_cargo_historial!));
+		}
 		if (error) throw error;
 	}
-	const nuevos = tramos.filter((t) => !t.id_cargo_historial).map(fila);
+	const nuevos = tramos.filter((t) => !t.id_cargo_historial);
 	if (nuevos.length) {
-		const { error } = await client.from('personal_cargo_historial').insert(nuevos);
+		let { error } = await client.from('personal_cargo_historial').insert(nuevos.map(fila));
+		if (sinColumna(error)) {
+			conExtras = false;
+			({ error } = await client.from('personal_cargo_historial').insert(nuevos.map(fila)));
+		}
+		if (error) throw error;
+	}
+}
+
+/** Ticket #144: otros trabajadores con ese cargo y aptitudes registradas ("Importar aptitudes de otro trabajador"). */
+export async function aptitudesPorCargo(
+	client: SupabaseClient,
+	cargo: string,
+	excluirIdPersonal: number | null
+): Promise<{ idPersonal: number; nombre: string; aptitudes: AptitudCargo[] }[]> {
+	if (!cargo.trim()) return [];
+	const { data, error } = await client
+		.from('personal_cargo_historial')
+		.select('id_personal, aptitudes, fecha_inicio, personal!inner(nombres, apellidos, nombre, estado)')
+		.ilike('cargo', cargo.trim())
+		.order('fecha_inicio', { ascending: false });
+	if (error) return [];
+	const porPersona = new Map<number, { idPersonal: number; nombre: string; aptitudes: AptitudCargo[] }>();
+	for (const r of (data ?? []) as any[]) {
+		const per = Array.isArray(r.personal) ? r.personal[0] : r.personal;
+		if (r.id_personal === excluirIdPersonal || per?.estado === 'baja' || porPersona.has(r.id_personal)) continue;
+		const aptitudes = (Array.isArray(r.aptitudes) ? r.aptitudes : []) as AptitudCargo[];
+		if (!aptitudes.length) continue;
+		porPersona.set(r.id_personal, {
+			idPersonal: r.id_personal,
+			nombre: [per?.nombres, per?.apellidos].filter(Boolean).join(' ').trim() || per?.nombre || 'Trabajador',
+			aptitudes
+		});
+	}
+	return [...porPersona.values()];
+}
+
+/** Ticket #144: un tramo del historial de remuneraciones. fecha_fin vacía = vigente. */
+export interface RemuneracionHistorial {
+	id_remuneracion?: number;
+	fecha_inicio: string;
+	fecha_fin: string | null;
+	periodicidad: 'diaria' | 'semanal' | 'quincenal' | 'mensual';
+	monto: number;
+	observacion: string | null;
+}
+
+/** Historial de remuneraciones (del más reciente al más antiguo). null si la base aún no tiene la tabla (migración
+ * 20261127140000): entonces la ficha sigue con los campos de "Condiciones actuales". */
+export async function getRemuneraciones(client: SupabaseClient, idPersonal: number): Promise<RemuneracionHistorial[] | null> {
+	const { data, error } = await client
+		.from('personal_remuneracion_historial')
+		.select('id_remuneracion, fecha_inicio, fecha_fin, periodicidad, monto, observacion')
+		.eq('id_personal', idPersonal)
+		.order('fecha_inicio', { ascending: false });
+	if (error) {
+		if (error.code === '42P01' || error.code === 'PGRST205' || error.code === 'PGRST204') return null;
+		throw error;
+	}
+	return ((data ?? []) as any[]).map((r) => ({ ...r, monto: Number(r.monto) }));
+}
+
+/** La remuneración vigente hoy (la más reciente ya iniciada y sin cerrar; si no, la más reciente). */
+export function remuneracionVigente(tramos: RemuneracionHistorial[], hoy = hoyLima()): RemuneracionHistorial | null {
+	const orden = [...tramos].sort((a, b) => b.fecha_inicio.localeCompare(a.fecha_inicio));
+	return orden.find((t) => t.fecha_inicio <= hoy && (!t.fecha_fin || t.fecha_fin >= hoy)) ?? orden[0] ?? null;
+}
+
+export async function guardarRemuneraciones(client: SupabaseClient, idPersonal: number, tramos: RemuneracionHistorial[], usuario: string | null): Promise<void> {
+	const { data: actuales, error: e0 } = await client.from('personal_remuneracion_historial').select('id_remuneracion').eq('id_personal', idPersonal);
+	if (e0) throw e0;
+	const quedan = new Set(tramos.filter((t) => t.id_remuneracion).map((t) => t.id_remuneracion));
+	const quitar = (actuales ?? []).map((a) => a.id_remuneracion as number).filter((id) => !quedan.has(id));
+	if (quitar.length) {
+		const { error } = await client.from('personal_remuneracion_historial').delete().in('id_remuneracion', quitar);
+		if (error) throw error;
+	}
+	const fila = (t: RemuneracionHistorial) => ({
+		id_personal: idPersonal,
+		fecha_inicio: t.fecha_inicio,
+		fecha_fin: t.fecha_fin || null,
+		periodicidad: t.periodicidad,
+		monto: Math.round(Number(t.monto) * 100) / 100,
+		observacion: t.observacion?.trim() || null
+	});
+	for (const t of tramos.filter((t) => t.id_remuneracion)) {
+		const { error } = await client.from('personal_remuneracion_historial').update(fila(t)).eq('id_remuneracion', t.id_remuneracion!);
+		if (error) throw error;
+	}
+	const nuevos = tramos.filter((t) => !t.id_remuneracion).map((t) => ({ ...fila(t), usuario }));
+	if (nuevos.length) {
+		const { error } = await client.from('personal_remuneracion_historial').insert(nuevos);
 		if (error) throw error;
 	}
 }

@@ -16,11 +16,16 @@
 	import { nombreCompleto, hoyLima } from '$lib/modules/personal/services/personal.service';
 	import { sumarDias } from '../services/asistencia.service';
 	import EditarDiaTareo from './EditarDiaTareo.svelte';
+	import { getSaldosVigentesCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import {
 		ESTADOS_CELDA,
 		ORIGENES,
 		cargarTareoConsultoria,
 		periodoConsultoria,
+		proyectarConsultoria,
+		cargarPlanTareo,
+		guardarFondo,
+		guardarPresupuesto,
 		guardarTrabajador,
 		aprobarTareo,
 		enviarTareo,
@@ -55,6 +60,8 @@
 	let aprobando = $state(false);
 	let abiertos = $state<Record<number, boolean>>({});
 	let verPago = $state(false);
+	// Ticket #118 (26/11/2026): vista Real y Proyección, como en Obra. Proyección = sueldo completo del periodo.
+	let vista = $state<'real' | 'proyeccion'>('real');
 
 	const fin = $derived(periodoConsultoria(grupo, inicio).fin);
 	const tituloPeriodo = $derived(
@@ -94,10 +101,62 @@
 	const porEnviarSel = $derived(seleccionados.filter((c) => aprobada(c) && pendienteDe(c) > 0));
 	const totalSeleccionado = $derived(seleccionados.reduce((t, c) => t + (aprobada(c) ? montoDe(c) : totalDe(c)), 0));
 
+	// ── Proyección por obra o área: presupuesto (a mano, junto al saldo real), fondo separado y falta separar ──
+	interface CentroProy {
+		id: number;
+		nombre: string;
+		pago: number;
+		presupuesto: string;
+		fondo: string;
+		guardado: { presupuesto: number | null; fondo: number | null };
+		saldoCentro: number | null;
+		disponible: boolean;
+	}
+	let centrosProy = $state<CentroProy[]>([]);
+	const proyDe = (c: FilaConsultoria) => proyectarConsultoria(c, hoy);
+	const totProy = $derived({
+		acumulado: r2(filas.reduce((t, c) => t + proyDe(c).acumulado, 0)),
+		porCompletar: r2(filas.reduce((t, c) => t + proyDe(c).porCompletar, 0)),
+		bonos: r2(filas.reduce((t, c) => t + num(bonos[c.fila.personal.id_personal]) + c.fila.extrasMonto, 0)),
+		total: r2(filas.reduce((t, c) => t + totalDe(c), 0))
+	});
+	const pagoCentro = (id: number) => r2(filas.filter((c) => c.idCentroCosto === id).reduce((t, c) => t + totalDe(c), 0));
+	const montoTexto = (v: number | null) => (v != null ? v.toFixed(2) : '');
+	const numONull = (v: string) => (v.trim() === '' ? null : num(v));
+
+	async function cargarCentros() {
+		const ids = [...new Set(lista.map((c) => c.idCentroCosto).filter((x): x is number => x != null))];
+		const [planes, saldos] = await Promise.all([Promise.all(ids.map((id) => cargarPlanTareo(supabase, id, inicio, grupo))), getSaldosVigentesCentroCosto(supabase, ids)]);
+		centrosProy = ids.map((id, i) => ({
+			id,
+			nombre: lista.find((c) => c.idCentroCosto === id)?.centro || 'Obra o área',
+			pago: 0,
+			presupuesto: montoTexto(planes[i].presupuesto),
+			fondo: montoTexto(planes[i].fondo),
+			guardado: { presupuesto: planes[i].presupuesto, fondo: planes[i].fondo },
+			saldoCentro: saldos[id]?.saldo ?? null,
+			disponible: planes[i].disponible
+		}));
+	}
+	async function guardarMontosCentro(cp: CentroProy, campo: 'presupuesto' | 'fondo') {
+		if (!puedeEnviar) return;
+		const nuevo = numONull(cp[campo]);
+		if (nuevo === cp.guardado[campo]) return;
+		try {
+			if (campo === 'fondo') await guardarFondo(supabase, cp.id, inicio, nuevo, grupo);
+			else await guardarPresupuesto(supabase, cp.id, inicio, nuevo, grupo);
+			cp.guardado[campo] = nuevo;
+			toast.success(campo === 'fondo' ? 'Fondo separado guardado.' : 'Presupuesto guardado.');
+		} catch (err) {
+			toast.error(`No se pudo guardar. ${describeError(err)}`);
+		}
+	}
+
 	async function cargar() {
 		cargando = true;
 		try {
 			lista = await cargarTareoConsultoria(supabase, grupo, inicio, hoy, ambito);
+			void cargarCentros().catch(() => (centrosProy = []));
 			const b: Record<number, string> = {};
 			const fc: Record<number, string> = {};
 			const mo: Record<number, string> = {};
@@ -300,16 +359,26 @@
 		</div>
 		<div class="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
 			{#if puedeEnviar}
+				<div class="flex rounded-xl border border-slate-200 bg-white p-0.5 text-sm" role="tablist" aria-label="Vista del tareo">
+					<button type="button" role="tab" aria-selected={vista === 'real'} onclick={() => (vista = 'real')} class={`px-4 py-1.5 rounded-lg font-semibold ${vista === 'real' ? 'bg-orange-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Real</button>
+					<button type="button" role="tab" aria-selected={vista === 'proyeccion'} onclick={() => (vista = 'proyeccion')} class={`px-4 py-1.5 rounded-lg font-semibold ${vista === 'proyeccion' ? 'bg-orange-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Proyección</button>
+				</div>
+			{/if}
+			{#if puedeEnviar && vista === 'real'}
 				<div class="flex flex-col gap-1.5">
 					<label for="cons-fecha-comun" class="text-xs font-medium text-slate-600">Fecha común CxP</label>
 					<input id="cons-fecha-comun" type="date" bind:value={fechaComun} class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm" />
 				</div>
 				<button type="button" onclick={aplicarFechaComun} class="px-3 py-1.5 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600">Aplicar a {seleccionados.length ? `seleccionados (${seleccionados.length})` : 'todos'}</button>
-			{:else}
+			{:else if !puedeEnviar}
 				<button type="button" onclick={() => (verPago = !verPago)} class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 flex items-center gap-2"><i class={`fas ${verPago ? 'fa-eye-slash' : 'fa-eye'}`}></i> {verPago ? 'Ocultar' : 'Ver'} datos de pago</button>
 			{/if}
-			{#if pendientesAprobacion}<span class="rounded-lg bg-orange-50 border border-orange-200 px-3 py-1 font-semibold text-orange-700 text-sm">Pendientes de aprobación: {pendientesAprobacion}</span>{/if}
-			<span class="text-xs text-blue-700"><i class="fas fa-circle-info"></i> Aprobación a cargo del jefe inmediato.</span>
+			{#if vista === 'real'}
+				{#if pendientesAprobacion}<span class="rounded-lg bg-orange-50 border border-orange-200 px-3 py-1 font-semibold text-orange-700 text-sm">Pendientes de aprobación: {pendientesAprobacion}</span>{/if}
+				<span class="text-xs text-blue-700"><i class="fas fa-circle-info"></i> Aprobación a cargo del jefe inmediato.</span>
+			{:else}
+				<span class="text-xs text-slate-500"><i class="fas fa-circle-info"></i> Proyección: sueldo completo del periodo; los días por venir cuentan como trabajados.</span>
+			{/if}
 			{#if cargando}<i class="fas fa-spinner fa-spin text-blue-500"></i>{/if}
 		</div>
 	</div>
@@ -318,6 +387,8 @@
 		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">
 			No hay personal de {nombreAmbito} que cobre {grupo === 'quincenal' ? 'por quincena' : 'por mes'}{modalidad ? ' con esa modalidad' : ''}.
 		</div>
+	{:else if filas.length && vista === 'proyeccion'}
+	{@render vistaProyeccion()}
 	{:else if filas.length}
 		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
 			<table class="w-full text-sm">
@@ -429,6 +500,95 @@
 		</div>
 	{/if}
 </div>
+
+{#snippet vistaProyeccion()}
+	<div class="flex items-center gap-2 px-1">
+		<span class="text-lg font-bold text-slate-800">Vista:</span>
+		<span class="rounded-lg bg-orange-50 border border-orange-200 px-3 py-0.5 text-lg font-extrabold text-orange-600">PROYECCIÓN</span>
+		<span class="text-sm text-slate-500">{nombreAmbito} · {tituloPeriodo}</span>
+	</div>
+	<div class="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">
+		<table class="w-full text-sm">
+			<thead class="bg-slate-50 text-slate-600 text-xs">
+				<tr>
+					<th class="px-2 py-2 text-left min-w-[170px]">Colaborador</th>
+					<th class="px-2 py-2 text-left">Cargo</th>
+					<th class="px-2 py-2 text-right">Días registrados</th>
+					<th class="px-2 py-2 text-right">Días previstos</th>
+					<th class="px-2 py-2 text-right">S/ por día</th>
+					<th class="px-2 py-2 text-right">Acumulado real S/</th>
+					<th class="px-2 py-2 text-right">Por completar S/</th>
+					<th class="px-2 py-2 text-right">Bonos y extras S/</th>
+					<th class="px-2 py-2 text-right">Total proyectado S/</th>
+				</tr>
+			</thead>
+			<tbody class="divide-y divide-slate-100">
+				{#each filas as c (c.fila.personal.id_personal)}
+					{@const pr = proyDe(c)}
+					<tr>
+						<td class="px-2 py-2">
+							<div class="font-semibold text-slate-800">{nombreCompleto(c.fila.personal)}</div>
+							{#if c.centro}<div class="text-[10px] text-slate-400 truncate max-w-[200px]">{c.centro}</div>{/if}
+						</td>
+						<td class="px-2 py-2 text-xs text-slate-600">{c.fila.personal.cargo ?? ''}</td>
+						<td class="px-2 py-2 text-right tabular-nums font-semibold">{fmtDias(pr.diasRegistrados)}</td>
+						<td class="px-2 py-2 text-right tabular-nums text-slate-500">{fmtDias(pr.diasPrevistos)} P</td>
+						<td class="px-2 py-2 text-right tabular-nums">{c.fila.sinMonto ? '—' : formatCurrency(c.fila.tarifaDia)}</td>
+						<td class="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(pr.acumulado)}</td>
+						<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(pr.porCompletar)}</td>
+						<td class="px-2 py-2 text-right tabular-nums">{formatCurrency(num(bonos[c.fila.personal.id_personal]) + c.fila.extrasMonto)}</td>
+						<td class="px-2 py-2 text-right tabular-nums font-extrabold text-slate-900">{formatCurrency(totalDe(c))}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+	<div class="rounded-2xl border border-orange-100 bg-orange-50/60 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+		<span class="text-lg font-bold text-orange-600">Totales de la proyección</span>
+		<span class="text-blue-700">Total acumulado <b>{formatCurrency(totProy.acumulado)}</b></span>
+		<span class="text-blue-700">Por completar <b>{formatCurrency(totProy.porCompletar)}</b></span>
+		<span class="text-blue-700">Bonos y extras <b>{formatCurrency(totProy.bonos)}</b></span>
+		<span class="ml-auto rounded-xl bg-orange-100 px-3 py-1 text-center"><span class="block text-[11px] font-bold text-orange-700">TOTAL PROYECTADO</span><b class="text-lg text-orange-700">{formatCurrency(totProy.total)}</b></span>
+	</div>
+	<p class="px-1 text-xs italic text-slate-500">P = previsto · Los días por venir no son asistencia registrada: se cuentan como trabajados hasta el cierre del periodo.</p>
+	{#each centrosProy as cp (cp.id)}
+		{@const pago = pagoCentro(cp.id)}
+		{@const pres = numONull(cp.presupuesto)}
+		{@const fondoN = num(cp.fondo)}
+		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm p-4 flex flex-col gap-3">
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+				<span class="font-bold text-slate-800">{cp.nombre}</span>
+				{#if cp.saldoCentro != null}
+					<span class="text-xs text-slate-500">Disponible en la cuenta: <b class={cp.saldoCentro < 0 ? 'text-rose-600' : 'text-emerald-700'}>{formatCurrency(cp.saldoCentro)}</b>
+						{#if puedeEnviar && cp.disponible}<button type="button" onclick={() => { cp.presupuesto = Math.max(cp.saldoCentro ?? 0, 0).toFixed(2); guardarMontosCentro(cp, 'presupuesto'); }} class="ml-1 text-blue-600 hover:underline">Usar como presupuesto</button>{/if}
+					</span>
+				{/if}
+			</div>
+			<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+				<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
+					<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(pago)}</b>
+				</div>
+				{#if cp.disponible}
+					<label class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
+						<span class="font-bold text-slate-800">Presupuesto disponible</span>
+						<input type="text" inputmode="decimal" bind:value={cp.presupuesto} onblur={() => guardarMontosCentro(cp, 'presupuesto')} disabled={!puedeEnviar} placeholder="0.00" class="w-32 px-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-semibold" aria-label="Presupuesto disponible" />
+					</label>
+					<div class={`rounded-2xl border px-4 py-3 flex items-center justify-between gap-2 ${pres != null && pres - pago < 0 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+						<span class={`font-bold ${pres != null && pres - pago < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>Saldo disponible</span>
+						<b class={`text-xl ${pres != null && pres - pago < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{pres == null ? 'Escribe el presupuesto' : formatCurrency(r2(pres - pago))}</b>
+					</div>
+				{/if}
+				<label class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
+					<span class="font-bold text-slate-800">Fondo separado</span>
+					<input type="text" inputmode="decimal" bind:value={cp.fondo} onblur={() => guardarMontosCentro(cp, 'fondo')} disabled={!puedeEnviar} placeholder="0.00" class="w-32 px-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-semibold" aria-label="Fondo separado" />
+				</label>
+				<div class="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-3 flex items-center justify-between gap-2">
+					<span class="font-bold text-orange-700">Falta separar</span><b class="text-xl text-orange-600">{formatCurrency(Math.max(r2(pago - fondoN), 0))}</b>
+				</div>
+			</div>
+		</div>
+	{/each}
+{/snippet}
 
 <EditarDiaTareo
 	edicion={edicion ? { fila: edicion.fila, dia: edicion.dia } : null}

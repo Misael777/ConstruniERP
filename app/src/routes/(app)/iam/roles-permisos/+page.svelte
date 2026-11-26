@@ -33,7 +33,11 @@
 				{ key: 'ver_proyectos', label: 'General Proyectos' },
 				{ key: 'ver_proyectos_dashboard', label: 'Dashboard Proyectos' },
 				{ key: 'ver_proyectos_gestion', label: 'Gestión de Proyectos' },
-				{ key: 'ver_proyectos_partidas', label: 'Partidas y Plantillas' }
+				{ key: 'ver_proyectos_partidas', label: 'Partidas y Plantillas' },
+				{ key: 'ver_proyectos_consultoria', label: 'Consultoría' },
+				{ key: 'ver_proyectos_obra', label: 'Obra' },
+				{ key: 'ver_proyectos_catalogo', label: 'Catálogo' },
+				{ key: 'ver_proyectos_reuniones', label: 'Reuniones, acuerdos y mejoras' }
 			]
 		},
 		{
@@ -51,7 +55,26 @@
 		},
 		{
 			id: 'recursos_humanos', name: 'Recursos Humanos', icon: 'fas fa-users', colorClass: 'text-pink-600 bg-pink-50 border-pink-100',
-			submodules: [{ key: 'ver_empleados', label: 'Empleados' }]
+			submodules: [
+				{ key: 'ver_empleados', label: 'Empleados' },
+				// Ticket #143: los permisos de Personal y Asistencia existían pero no estaban en la matriz.
+				{ key: 'ver_rrhh', label: 'General Personal y Asistencia' },
+				{ key: 'ver_rrhh_personal', label: 'Personal (fichas de trabajadores)' },
+				{ key: 'ver_rrhh_asistencia', label: 'Asistencia y tareo' },
+				{ key: 'aprobar_tareo', label: 'Corregir y enviar el tareo a Cuentas por Pagar' },
+				{ key: 'ver_rrhh_huelleros', label: 'Huelleros' },
+				{ key: 'ver_rrhh_horarios', label: 'Horarios' }
+			]
+		},
+		{
+			// Ticket #143 (26/11/2026): quién recibe las Alertas de tareas (ícono ⚠) de cada área. Las que están a cargo de
+			// cada persona ("Mis tareas") le llegan siempre.
+			id: 'alertas', name: 'Alertas de tareas', icon: 'fas fa-triangle-exclamation', colorClass: 'text-rose-600 bg-rose-50 border-rose-100',
+			submodules: [
+				{ key: 'ver_alertas_rrhh', label: 'Alertas de Recursos Humanos' },
+				{ key: 'ver_alertas_proyectos', label: 'Alertas de Proyectos' },
+				{ key: 'ver_alertas_finanzas', label: 'Alertas de Finanzas' }
+			]
 		},
 		{
 			id: 'configuracion', name: 'Configuración', icon: 'fas fa-cog', colorClass: 'text-slate-600 bg-slate-50 border-slate-200',

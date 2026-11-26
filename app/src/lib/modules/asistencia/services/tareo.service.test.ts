@@ -16,6 +16,8 @@ import {
 	periodoConsultoria,
 	calcularFilaConsultoria,
 	esCentroObra,
+	cumpleAptitudes,
+	proyectarConsultoria,
 	type MarcaTareo,
 	type AjusteTareo,
 	type FeriadoTareo
@@ -220,6 +222,27 @@ describe('Consultoría (ticket #118)', () => {
 		expect(esCentroObra({ tipo: 'proyecto', proyecto: [{ tipo_venta: 'consultoria' }] })).toBe(false);
 		expect(esCentroObra({ tipo: 'bolsa general', proyecto: null })).toBe(false);
 		expect(esCentroObra(null)).toBe(false);
+	});
+});
+
+describe('requerimientos y proyección de Consultoría (ticket #118, 26/11/2026)', () => {
+	it('cumple aptitudes sin importar tildes ni mayúsculas', () => {
+		expect(cumpleAptitudes(['Tarrajeo', 'asentado de LADRILLOS'], ['Asentado de ladrillos', 'Tarrajeo'])).toEqual({ tiene: 2, total: 2, faltan: [] });
+		expect(cumpleAptitudes(['Tarrajeo'], ['Habilitación de acero', 'tarrajeo'])).toEqual({ tiene: 1, total: 2, faltan: ['Habilitación de acero'] });
+		expect(cumpleAptitudes(null, ['Habilitacion de acero'])).toEqual({ tiene: 0, total: 1, faltan: ['Habilitacion de acero'] });
+	});
+	it('proyección = sueldo completo: lo registrado hasta hoy + lo que falta hasta el cierre', () => {
+		// Quincena 16–30/11/2026 con horario L-V, hoy = 20/11, marcó todos los días hábiles hasta hoy.
+		const lv: Horario = { ...civil, horario_dia: [1, 2, 3, 4, 5].map((dia) => ({ dia, hora_entrada: '08:00', hora_salida: '17:00', refrigerio_inicio: '12:00', refrigerio_fin: '13:00' })) };
+		const marcasQ = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20'].flatMap((d) => [m(d, '08:00'), m(d, '17:00')]);
+		const pq = persona({ periodicidad_pago: 'quincenal', monto_pago: 1500 });
+		const base = calcularFila(pq, lv, marcasQ, [], [], null, '2026-11-16', '2026-11-20', true, 15);
+		const c = calcularFilaConsultoria(base, 'quincenal', 5, 'Corporativo');
+		const p = proyectarConsultoria(c, '2026-11-20');
+		expect(p.diasRegistrados).toBe(5);
+		expect(p.diasPrevistos).toBe(10);
+		expect(p.acumulado).toBeCloseTo(500, 2);
+		expect(p.acumulado + p.porCompletar).toBeCloseTo(1500, 2);
 	});
 });
 

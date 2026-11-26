@@ -13,12 +13,18 @@
 	import { describeError } from '$lib/shared/describeError';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import HistorialAsignaciones from './HistorialAsignaciones.svelte';
+	import AptitudesInput from '$lib/modules/asistencia/components/AptitudesInput.svelte';
+	import InputConLista from '$lib/shared/components/InputConLista.svelte';
+	import CargoModal from './CargoModal.svelte';
+	import RemuneracionModal from './RemuneracionModal.svelte';
+	import { catalogoAptitudes } from '$lib/modules/asistencia/services/tareo.service';
 	import {
 		TIPOS_DOCUMENTO,
 		SEXOS,
 		REGIMENES,
 		REGIMENES_ANTERIORES,
 		CARGOS_SUGERIDOS,
+		CARGOS_POR_AREA,
 		CATEGORIAS,
 		CARGOS_REFERENTE,
 		VINCULOS,
@@ -35,6 +41,13 @@
 		getCargosHistorial,
 		guardarCargosHistorial,
 		cargoActual,
+		cargoAbierto,
+		aptitudesDeCargos,
+		getRemuneraciones,
+		guardarRemuneraciones,
+		remuneracionVigente,
+		NIVELES_APTITUD,
+		type RemuneracionHistorial,
 		type CargoHistorial,
 		type Personal,
 		type DatosPersonal
@@ -148,7 +161,16 @@
 		untrack(() => iniciarFicha(p));
 	});
 
+	// Ticket #118 (26/11/2026): aptitudes del trabajador (lo que sabe en campo); el tareo de Obra las compara con las que
+	// piden los requerimientos de personal. Ticket #144: las de cada cargo (con su nivel) se registran en el cargo; aquí
+	// quedan las "otras". personal.aptitudes = las de los cargos vigentes + las otras. Sin la migración 20261127120000
+	// no se guardan.
+	let aptitudes = $state<string[]>([]);
+	let aptitudesSugeridas = $state<string[]>([]);
+
 	function iniciarFicha(personal: Personal | null) {
+		aptitudes = [...(personal?.aptitudes ?? [])];
+		void catalogoAptitudes(supabase).then((a) => (aptitudesSugeridas = a)).catch(() => {});
 		const base: DatosPersonal = { ...VACIO };
 		if (personal) for (const k of Object.keys(VACIO) as (keyof DatosPersonal)[]) (base as any)[k] = personal[k] ?? VACIO[k];
 		// Llegó desde el huellero (solo trae su nombre en un texto): se propone primera palabra = nombres, resto =
@@ -223,14 +245,25 @@
 	let erroresCargos = $state<Record<number, string>>({});
 	const hoyIso = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
 
+	// Ticket #144: historial de remuneraciones. null = la base aún no tiene la tabla (migración 20261127140000): entonces
+	// se usan los campos de "Condiciones actuales" como antes, y los cargos no tienen clasificación ni aptitudes.
+	let remuneraciones = $state<RemuneracionHistorial[] | null>(null);
+	const conHistorialNuevo = $derived(remuneraciones !== null);
+	const diaAntes = (f: string) => new Date(Date.parse(`${f}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
 	async function cargarCargos(id: number | null) {
 		cargos = [];
 		erroresCargos = {};
-		if (!id) return;
+		remuneraciones = null;
 		cargandoCargos = true;
 		try {
-			const lista = await getCargosHistorial(supabase, id);
-			if (personal?.id_personal === id) cargos = lista;
+			const [lista, remus] = await Promise.all([id ? getCargosHistorial(supabase, id) : Promise.resolve([]), getRemuneraciones(supabase, id ?? 0).catch(() => null)]);
+			if ((personal?.id_personal ?? null) !== id) return;
+			cargos = lista;
+			remuneraciones = remus;
+			// Las aptitudes de los cargos se muestran con su cargo; aquí quedan solo las "otras".
+			const delCargo = new Set(aptitudesDeCargos(lista).map((a) => a.toLowerCase()));
+			aptitudes = (personal?.aptitudes ?? []).filter((a) => !delCargo.has(a.toLowerCase()));
 		} catch (err) {
 			toast.error(`No se pudo leer el historial de cargos. ${describeError(err)}`);
 		} finally {
@@ -238,19 +271,76 @@
 		}
 	}
 
-	/** Nuevo cargo: cierra el actual el día anterior (si no tenía fecha de fin) y abre uno desde hoy. */
+	// ── Registrar / editar / ver un cargo (modal con sus aptitudes técnicas) ──
+	let cargoModal = $state<{ c: CargoHistorial; indice: number | null; soloLectura: boolean } | null>(null);
 	function agregarCargo() {
-		const hoy = hoyIso();
-		const ayer = new Date(Date.parse(`${hoy}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
-		cargos = [
-			{ cargo: '', fecha_inicio: hoy, fecha_fin: null, observacion: null },
-			...cargos.map((c) => (!c.fecha_fin && c.fecha_inicio <= ayer ? { ...c, fecha_fin: ayer } : c))
-		];
+		const hayPrincipal = cargos.some((c) => cargoAbierto(c, hoyIso()) && (c.clasificacion ?? 'principal') === 'principal');
+		cargoModal = {
+			c: { cargo: '', fecha_inicio: hoyIso(), fecha_fin: null, observacion: null, clasificacion: conHistorialNuevo && hayPrincipal ? 'secundario' : 'principal', aptitudes: [] },
+			indice: null,
+			soloLectura: false
+		};
 	}
-
+	function guardarCargoModal(c: CargoHistorial) {
+		if (!cargoModal) return;
+		if (cargoModal.indice != null) {
+			const i = cargoModal.indice;
+			cargos = cargos.map((x, j) => (j === i ? c : x));
+		} else {
+			// Un nuevo cargo PRINCIPAL cierra el principal vigente el día anterior (los secundarios siguen). Sin la migración,
+			// como antes: cierra el cargo vigente.
+			const esPrincipal = (c.clasificacion ?? 'principal') === 'principal';
+			const ayer = diaAntes(c.fecha_inicio);
+			cargos = [
+				c,
+				...cargos.map((x) =>
+					esPrincipal && !x.fecha_fin && (!conHistorialNuevo || (x.clasificacion ?? 'principal') === 'principal') && x.fecha_inicio <= ayer ? { ...x, fecha_fin: ayer } : x
+				)
+			];
+		}
+		erroresCargos = {};
+		cargoModal = null;
+	}
+	/** Dar de baja un cargo vigente: queda cerrado hoy (se guarda con la ficha). */
+	function darDeBajaCargo(i: number) {
+		const hoy = hoyIso();
+		cargos = cargos.map((c, j) => (j === i ? { ...c, fecha_fin: c.fecha_inicio > hoy ? c.fecha_inicio : hoy } : c));
+	}
 	function quitarCargo(i: number) {
 		cargos = cargos.filter((_, j) => j !== i);
 		erroresCargos = {};
+	}
+
+	// ── Historial de remuneraciones ──
+	let remuModal = $state<{ r: RemuneracionHistorial; indice: number | null; soloLectura: boolean } | null>(null);
+	const remuVigente = $derived(remuneraciones ? remuneracionVigente(remuneraciones, hoyIso()) : null);
+	function nuevaRemuneracion() {
+		const v = remuVigente;
+		remuModal = { r: { fecha_inicio: hoyIso(), fecha_fin: null, periodicidad: v?.periodicidad ?? (form.periodicidad_pago as RemuneracionHistorial['periodicidad']) ?? 'semanal', monto: 0, observacion: null }, indice: null, soloLectura: false };
+	}
+	function guardarRemuModal(r: RemuneracionHistorial) {
+		if (!remuModal || !remuneraciones) return;
+		if (remuModal.indice != null) {
+			const i = remuModal.indice;
+			remuneraciones = remuneraciones.map((x, j) => (j === i ? r : x));
+		} else {
+			const ayer = diaAntes(r.fecha_inicio);
+			remuneraciones = [r, ...remuneraciones.map((x) => (!x.fecha_fin && x.fecha_inicio <= ayer ? { ...x, fecha_fin: ayer } : x))].sort((a, b) => b.fecha_inicio.localeCompare(a.fecha_inicio));
+		}
+		remuModal = null;
+		// La vigente se refleja en las condiciones de la ficha (periodicidad, monto y desde), que usan el tareo y la planilla.
+		const v = remuneracionVigente(remuneraciones, hoyIso());
+		if (v) {
+			form.periodicidad_pago = v.periodicidad as DatosPersonal['periodicidad_pago'];
+			form.monto_pago = v.monto;
+			form.monto_pago_desde = v.fecha_inicio;
+		}
+	}
+	function estadoTramo(desde: string, hasta: string | null): { texto: string; clase: string } {
+		const hoy = hoyIso();
+		if (desde > hoy) return { texto: 'Programado', clase: 'bg-orange-50 text-orange-700 border-orange-200' };
+		if (!hasta || hasta >= hoy) return { texto: 'Vigente', clase: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+		return { texto: 'Finalizado', clase: 'bg-slate-100 text-slate-600 border-slate-200' };
 	}
 
 	function duracionCargo(c: CargoHistorial): string {
@@ -384,7 +474,10 @@
 			else if (!c.fecha_inicio) ec[i] = 'Indica desde cuándo.';
 			else if (c.fecha_fin && c.fecha_fin < c.fecha_inicio) ec[i] = '"Hasta" no puede ser anterior a "Desde".';
 		});
-		if (cargos.filter((c) => !c.fecha_fin).length > 1) e.cargos = 'Solo un cargo puede quedar sin fecha "Hasta" (el actual).';
+		if (conHistorialNuevo) {
+			if (cargos.filter((c) => !c.fecha_fin && (c.clasificacion ?? 'principal') === 'principal').length > 1)
+				e.cargos = 'Solo un cargo PRINCIPAL puede quedar vigente (sin fecha "Hasta"); los demás deben ser secundarios o cerrarse.';
+		} else if (cargos.filter((c) => !c.fecha_fin).length > 1) e.cargos = 'Solo un cargo puede quedar sin fecha "Hasta" (el actual).';
 		erroresCargos = ec;
 		errores = e;
 		return Object.keys(e).length === 0 && Object.keys(ec).length === 0;
@@ -395,6 +488,12 @@
 			toast.error('Revisa los campos marcados en rojo.');
 			irAPrimerError();
 			return;
+		}
+		// Ticket #144: la remuneración vigente del historial es la que rige en la ficha (tareo y planilla).
+		if (remuneraciones && remuVigente) {
+			form.periodicidad_pago = remuVigente.periodicidad as DatosPersonal['periodicidad_pago'];
+			form.monto_pago = remuVigente.monto;
+			form.monto_pago_desde = remuVigente.fecha_inicio;
 		}
 		const esCivil = usaCategoria(form.regimen);
 		const datos: DatosPersonal = {
@@ -470,10 +569,16 @@
 			const idGuardado = await guardarPersonal(supabase, personal?.id_personal ?? null, datos, !personal || cambioDeObra ? huellerosElegidos : null, obrasFinal);
 			// Ticket #123: la foto reemplazada o quitada se borra también de Drive.
 			if (fotoAnterior && datos.foto_url !== fotoAnterior) void borrarArchivosDriveHuerfanos(supabase, [fotoAnterior]);
+			const todasAptitudes = [...new Map([...aptitudesDeCargos(cargos, hoyIso()), ...aptitudes].map((a) => [a.trim().toLowerCase(), a.trim()])).values()].filter(Boolean);
+			if (todasAptitudes.join('|') !== (personal?.aptitudes ?? []).join('|')) {
+				const { error: eApt } = await supabase.from('personal').update({ aptitudes: todasAptitudes }).eq('id_personal', idGuardado);
+				if (eApt && eApt.code !== '42703' && eApt.code !== 'PGRST204') toast.error(`La ficha se guardó, pero no sus aptitudes. ${describeError(eApt)}`);
+			}
 			try {
 				await guardarCargosHistorial(supabase, idGuardado, cargos);
+				if (remuneraciones) await guardarRemuneraciones(supabase, idGuardado, remuneraciones, permisosState.userName || null);
 			} catch (err) {
-				toast.error(`La ficha se guardó, pero no el historial de cargos. ${describeError(err)}`);
+				toast.error(`La ficha se guardó, pero no el historial de cargos o remuneraciones. ${describeError(err)}`);
 				onSaved();
 				onClose();
 				return;
@@ -509,11 +614,12 @@
 		`w-full px-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 ${errores[campo] ? 'border-rose-400' : 'border-slate-200'}`;
 
 	// ── Submenú de la ficha (a pedido del usuario, 11/11/2026): una sección a la vez, como en el diseño de referencia.
-	type Seccion = 'personales' | 'vinculo' | 'cargo' | 'beneficios' | 'pagos';
+	type Seccion = 'personales' | 'vinculo' | 'cargo' | 'aptitudes' | 'beneficios' | 'pagos';
 	const SECCIONES: { id: Seccion; titulo: string; subtitulo: string; icono: string }[] = [
 		{ id: 'personales', titulo: 'Datos personales', subtitulo: 'Identificación y contacto del trabajador.', icono: 'fa-user' },
 		{ id: 'vinculo', titulo: 'Vínculo laboral', subtitulo: 'Define la relación laboral y su vigencia.', icono: 'fa-briefcase' },
-		{ id: 'cargo', titulo: 'Cargo y remuneración', subtitulo: 'Condiciones vigentes e historial de cargos con sus fechas.', icono: 'fa-coins' },
+		{ id: 'cargo', titulo: 'Cargo y remuneración', subtitulo: 'Condiciones vigentes e historial de cargos y remuneraciones.', icono: 'fa-coins' },
+		{ id: 'aptitudes', titulo: 'Aptitudes y actitudes', subtitulo: 'Lo que sabe hacer en campo, por cargo y con su nivel.', icono: 'fa-chart-simple' },
 		{ id: 'beneficios', titulo: 'Beneficios y proyección', subtitulo: 'Beneficios y anticipo de los próximos pagos.', icono: 'fa-gift' },
 		{ id: 'pagos', titulo: 'Pagos y seguros', subtitulo: 'Abono de remuneraciones y coberturas.', icono: 'fa-shield-halved' }
 	];
@@ -878,11 +984,12 @@
 								{/if}
 							</div>
 						{:else if seccion === 'cargo'}
+							{@const secundarios = cargos.filter((c) => cargoAbierto(c, hoyIso()) && c.clasificacion === 'secundario').length}
 							<div class="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3">
 								{#each [
-									{ icono: 'fa-briefcase', titulo: 'Cargo vigente', valor: cargoVigente || (usaCategoria(form.regimen) && form.categoria ? etiquetaCategoria(form.categoria) : null), extra: null },
+									{ icono: 'fa-briefcase', titulo: conHistorialNuevo ? 'Cargo principal vigente' : 'Cargo vigente', valor: cargoVigente || (usaCategoria(form.regimen) && form.categoria ? etiquetaCategoria(form.categoria) : null), extra: secundarios ? `+ ${secundarios} cargo${secundarios === 1 ? '' : 's'} secundario${secundarios === 1 ? '' : 's'}` : null },
 									{ icono: 'fa-coins', titulo: 'Remuneración vigente', valor: form.periodicidad_pago ? soles(form.monto_pago) : null, extra: form.periodicidad_pago ? etiqueta(PERIODICIDADES_PAGO, form.periodicidad_pago) : null },
-									{ icono: 'fa-calendar', titulo: 'Vigencia actual', valor: form.monto_pago_desde ? `Desde ${fechaCorta(form.monto_pago_desde)}` : null, extra: null }
+									{ icono: 'fa-calendar', titulo: 'Vigente desde', valor: form.monto_pago_desde ? fechaCorta(form.monto_pago_desde) : null, extra: null }
 								] as t}
 									<div class="flex items-center gap-3 rounded-xl border border-slate-200 p-3 min-w-0">
 										<span class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0"><i class={`fas ${t.icono}`}></i></span>
@@ -895,53 +1002,143 @@
 								{/each}
 							</div>
 
-							{@render subtitulo('Condiciones actuales')}
-							{#snippet ctlPeriodicidad()}
-								<SelectConSaldo id="periodicidad_pago" value={form.periodicidad_pago ?? ''} options={PERIODICIDADES_PAGO} placeholder="Selecciona la periodicidad" hasError={!!errores.periodicidad_pago} encabezadoNombre="Periodicidad" onchange={(v) => (form.periodicidad_pago = (v || null) as DatosPersonal['periodicidad_pago'])} />
-							{/snippet}
-							{@render campo('periodicidad_pago', 'Periodicidad', false, ctlPeriodicidad)}
-							{#snippet ctlMonto()}<input id="monto_pago" type="number" min="0" step="0.01" bind:value={form.monto_pago} disabled={!form.periodicidad_pago} placeholder={form.periodicidad_pago ? '0.00' : 'Elige primero la periodicidad'} class={`${inputClase('monto_pago')} disabled:bg-slate-50`} />{/snippet}
-							{@render campo('monto_pago', `${etiquetaMonto(form.periodicidad_pago)} (S/)`, false, ctlMonto, form.periodicidad_pago ? 'Monto bruto que recibe en cada periodo de pago.' : undefined)}
-							{#snippet ctlMontoDesde()}<input id="monto_pago_desde" type="date" bind:value={form.monto_pago_desde} disabled={!form.periodicidad_pago} class={`${inputClase('monto_pago_desde')} disabled:bg-slate-50`} />{/snippet}
-							{@render campo('monto_pago_desde', 'Vigente desde', false, ctlMontoDesde, 'Desde cuándo rige este monto.')}
+							{#if !conHistorialNuevo}
+								{@render subtitulo('Condiciones actuales')}
+								{#snippet ctlPeriodicidad()}
+									<SelectConSaldo id="periodicidad_pago" value={form.periodicidad_pago ?? ''} options={PERIODICIDADES_PAGO} placeholder="Selecciona la periodicidad" hasError={!!errores.periodicidad_pago} encabezadoNombre="Periodicidad" onchange={(v) => (form.periodicidad_pago = (v || null) as DatosPersonal['periodicidad_pago'])} />
+								{/snippet}
+								{@render campo('periodicidad_pago', 'Periodicidad', false, ctlPeriodicidad)}
+								{#snippet ctlMonto()}<input id="monto_pago" type="number" min="0" step="0.01" bind:value={form.monto_pago} disabled={!form.periodicidad_pago} placeholder={form.periodicidad_pago ? '0.00' : 'Elige primero la periodicidad'} class={`${inputClase('monto_pago')} disabled:bg-slate-50`} />{/snippet}
+								{@render campo('monto_pago', `${etiquetaMonto(form.periodicidad_pago)} (S/)`, false, ctlMonto, form.periodicidad_pago ? 'Monto bruto que recibe en cada periodo de pago.' : undefined)}
+								{#snippet ctlMontoDesde()}<input id="monto_pago_desde" type="date" bind:value={form.monto_pago_desde} disabled={!form.periodicidad_pago} class={`${inputClase('monto_pago_desde')} disabled:bg-slate-50`} />{/snippet}
+								{@render campo('monto_pago_desde', 'Vigente desde', false, ctlMontoDesde, 'Desde cuándo rige este monto.')}
+							{/if}
 
-							{#snippet accionCargo()}{@render botonNaranja('Registrar cambio de cargo', agregarCargo)}{/snippet}
+							{#snippet accionCargo()}{@render botonNaranja('Registrar cargo', agregarCargo)}{/snippet}
 							{@render subtitulo('Historial de cargos', accionCargo)}
 							<div class="sm:col-span-2 flex flex-col gap-2">
 								{#if cargandoCargos}
 									<span class="text-xs text-slate-400"><i class="fas fa-spinner fa-spin"></i> Cargando historial…</span>
 								{:else if !cargos.length}
-									<span class="text-xs text-slate-400 italic">Sin cargos registrados. Pulsa «Registrar cambio de cargo».</span>
+									<span class="text-xs text-slate-400 italic">Sin cargos registrados. Pulsa «Registrar cargo».</span>
 								{:else}
-									<div class="border border-slate-200 rounded-xl overflow-hidden">
-										<div class="hidden sm:grid grid-cols-[9rem_9rem_minmax(0,1fr)_6.5rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
-											<span>Desde</span><span>Hasta</span><span>Cargo</span><span>Estado</span><span class="sr-only">Acciones</span>
-										</div>
-										{#each cargos as c, i (c.id_cargo_historial ?? `n${i}`)}
-											<div class={`grid grid-cols-2 sm:grid-cols-[9rem_9rem_minmax(0,1fr)_6.5rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 ${erroresCargos[i] ? 'bg-rose-50/50' : ''}`}>
-												<label class="flex flex-col gap-0.5 text-[11px] text-slate-500 sm:contents">
-													<span class="sm:hidden">Desde</span>
-													<input type="date" bind:value={c.fecha_inicio} aria-label="Desde" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
-												</label>
-												<label class="flex flex-col gap-0.5 text-[11px] text-slate-500 sm:contents">
-													<span class="sm:hidden">Hasta</span>
-													<input type="date" value={c.fecha_fin ?? ''} oninput={(e) => (c.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
-												</label>
-												<span class="col-span-2 sm:col-span-1 flex flex-col gap-0.5 min-w-0">
-													<input id={`cargo_${i}`} bind:value={c.cargo} list="cargos-sugeridos" maxlength="100" placeholder="Elige o escribe el cargo" aria-label="Cargo" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400" />
-													<span class="text-[11px] text-slate-400">{duracionCargo(c)}</span>
-												</span>
-												<span>{@render insignia(estadoCargo(c))}</span>
-												<button type="button" onclick={() => quitarCargo(i)} title="Quitar este tramo" aria-label="Quitar este tramo" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
-												{#if erroresCargos[i]}<span class="col-span-2 sm:col-span-5 text-xs text-rose-600">{erroresCargos[i]}</span>{/if}
-											</div>
-										{/each}
+									<div class="border border-slate-200 rounded-xl overflow-x-auto">
+										<table class="w-full text-sm">
+											<thead class="bg-slate-100 text-xs text-slate-600">
+												<tr>
+													<th class="px-3 py-2 text-left font-semibold">Desde</th>
+													<th class="px-3 py-2 text-left font-semibold">Hasta</th>
+													<th class="px-3 py-2 text-left font-semibold">Cargo</th>
+													{#if conHistorialNuevo}<th class="px-3 py-2 text-left font-semibold">Clasificación</th>{/if}
+													<th class="px-3 py-2 text-left font-semibold">Estado</th>
+													<th class="px-3 py-2 text-center font-semibold">Acción</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each cargos as c, i (c.id_cargo_historial ?? `n${i}`)}
+													{@const est = estadoTramo(c.fecha_inicio, c.fecha_fin)}
+													<tr class={`border-t border-slate-100 ${erroresCargos[i] ? 'bg-rose-50/50' : est.texto === 'Vigente' ? 'bg-emerald-50/40' : ''}`}>
+														<td class="px-3 py-2 tabular-nums">{fechaCorta(c.fecha_inicio) ?? '—'}</td>
+														<td class="px-3 py-2 tabular-nums">{c.fecha_fin ? fechaCorta(c.fecha_fin) : '—'}</td>
+														<td class="px-3 py-2">
+															<span class="font-medium text-slate-800">{c.cargo || '—'}</span>
+															{#if c.aptitudes?.length}<span class="block text-[11px] text-slate-400">{c.aptitudes.length} aptitud{c.aptitudes.length === 1 ? '' : 'es'} · {duracionCargo(c)}</span>{:else}<span class="block text-[11px] text-slate-400">{duracionCargo(c)}</span>{/if}
+														</td>
+														{#if conHistorialNuevo}<td class="px-3 py-2 text-slate-600">{c.clasificacion === 'secundario' ? 'Secundario' : 'Principal'}</td>{/if}
+														<td class="px-3 py-2">{@render insignia(est)}</td>
+														<td class="px-3 py-2">
+															<div class="flex items-center justify-center gap-1">
+																<button type="button" onclick={() => (cargoModal = { c: { ...c, aptitudes: [...(c.aptitudes ?? [])] }, indice: i, soloLectura: true })} title="Ver" aria-label="Ver cargo" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-eye text-xs"></i></button>
+																<button type="button" onclick={() => (cargoModal = { c: { ...c, aptitudes: [...(c.aptitudes ?? [])] }, indice: i, soloLectura: false })} title="Editar" aria-label="Editar cargo" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-pen text-xs"></i></button>
+																{#if !c.id_cargo_historial}
+																	<button type="button" onclick={() => quitarCargo(i)} title="Quitar (aún no se guardó)" aria-label="Quitar cargo" class="w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+																{:else if est.texto !== 'Finalizado'}
+																	<button type="button" onclick={() => darDeBajaCargo(i)} title="Cierra el cargo con la fecha de hoy" class="px-2 py-0.5 rounded-md border border-rose-300 text-rose-600 text-xs font-semibold hover:bg-rose-50">Dar de baja</button>
+																{/if}
+															</div>
+														</td>
+													</tr>
+													{#if erroresCargos[i]}<tr><td colspan="6" class="px-3 pb-2 text-xs text-rose-600">{erroresCargos[i]}</td></tr>{/if}
+												{/each}
+											</tbody>
+										</table>
 									</div>
 								{/if}
 								{#if errores.cargos}<span class="text-xs text-rose-600">{errores.cargos}</span>{/if}
 							</div>
-							<datalist id="cargos-sugeridos">{#each CARGOS_SUGERIDOS as c}<option value={c}></option>{/each}</datalist>
-							{@render nota('Cada tramo conserva su cargo, sin fechas superpuestas. El que no tiene fecha «Hasta» es el cargo vigente; si su «Desde» es futuro queda como Programado.')}
+							{@render nota(conHistorialNuevo ? 'Un cargo principal vigente y los secundarios que haga a la vez. Al registrar un nuevo cargo principal, el anterior se cierra el día antes. Los cambios se guardan con «Guardar».' : 'Cada tramo conserva su cargo, sin fechas superpuestas. El que no tiene fecha «Hasta» es el cargo vigente.')}
+
+							{#if conHistorialNuevo}
+								{#snippet accionRemu()}{@render botonNaranja('Registrar cambio de remuneración', nuevaRemuneracion)}{/snippet}
+								{@render subtitulo('Historial de remuneraciones', accionRemu)}
+								<div class="sm:col-span-2 flex flex-col gap-2">
+									{#if !remuneraciones?.length}
+										<span class="text-xs text-slate-400 italic">Sin remuneraciones registradas. Pulsa «Registrar cambio de remuneración».</span>
+									{:else}
+										<div class="border border-slate-200 rounded-xl overflow-x-auto">
+											<table class="w-full text-sm">
+												<thead class="bg-slate-100 text-xs text-slate-600">
+													<tr>
+														<th class="px-3 py-2 text-left font-semibold">Desde</th>
+														<th class="px-3 py-2 text-left font-semibold">Hasta</th>
+														<th class="px-3 py-2 text-left font-semibold">Periodicidad</th>
+														<th class="px-3 py-2 text-right font-semibold">Monto base (S/)</th>
+														<th class="px-3 py-2 text-left font-semibold">Estado</th>
+														<th class="px-3 py-2 text-center font-semibold">Acción</th>
+													</tr>
+												</thead>
+												<tbody>
+													{#each remuneraciones as r, i (r.id_remuneracion ?? `r${i}`)}
+														{@const est = estadoTramo(r.fecha_inicio, r.fecha_fin)}
+														<tr class={`border-t border-slate-100 ${est.texto === 'Vigente' ? 'bg-emerald-50/40' : ''}`}>
+															<td class="px-3 py-2 tabular-nums">{fechaCorta(r.fecha_inicio)}</td>
+															<td class="px-3 py-2 tabular-nums">{r.fecha_fin ? fechaCorta(r.fecha_fin) : '—'}</td>
+															<td class="px-3 py-2">{etiqueta(PERIODICIDADES_PAGO, r.periodicidad)}</td>
+															<td class="px-3 py-2 text-right tabular-nums">{Number(r.monto).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+															<td class="px-3 py-2">{@render insignia(est)}</td>
+															<td class="px-3 py-2">
+																<div class="flex items-center justify-center gap-1">
+																	<button type="button" onclick={() => (remuModal = { r: { ...r }, indice: i, soloLectura: true })} title="Ver" aria-label="Ver remuneración" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-eye text-xs"></i></button>
+																	<button type="button" onclick={() => (remuModal = { r: { ...r }, indice: i, soloLectura: false })} title="Editar" aria-label="Editar remuneración" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-pen text-xs"></i></button>
+																	{#if !r.id_remuneracion}<button type="button" onclick={() => (remuneraciones = remuneraciones!.filter((_, j) => j !== i))} title="Quitar (aún no se guardó)" aria-label="Quitar remuneración" class="w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>{/if}
+																</div>
+															</td>
+														</tr>
+													{/each}
+												</tbody>
+											</table>
+										</div>
+									{/if}
+								</div>
+								{@render nota('La remuneración vigente es la que usan el tareo y la planilla. Al registrar un cambio, la anterior se cierra el día antes.')}
+							{/if}
+						{:else if seccion === 'aptitudes'}
+							{@render subtitulo('Aptitudes por cargo')}
+							<div class="sm:col-span-2 flex flex-col gap-2">
+								{#each cargos.filter((c) => cargoAbierto(c, hoyIso())) as c, k (c.id_cargo_historial ?? `a${k}`)}
+									<div class="rounded-xl border border-slate-200 p-3">
+										<div class="flex items-center gap-2 mb-2">
+											<span class="font-semibold text-slate-800">{c.cargo}</span>
+											{#if conHistorialNuevo}<span class="text-xs text-slate-500">· {c.clasificacion === 'secundario' ? 'Secundario' : 'Principal'}</span>{/if}
+											<button type="button" onclick={() => { const i = cargos.indexOf(c); cargoModal = { c: { ...c, aptitudes: [...(c.aptitudes ?? [])] }, indice: i, soloLectura: false }; }} class="ml-auto text-xs text-blue-600 hover:underline">Editar aptitudes</button>
+										</div>
+										<div class="flex flex-wrap gap-1.5">
+											{#each c.aptitudes ?? [] as a (a.actividad)}
+												<span class="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 px-2 py-0.5 text-xs text-blue-700">{a.actividad}{#if a.nivel}<b class="font-semibold">· {NIVELES_APTITUD.find((n) => n.value === a.nivel)?.label}</b>{/if}</span>
+											{:else}
+												<span class="text-xs text-slate-400 italic">Sin aptitudes registradas para este cargo.</span>
+											{/each}
+										</div>
+									</div>
+								{:else}
+									<span class="text-xs text-slate-400 italic">Sin cargos vigentes. Registra su cargo en «Cargo y remuneración».</span>
+								{/each}
+							</div>
+							{@render subtitulo('Otras aptitudes')}
+							<div class="sm:col-span-2 flex flex-col gap-1">
+								<AptitudesInput id="aptitudes_personal" bind:value={aptitudes} sugerencias={aptitudesSugeridas} placeholder="Ej. Lectura de planos… y pulsa Enter" />
+								<span class="text-xs text-slate-400">Lo que sabe hacer en campo fuera de sus cargos. En el tareo (Proyección) todas sus aptitudes se comparan con las que pide cada requerimiento de personal.</span>
+							</div>
 						{:else if seccion === 'beneficios'}
 							<div class="sm:col-span-2 flex flex-col items-center text-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10">
 								<span class="w-12 h-12 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center text-xl"><i class="fas fa-gift"></i></span>
@@ -963,7 +1160,7 @@
 										</div>
 										{#each cuentas as c, i (c.id_cuenta ?? `n${i}`)}
 											<div class="grid grid-cols-2 sm:grid-cols-[minmax(0,1fr)_5.5rem_minmax(0,1fr)_minmax(0,1fr)_6rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
-												<input bind:value={c.banco} list="bancos-personal" maxlength="60" placeholder="Banco" aria-label="Banco" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+												<InputConLista bind:value={c.banco} opciones={BANCOS} maxlength={60} placeholder="Banco" ariaLabel="Banco" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
 												<select bind:value={c.moneda} aria-label="Moneda" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm"><option value="PEN">S/</option><option value="USD">US$</option></select>
 												<input bind:value={c.numero_cuenta} maxlength="30" placeholder="N.º de cuenta" aria-label="Número de cuenta" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
 												<input bind:value={c.cci} maxlength="20" inputmode="numeric" placeholder="CCI (20 dígitos)" aria-label="CCI" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
@@ -973,7 +1170,6 @@
 										{/each}
 									</div>
 								{/if}
-								<datalist id="bancos-personal">{#each BANCOS as b}<option value={b}></option>{/each}</datalist>
 								{#if errores.cci}<span class="text-xs text-rose-600">{errores.cci}</span>{/if}
 							</div>
 
@@ -987,47 +1183,53 @@
 								{@render campo('cuspp', 'CUSPP', false, ctlCuspp)}
 							{/if}
 
-							{#snippet accionSeguro()}{@render botonNaranja('Agregar seguro', () => (seguros = [{ tipo: 'sctr_salud', aseguradora: '', poliza: '', fecha_inicio: hoyIso(), fecha_fin: null, archivo_url: null }, ...seguros]))}{/snippet}
-							{@render subtitulo('Seguros (SCTR salud, SCTR pensión y Vida Ley)', docsDisponible ? accionSeguro : undefined)}
-							<div class="sm:col-span-2 flex flex-col gap-2">
-								{#if !docsDisponible}
-									<span class="text-xs text-amber-700">Falta actualizar la base de datos para registrar el historial de seguros.</span>
-								{:else if !seguros.length}
-									<span class="text-xs text-slate-400 italic">Sin seguros registrados. Cada mes se agrega el SCTR de salud y el de pensión (con su archivo); el historial queda completo.</span>
-								{:else}
-									<div class="border border-slate-200 rounded-xl overflow-hidden">
-										<div class="hidden sm:grid grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
-											<span>Seguro</span><span>Aseguradora</span><span>Póliza</span><span>Desde</span><span>Hasta</span><span>Archivo</span><span>Estado</span><span class="sr-only">Quitar</span>
-										</div>
-										{#each seguros as s, i (s.id_seguro ?? `n${i}`)}
-											<div class="grid grid-cols-2 sm:grid-cols-[9.5rem_minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
-												<select bind:value={s.tipo} aria-label="Tipo de seguro" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm">{#each TIPOS_SEGURO as t}<option value={t.value}>{t.label}</option>{/each}</select>
-												<input bind:value={s.aseguradora} list="aseguradoras-personal" maxlength="100" placeholder="Aseguradora" aria-label="Aseguradora" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
-												<input bind:value={s.poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
-												<input type="date" bind:value={s.fecha_inicio} aria-label="Desde" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
-												<input type="date" value={s.fecha_fin ?? ''} oninput={(e) => (s.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
-												{@render archivo(s, 'seguro', `s${i}`)}
-												<span>{@render insignia(i === seguros.findIndex((x) => x.tipo === s.tipo) ? estadoVence(s.fecha_fin, DIAS_AVISO_SEGURO[s.tipo]) : { texto: 'Anterior', clase: 'bg-slate-100 text-slate-500 border-slate-200' })}</span>
-												<button type="button" onclick={() => (seguros = seguros.filter((_, j) => j !== i))} title="Quitar seguro" aria-label="Quitar seguro" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+							<!-- Ticket #110 (26/11/2026, "que no esté todo amontonado"): un bloque por seguro, cada uno con su historial. -->
+							{#each TIPOS_SEGURO as ts (ts.value)}
+								{@const filasTipo = seguros.map((s, i) => ({ s, i })).filter((x) => x.s.tipo === ts.value)}
+								{#snippet accionSeguro()}{@render botonNaranja(`Agregar ${ts.label}`, () => (seguros = [{ tipo: ts.value, aseguradora: '', poliza: '', fecha_inicio: hoyIso(), fecha_fin: null, archivo_url: null }, ...seguros]))}{/snippet}
+								{@render subtitulo(ts.label, docsDisponible ? accionSeguro : undefined)}
+								<div class="sm:col-span-2 flex flex-col gap-2">
+									{#if !docsDisponible}
+										<span class="text-xs text-amber-700">Falta actualizar la base de datos para registrar el historial de seguros.</span>
+									{:else if !filasTipo.length}
+										<span class="text-xs text-slate-400 italic">Sin registros de {ts.label}.{ts.value === 'vida_ley' ? '' : ' Se agrega cada renovación con su archivo; el historial queda completo.'}</span>
+									{:else}
+										<div class="border border-slate-200 rounded-xl overflow-hidden">
+											<div class="hidden sm:grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
+												<span>Aseguradora</span><span>Póliza</span><span>Desde</span><span>Hasta</span><span>Archivo</span><span>Estado</span><span class="sr-only">Quitar</span>
 											</div>
-										{/each}
-									</div>
-								{/if}
-								<datalist id="aseguradoras-personal">{#each ASEGURADORAS as a}<option value={a}></option>{/each}</datalist>
-							</div>
+											{#each filasTipo as { s, i }, k (s.id_seguro ?? `n${i}`)}
+												<div class="grid grid-cols-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_8.5rem_8.5rem_7rem_6rem_2.5rem] items-center gap-2 px-3 py-2 border-t border-slate-100 first:border-t-0 text-sm">
+													<InputConLista bind:value={s.aseguradora} opciones={ASEGURADORAS} maxlength={100} placeholder="Aseguradora" ariaLabel="Aseguradora" class="w-full min-w-0 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+													<input bind:value={s.poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza" class="px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
+													<input type="date" bind:value={s.fecha_inicio} aria-label="Desde" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+													<input type="date" value={s.fecha_fin ?? ''} oninput={(e) => (s.fecha_fin = e.currentTarget.value || null)} aria-label="Hasta" class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" />
+													{@render archivo(s, 'seguro', `s${i}`)}
+													<span>{@render insignia(k === 0 ? estadoVence(s.fecha_fin, DIAS_AVISO_SEGURO[s.tipo]) : { texto: 'Anterior', clase: 'bg-slate-100 text-slate-500 border-slate-200' })}</span>
+													<button type="button" onclick={() => (seguros = seguros.filter((_, j) => j !== i))} title="Quitar" aria-label="Quitar" class="justify-self-end w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{/each}
 
 							{@render subtitulo('Salud ocupacional')}
 							<div class="sm:col-span-2 border border-slate-200 rounded-xl overflow-hidden">
 								<div class="hidden sm:grid grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] gap-2 px-3 py-2 bg-slate-100 text-xs font-semibold text-slate-600">
-									<span>Cobertura</span><span>Póliza o documento</span><span>Vencimiento</span><span>Estado</span>
+									<span>Examen</span><span>Documento</span><span>Vencimiento</span><span>Estado</span>
 								</div>
-								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 text-sm">
+								<!-- Ticket #110: en Salud ocupacional queda solo el examen médico; el SCTR va en Seguros. La fila antigua
+								     solo aparece si la ficha tiene datos del registro anterior. -->
+								{#if form.sctr_poliza || form.sctr_vencimiento}
+								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 border-b border-slate-100 text-sm">
 									<span class="font-medium text-slate-800">SCTR <span class="block text-[11px] font-normal text-slate-400">registro anterior</span></span>
 									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.sctr_vencimiento, 7))}</span>
 									<input id="sctr_poliza" bind:value={form.sctr_poliza} maxlength="40" placeholder="N.º de póliza" aria-label="Póliza SCTR" class="col-span-2 sm:col-span-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" />
 									<input id="sctr_vencimiento" type="date" bind:value={form.sctr_vencimiento} aria-label="Vencimiento del SCTR" class="col-span-2 sm:col-span-1 px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-slate-700" />
 								</div>
-								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 border-t border-slate-100 text-sm">
+								{/if}
+								<div class="grid grid-cols-2 sm:grid-cols-[10rem_minmax(0,1fr)_10rem_7rem] items-center gap-2 px-3 py-2 text-sm">
 									<span class="font-medium text-slate-800">Examen médico ocupacional</span>
 									<span class="justify-self-end sm:justify-self-auto sm:order-last">{@render insignia(estadoVence(form.examen_medico_vencimiento))}</span>
 									<span class="hidden sm:block text-slate-300">—</span>
@@ -1054,3 +1256,15 @@
 		</div>
 	</div>
 {/if}
+
+<CargoModal
+	open={!!cargoModal}
+	inicial={cargoModal?.c ?? null}
+	idPersonal={personal?.id_personal ?? null}
+	sugerencias={aptitudesSugeridas}
+	soloLectura={cargoModal?.soloLectura ?? false}
+	conClasificacion={conHistorialNuevo}
+	onguardar={guardarCargoModal}
+	oncerrar={() => (cargoModal = null)}
+/>
+<RemuneracionModal open={!!remuModal} inicial={remuModal?.r ?? null} soloLectura={remuModal?.soloLectura ?? false} onguardar={guardarRemuModal} oncerrar={() => (remuModal = null)} />
