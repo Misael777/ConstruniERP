@@ -267,6 +267,40 @@
 		gridVersion++;
 	}
 
+	/** Pedido de la clienta (26/11/2026): arrastrar una tarjeta a la semana/mes anterior o siguiente. Cada panorama tiene
+	 * dos zonas ("‹" y "›"); al soltar ahí la cuota se mueve el mismo día de la semana anterior/siguiente (vista semana)
+	 * o el mismo día del mes anterior/siguiente (vista mes), y el calendario pasa a esa semana o mes. */
+	let zonasBorde = $state<Record<string, T[]>>({});
+	function fechaDesplazada(iso: string, dir: -1 | 1): string {
+		const d = new Date(iso + 'T00:00:00');
+		if (vista === 'semana') return toISO(addDays(d, 7 * dir));
+		const destino = new Date(d.getFullYear(), d.getMonth() + dir, 1);
+		const ultimo = new Date(destino.getFullYear(), destino.getMonth() + 1, 0).getDate();
+		destino.setDate(Math.min(d.getDate(), ultimo));
+		return toISO(destino);
+	}
+	function soltarEnBorde(pIdx: number, dir: -1 | 1, e: CustomEvent<{ items: T[] }>) {
+		zonasBorde[`${pIdx}:${dir}`] = [];
+		const items = e.detail.items;
+		if (!items.length) return;
+		for (const it of items) {
+			if (it.pagado) {
+				onItemBloqueado?.();
+				continue;
+			}
+			const original = panoramas[pIdx]?.items.find((i) => i.id === it.id)?.fechaVencimiento ?? it.fechaVencimiento;
+			const actual = cambiosPorPanorama[pIdx].get(it.id)?.fechaNueva ?? original;
+			if (!actual) continue;
+			const nueva = fechaDesplazada(actual, dir);
+			const previo = cambiosPorPanorama[pIdx].get(it.id);
+			if (nueva === original) cambiosPorPanorama[pIdx].delete(it.id);
+			else cambiosPorPanorama[pIdx].set(it.id, { item: it, fechaAnterior: previo ? previo.fechaAnterior : original, fechaNueva: nueva });
+		}
+		// Pasa a la semana/mes donde quedó la tarjeta (prev/next recalculan la grilla con los cambios pendientes). Se espera
+		// a que la columna de origen termine de procesar el soltar, para que no escriba sobre la grilla nueva.
+		setTimeout(() => (dir === -1 ? prev() : next()), FLIP_MS + 60);
+	}
+
 	async function confirmarCambios(pIdx: number) {
 		guardando[pIdx] = true;
 		errorGuardado[pIdx] = '';
@@ -366,6 +400,24 @@
 						</button>
 					</div>
 				{/if}
+			</div>
+
+			<!-- Zonas para soltar la tarjeta en la semana/mes anterior o siguiente (pedido de la clienta, 26/11/2026). -->
+			<div class="grid grid-cols-2 gap-2 px-3 pt-2">
+				{#each [-1, 1] as dir (dir)}
+					{@const clave = `${pIdx}:${dir}`}
+					<div
+						use:dndzone={{ items: zonasBorde[clave] ?? [], flipDurationMs: FLIP_MS, type: `cal-panorama-${panorama.id}`, dropTargetStyle: { outline: '2px dashed #3b82f6', background: '#eff6ff' } }}
+						onconsider={(e) => (zonasBorde[clave] = e.detail.items)}
+						onfinalize={(e) => soltarEnBorde(pIdx, dir as -1 | 1, e)}
+						class={`min-h-[30px] rounded-lg border border-dashed border-slate-200 text-[11px] text-slate-400 flex items-center px-3 ${dir === -1 ? 'justify-start' : 'justify-end'}`}
+					>
+						{#if !(zonasBorde[clave]?.length)}
+							<span class="pointer-events-none">{dir === -1 ? `‹ Suelta aquí para pasarla a ${vista === 'semana' ? 'la semana anterior' : 'el mes anterior'}` : `Suelta aquí para pasarla a ${vista === 'semana' ? 'la semana siguiente' : 'el mes siguiente'} ›`}</span>
+						{/if}
+						{#each zonasBorde[clave] ?? [] as it (it.id)}<span class="text-[10px] text-blue-600">{it.titulo}</span>{/each}
+					</div>
+				{/each}
 			</div>
 
 			{#if vista === 'mes'}
@@ -479,10 +531,9 @@
 												{/if}
 											{/if}
 										</div>
-										{#if vista === 'semana'}
-											<p class="text-slate-400 truncate">{subtituloDe(item)}</p>
-											{#if detalleDe?.(item)}<p class="text-slate-400 truncate">{detalleDe(item)}</p>{/if}
-										{/if}
+										<!-- Cliente y proyecto también en la vista mes (pedido de la clienta, 26/11/2026); el texto completo se ve al pasar el cursor. -->
+										<p class="text-slate-400 truncate">{subtituloDe(item)}</p>
+										{#if detalleDe?.(item)}<p class="text-slate-400 truncate">{detalleDe(item)}</p>{/if}
 										<p class={`font-bold ${colorTexto}`}>{formatCurrency(item.monto)}</p>
 									</div>
 								{/each}
@@ -495,7 +546,7 @@
 	{/each}
 
 	<p class="text-[11px] text-slate-400 px-1">
-		Mostrando cuotas programadas entre {rangoLabel}. <strong>Panorama Actual</strong> es el estado real de la cartera — arrastra la tarjeta (o toca su fecha para elegir cualquier día, también de otro mes) y pulsa <strong>Guardar cambios</strong>: la nueva fecha queda en la cuenta.
+		Mostrando cuotas programadas entre {rangoLabel}. <strong>Panorama Actual</strong> es el estado real de la cartera — arrastra la tarjeta a otro día, o a las franjas «‹ anterior / siguiente ›» para pasarla a otra semana o mes (también puedes tocar su fecha y elegir cualquier día), y pulsa <strong>Guardar cambios</strong>: la nueva fecha queda en la cuenta.
 		En <strong>Panorama 1</strong> y <strong>Panorama 2</strong>, arrastrar solo propone un cambio (no se guarda solo) — usa "Establecer como panorama actual" para volverlo real.
 	</p>
 </div>
