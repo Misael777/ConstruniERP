@@ -32,6 +32,7 @@
 	import { dndzone } from 'svelte-dnd-action';
 	import { ChevronLeft, ChevronRight, Pencil, Eye, Loader2, Lock, Copy, CalendarDays, ArrowUpRight } from '@lucide/svelte';
 	import { untrack } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { formatCurrency } from '$lib/shared/fieldConfig';
 
 	const {
@@ -162,11 +163,17 @@
 			'[PanoramaCalendarView] panoramas recibidos:',
 			panoramas.map((p) => ({ id: p.id, nombre: p.nombre, subtitulo: p.subtitulo, totalItems: p.items.length }))
 		);
-		const nuevoGrid = panoramas.map((p) =>
+		// Observación del calendario (26/11/2026): las fechas movidas y aún sin guardar se respetan al cambiar de semana o
+		// de mes (antes la tarjeta volvía a su día original aunque el cambio seguía pendiente).
+		const pendientes = (pIdx: number) => (typeof cambiosPorPanorama === 'undefined' ? undefined : cambiosPorPanorama[pIdx]);
+		const nuevoGrid = panoramas.map((p, pIdx) =>
 			days.map((day) =>
 				p.items
+					.map((i) => {
+						const pend = pendientes(pIdx)?.get(i.id);
+						return pend ? { ...i, fechaVencimiento: pend.fechaNueva } : { ...i };
+					})
 					.filter((i) => i.fechaVencimiento === day)
-					.map((i) => ({ ...i }))
 					.sort((a, b) => a.titulo.localeCompare(b.titulo))
 			)
 		);
@@ -180,14 +187,17 @@
 		return nuevoGrid;
 	}
 
-	let grid = $state<T[][][]>(computeGrid());
-	let gridVersion = $state(0);
 	/** Un Map de cambios pendientes POR PANORAMA (índice = pIdx, igual que `grid`): id -> {item,
 	 * fechaAnterior, fechaNueva}. Separado por panorama para que confirmar/descartar en uno no
-	 * afecte a los otros dos — ver nota de arriba del archivo. */
-	let cambiosPorPanorama = $state<Map<number, { item: T; fechaAnterior: string | null; fechaNueva: string }>[]>(
-		panoramas.map(() => new Map())
+	 * afecte a los otros dos — ver nota de arriba del archivo.
+	 * Observación del calendario (26/11/2026, "no hay un botón Guardar"): era un Map común dentro de $state, que Svelte
+	 * no vigila — al soltar una tarjeta el cambio quedaba anotado pero el botón para guardarlo nunca aparecía. SvelteMap
+	 * sí es reactivo. */
+	const cambiosPorPanorama: SvelteMap<number, { item: T; fechaAnterior: string | null; fechaNueva: string }>[] = untrack(() =>
+		panoramas.map(() => new SvelteMap())
 	);
+	let grid = $state<T[][][]>(computeGrid());
+	let gridVersion = $state(0);
 	let guardando = $state<boolean[]>(panoramas.map(() => false));
 	let errorGuardado = $state<string[]>(panoramas.map(() => ''));
 
@@ -240,6 +250,21 @@
 		// Reordena alfabéticamente por nombre (ver nota arriba) para que la columna del día quede en un
 		// orden estable y predecible, sin importar en qué orden exacto soltó el usuario la tarjeta.
 		grid[pIdx][dIdx] = [...permitidos].sort((a, b) => a.titulo.localeCompare(b.titulo));
+	}
+
+	/** Mover una tarjeta a cualquier fecha con el selector de la tarjeta (también a otro mes, que no se ve al arrastrar). */
+	let editandoFecha = $state<string | null>(null);
+	function moverAFecha(pIdx: number, item: T, fecha: string) {
+		editandoFecha = null;
+		if (!fecha || fecha === item.fechaVencimiento) return;
+		if (item.pagado) return void onItemBloqueado?.();
+		const cambios = cambiosPorPanorama[pIdx];
+		const previo = cambios.get(item.id);
+		const original = panoramas[pIdx]?.items.find((i) => i.id === item.id)?.fechaVencimiento ?? item.fechaVencimiento;
+		if (fecha === original) cambios.delete(item.id);
+		else cambios.set(item.id, { item, fechaAnterior: previo ? previo.fechaAnterior : original, fechaNueva: fecha });
+		grid[pIdx] = computeGrid()[pIdx];
+		gridVersion++;
 	}
 
 	async function confirmarCambios(pIdx: number) {
@@ -322,7 +347,7 @@
 				<span class="text-xs font-semibold {colorTexto}">· {vista === 'semana' ? 'Esta semana' : 'En el calendario'}: {formatCurrency(totalRango(pIdx))}</span>
 
 				{#if cambios?.size > 0}
-					<div class="ml-auto flex items-center gap-2 text-sm">
+					<div class="ml-auto flex flex-wrap items-center gap-2 text-sm rounded-lg bg-amber-50 border border-amber-200 px-2 py-1">
 						<span class="text-amber-600 font-medium">
 							{cambios.size} {panorama.modo === 'actual' ? 'fecha' : 'cambio propuesto'}{cambios.size === 1 ? '' : 's'}{panorama.modo === 'actual' ? ' sin guardar' : ''}
 						</span>
@@ -337,7 +362,7 @@
 							class={`flex items-center gap-1.5 px-3 h-8 rounded-lg text-white font-medium disabled:opacity-60 ${panorama.modo === 'actual' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-amber-500 hover:bg-amber-600'}`}
 						>
 							{#if guardando[pIdx]}<Loader2 size={14} class="animate-spin" />{/if}
-							{panorama.modo === 'actual' ? 'Confirmar cambios' : 'Establecer como panorama actual'}
+							{panorama.modo === 'actual' ? 'Guardar cambios' : 'Establecer como panorama actual'}
 						</button>
 					</div>
 				{/if}
@@ -379,14 +404,35 @@
 								class={vista === 'semana' ? 'flex-1 flex flex-col gap-1.5 p-1.5 min-h-[130px]' : 'flex-1 flex flex-col gap-1 p-1 min-h-[64px] max-h-[130px] overflow-y-auto'}
 							>
 								{#each grid[pIdx]?.[dIdx] ?? [] as item (item.id)}
+									{@const claveFecha = `${pIdx}-${item.id}`}
 									<div
 										class={`rounded-lg border shadow-sm ${item.pagado ? 'bg-slate-100 border-slate-200 opacity-70 cursor-not-allowed' : `cursor-grab active:cursor-grabbing ${colorCard}`} ${vista === 'semana' ? 'px-2 py-1.5 text-[11px] leading-tight' : 'px-1.5 py-1 text-[9.5px] leading-tight'}`}
 										title={item.pagado ? 'Este pago ya se realizó — no se puede reprogramar.' : ''}
 									>
-										<p class={`font-bold flex items-center gap-1 ${item.pagado ? 'text-slate-400' : colorTexto}`}>
-											{#if item.pagado}<Lock size={10} />{/if}
-											{fmtFechaCorta(item.fechaVencimiento)}
-										</p>
+										{#if editandoFecha === claveFecha}
+											<input
+												type="date"
+												value={item.fechaVencimiento ?? ''}
+												onchange={(e) => moverAFecha(pIdx, item, (e.currentTarget as HTMLInputElement).value)}
+												onblur={() => (editandoFecha = null)}
+												onmousedown={(e) => e.stopPropagation()}
+												onpointerdown={(e) => e.stopPropagation()}
+												class="w-full mb-0.5 px-1 py-0.5 border border-blue-300 rounded text-[10px] text-slate-700 bg-white"
+												aria-label="Nueva fecha"
+											/>
+										{:else}
+											<button
+												type="button"
+												disabled={item.pagado}
+												onclick={(e) => { e.stopPropagation(); editandoFecha = claveFecha; }}
+												onpointerdown={(e) => e.stopPropagation()}
+												title={item.pagado ? 'Este pago ya se realizó — no se puede reprogramar.' : 'Cambiar la fecha (también a otro mes)'}
+												class={`font-bold flex items-center gap-1 hover:underline disabled:no-underline ${item.pagado ? 'text-slate-400' : colorTexto}`}
+											>
+												{#if item.pagado}<Lock size={10} />{:else}<CalendarDays size={vista === 'semana' ? 10 : 8} />{/if}
+												{fmtFechaCorta(item.fechaVencimiento)}
+											</button>
+										{/if}
 										<div class="flex items-start gap-1">
 											{#if onVerResumen}
 												<button
@@ -449,7 +495,7 @@
 	{/each}
 
 	<p class="text-[11px] text-slate-400 px-1">
-		Mostrando cuotas programadas entre {rangoLabel}. <strong>Panorama Actual</strong> es el estado real de la cartera — arrastra y confirma para reprogramar de inmediato.
+		Mostrando cuotas programadas entre {rangoLabel}. <strong>Panorama Actual</strong> es el estado real de la cartera — arrastra la tarjeta (o toca su fecha para elegir cualquier día, también de otro mes) y pulsa <strong>Guardar cambios</strong>: la nueva fecha queda en la cuenta.
 		En <strong>Panorama 1</strong> y <strong>Panorama 2</strong>, arrastrar solo propone un cambio (no se guarda solo) — usa "Establecer como panorama actual" para volverlo real.
 	</p>
 </div>

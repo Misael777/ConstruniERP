@@ -29,6 +29,7 @@
 	import { reportarDiagnostico } from '$lib/shared/auditoria';
 	import { diag, revisarCaidaAnterior, leerLog, formatearEntrada, infoEquipo, diagState, activarDiagnostico } from '$lib/shared/diagnostico.svelte';
 	import DiagnosticoPanel from '$lib/shared/components/DiagnosticoPanel.svelte';
+	import { instalarTooltipTextoCortado } from '$lib/shared/tooltipTextoCortado';
 	import EntornoDeveloper from '$lib/shared/components/EntornoDeveloper.svelte';
 	import EntornoHuelleros from '$lib/shared/components/EntornoHuelleros.svelte';
 
@@ -127,6 +128,8 @@
 	onDestroy(() => authListener.subscription.unsubscribe());
 
 	onMount(async () => {
+		// Ticket #141: texto completo al pasar el cursor sobre cualquier texto cortado.
+		instalarTooltipTextoCortado();
 		if (isRunningInTauri()) {
 			getCurrentWindow().onFocusChanged(({ payload: focused }) => {
 				if (focused) checkPendingShare();

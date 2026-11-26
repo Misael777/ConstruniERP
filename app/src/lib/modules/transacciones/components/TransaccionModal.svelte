@@ -1570,7 +1570,7 @@
 	// categoriaEsPrestamoOtorgado, justo abajo, ya necesita leerlo — TypeScript exige que un `let`
 	// exista antes de su primera referencia en el archivo, aunque sea dentro de un $derived que recién
 	// se evalúa después.
-	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo' | 'tributo' | 'donacion' | 'diezmo';
+	type ClaseDestino = '' | 'proveedores' | 'subcontratista' | 'empleados' | 'cliente' | 'otro' | 'prestamo' | 'tributo' | 'obra_caridad' | 'accionistas';
 	let claseDestino = $state<ClaseDestino>('');
 	// Clasificación de transacciones (Excel de la clienta, 24/11/2026): en un EGRESO la Categoría depende SOLO de la
 	// Clase ("no habrá más categorías para esta clase") — ya no del tipo de proyecto del Centro de Costo Origen
@@ -1584,11 +1584,13 @@
 		subcontratista: ['Planilla', 'Reembolso - Compra de materiales', 'Máquinas y herramientas', 'Otros'],
 		tributo: ['IGV', 'Renta', 'Multa', 'Fraccionamiento', 'Otros'],
 		otro: OTROS_EGRESO,
-		donacion: OTROS_EGRESO,
-		diezmo: OTROS_EGRESO
+		// Ticket #139 (25/11/2026): "Donación" y "Diezmo" pasan a ser categorías de la Clase "Obra de caridad".
+		obra_caridad: ['Donación', 'Diezmo'],
+		// Ticket #140: Clase "Accionistas" con la Categoría "Utilidad".
+		accionistas: ['Utilidad']
 	};
 	/** Clases cuyo Centro de Costo Destino es el mismo que "Otro" (Obra, Consultoría, Corporativo, tipo Otro). */
-	const claseComoOtro = (c: string) => c === 'otro' || c === 'tributo' || c === 'donacion' || c === 'diezmo';
+	const claseComoOtro = (c: string) => c === 'otro' || c === 'tributo' || c === 'obra_caridad' || c === 'accionistas';
 	// "Otro", "Préstamo" y "Tributo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
 	// optionsFor/catalogoDetalleActual más abajo): Categoría vuelve a ser un selector PLANO (sin la
 	// cascada Grupo→Subcategoría de Obra/Consultoría/Corporativo) — la diferencia entre las tres está en
@@ -1640,7 +1642,7 @@
 	// Donación o Diezmo) abren el flujo de préstamo otorgado; Clase Préstamo + "Reembolso" es un egreso normal.
 	const categoriaEsPrestamoOtorgado = $derived(
 		formValues.tipo === 'egreso' &&
-			(((claseDestino === 'otro' || claseDestino === 'donacion' || claseDestino === 'diezmo') && formValues.categoria === 'Préstamo') ||
+			((claseDestino === 'otro' && formValues.categoria === 'Préstamo') ||
 				(claseDestino === 'empleados' && formValues.categoria === 'Préstamos otorgado') ||
 				formValues.categoria === 'Préstamo Otorgado')
 	);
@@ -2105,10 +2107,11 @@
 	// Ticket #55: orden A-Z por label, con "Otro" siempre al final (a pedido explícito del usuario) — antes
 	// el orden era arbitrario (proveedores, subcontratista, empleados, cliente, otro, prestamo, tributo).
 	const OPCIONES_CLASE_DESTINO: { value: ClaseDestino; label: string }[] = [
+		{ value: 'accionistas', label: 'Accionistas' },
 		{ value: 'cliente', label: 'Cliente' },
-		{ value: 'diezmo', label: 'Diezmo' },
-		{ value: 'donacion', label: 'Donación' },
+
 		{ value: 'empleados', label: 'Empleados' },
+		{ value: 'obra_caridad', label: 'Obra de caridad' },
 		{ value: 'prestamo', label: 'Préstamo' },
 		{ value: 'proveedores', label: 'Proveedores' },
 		{ value: 'subcontratista', label: 'Subcontratista' },

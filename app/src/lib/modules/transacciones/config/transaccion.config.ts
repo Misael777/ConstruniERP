@@ -227,6 +227,10 @@ export const FIELDS_CONFIG: FieldConfig[] = [
 			{ value: 'Máquinas y herramientas', label: 'Máquinas y herramientas' },
 			{ value: 'Fraccionamiento', label: 'Fraccionamiento' },
 			{ value: 'Otros', label: 'Otros' },
+			// Tickets #139/#140: Clase "Obra de caridad" (Donación, Diezmo) y Clase "Accionistas" (Utilidad).
+			{ value: 'Donación', label: 'Donación' },
+			{ value: 'Diezmo', label: 'Diezmo' },
+			{ value: 'Utilidad', label: 'Utilidad' },
 			// Subcategorías del dropdown en cascada de Obra + Egreso y Corporativo + Egreso (ver
 			// TIPOS_GASTO_OBRA/TIPOS_GASTO_CORPORATIVO en TransaccionModal.svelte) — el valor final que se
 			// guarda en `categoria` es la subcategoría elegida (ej. "Acero 6mm"), no la categoría
