@@ -56,7 +56,33 @@
 	let modalError = $state('');
 	let editingEmpleadoId = $state<number | null>(null);
 	
-	let nuevoNombre = $state('');
+	// Pedido de la clienta (26/11/2026): Nombres y Apellidos por separado (pasan así a la ficha de Personal, para el
+	// tareo). empleados.nombre sigue guardando el nombre completo que usa el resto del ERP.
+	let nuevosNombres = $state('');
+	let nuevosApellidos = $state('');
+	const nuevoNombre = $derived(`${nuevosNombres.trim()} ${nuevosApellidos.trim()}`.trim());
+
+	/** Crea la ficha de Personal del empleado o enlaza la que ya existe (por usuario o por DNI); nunca duplica.
+	 * Sin la migración 20261126120000 no hace nada. Devuelve un texto para el aviso, o null. */
+	async function enlazarFichaPersonal(idEmpleado: number): Promise<string | null> {
+		try {
+			const { data, error } = await supabase.rpc('fn_empleado_enlazar_personal', {
+				p_id_empleado: idEmpleado,
+				p_nombres: nuevosNombres.trim(),
+				p_apellidos: nuevosApellidos.trim(),
+				p_dni: nuevoDni.trim() || null,
+				p_telefono: nuevoTelefono.trim() || null,
+				p_fecha_ingreso: nuevaFechaIngreso || null
+			});
+			if (error) {
+				if (error.code !== 'PGRST202') toast.error(`El empleado se guardó, pero no se pudo enlazar su ficha de Personal. ${describeError(error)}`);
+				return null;
+			}
+			return (data as any)?.accion === 'creada' ? 'Se creó su ficha en Personal: complétala ahí para el tareo.' : 'Su ficha de Personal quedó enlazada.';
+		} catch {
+			return null;
+		}
+	}
 	let nuevoCorreo = $state('');
 	let nuevoTelefono = $state('');
 	let nuevoRolId = $state<number | null>(null);
@@ -199,9 +225,9 @@
 		modalError = ''; // Limpiamos cualquier error previo
 		
 		// Validaciones de frontend
-		if (!nuevoNombre.trim()) {
-			console.warn("[IAM UI Validation] Fallo validacion: El nombre está vacío");
-			modalError = 'El nombre es obligatorio';
+		if (!nuevosNombres.trim() || !nuevosApellidos.trim()) {
+			console.warn("[IAM UI Validation] Fallo validacion: nombres o apellidos vacíos");
+			modalError = 'Los nombres y los apellidos son obligatorios';
 			return;
 		}
 		if (!nuevoCorreo.trim()) {
@@ -285,7 +311,15 @@
 				console.log("[IAM UI] Lista de empleados recargada exitosamente. Total local:", empleados.length);
 			}
 
+			// Su ficha de Personal (para el tareo): se crea o se enlaza la que ya existe con su DNI.
+			let idNuevo: number | null = result.empleado?.id ?? null;
+			if (!idNuevo) {
+				const { data: e } = await supabase.from('empleados').select('id').eq('correo', payload.correo).maybeSingle();
+				idNuevo = (e as any)?.id ?? null;
+			}
+			const avisoFicha = idNuevo ? await enlazarFichaPersonal(idNuevo) : null;
 			showStatus('success', `Empleado registrado y usuario de acceso creado con el correo ${nuevoCorreo.trim()}`);
+			if (avisoFicha) toast.info(avisoFicha);
 			isModalOpen = false;
 			resetForm();
 		} catch (error: any) {
@@ -297,10 +331,26 @@
 		}
 	}
 
-	function prepararEdicion(emp: Empleado) {
+	async function prepararEdicion(emp: Empleado) {
 		console.log(`[IAM UI] Preparando edicion de empleado ID: ${emp.id} ("${emp.nombre}")...`);
 		editingEmpleadoId = emp.id;
-		nuevoNombre = emp.nombre;
+		// Nombres/apellidos: los del empleado; si aún no los tiene, los de su ficha de Personal; si no, todo en Nombres.
+		nuevosNombres = emp.nombre;
+		nuevosApellidos = '';
+		void (async () => {
+			const { data: e } = await supabase.from('empleados').select('nombres, apellidos').eq('id', emp.id).maybeSingle();
+			let n = (e as any)?.nombres as string | null | undefined;
+			let a = (e as any)?.apellidos as string | null | undefined;
+			if (!n && !a) {
+				const { data: per } = await supabase.from('personal').select('nombres, apellidos').eq('id_empleado', emp.id).neq('estado', 'baja').limit(1).maybeSingle();
+				n = (per as any)?.nombres;
+				a = (per as any)?.apellidos;
+			}
+			if (editingEmpleadoId === emp.id && (n || a)) {
+				nuevosNombres = n ?? '';
+				nuevosApellidos = a ?? '';
+			}
+		})();
 		nuevoCorreo = emp.correo || '';
 		nuevoTelefono = emp.telefono || '';
 		nuevoRolId = emp.rol_id || null;
@@ -321,8 +371,8 @@
 		modalError = '';
 		
 		// Validaciones de frontend
-		if (!nuevoNombre.trim()) {
-			modalError = 'El nombre es obligatorio';
+		if (!nuevosNombres.trim() || !nuevosApellidos.trim()) {
+			modalError = 'Los nombres y los apellidos son obligatorios';
 			return;
 		}
 		if (!nuevoCorreo.trim()) {
@@ -397,7 +447,10 @@
 				empleados = formatEmpleados(reloadData || []);
 			}
 
+			// Nombres/apellidos y su ficha de Personal (completa solo lo vacío; enlaza si aún no la tenía).
+			const avisoFicha = await enlazarFichaPersonal(editingEmpleadoId);
 			showStatus('success', `Empleado '${payload.nombre}' actualizado correctamente.`);
+			if (avisoFicha && avisoFicha.startsWith('Se creó')) toast.info(avisoFicha);
 			isModalOpen = false;
 			resetForm();
 		} catch (error: any) {
@@ -517,7 +570,8 @@
 	}
 
 	function resetForm() {
-		nuevoNombre = '';
+		nuevosNombres = '';
+		nuevosApellidos = '';
 		nuevoCorreo = '';
 		nuevoTelefono = '';
 		nuevoRolId = null;
@@ -796,8 +850,12 @@
 					<h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Informacion Personal</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 						<div>
-							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Nombre Completo *</label>
-							<input type="text" bind:value={nuevoNombre} oninput={onInputChange} placeholder="Nombre y Apellidos" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Nombres *</label>
+							<input type="text" bind:value={nuevosNombres} oninput={onInputChange} placeholder="Ej. Romina Fiorella" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
+						</div>
+						<div>
+							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Apellidos *</label>
+							<input type="text" bind:value={nuevosApellidos} oninput={onInputChange} placeholder="Ej. Casallo Echegaray" required class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition-all text-sm" />
 						</div>
 						<div>
 							<label class="block text-xs font-semibold text-[#0f3b5e] mb-1">Teléfono</label>
