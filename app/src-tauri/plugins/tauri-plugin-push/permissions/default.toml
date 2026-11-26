@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-obtener-token"
+description = "Permite leer el token de Firebase de este celular para registrarlo y recibir avisos (ticket #113)."
+commands.allow = ["obtener_token"]
+
+[default]
+description = "Permisos por defecto del plugin push."
+permissions = ["allow-obtener-token"]

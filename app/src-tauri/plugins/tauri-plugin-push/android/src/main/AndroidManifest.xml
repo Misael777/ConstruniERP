@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ticket #113: el servicio que recibe los avisos de Firebase (también con la app cerrada) y el permiso para mostrar
+  notificaciones (Android 13+). El manifest merger de Gradle lo combina con el de la app.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application>
+        <service
+            android:name="com.construnierp.app.push.PushMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

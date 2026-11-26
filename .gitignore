@@ -1,2 +1,9 @@
 # Archivos temporales de Office (se crean mientras un .docx/.xlsx está abierto)
 ~$*
+
+# Firebase (ticket #113): la configuración de Android y, sobre todo, la clave privada de la cuenta de servicio NUNCA
+# entran a git. google-services.json vive solo en la PC que compila; la clave privada va como secreto de Supabase
+# (FCM_SERVICE_ACCOUNT), no como archivo.
+google-services.json
+*firebase-adminsdk*.json
+*serviceAccount*.json

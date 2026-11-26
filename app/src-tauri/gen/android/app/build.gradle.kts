@@ -67,3 +67,9 @@ dependencies {
 }
 
 apply(from = "tauri.build.gradle.kts")
+
+// Ticket #113: Firebase Cloud Messaging. google-services.json NO está en git (ver .gitignore): se copia en la PC que
+// compila. Sin el archivo la app compila igual, solo que sin notificaciones push.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

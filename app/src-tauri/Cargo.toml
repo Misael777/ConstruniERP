@@ -28,6 +28,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-share-target = { path = "plugins/tauri-plugin-share-target" }
+# Ticket #113: notificaciones push (Firebase Cloud Messaging) en Android.
+tauri-plugin-push = { path = "plugins/tauri-plugin-push" }
 # Módulo de Tickets/Releases (ver Documentacion/MecanismoCICD.md): tauri-plugin-os para que el
 # frontend sepa si corre en Windows o Android (BotonActualizar.svelte) — funciona en ambos.
 tauri-plugin-os = "2"

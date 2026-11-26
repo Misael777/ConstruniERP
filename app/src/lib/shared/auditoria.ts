@@ -271,6 +271,8 @@ export function esCierreManual(): boolean {
 export async function cerrarSesion(): Promise<void> {
 	cierreManualEnCurso = true;
 	await registrarCierre('logout_manual');
+	// Ticket #113: este celular deja de recibir las notificaciones push del usuario.
+	await import('$lib/shared/pushRegistro').then((m) => m.quitarDispositivoPush()).catch(() => {});
 	await supabase.auth.signOut();
 }
 

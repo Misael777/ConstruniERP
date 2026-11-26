@@ -170,6 +170,8 @@
 			// "Versiones instaladas"). Sin await a propósito: es best-effort y no debe demorar el arranque.
 			void registrarVersionUsuario(supabase, session.user.id, permisosState.userName || null);
 			// Control de Accesos → Auditoría: sesión, latido, cierre y eventos pendientes. Best-effort, sin await.
+			// Ticket #113: notificaciones push en el celular (solo app Android). Best-effort, sin await.
+			void import('$lib/shared/pushRegistro').then((m) => m.registrarDispositivoPush());
 			void iniciarSesionAuditoria(session.user.id).then(() => {
 				// Modo diagnóstico: si la vez anterior la app murió en medio del OCR (u otra operación marcada),
 				// se reporta a la auditoría con el registro paso a paso, para verlo desde Prod.

@@ -215,6 +215,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_share_target::init())
+        .plugin(tauri_plugin_push::init())
         // Módulo de Tickets/Releases (ver Documentacion/MecanismoCICD.md) — tauri-plugin-os es
         // cross-platform, lo usa BotonActualizar.svelte para saber si mostrar el flujo de Windows
         // (auto-update) o el de Android (descarga de Drive + instalación manual). tauri-plugin-opener
