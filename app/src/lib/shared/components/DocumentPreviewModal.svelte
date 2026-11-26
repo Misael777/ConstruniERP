@@ -76,12 +76,18 @@
 		return String.fromCharCode(...cabecera) === '%PDF-';
 	}
 
+	// Observación de la clienta (26/11/2026): el comprobante recién adjuntado en "Nueva transacción" aún no está en
+	// Drive (es un archivo local, blob: o data:). Se mostraba en el iframe a su tamaño real ("como zoom"): ahora usa
+	// el visor propio, que ajusta la imagen a la pantalla.
+	const esArchivoLocal = (u: string) => u.startsWith('blob:') || u.startsWith('data:');
+	let imagenAmpliada = $state(false);
+
 	async function cargarVisorPropio(urlDoc: string, id: number) {
-		const fileId = extractDriveFileId(urlDoc);
-		if (!fileId) return;
+		const fileId = esArchivoLocal(urlDoc) ? null : extractDriveFileId(urlDoc);
+		if (!fileId && !esArchivoLocal(urlDoc)) return;
 		modoVisor = 'cargando';
 		try {
-			const blob = await downloadFromDriveClient(fileId);
+			const blob = fileId ? await downloadFromDriveClient(fileId) : await (await fetch(urlDoc)).blob();
 			if (id !== cargaId) return;
 			if (blob.type.startsWith('image/')) {
 				imagenUrl = URL.createObjectURL(blob);
@@ -115,7 +121,8 @@
 			totalPaginas = 0;
 			if (paginasEl) paginasEl.replaceChildren();
 			modoVisor = 'iframe';
-			if (abierto && urlDoc && isRunningInTauri()) void cargarVisorPropio(urlDoc, id);
+			imagenAmpliada = false;
+			if (abierto && urlDoc && (isRunningInTauri() || esArchivoLocal(urlDoc))) void cargarVisorPropio(urlDoc, id);
 		});
 		return () => {
 			// Al cerrar o cambiar de documento se descarta lo que siga dibujándose.
@@ -263,8 +270,11 @@
 						{/if}
 					</div>
 				{:else if previewUrl && modoVisor === 'imagen' && imagenUrl}
-					<div class="w-full h-full overflow-auto overscroll-contain bg-slate-200 p-4 flex justify-center">
-						<img src={imagenUrl} alt={title} class="max-w-full h-auto self-start shadow-md bg-white" />
+					<!-- La imagen entra completa en la ventana; un clic la amplía a su tamaño real (y otro la vuelve a ajustar). -->
+					<div class={`w-full h-full overflow-auto overscroll-contain bg-slate-200 p-4 flex ${imagenAmpliada ? 'items-start justify-start' : 'items-center justify-center'}`}>
+						<button type="button" onclick={() => (imagenAmpliada = !imagenAmpliada)} class={`${imagenAmpliada ? 'shrink-0 cursor-zoom-out' : 'max-w-full max-h-full cursor-zoom-in'}`} title={imagenAmpliada ? 'Clic para ajustar a la pantalla' : 'Clic para ampliar'}>
+							<img src={imagenUrl} alt={title} class={imagenAmpliada ? 'max-w-none shadow-md bg-white' : 'max-w-full max-h-[calc(90vh-7rem)] object-contain shadow-md bg-white'} />
+						</button>
 					</div>
 				{:else if previewUrl}
 					<iframe

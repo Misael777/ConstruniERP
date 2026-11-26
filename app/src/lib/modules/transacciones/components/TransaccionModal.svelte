@@ -2148,6 +2148,10 @@
 			// "Tributo" no tiene un tipo de Centro de Costo dedicado (mismo Destino que "Otro", ver
 			// optionsFor) — se distingue por la Categoría ya guardada, único indicio disponible al editar.
 			else if (['IGV', 'Renta', 'Multa', 'Fraccionamiento'].includes((transaccion as any)?.categoria ?? formValues.categoria ?? '')) claseDestino = 'tributo';
+			// Observación de la clienta (26/11/2026): Obra de caridad y Accionistas tampoco tienen centro propio (mismo
+			// Destino que "Otro"): se reconocen por su Categoría; antes se abrían como "Otro".
+			else if (['Donación', 'Diezmo'].includes((transaccion as any)?.categoria ?? formValues.categoria ?? '')) claseDestino = 'obra_caridad';
+			else if (((transaccion as any)?.categoria ?? formValues.categoria ?? '') === 'Utilidad') claseDestino = 'accionistas';
 			else claseDestino = 'otro';
 		}
 	});
