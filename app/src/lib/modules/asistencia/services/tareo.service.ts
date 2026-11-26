@@ -753,6 +753,11 @@ export async function proyectarPlanillas(client: SupabaseClient): Promise<void> 
 
 export type GrupoConsultoria = 'quincenal' | 'mensual';
 
+/** Pedido de la clienta (26/11/2026): el personal del centro Corporativo (tipo 'bolsa general') tiene su propia pestaña
+ * en el tareo, igual a la de Consultoría. Consultoría muestra el resto del personal que no es de obra. */
+export type AmbitoTareo = 'consultoria' | 'corporativo';
+export const esCentroCorporativo = (c: { tipo?: string | null } | null | undefined) => c?.tipo === 'bolsa general';
+
 const finDeMes = (f: string) => sumarDias(`${sumarDias(`${f.slice(0, 7)}-28`, 4).slice(0, 7)}-01`, -1);
 
 /** Periodo de pago que contiene `fecha`: quincena (1–15 / 16–fin de mes) o mes completo. */
@@ -828,7 +833,13 @@ function aMarcaTareo(m: any): { pin: string; marca: MarcaTareo } {
 
 /** Tareo de Consultoría del periodo: personal que cobra por quincena o mes y cuya obra o área principal no es de obra
  * (o lo que ya se guardó/envió en ese periodo). Sus marcas cuentan de cualquier huellero o de «Mi asistencia». */
-export async function cargarTareoConsultoria(client: SupabaseClient, grupo: GrupoConsultoria, inicio: string, hoy: string): Promise<FilaConsultoria[]> {
+export async function cargarTareoConsultoria(
+	client: SupabaseClient,
+	grupo: GrupoConsultoria,
+	inicio: string,
+	hoy: string,
+	ambito: AmbitoTareo = 'consultoria'
+): Promise<FilaConsultoria[]> {
 	const { fin } = periodoConsultoria(grupo, inicio);
 	const nDias = diasEntre(inicio, fin);
 	const seleccion = '*, centro_costo!personal_id_centro_costo_fkey(codigo, nombre, tipo, proyecto(nombre_proyecto, tipo_venta)), horario(*, horario_dia(*))';
@@ -843,7 +854,10 @@ export async function cargarTareoConsultoria(client: SupabaseClient, grupo: Grup
 	const guardadoDe = (p: any) => (p.id_centro_costo ? (guardados.get(`${p.id_centro_costo}:${p.id_personal}`) ?? null) : null);
 
 	const trabajadores = ((per ?? []) as any[]).filter(
-		(p) => !esCentroObra(p.centro_costo) && (guardadoDe(p) || (p.estado === 'activo' && (!p.fecha_ingreso || p.fecha_ingreso <= fin) && (!p.fecha_cese || p.fecha_cese >= inicio)))
+		(p) =>
+			!esCentroObra(p.centro_costo) &&
+			esCentroCorporativo(p.centro_costo) === (ambito === 'corporativo') &&
+			(guardadoDe(p) || (p.estado === 'activo' && (!p.fecha_ingreso || p.fecha_ingreso <= fin) && (!p.fecha_cese || p.fecha_cese >= inicio)))
 	);
 	if (!trabajadores.length) return [];
 	const ids = trabajadores.map((p) => p.id_personal as number);

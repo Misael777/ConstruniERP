@@ -31,8 +31,13 @@
 		type FilaTareo,
 		type DiaTareo,
 		type GrupoConsultoria,
-		type EstadoAprobacion
+		type EstadoAprobacion,
+		type AmbitoTareo
 	} from '../services/tareo.service';
+
+	// Pedido de la clienta (26/11/2026): la misma pestaña sirve para Consultoría y para Corporativo (su propio personal).
+	let { ambito = 'consultoria' }: { ambito?: AmbitoTareo } = $props();
+	const nombreAmbito = $derived(ambito === 'corporativo' ? 'Corporativo' : 'Consultoría');
 
 	const hoy = hoyLima();
 	const puedeEnviar = hasPermiso('aprobar_tareo');
@@ -92,7 +97,7 @@
 	async function cargar() {
 		cargando = true;
 		try {
-			lista = await cargarTareoConsultoria(supabase, grupo, inicio, hoy);
+			lista = await cargarTareoConsultoria(supabase, grupo, inicio, hoy, ambito);
 			const b: Record<number, string> = {};
 			const fc: Record<number, string> = {};
 			const mo: Record<number, string> = {};
@@ -107,7 +112,7 @@
 			monto = mo;
 			seleccion = {};
 		} catch (err) {
-			toast.error(`No se pudo cargar el tareo de Consultoría. ${describeError(err)}`);
+			toast.error(`No se pudo cargar el tareo de ${nombreAmbito}. ${describeError(err)}`);
 			lista = [];
 		} finally {
 			cargando = false;
@@ -116,6 +121,7 @@
 	$effect(() => {
 		void grupo;
 		void inicio;
+		void ambito;
 		cargar();
 	});
 
@@ -310,7 +316,7 @@
 
 	{#if !filas.length && !cargando}
 		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">
-			No hay personal de Consultoría, Corporativo u oficina que cobre {grupo === 'quincenal' ? 'por quincena' : 'por mes'}{modalidad ? ' con esa modalidad' : ''}.
+			No hay personal de {nombreAmbito} que cobre {grupo === 'quincenal' ? 'por quincena' : 'por mes'}{modalidad ? ' con esa modalidad' : ''}.
 		</div>
 	{:else if filas.length}
 		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-x-auto">

@@ -47,11 +47,14 @@
 		goto(`?${q.toString()}`, { replaceState: true, keepFocus: true, noScroll: true });
 	}
 	// Ticket #118: el tareo tiene dos pestañas, Obra (semanal) y Consultoría (quincena o mes).
-	let tareoTipo = $state<'obra' | 'consultoria'>(page.url.searchParams.get('tareo') === 'consultoria' ? 'consultoria' : 'obra');
-	function elegirTareoTipo(t: 'obra' | 'consultoria') {
+	// 26/11/2026: se sumó la pestaña Corporativo (pedido de la clienta), igual a Consultoría.
+	type TareoTipo = 'obra' | 'consultoria' | 'corporativo';
+	const tareoInicial = page.url.searchParams.get('tareo');
+	let tareoTipo = $state<TareoTipo>(tareoInicial === 'consultoria' || tareoInicial === 'corporativo' ? tareoInicial : 'obra');
+	function elegirTareoTipo(t: TareoTipo) {
 		tareoTipo = t;
 		const q = new URLSearchParams(page.url.searchParams);
-		if (t === 'consultoria') q.set('tareo', t);
+		if (t !== 'obra') q.set('tareo', t);
 		else q.delete('tareo');
 		goto(`?${q.toString()}`, { replaceState: true, keepFocus: true, noScroll: true });
 	}
@@ -283,8 +286,9 @@
 			<div class="flex gap-6 border-b border-slate-200" role="tablist" aria-label="Tipo de tareo">
 				<button role="tab" aria-selected={tareoTipo === 'obra'} onclick={() => elegirTareoTipo('obra')} class={`px-2 pb-2 text-lg font-bold border-b-[3px] -mb-px ${tareoTipo === 'obra' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Obra</button>
 				<button role="tab" aria-selected={tareoTipo === 'consultoria'} onclick={() => elegirTareoTipo('consultoria')} class={`px-2 pb-2 text-lg font-bold border-b-[3px] -mb-px ${tareoTipo === 'consultoria' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Consultoría</button>
+				<button role="tab" aria-selected={tareoTipo === 'corporativo'} onclick={() => elegirTareoTipo('corporativo')} class={`px-2 pb-2 text-lg font-bold border-b-[3px] -mb-px ${tareoTipo === 'corporativo' ? 'border-orange-500 text-orange-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>Corporativo</button>
 			</div>
-			{#if tareoTipo === 'obra'}<TareoSemanal />{:else}<TareoConsultoria />{/if}
+			{#if tareoTipo === 'obra'}<TareoSemanal />{:else}{#key tareoTipo}<TareoConsultoria ambito={tareoTipo} />{/key}{/if}
 		</div>
 		{:else if tab === 'config'}
 		<div class="max-w-[1000px] mx-auto flex flex-col gap-4">
