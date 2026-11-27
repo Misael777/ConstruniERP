@@ -26,6 +26,8 @@ export interface AlertaTarea {
 	/** Fecha que manda (la más antigua vencida o la próxima), 'AAAA-MM-DD'. */
 	fecha: string;
 	prioridad: PrioridadAlerta;
+	/** true: la prioridad la puso alguien (en la cuenta o en tarea_prioridad); false: automática por fecha. */
+	prioridadManual?: boolean;
 	responsable: string | null;
 	registradoPor: string | null;
 	href: string;
@@ -63,9 +65,16 @@ export async function getAlertasTareas(client: SupabaseClient, modulos: Record<M
 	if (modulos.proyectos) tareas.push(alertasCronograma(client, hoy));
 	if (modulos.finanzas) tareas.push(alertasCobros(client, hoy), alertasPagos(client, hoy));
 	// Un módulo que falla no tumba a los demás (el panel muestra lo que sí cargó).
-	const resultados = await Promise.allSettled(tareas);
+	const [resultados, manuales] = await Promise.all([Promise.allSettled(tareas), getPrioridadesManuales(client)]);
 	resultados.forEach((r) => r.status === 'rejected' && console.error('[alertas] No se pudo cargar un grupo de alertas:', r.reason));
-	return resultados.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])).sort((a, b) => a.fecha.localeCompare(b.fecha));
+	return resultados
+		.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+		.map((a) => {
+			// Finanzas guarda la prioridad en la cuenta (ya viene aplicada); el resto, en tarea_prioridad.
+			const m = a.modulo !== 'finanzas' ? manuales.get(a.id) : undefined;
+			return m ? { ...a, prioridad: m, prioridadManual: true } : a;
+		})
+		.sort((a, b) => a.fecha.localeCompare(b.fecha));
 }
 
 async function alertasPersonal(client: SupabaseClient, hoy: string): Promise<AlertaTarea[]> {
@@ -200,6 +209,7 @@ async function alertasCobros(client: SupabaseClient, hoy: string): Promise<Alert
 			detalle: g.detalle,
 			fecha: g.fecha,
 			prioridad: prioridadDe(cc?.prioridad, g.fecha, hoy),
+			prioridadManual: !!cc?.prioridad,
 			responsable: cc?.responsable ?? null,
 			registradoPor: cc?.usuario_registro ?? null,
 			href: `/finanzas/cuentas-cobrar?resumenCuenta=${id}`
@@ -228,6 +238,7 @@ async function alertasPagos(client: SupabaseClient, hoy: string): Promise<Alerta
 			detalle: g.detalle,
 			fecha: g.fecha,
 			prioridad: prioridadDe(cp?.prioridad, g.fecha, hoy),
+			prioridadManual: !!cp?.prioridad,
 			responsable: cp?.responsable ?? null,
 			registradoPor: cp?.usuario_registro ?? null,
 			href: '/finanzas/cuentas-pagar'
@@ -281,4 +292,63 @@ export function pestanaTarea(a: AlertaTarea, e: EstadoTarea | undefined, hoy = h
 	if (!e || (e.fecha_alerta && e.fecha_alerta !== a.fecha)) return 'hoy';
 	if (e.estado === 'completada') return 'completada';
 	return e.aplazada_hasta && e.aplazada_hasta > hoy ? 'aplazada' : 'hoy';
+}
+
+// ─────────────── Pedido 27/11/2026: prioridad a mano (compartida) y orden a mano (personal) ───────────────
+
+/** Prioridades puestas a mano en RRHH/Proyectos (tabla tarea_prioridad). Sin la migración 20261127180000: vacío. */
+async function getPrioridadesManuales(client: SupabaseClient): Promise<Map<string, PrioridadAlerta>> {
+	const { data, error } = await client.from('tarea_prioridad').select('id_alerta, prioridad');
+	if (error) return new Map();
+	return new Map(((data ?? []) as { id_alerta: string; prioridad: PrioridadAlerta }[]).map((r) => [r.id_alerta, r.prioridad]));
+}
+
+/**
+ * Cambia la prioridad de una tarea para todos (null = volver a automática, por fecha). En Finanzas se guarda en la
+ * cuenta por cobrar/pagar (la misma prioridad que se ve en esos módulos; CxC usa alto/medio/bajo y CxP alto/media/bajo).
+ */
+export async function guardarPrioridadTarea(client: SupabaseClient, alerta: AlertaTarea, prioridad: PrioridadAlerta | null, usuario: string | null = null): Promise<void> {
+	const m = /^cx([cp])-(\d+)$/.exec(alerta.id);
+	if (m) {
+		const cobrar = m[1] === 'c';
+		const valor = !prioridad ? null : prioridad === 'alta' ? 'alto' : prioridad === 'baja' ? 'bajo' : cobrar ? 'medio' : 'media';
+		const { error } = await client
+			.from(cobrar ? 'cuentas_cobrar' : 'cuentas_pagar')
+			.update({ prioridad: valor })
+			.eq(cobrar ? 'id_cuenta_cobrar' : 'id_cuenta_pagar', Number(m[2]));
+		if (error) throw error;
+		return;
+	}
+	const { error } = prioridad
+		? await client.from('tarea_prioridad').upsert({ id_alerta: alerta.id, prioridad, usuario, updated_at: new Date().toISOString() }, { onConflict: 'id_alerta' })
+		: await client.from('tarea_prioridad').delete().eq('id_alerta', alerta.id);
+	if (error) throw error;
+}
+
+/** Orden manual del usuario (id de alerta → posición). Sin la migración 20261127180000: vacío. */
+export async function getOrdenTareas(client: SupabaseClient): Promise<Map<string, number>> {
+	const { data, error } = await client.from('tarea_orden').select('id_alerta, orden');
+	if (error) return new Map();
+	return new Map(((data ?? []) as { id_alerta: string; orden: number }[]).map((r) => [r.id_alerta, r.orden]));
+}
+
+/** Guarda el orden manual de una lista de tareas (la posición en el arreglo). */
+export async function guardarOrdenTareas(client: SupabaseClient, ids: string[]): Promise<void> {
+	if (!ids.length) return;
+	const { data: u } = await client.auth.getUser();
+	const ahora = new Date().toISOString();
+	const { error } = await client
+		.from('tarea_orden')
+		.upsert(ids.map((id_alerta, orden) => ({ auth_user_id: u.user?.id, id_alerta, orden, updated_at: ahora })), { onConflict: 'auth_user_id,id_alerta' });
+	if (error) throw error;
+}
+
+/**
+ * Día en que la tarea va en el calendario: el día al que se movió (tarea_estado 'aplazada', aplazada_hasta) o su fecha;
+ * nunca antes de hoy (lo vencido va en hoy, marcado como vencido). Si la alerta cambió de fecha, se ignora lo guardado.
+ */
+export function diaPlanTarea(a: AlertaTarea, e: EstadoTarea | undefined, hoy = hoyLima()): string {
+	const vigente = e && (!e.fecha_alerta || e.fecha_alerta === a.fecha);
+	const dia = vigente && e!.estado === 'aplazada' && e!.aplazada_hasta ? e!.aplazada_hasta : a.fecha;
+	return dia < hoy ? hoy : dia;
 }

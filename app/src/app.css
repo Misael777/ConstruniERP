@@ -21,3 +21,10 @@ html.sin-barra::-webkit-scrollbar,
 html.sin-barra body::-webkit-scrollbar {
   display: none;
 }
+
+/* Arrastrar y soltar (src/lib/shared/arrastre.ts): destino bajo el puntero. */
+.arrastre-sobre {
+	outline: 2px dashed #f97316;
+	outline-offset: 2px;
+	background-color: #fff7ed;
+}
