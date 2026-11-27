@@ -47,6 +47,9 @@
 		aprobacionDe,
 		estaAprobado,
 		proyectarFila,
+		pagoPlanificadoFila,
+		guardarControlTareo,
+		cuentasBancoTareo,
 		liberarEnviosSinPago,
 		proyectarPlanillas,
 		exportarTareoXLSX,
@@ -382,6 +385,11 @@
 	let plan = $state<PlanTareo | null>(null);
 	let saldoObra = $state<number | null>(null);
 	let presupuestoTexto = $state('');
+	// Ticket #118 (27/11/2026): Control presupuestal y Control financiero (fecha de asignación, fecha de reserva, cuenta).
+	let presupuestoFecha = $state('');
+	let fondoFecha = $state('');
+	let idCuentaFondo = $state('');
+	let cuentasFondo = $state<{ id: number; nombre: string; detalle: string }[]>([]);
 	let aptitudesSugeridas = $state<string[]>([]);
 	let reqEditando = $state<RequerimientoTareo | null>(null);
 	let guardandoReq = $state(false);
@@ -402,6 +410,25 @@
 		saldoObra = saldos[id]?.saldo ?? null;
 		aptitudesSugeridas = apt;
 		presupuestoTexto = p.presupuesto != null ? p.presupuesto.toFixed(2) : '';
+		presupuestoFecha = p.presupuestoFecha ?? '';
+		fondoFecha = p.fondoFecha ?? '';
+		idCuentaFondo = p.idCuentaBanco != null ? String(p.idCuentaBanco) : '';
+		if (!cuentasFondo.length) cuentasFondo = await cuentasBancoTareo(supabase).catch(() => []);
+	}
+
+	/** Guarda fecha de asignación, fecha de reserva y cuenta bancaria del fondo (las tres juntas). */
+	async function guardarControl() {
+		if (!obra || !puedeEnviar) return;
+		try {
+			await guardarControlTareo(supabase, obra.id_centro_costo, lunes, {
+				presupuestoFecha: presupuestoFecha || null,
+				fondoFecha: fondoFecha || null,
+				idCuentaBanco: idCuentaFondo ? Number(idCuentaFondo) : null
+			});
+			toast.success('Guardado.');
+		} catch (err) {
+			toast.error(`No se pudo guardar. ${describeError(err)}`);
+		}
 	}
 
 	const cargoDe = (f: FilaTareo) => (f.personal.cargo ?? f.personal.categoria ?? '').trim();
@@ -439,6 +466,10 @@
 	const costoRequerimientos = $derived(grupos.filter((g) => g.req).reduce((t, g) => t + costoEstimado(g), 0));
 	const presupuesto = $derived(presupuestoTexto.trim() === '' ? null : num(presupuestoTexto));
 	const saldoDisponible = $derived.by(() => (presupuesto == null ? null : r2(presupuesto - totProy.total)));
+	// Vista Real: lo previsto según el horario (sin la asistencia) y el saldo del presupuesto con lo real al corte.
+	const pagoOriginal = $derived(r2(filas.reduce((t, f) => t + pagoPlanificadoFila(f, num(bonos[f.personal.id_personal])), 0)));
+	const saldoAlCorte = $derived(presupuesto == null ? null : r2(presupuesto - totalSemana));
+	const cuentaFondo = $derived(cuentasFondo.find((c) => String(c.id) === idCuentaFondo) ?? null);
 
 	async function guardarPresupuestoSemana() {
 		if (!obra || !puedeEnviar || !plan?.disponible) return;
@@ -896,34 +927,56 @@
 				{/each}
 			</div>
 
-			<!-- Totales, aprobación y envío -->
-			<div class="sticky bottom-0 bg-white border border-slate-200 rounded-2xl shadow-lg p-3 flex flex-col lg:flex-row lg:items-center gap-3">
-				<div class="flex flex-wrap gap-x-5 gap-y-1 text-sm flex-1">
-					<span class="text-slate-500">Total del periodo <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
-					{#if seleccionados.length}<span class="text-slate-500">Seleccionados ({seleccionados.length}) <b class="text-blue-700">{formatCurrency(totalSeleccionado)}</b></span>{/if}
-					{#if mostrarPago}
-						<span class="text-slate-500">Enviado <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b></span>
-						<span class="text-slate-500">Saldo pendiente <b class={saldoPendiente ? 'text-amber-700' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b></span>
-					{/if}
-				</div>
-				<div class="flex flex-wrap items-end gap-2">
-					{#if esAdmin || filas.some(esJefeDe)}
-						<div class="flex flex-col items-center gap-0.5">
-							<span class="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded px-2">Jefe inmediato</span>
-							<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} class="px-3 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50 disabled:opacity-40">
-								<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
-							</button>
-						</div>
-					{/if}
-					{#if puedeEnviar}
-						<div class="flex flex-col items-center gap-0.5">
-							<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
-							<span class="text-[10px] text-slate-400">Requiere aprobación del jefe inmediato</span>
-						</div>
-						<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40" title="Envía el saldo de todos los trabajadores ya aprobados">
-							Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
+			<!-- Ticket #118 (maqueta 27/11/2026): Control presupuestal, Control financiero y Cuentas por pagar. -->
+			<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg divide-y divide-slate-100 text-sm">
+				{#if puedeEnviar && plan?.disponible}
+					<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
+						{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}
+						<span class="text-slate-600">Presupuesto asignado previamente <b class="text-slate-900">{presupuesto == null ? '—' : formatCurrency(presupuesto)}</b></span>
+						<span class="text-slate-600"><i class="far fa-calendar text-slate-400"></i> {presupuestoFecha ? `${ddmm(presupuestoFecha)}/${presupuestoFecha.slice(0, 4)}` : 'Sin fecha de asignación'}</span>
+						<span class="text-slate-600">Pago proyectado originalmente <b class="text-blue-700">{formatCurrency(pagoOriginal)}</b></span>
+						<span class="text-slate-600">Total real al corte <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
+						<span class="text-slate-600 lg:ml-auto">Saldo presupuestal al corte <b class={`text-lg ${saldoAlCorte != null && saldoAlCorte < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoAlCorte == null ? '—' : formatCurrency(saldoAlCorte)}</b></span>
+					</div>
+				{/if}
+				{#if puedeEnviar}
+					<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
+						{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}
+						{@render controlFondo()}
+						<button type="button" onclick={() => (verReservas = true)} class="lg:ml-auto px-3 py-1.5 rounded-xl border-2 border-blue-500 text-blue-700 text-sm font-bold hover:bg-blue-50">
+							Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
 						</button>
-					{/if}
+					</div>
+				{/if}
+				<div class="flex flex-col lg:flex-row lg:items-center gap-3 px-3 py-2">
+					<div class="flex flex-wrap items-center gap-x-5 gap-y-1 flex-1">
+						{@render franjaTitulo('fa-file-invoice', 'Cuentas por pagar', 'bg-emerald-50 text-emerald-700')}
+						<span class="text-slate-600">Total del período <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
+						{#if seleccionados.length}<span class="text-slate-600">Seleccionados ({seleccionados.length}) <b class="text-blue-700">{formatCurrency(totalSeleccionado)}</b></span>{/if}
+						{#if mostrarPago}
+							<span class="text-slate-600">Enviado a CxP <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b></span>
+							<span class="text-slate-600">Pendiente de enviar <b class={saldoPendiente ? 'text-rose-600' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b></span>
+						{/if}
+					</div>
+					<div class="flex flex-wrap items-end gap-2">
+						{#if esAdmin || filas.some(esJefeDe)}
+							<div class="flex flex-col items-center gap-0.5">
+								<span class="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded px-2">Jefe inmediato</span>
+								<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} class="px-3 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50 disabled:opacity-40">
+									<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
+								</button>
+							</div>
+						{/if}
+						{#if puedeEnviar}
+							<div class="flex flex-col items-center gap-0.5">
+								<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
+								<span class="text-[10px] text-slate-400">Requiere aprobación del jefe inmediato</span>
+							</div>
+							<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40" title="Envía el saldo de todos los trabajadores ya aprobados">
+								Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
+							</button>
+						{/if}
+					</div>
 				</div>
 			</div>
 		{/if}
@@ -937,11 +990,12 @@
 		{#if plan?.disponible}
 			<span class="hidden sm:block h-6 w-px bg-slate-300"></span>
 			<label class="flex items-center gap-2 text-sm text-slate-700">
-				Presupuesto disponible
-				<span class="relative">
-					<span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">S/</span>
-					<input type="text" inputmode="decimal" bind:value={presupuestoTexto} onblur={guardarPresupuestoSemana} disabled={!puedeEnviar} placeholder="0.00" class="w-36 pl-8 pr-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-bold" aria-label="Presupuesto disponible" />
-				</span>
+				Presupuesto asignado previamente
+				{@render montoLapiz(presupuestoTexto, (v) => (presupuestoTexto = v), guardarPresupuestoSemana, 'Presupuesto asignado previamente', 'w-36 text-base font-bold')}
+			</label>
+			<label class="flex items-center gap-2 text-sm text-slate-700">
+				Fecha de asignación
+				<input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1.5 border border-slate-200 rounded-lg text-sm" aria-label="Fecha de asignación" />
 			</label>
 			{#if saldoObra != null}
 				<span class="text-xs text-slate-500">Disponible en la obra: <b class={saldoObra < 0 ? 'text-rose-600' : 'text-emerald-700'}>{formatCurrency(saldoObra)}</b>
@@ -1101,54 +1155,66 @@
 			</tbody>
 		</table>
 	</div>
-	<div class="rounded-2xl border border-orange-100 bg-orange-50/60 px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-		<span class="text-lg font-bold text-orange-600">Totales de la proyección</span>
-		<span class="text-blue-700">Total acumulado <b>{formatCurrency(totProy.acumulado)}</b></span>
-		<span class="text-blue-700">Por completar <b>{formatCurrency(totProy.porCompletar)}</b></span>
-		<span class="text-blue-700">Bonos previstos <b>{formatCurrency(totProy.bonos)}</b></span>
-		<span class="ml-auto rounded-xl bg-orange-100 px-3 py-1 text-center"><span class="block text-[11px] font-bold text-orange-700">TOTAL PROYECTADO</span><b class="text-lg text-orange-700">{formatCurrency(totProy.total)}</b></span>
-	</div>
 	<p class="px-1 text-xs italic text-slate-500">P = proyectado · Los días futuros no son asistencia registrada: se prevén según el horario de cada trabajador.</p>
-	{#if plan?.disponible}
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-			<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
-				<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(totProy.total)}</b>
-			</div>
-			<div class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
-				<span class="font-bold text-slate-800">Presupuesto disponible</span><b class="text-xl text-slate-900">{presupuesto == null ? '—' : formatCurrency(presupuesto)}</b>
-			</div>
-			<div class={`rounded-2xl border px-4 py-3 flex items-center justify-between gap-2 ${saldoDisponible != null && saldoDisponible < 0 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-				<span class={`font-bold ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>Saldo disponible</span>
-				<b class={`text-xl ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? 'Escribe el presupuesto' : formatCurrency(saldoDisponible)}</b>
-			</div>
+	<!-- Ticket #118 (maqueta 27/11/2026): pie en franjas. Lo que tiene lápiz se escribe. -->
+	<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg divide-y divide-slate-100 text-sm">
+		<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
+			{@render franjaTitulo('fa-chart-column', 'Totales de la proyección', 'bg-orange-50 text-orange-700')}
+			<span class="text-slate-600">Total acumulado <b class="text-blue-700">{formatCurrency(totProy.acumulado)}</b></span>
+			<span class="text-slate-600">Por completar <b class="text-blue-700">{formatCurrency(totProy.porCompletar)}</b></span>
+			<span class="text-slate-600">Bonos previstos <b class="text-blue-700">{formatCurrency(totProy.bonos)}</b></span>
+			<span class="text-slate-600 lg:ml-auto">Total proyectado <b class="text-lg text-orange-600">{formatCurrency(totProy.total)}</b></span>
 		</div>
-	{/if}
-	<div class={`grid grid-cols-1 ${plan?.disponible ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-3`}>
-		{#if !plan?.disponible}
-		<div class="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-2">
-			<span class="font-bold text-blue-900">Pago proyectado</span><b class="text-xl text-blue-900">{formatCurrency(totProy.total)}</b>
-		</div>
+		{#if plan?.disponible}
+			<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
+				{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}
+				<span class="flex items-center gap-2 text-slate-600">Presupuesto asignado previamente {@render montoLapiz(presupuestoTexto, (v) => (presupuestoTexto = v), guardarPresupuestoSemana, 'Presupuesto asignado previamente', 'w-32 font-bold')}</span>
+				<label class="flex items-center gap-2 text-slate-600">Fecha de asignación <input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" /></label>
+				<span class="text-slate-600">Pago proyectado <b class="text-blue-700">{formatCurrency(totProy.total)}</b></span>
+				<span class="text-slate-600 lg:ml-auto">Saldo presupuestal <b class={`text-lg ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? '—' : formatCurrency(saldoDisponible)}</b></span>
+			</div>
 		{/if}
-		<label class="rounded-2xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between gap-2">
-			<span class="font-bold text-slate-800">Fondo separado</span>
-			<input type="text" inputmode="decimal" bind:value={fondoTexto} onblur={guardarFondoSemana} disabled={!puedeEnviar} placeholder="0.00" class="w-32 px-2 py-1.5 border border-slate-200 rounded-lg text-right text-base font-semibold" aria-label="Fondo separado" />
-		</label>
-		<div class="rounded-2xl border border-orange-100 bg-orange-50 px-4 py-3 flex items-center justify-between gap-2">
-			<span class="font-bold text-orange-700">Falta separar</span><b class="text-xl text-orange-600">{formatCurrency(faltaSeparar)}</b>
+		<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
+			{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}
+			{@render controlFondo()}
+			<span class="text-slate-600 lg:ml-auto">Pendiente de reservar <b class="text-lg text-rose-600">{formatCurrency(faltaSeparar)}</b></span>
+		</div>
+		<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
+			{@render franjaTitulo('fa-calendar-check', 'Reserva para pago', 'bg-emerald-50 text-emerald-700')}
+			<input type="date" bind:value={fechaReserva} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" aria-label="Fecha de la reserva para pago" />
+			<button type="button" onclick={programarReserva} disabled={reservando || !proySel.length} class="px-4 py-1.5 rounded-xl bg-orange-500 text-white text-sm font-bold hover:bg-orange-600 disabled:opacity-40">
+				<i class="fas fa-calendar-plus"></i> {reservando ? 'Programando…' : `Programar reserva de seleccionados${proySel.length ? ` (${proySel.length})` : ''}`}
+			</button>
+			<button type="button" onclick={() => (verReservas = true)} class="px-4 py-1.5 rounded-xl border-2 border-blue-500 text-blue-700 text-sm font-bold hover:bg-blue-50">
+				<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
+			</button>
+			<span class="text-xs italic text-slate-500">Al aprobar el tareo real, se ajusta esta reserva sin duplicar el compromiso.</span>
 		</div>
 	</div>
-	<div class="flex flex-wrap items-end gap-3">
-		<label class="flex flex-col gap-1 text-sm font-semibold text-slate-700">Reserva para pago
-			<input type="date" bind:value={fechaReserva} class="px-3 py-2 border border-slate-200 rounded-xl text-sm font-normal" />
-		</label>
-		<button type="button" onclick={programarReserva} disabled={reservando || !proySel.length} class="px-4 py-2 rounded-xl bg-orange-500 text-white text-sm font-bold hover:bg-orange-600 disabled:opacity-40">
-			<i class="fas fa-calendar-plus"></i> {reservando ? 'Programando…' : `Programar reserva de seleccionados${proySel.length ? ` (${proySel.length})` : ''}`}
-		</button>
-		<button type="button" onclick={() => (verReservas = true)} class="px-4 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50">
-			<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
-		</button>
-	</div>
-	<p class="px-1 text-xs italic text-slate-500">Al aprobar el tareo real, se ajusta esta reserva sin duplicar el compromiso.</p>
+{/snippet}
+
+{#snippet franjaTitulo(icono: string, titulo: string, clase: string)}
+	<span class={`inline-flex items-center gap-2 rounded-lg px-3 py-1 font-bold whitespace-nowrap ${clase}`}><i class={`fas ${icono}`}></i>{titulo}</span>
+{/snippet}
+
+{#snippet montoLapiz(valor: string, poner: (v: string) => void, guardar: () => void, etiqueta: string, clase: string)}
+	<span class="relative inline-flex items-center">
+		<span class="absolute left-2 text-xs font-bold text-slate-500">S/</span>
+		<input type="text" inputmode="decimal" value={valor} oninput={(e) => poner((e.currentTarget as HTMLInputElement).value)} onblur={guardar} disabled={!puedeEnviar} placeholder="0.00" class={`pl-7 pr-7 py-1 border border-slate-200 rounded-lg text-right disabled:bg-slate-50 ${clase}`} aria-label={etiqueta} />
+		{#if puedeEnviar}<i class="fas fa-pen absolute right-2 text-[11px] text-slate-400 pointer-events-none"></i>{/if}
+	</span>
+{/snippet}
+
+<!-- Control financiero: igual en Real y Proyección. -->
+{#snippet controlFondo()}
+	<span class="flex items-center gap-2 text-slate-600">Fondo reservado actualmente {@render montoLapiz(fondoTexto, (v) => (fondoTexto = v), guardarFondoSemana, 'Fondo reservado actualmente', 'w-32 font-bold')}</span>
+	<label class="flex items-center gap-2 text-slate-600">Fecha de reserva <input type="date" bind:value={fondoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" /></label>
+	<label class="flex items-center gap-2 text-slate-600">Cuenta
+		<select bind:value={idCuentaFondo} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm font-semibold text-slate-800 max-w-[14rem]" title={cuentaFondo?.detalle ?? ''}>
+			<option value="">Elige la cuenta…</option>
+			{#each cuentasFondo as c (c.id)}<option value={String(c.id)}>{c.nombre}</option>{/each}
+		</select>
+	</label>
 {/snippet}
 
 {#snippet botonMarcas(f: FilaTareo)}

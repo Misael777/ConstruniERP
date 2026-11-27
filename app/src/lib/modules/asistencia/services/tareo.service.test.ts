@@ -12,6 +12,7 @@ import {
 	aprobacionDe,
 	estaAprobado,
 	proyectarFila,
+	pagoPlanificadoFila,
 	fraccionPrevista,
 	periodoConsultoria,
 	calcularFilaConsultoria,
@@ -189,6 +190,11 @@ describe('proyección (ticket #118)', () => {
 		expect(fraccionPrevista(persona(), null, 480, '2026-11-07')).toBe(1);
 		expect(fraccionPrevista(persona(), null, 480, '2026-11-08')).toBe(0);
 		expect(fraccionPrevista(persona({ fecha_cese: '2026-11-04' }), null, 480, '2026-11-05')).toBe(0);
+	});	it('pago proyectado originalmente (vista Real): según el horario, aunque haya faltado', () => {
+		// Solo vino el lunes; lo planificado sigue siendo lunes a sábado (6 días) + bonos.
+		const soloLunes = calcularFila(persona(), civil, [m('2026-11-02', '07:30'), m('2026-11-02', '17:00')], [], [], null, LUNES, '2026-11-08');
+		expect(pagoPlanificadoFila(soloLunes)).toBeCloseTo(6 * soloLunes.tarifaDia, 2);
+		expect(pagoPlanificadoFila(soloLunes, 50)).toBeCloseTo(6 * soloLunes.tarifaDia + 50, 2);
 	});
 });
 

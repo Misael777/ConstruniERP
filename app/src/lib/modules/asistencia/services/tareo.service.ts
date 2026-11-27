@@ -349,6 +349,15 @@ export function fraccionPrevista(p: Pick<Personal, 'fecha_ingreso' | 'fecha_cese
 	return hd ? fraccionDia(minutosDelDia(hd), jornadaMin) : 0;
 }
 
+/**
+ * Ticket #118 (27/11/2026) "Pago proyectado originalmente" de la vista Real: lo que se preveía pagar en la semana según
+ * el horario de cada día (sin mirar la asistencia registrada), más los bonos. Los feriados cuentan lo reconocido. Pura.
+ */
+export function pagoPlanificadoFila(f: FilaTareo, bonos = 0): number {
+	const dias = f.dias.reduce((t, d) => t + (d.feriado ? d.fraccion : fraccionPrevista(f.personal, f.horario, f.jornadaMin, d.fecha)), 0);
+	return r2(dias * f.tarifaDia + bonos);
+}
+
 /** Proyección de la semana de un trabajador: lo registrado hasta hoy y lo previsto desde mañana. Pura. */
 export function proyectarFila(f: FilaTareo, hoy: string): ProyeccionFila {
 	const dias = f.dias.map((d) => {
@@ -727,6 +736,10 @@ export interface PlanTareo {
 	presupuesto: number | null;
 	/** Fondo separado del periodo. */
 	fondo: number | null;
+	/** Ticket #118 (27/11/2026): fecha de asignación del presupuesto, fecha de reserva y cuenta bancaria del fondo. */
+	presupuestoFecha: string | null;
+	fondoFecha: string | null;
+	idCuentaBanco: number | null;
 }
 
 const normalizar = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
@@ -744,9 +757,15 @@ export async function cargarPlanTareo(client: SupabaseClient, idCentroCosto: num
 	const [{ data: cfg, error: eC }, { data: reqs, error: eR }, { data: sem }] = await Promise.all([
 		client.from('tareo_obra_config').select('requerimiento_modo').eq('id_centro_costo', idCentroCosto).maybeSingle(),
 		client.from('tareo_requerimiento').select('*').eq('id_centro_costo', idCentroCosto).order('id_requerimiento'),
-		client.from('tareo_semana').select('presupuesto_disponible, fondo_separado').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', inicio).eq('periodo', periodo).maybeSingle()
+		// '*': así no falla en una base sin la migración 20261127190000 (fechas y cuenta del control).
+		client.from('tareo_semana').select('*').eq('id_centro_costo', idCentroCosto).eq('semana_inicio', inicio).eq('periodo', periodo).maybeSingle()
 	]);
-	if (eC || eR) return { disponible: false, modo: 'obra', requerimientos: [], presupuesto: null, fondo: (sem as any)?.fondo_separado != null ? Number((sem as any).fondo_separado) : null };
+	const control = {
+		presupuestoFecha: ((sem as any)?.presupuesto_fecha as string | null) ?? null,
+		fondoFecha: ((sem as any)?.fondo_fecha as string | null) ?? null,
+		idCuentaBanco: (sem as any)?.fondo_id_cuenta_banco != null ? Number((sem as any).fondo_id_cuenta_banco) : null
+	};
+	if (eC || eR) return { disponible: false, modo: 'obra', requerimientos: [], presupuesto: null, fondo: (sem as any)?.fondo_separado != null ? Number((sem as any).fondo_separado) : null, ...control };
 	const modo = ((cfg as any)?.requerimiento_modo ?? 'obra') as ModoRequerimiento;
 	const requerimientos = ((reqs ?? []) as any[])
 		.filter((r) => (modo === 'obra' ? r.semana_inicio == null : r.semana_inicio === inicio))
@@ -757,8 +776,45 @@ export async function cargarPlanTareo(client: SupabaseClient, idCentroCosto: num
 		modo,
 		requerimientos,
 		presupuesto: s?.presupuesto_disponible != null ? Number(s.presupuesto_disponible) : null,
-		fondo: s?.fondo_separado != null ? Number(s.fondo_separado) : null
+		fondo: s?.fondo_separado != null ? Number(s.fondo_separado) : null,
+		...control
 	};
+}
+
+/** Ticket #118 (27/11/2026): guarda la fecha de asignación del presupuesto, la fecha de reserva y la cuenta del fondo. */
+export async function guardarControlTareo(
+	client: SupabaseClient,
+	idCentroCosto: number,
+	inicio: string,
+	datos: { presupuestoFecha: string | null; fondoFecha: string | null; idCuentaBanco: number | null },
+	periodo: PeriodoTareo = 'semanal'
+): Promise<void> {
+	const { error } = await client.rpc('fn_tareo_control', {
+		p_id_centro_costo: idCentroCosto,
+		p_semana_inicio: inicio,
+		p_periodo: periodo,
+		p_presupuesto_fecha: datos.presupuestoFecha || null,
+		p_fondo_fecha: datos.fondoFecha || null,
+		p_id_cuenta_banco: datos.idCuentaBanco
+	});
+	if (error) throw error;
+}
+
+/** Cuentas bancarias activas para el "Control financiero" del tareo: "BCP - Soles". */
+export async function cuentasBancoTareo(client: SupabaseClient): Promise<{ id: number; nombre: string; detalle: string }[]> {
+	const { data, error } = await client
+		.from('cuenta_banco')
+		.select('id_cuenta_banco, nombre_banco, tipo_moneda, numero_cuenta, titular_cuenta')
+		.eq('estado', 'activa')
+		.eq('activo', true)
+		.order('nombre_banco');
+	if (error) throw error;
+	const moneda: Record<string, string> = { soles: 'Soles', dolares: 'Dólares' };
+	return ((data ?? []) as any[]).map((c) => ({
+		id: Number(c.id_cuenta_banco),
+		nombre: [c.nombre_banco, moneda[c.tipo_moneda] ?? c.tipo_moneda].filter(Boolean).join(' - '),
+		detalle: [c.titular_cuenta, c.numero_cuenta].filter(Boolean).join(' · ')
+	}));
 }
 
 export async function guardarModoRequerimiento(client: SupabaseClient, idCentroCosto: number, modo: ModoRequerimiento, usuario: string | null): Promise<void> {
