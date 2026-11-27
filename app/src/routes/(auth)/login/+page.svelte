@@ -6,6 +6,8 @@
 	import { confirmActivation, getFirstAdminStatus, createFirstAdmin as crearPrimerAdministrador } from '$lib/edgeFunctionClient';
 	import SnoopyLoader, { FONDO_CARGA } from '$lib/shared/components/SnoopyLoader.svelte';
 	import TecladoClave from '$lib/shared/components/TecladoClave.svelte';
+	import { leerConteoTareasHoy } from '$lib/shared/tareasHoyCache';
+	import { hoyLima } from '$lib/modules/personal/services/personal.service';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { Fingerprint, Lock, ArrowRight } from '@lucide/svelte';
 	import {
@@ -255,11 +257,20 @@
 		await irAlSistema();
 	}
 
+	/** Ticket #112: "Tareas de hoy" arriba a la derecha de la pantalla de la clave. Al tocarlo, después de ingresar se
+	 * abre directo esa pantalla en vez del Dashboard. El número es el último conteo guardado en este equipo. */
+	let irATareas = $state(false);
+	const tareasHoyGuardadas = $derived(leerConteoTareasHoy(accesoGuardado?.email, hoyLima()));
+	function tocarTareasHoy() {
+		irATareas = !irATareas;
+		mensajeRapido = '';
+	}
+
 	async function irAlSistema() {
 		pendienteActivacion = null;
 		pantallaCompletaCarga = true;
-		mensajeCargaPantallaCompleta = 'Cargando tu cuenta…';
-		await goto('/dashboard');
+		mensajeCargaPantallaCompleta = irATareas ? 'Abriendo tus tareas de hoy…' : 'Cargando tu cuenta…';
+		await goto(irATareas ? '/mis-tareas' : '/dashboard');
 	}
 
 	function getSavedEmail() {
@@ -308,6 +319,12 @@
 			checkingFirstAdmin = false;
 		}
 	}
+
+	// Ticket #112 (rechazo): sin barra de desplazamiento en la pantalla de ingreso (clase en app.css).
+	onMount(() => {
+		document.documentElement.classList.add('sin-barra');
+		return () => document.documentElement.classList.remove('sin-barra');
+	});
 
 	onMount(async () => {
 		console.log('[Login] onMount started');
@@ -657,9 +674,27 @@ async function handleSetupPassword(e: Event) {
 					<p class="text-white text-2xl font-bold tracking-tight">construni</p>
 					<p class="mt-0.5 pl-0.5 border-l-2 border-white/60 text-brand-orange text-base font-bold tracking-wide">&nbsp;ERP</p>
 				</div>
+				{#if mode === 'rapido'}
+					<!-- Ticket #112 (rechazo): "Tareas de hoy" arriba a la derecha, como en la maqueta. -->
+					<button
+						type="button"
+						onclick={tocarTareasHoy}
+						aria-pressed={irATareas}
+						class={`ml-auto flex flex-col items-center gap-1 rounded-2xl px-2 py-1 transition ${irATareas ? 'bg-white/15 ring-2 ring-brand-orange' : 'hover:bg-white/10'}`}
+						title="Al ingresar se abrirán tus tareas de hoy"
+					>
+						<span class="relative w-[min(2.75rem,5.5dvh)] h-[min(2.75rem,5.5dvh)] rounded-full bg-brand-orange text-white flex items-center justify-center shadow-lg shadow-orange-500/30">
+							<i class="fas fa-clipboard-list text-[min(1.25rem,2.5dvh)]"></i>
+							{#if tareasHoyGuardadas}
+								<span class="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-white text-[#0b2447] border-2 border-[#0b2447] text-[10px] font-bold leading-none flex items-center justify-center">{tareasHoyGuardadas > 99 ? '99+' : tareasHoyGuardadas}</span>
+							{/if}
+						</span>
+						<span class="text-white text-[11px] font-semibold leading-none whitespace-nowrap">Tareas de hoy</span>
+					</button>
+				{/if}
 			</header>
 
-			<main class="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] -mt-5 bg-white rounded-t-[1.75rem] px-5 pt-[min(1rem,2dvh)] pb-[calc(env(safe-area-inset-bottom)+min(0.75rem,1dvh))] flex flex-col">
+			<main class="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden -mt-5 bg-white rounded-t-[1.75rem] px-5 pt-[min(1rem,2dvh)] pb-[calc(env(safe-area-inset-bottom)+min(0.75rem,1dvh))] flex flex-col">
 				{#if ENTORNO === 'dev'}
 					<div class="mb-3 px-3 py-1.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-xs text-center">
 						Base de <b>DESARROLLO</b> (datos de prueba)
@@ -718,6 +753,10 @@ async function handleSetupPassword(e: Event) {
 							{#snippet nota()}
 								{#if mensajeRapido}
 									<p class="mt-[min(0.75rem,1.2dvh)] text-center text-xs font-medium text-red-600">{mensajeRapido}</p>
+								{:else if irATareas}
+									<p class="mt-[min(0.75rem,1.2dvh)] flex items-center justify-center gap-1.5 text-xs font-medium text-brand-orange">
+										<i class="fas fa-clipboard-list"></i> Ingresa tu clave para ver tus tareas de hoy
+									</p>
 								{:else if activarHuellaPendiente}
 									<p class="mt-[min(0.75rem,1.2dvh)] flex items-center justify-center gap-1.5 text-xs font-medium text-brand-orange">
 										<Fingerprint size={13} /> Ingresa tu clave para activar tu huella

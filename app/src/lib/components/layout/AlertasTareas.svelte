@@ -8,6 +8,7 @@
 	import { TriangleAlert, Users, Layers, Database, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { crearDetectorDeNovedades } from '$lib/shared/sonido';
+	import { guardarConteoTareasHoy } from '$lib/shared/tareasHoyCache';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { hoyLima } from '$lib/modules/personal/services/personal.service';
 	import { getAlertasTareas, getEstadosTareas, pestanaTarea, type EstadoTarea, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
@@ -66,6 +67,9 @@
 			estadosTareas = est;
 			alertas = lista.filter((a) => area[a.modulo] || esMia(a));
 			cargoUnaVez = true;
+			// Ticket #112: la pantalla de ingreso muestra este número antes de iniciar sesión (ver tareasHoyCache.ts).
+			const { data } = await supabase.auth.getSession();
+			guardarConteoTareasHoy(data.session?.user.email ?? '', hoy, tareasHoy);
 		} catch (err: any) {
 			error = err?.message ?? 'No se pudieron cargar las alertas.';
 		} finally {
@@ -124,7 +128,7 @@
 	{#if abierto}
 		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 		<div class="fixed inset-0 z-30" role="presentation" onclick={() => (abierto = false)}></div>
-		<div class="fixed left-3 right-3 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-[26rem] max-h-[75vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 z-40">
+		<div class="fixed left-3 right-3 top-[4.5rem] sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-4 sm:w-[26rem] max-h-[75vh] overflow-y-auto bg-white rounded-2xl shadow-2xl border border-slate-100 z-40">
 			<div class="p-4 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
 				<div class="flex items-start gap-3">
 					<TriangleAlert size={26} class="text-orange-500 shrink-0" />
@@ -139,7 +143,7 @@
 						<button
 							type="button"
 							onclick={() => (pestana = valor as typeof pestana)}
-							class={`flex-1 px-2 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${pestana === valor ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+							class={`flex-1 min-w-0 px-1.5 py-1.5 rounded-lg border text-[11px] sm:text-xs font-semibold whitespace-nowrap transition-colors ${pestana === valor ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
 						>
 							{texto}
 						</button>
@@ -165,15 +169,19 @@
 							{#each verTodo ? items : items.slice(0, MAX_POR_GRUPO) as a (a.id)}
 								{@const v = etiquetaVencimiento(a.fecha)}
 								<li>
-									<button type="button" onclick={() => ir(a)} class="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-slate-50" title={a.detalle ? `${a.titulo} — ${a.detalle}` : a.titulo}>
-										<div class="flex-1 min-w-0">
-											<p class="text-[13px] text-slate-800 truncate">{a.titulo}</p>
-											{#if a.detalle}<p class="text-[11px] text-slate-400 truncate">{a.detalle}{a.responsable ? ` · ${a.responsable}` : ''}</p>{/if}
-										</div>
-										<span class={`shrink-0 px-2 py-0.5 rounded-md border text-[10px] font-semibold ${PRIORIDAD[a.prioridad].clase}`}>{PRIORIDAD[a.prioridad].texto}</span>
-										<span class={`shrink-0 w-24 text-right text-[11px] ${v.urgente ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>{v.texto}</span>
-										<ChevronRight size={14} class="shrink-0 text-slate-400" />
-									</button>
+									<!-- Ticket #135: texto alineado — título y detalle hacen salto de línea (no se cortan) y a la derecha una columna
+										     fija con la prioridad arriba y el vencimiento abajo, igual en PC y en la app. -->
+										<button type="button" onclick={() => ir(a)} class="w-full flex items-start gap-3 px-4 py-2.5 text-left hover:bg-slate-50" title={a.detalle ? `${a.titulo} — ${a.detalle}` : a.titulo}>
+											<div class="flex-1 min-w-0">
+												<p class="text-[13px] font-semibold leading-snug text-slate-800 break-words line-clamp-2">{a.titulo}</p>
+												{#if a.detalle || a.responsable}<p class="mt-0.5 text-[11px] leading-snug text-slate-500 break-words line-clamp-2">{a.detalle ?? ''}{a.detalle && a.responsable ? ' · ' : ''}{a.responsable ?? ''}</p>{/if}
+											</div>
+											<div class="shrink-0 w-[5.75rem] flex flex-col items-end gap-1 text-right">
+												<span class={`px-2 py-0.5 rounded-md border text-[10px] font-semibold leading-tight ${PRIORIDAD[a.prioridad].clase}`}>{PRIORIDAD[a.prioridad].texto}</span>
+												<span class={`text-[11px] leading-tight ${v.urgente ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>{v.texto}</span>
+											</div>
+											<ChevronRight size={14} class="shrink-0 self-center text-slate-400" />
+										</button>
 								</li>
 							{/each}
 						</ul>

@@ -11,3 +11,13 @@
 body {
   @apply bg-brand-gray text-slate-800 font-sans;
 }
+
+/* Ticket #112 (rechazo): la pantalla de ingreso se ve como 1 sola pantalla, sin barra de desplazamiento (ver login). */
+html.sin-barra,
+html.sin-barra body {
+  scrollbar-width: none;
+}
+html.sin-barra::-webkit-scrollbar,
+html.sin-barra body::-webkit-scrollbar {
+  display: none;
+}

@@ -3606,9 +3606,9 @@
 						     Categoría | Clase, Ver comprobante | Adjuntar nuevo comprobante — y debajo los centros
 						     de costo. En celular todo baja a una columna (los dos botones siguen lado a lado). -->
 						<div class="flex flex-col gap-3 sm:gap-4">
-							<!-- Clasificación 24/11/2026 (Excel de la clienta): Tipo | Categoría, y debajo Clase | Vincular con cuenta por pagar. -->
-							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
-								{@render fieldBlock(tipoField)}
+							<!-- Ticket #147: en Egreso el orden es Tipo | Clase y debajo Categoría | Vincular con cuenta por pagar
+							     (la Categoría depende de la Clase). En Ingreso sigue Tipo | Categoría y debajo Vincular. -->
+							{#snippet categoriaBloque()}
 								{#if catalogoDetalleActual.length > 0}
 									<!-- Categoría en cascada (a pedido explícito del usuario, vuelve a ser interactiva
 									     acá — no solo de lectura): reusa el mismo estado de Grupo que la sección
@@ -3637,9 +3637,8 @@
 								{:else}
 									{@render fieldBlock(categoriaField)}
 								{/if}
-							</div>
-							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
-									{#if formValues.tipo === 'egreso'}
+							{/snippet}
+							{#snippet claseBloque()}
 										<div>
 											<label for="tr-clase-destino" class="text-xs sm:text-sm leading-tight font-bold text-[#0f3b5e] mb-1 block">Clase</label>
 											<div class="relative">
@@ -3654,7 +3653,13 @@
 											</div>
 											<p class="hidden sm:block mt-1 text-xs text-slate-400">Clasifica qué muestra Centro de Costo Destino.</p>
 										</div>
-									{/if}
+							{/snippet}
+							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
+								{@render fieldBlock(tipoField)}
+								{#if formValues.tipo === 'egreso'}{@render claseBloque()}{:else}{@render categoriaBloque()}{/if}
+							</div>
+							<div class="grid grid-cols-2 gap-x-3 gap-y-3 sm:gap-4 items-end sm:items-start">
+								{#if formValues.tipo === 'egreso'}{@render categoriaBloque()}{/if}
 								{#if muestraVinculo}{@render vinculoBlock()}{/if}
 							</div>
 								{#if esDetraccion}

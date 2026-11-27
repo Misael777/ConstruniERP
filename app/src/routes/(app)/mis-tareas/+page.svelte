@@ -113,16 +113,17 @@
 
 <div class="h-full overflow-y-auto bg-slate-50">
 	<div class="max-w-3xl mx-auto p-4 sm:p-6 flex flex-col gap-4">
-		<div class="flex items-center gap-4 bg-white border border-slate-100 rounded-2xl shadow-sm p-4">
-			<span class="w-14 h-14 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center text-2xl shrink-0"><i class="fas fa-calendar-check"></i></span>
+		<div class="flex items-center gap-3 sm:gap-4 bg-white border border-slate-100 rounded-2xl shadow-sm p-4">
+			<span class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center text-2xl shrink-0"><i class="fas fa-calendar-check"></i></span>
 			<div class="flex-1 min-w-0">
-				<h1 class="text-xl sm:text-2xl font-extrabold text-[#0f2a4a]">Vamos paso a paso</h1>
-				<p class="text-slate-700">{conteo.hoy} tarea{conteo.hoy === 1 ? '' : 's'} pendiente{conteo.hoy === 1 ? '' : 's'} para hoy</p>
+				<h1 class="text-lg sm:text-2xl font-extrabold leading-tight text-[#0f2a4a]">Vamos paso a paso</h1>
+				<p class="text-sm sm:text-base leading-snug text-slate-700">{conteo.hoy} tarea{conteo.hoy === 1 ? '' : 's'} pendiente{conteo.hoy === 1 ? '' : 's'} para hoy</p>
 				<p class="text-sm text-slate-500 first-letter:uppercase">{fechaLarga}</p>
 			</div>
-			<div class="relative shrink-0 hidden xs:block sm:block">
-				<span class="absolute -top-1 -left-14 rotate-[-8deg] rounded-lg border-2 border-slate-700 bg-white px-1.5 py-0.5 text-[10px] font-bold leading-tight text-slate-700 text-center">¡Ánimo!<br />Tú puedes</span>
-				<img src="/snoopy-casco.webp" alt="" class="h-16 w-auto select-none" draggable="false" />
+			<!-- Ticket #135: el cartel ya no se monta sobre el texto; va encima de Snoopy, también en el celular. -->
+			<div class="shrink-0 flex flex-col items-center gap-1">
+				<span class="rotate-[-6deg] rounded-lg border-2 border-slate-700 bg-white px-1.5 py-0.5 text-[10px] font-bold leading-tight text-slate-700 text-center whitespace-nowrap">¡Ánimo!<br />Tú puedes</span>
+				<img src="/snoopy-casco.webp" alt="" class="h-12 sm:h-16 w-auto select-none" draggable="false" />
 			</div>
 		</div>
 
@@ -177,19 +178,19 @@
 								class={`mt-0.5 w-7 h-7 rounded-full border-2 shrink-0 flex items-center justify-center ${pestana === 'completada' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-400 hover:border-emerald-500 hover:text-emerald-500 text-transparent'}`}
 							><i class="fas fa-check text-xs"></i></button>
 							<button type="button" onclick={() => goto(a.href)} class="flex-1 min-w-0 text-left">
-								<p class={`font-bold text-slate-800 ${pestana === 'completada' ? 'line-through text-slate-400' : ''}`}>{a.titulo}</p>
+								<p class={`font-bold leading-snug break-words text-slate-800 ${pestana === 'completada' ? 'line-through text-slate-400' : ''}`}>{a.titulo}</p>
 								<div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
 									<span class={`rounded-md border px-1.5 py-0.5 font-semibold ${areaDe(a.modulo).chip}`}>{areaDe(a.modulo).titulo}</span>
-									{#if a.detalle}<span class="text-slate-500 truncate max-w-[16rem]">{a.detalle}</span>{/if}
+									{#if a.detalle}<span class="min-w-0 text-slate-500 break-words">{a.detalle}</span>{/if}
 								</div>
-								<p class="mt-1 text-xs text-slate-500"><i class="far fa-user"></i> {a.registradoPor ? (delegada(a) ? 'Registrada por ti' : `Registrada por ${a.registradoPor}`) : 'Alerta del ERP'}{a.responsable && !esMia(a) ? ` · a cargo de ${a.responsable}` : ''}</p>
+								<p class="mt-1 text-xs leading-snug text-slate-500"><i class="far fa-user mr-1"></i> {a.registradoPor ? (delegada(a) ? 'Registrada por ti' : `Registrada por ${a.registradoPor}`) : 'Alerta del ERP'}{a.responsable && !esMia(a) ? ` · a cargo de ${a.responsable}` : ''}</p>
 							</button>
-							<div class="flex flex-col items-end gap-1 shrink-0">
+							<div class="w-[5.75rem] flex flex-col items-end gap-1 shrink-0 text-right">
 								<span class={`rounded-full border px-2 py-0.5 text-xs font-semibold ${PRIORIDAD[a.prioridad].clase}`}>{PRIORIDAD[a.prioridad].texto}</span>
 								{#if pestana === 'aplazada' && e?.aplazada_hasta}
 									<span class="rounded-lg bg-orange-50 px-2 py-0.5 text-xs font-bold text-orange-600 uppercase">{new Date(`${e.aplazada_hasta}T12:00:00Z`).toLocaleDateString('es-PE', { day: 'numeric', month: 'short', timeZone: 'UTC' })}</span>
 								{:else}
-									<span class={`text-xs ${v.urgente ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>{v.texto}</span>
+									<span class={`text-xs leading-tight ${v.urgente ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>{v.texto}</span>
 								{/if}
 							</div>
 							<button type="button" onclick={(ev) => { ev.stopPropagation(); menuDe = menuDe === a.id ? null : a.id; fechaAplazar = sumar(hoy, 1); }} class="w-7 h-7 rounded-full text-slate-500 hover:bg-slate-100 shrink-0" aria-label="Más opciones"><i class="fas fa-ellipsis"></i></button>

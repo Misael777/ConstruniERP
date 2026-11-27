@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { supabase } from '$lib/supabaseClient';
 	import { hasPermiso } from '$lib/stores/permisos.svelte';
-	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins, Eye, ChevronDown, Briefcase, HardHat, Ellipsis, DollarSign } from '@lucide/svelte';
+	import { ArrowLeft, Wallet, CreditCard, Search, Download, X, Banknote, Landmark, Building2, Smartphone, RotateCcw, TrendingUp, Scale, HandCoins, Eye, ChevronDown, Briefcase, HardHat, Ellipsis, DollarSign, ArrowUpNarrowWide, ArrowDownWideNarrow } from '@lucide/svelte';
 	import { toast } from '$lib/stores/toast';
 	import { formatCurrency, emptyColumnFilters, isColumnFilterActive, type FieldConfig, type FieldOption, type ColumnFilters } from '$lib/shared/fieldConfig';
 	import { getCentroCostoOptions, getCentroCostoTipoMap, labelPorCodigoMedioPago } from '$lib/modules/transacciones/services/transacciones.service';
@@ -15,6 +15,7 @@
 	import TransaccionModal from '$lib/modules/transacciones/components/TransaccionModal.svelte';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import ColumnFilterBar from '$lib/shared/components/ColumnFilterBar.svelte';
+	import { exportarTablaXlsx } from '$lib/shared/exportarXlsx';
 
 	// Panel 100% sobre `transaccion` (Supabase anon key, client-side) — a pedido explícito del usuario:
 	// "Movimientos de Caja" debe ser solo sobre transacciones, sin ningún dato de cuentas_pagar/cobrar
@@ -238,7 +239,16 @@
 		}
 		return true;
 	}
-	const movimientosFiltrados = $derived(movimientosFilas.filter(cumpleColumnFilters));
+	/** Ticket #145: orden por fecha aun con filtros — 'asc' = más antigua primero (orden del servicio). */
+	let orden = $state<'asc' | 'desc'>('asc');
+	const movimientosFiltrados = $derived.by(() => {
+		const filtradas = movimientosFilas.filter(cumpleColumnFilters);
+		return orden === 'desc' ? filtradas.slice().reverse() : filtradas;
+	});
+	function alternarOrden() {
+		orden = orden === 'asc' ? 'desc' : 'asc';
+		pageNum = 1;
+	}
 	function onColumnFiltersChange() {
 		pageNum = 1;
 	}
@@ -375,31 +385,53 @@
 		pageNum = p;
 	}
 
-	function exportarCSV() {
-		if (movimientosFiltrados.length === 0) return;
-		const encabezados = ['Código', 'Fecha', 'Tipo', 'Concepto', 'Centro de Costo Origen', 'Centro de Costo Destino', 'Método de Pago', 'Monto', 'Moneda', 'Saldo Acumulado', 'Estado de aprobación', 'Documento pendiente'];
-		const filas = movimientosFiltrados.map((f) => [
-			f.codigo,
-			formatDate(f.fecha),
-			TIPO_MOVIMIENTO_LABEL[f.tipo] ?? f.tipo,
-			f.concepto,
-			f.centroCostoOrigenLabel,
-			f.centroCostoDestinoLabel,
-			medioPagoDe(f) ?? '',
-			montoMovimiento(f),
-			f.moneda === 'dolares' ? 'Dólares' : 'Soles',
-			f.saldoAcumulado,
-			f.aprobado ? 'Aprobado' : 'Pendiente',
-			f.raw?.documento_pendiente === 'si' ? 'Sí' : 'No'
-		]);
-		const csv = [encabezados, ...filas].map((fila) => fila.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
-		const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `movimientos-caja-${new Date().toISOString().slice(0, 10)}.csv`;
-		a.click();
-		URL.revokeObjectURL(url);
+	/** Ticket #145: el CSV por enlace no descargaba en la app de escritorio; ahora genera un Excel con el diálogo
+	 * "Guardar como" (exportarTablaXlsx), con las filas tal como se ven: filtradas y en el orden elegido. */
+	let exportando = $state(false);
+	async function exportarExcel() {
+		if (movimientosFiltrados.length === 0) {
+			toast.error('No hay movimientos para exportar con estos filtros.');
+			return;
+		}
+		exportando = true;
+		try {
+			await exportarTablaXlsx({
+				nombreArchivo: 'movimientos_caja',
+				hoja: 'Movimientos de Caja',
+				columnas: [
+					{ titulo: 'Código', ancho: 14 },
+					{ titulo: 'Fecha', ancho: 12 },
+					{ titulo: 'Tipo', ancho: 14 },
+					{ titulo: 'Concepto', ancho: 40 },
+					{ titulo: 'Centro de Costo Origen', ancho: 32 },
+					{ titulo: 'Centro de Costo Destino', ancho: 32 },
+					{ titulo: 'Método de Pago', ancho: 16 },
+					{ titulo: 'Monto', ancho: 14, formato: 'moneda' },
+					{ titulo: 'Moneda', ancho: 10 },
+					{ titulo: 'Saldo Acumulado', ancho: 16, formato: 'moneda' },
+					{ titulo: 'Estado de aprobación', ancho: 18 },
+					{ titulo: 'Documento pendiente', ancho: 18 }
+				],
+				filas: movimientosFiltrados.map((f) => [
+					f.codigo,
+					formatDate(f.fecha),
+					TIPO_MOVIMIENTO_LABEL[f.tipo] ?? f.tipo,
+					f.concepto,
+					f.centroCostoOrigenLabel,
+					f.centroCostoDestinoLabel,
+					medioPagoDe(f) ?? '',
+					montoMovimiento(f),
+					f.moneda === 'dolares' ? 'Dólares' : 'Soles',
+					f.saldoAcumulado,
+					f.aprobado ? 'Aprobado' : 'Pendiente',
+					f.raw?.documento_pendiente === 'si' ? 'Sí' : 'No'
+				])
+			});
+		} catch (err: any) {
+			toast.error(err?.message ?? 'No se pudo exportar');
+		} finally {
+			exportando = false;
+		}
 	}
 </script>
 
@@ -624,8 +656,11 @@
 			<button type="button" onclick={limpiarFiltros} class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-blue-600 text-sm font-medium hover:bg-blue-50" title="Limpiar filtros">
 				<RotateCcw size={15} /> Limpiar filtros
 			</button>
-			<button type="button" onclick={exportarCSV} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
-				<Download size={16} /> Exportar
+			<button type="button" onclick={alternarOrden} class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50" title="Cambiar el orden por fecha">
+				{#if orden === 'asc'}<ArrowUpNarrowWide size={16} /> Más antiguas primero{:else}<ArrowDownWideNarrow size={16} /> Más recientes primero{/if}
+			</button>
+			<button type="button" onclick={exportarExcel} disabled={exportando} class="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50 disabled:opacity-60">
+				<Download size={16} /> {exportando ? 'Exportando…' : 'Exportar'}
 			</button>
 		</div>
 	</div>
