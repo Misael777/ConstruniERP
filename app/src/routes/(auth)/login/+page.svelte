@@ -10,10 +10,12 @@
 	import { hoyLima } from '$lib/modules/personal/services/personal.service';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
 	import { Fingerprint, Lock, ArrowRight } from '@lucide/svelte';
+	import { toast } from '$lib/stores/toast';
 	import {
 		leerAccesoRapido,
 		activarAccesoRapido,
 		abrirConClave,
+		activarHuellaConLlave,
 		abrirConHuella,
 		quitarAccesoRapido,
 		actualizarPerfilAccesoRapido,
@@ -135,17 +137,13 @@
 			const cred = await abrirConClave(pin);
 			if (activarHuellaPendiente && accesoGuardado) {
 				try {
-					await activarAccesoRapido({
-						pin,
-						email: cred.email,
-						password: cred.password,
-						nombre: accesoGuardado.nombre,
-						fotoUrl: accesoGuardado.fotoUrl,
-						conHuella: true
-					});
+					await activarHuellaConLlave(cred.llave);
+					toast.success('Huella activada. La próxima vez puedes entrar con tu huella.');
 				} catch (err) {
-					// No impide entrar: solo queda sin huella.
+					// No impide entrar: solo queda sin huella, pero se avisa (antes fallaba en silencio).
 					console.error('[Login] No se pudo activar la huella:', err);
+					const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+					if (!msg.includes('cancel')) toast.error('No se pudo activar la huella. Inténtalo de nuevo la próxima vez.');
 				}
 				activarHuellaPendiente = false;
 			}

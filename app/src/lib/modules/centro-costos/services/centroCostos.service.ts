@@ -53,6 +53,8 @@ export interface CentroCosto {
 	id_cliente: number | null;
 	id_proveedor: number | null;
 	id_empleado: number | null;
+	/** Trabajador de Personal y Asistencia dueño del centro (27/11/2026, ver migración centro_costo_personal). */
+	id_personal?: number | null;
 	/** Solo para filas vinculadas a un proveedor (pestaña "Cuentas Internas"): el "Producto y Servicio"
 	 * de ese proveedor (columna real `proveedor.vendedor`, ver ProveedorModal.svelte) — se trae con un
 	 * embed, no es una columna propia de centro_costo. null para filas sin proveedor vinculado. */
@@ -110,6 +112,9 @@ export async function resolveEntidadVinculada(client: SupabaseClient, centro: Ce
 	if (centro.id_empleado) {
 		const { data } = await client.from('empleados').select('nombre').eq('id', centro.id_empleado).maybeSingle();
 		return { tipo: 'Empleado', id: centro.id_empleado, nombre: data?.nombre ?? centro.nombre };
+	}
+	if (centro.id_personal) {
+		return { tipo: 'Empleado', id: centro.id_personal, nombre: centro.nombre };
 	}
 	return null;
 }
@@ -196,6 +201,8 @@ export const TIPO_CONSULTORIA = 'consultoria';
 const NOMBRE_CENTRO_UNICO: Record<string, string> = { [TIPO_CORPORATIVO]: 'CORPORATIVO', [TIPO_CONSULTORIA]: 'CONSULTORÍA' };
 const MENSAJE_CENTRO_UNICO =
 	'Los centros de costo Corporativo y Consultoría son únicos y se generan automáticamente: no se puede crear otro, darlos de baja ni cambiarles el tipo.';
+const MENSAJE_CENTRO_PERSONAL =
+	'Este centro de costo pertenece a un trabajador de Personal y Asistencia: se crea solo y se da de baja desde la ficha del trabajador.';
 
 /** true si el centro es uno de los únicos (Corporativo, o Consultoría general sin proyecto). */
 export function esCentroCostoUnico(centro: { tipo?: string | null; id_proyecto?: number | null } | null | undefined): boolean {
@@ -474,7 +481,7 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 	// transacción/pago dispararía un getOrCrear que le crea uno NUEVO, duplicando el concepto.
 	const { data: existente, error: fetchError } = await client
 		.from(TABLE_NAME)
-		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, tipo')
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, id_personal, tipo')
 		.eq(PK_COLUMN, id)
 		.maybeSingle();
 
@@ -482,6 +489,7 @@ export async function deleteCentroCosto(client: SupabaseClient, id: number): Pro
 		return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
 	}
 	if (esCentroCostoUnico(existente)) return { success: false, message: MENSAJE_CENTRO_UNICO };
+	if (existente?.id_personal) return { success: false, message: MENSAJE_CENTRO_PERSONAL };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])
@@ -535,11 +543,12 @@ export async function restaurarCentroCosto(client: SupabaseClient, id: number): 
 export async function eliminarCentroCostoPermanente(client: SupabaseClient, id: number): Promise<ServiceResult> {
 	const { data: existente, error: fetchError } = await client
 		.from(TABLE_NAME)
-		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, tipo')
+		.select('id_proyecto, id_cliente, id_proveedor, id_empleado, id_personal, tipo')
 		.eq(PK_COLUMN, id)
 		.maybeSingle();
 	if (fetchError) return { success: false, message: `No se pudo verificar el centro de costo: ${fetchError.message}` };
 	if (esCentroCostoUnico(existente)) return { success: false, message: MENSAJE_CENTRO_UNICO };
+	if (existente?.id_personal) return { success: false, message: MENSAJE_CENTRO_PERSONAL };
 
 	const entidadVinculada = existente
 		? (Object.keys(COLUMNA_POR_TIPO) as EntidadCentroCosto[]).find((tipo) => existente[COLUMNA_POR_TIPO[tipo]])

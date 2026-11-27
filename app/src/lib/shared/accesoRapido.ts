@@ -188,13 +188,13 @@ export class AccesoRapidoError extends Error {
 }
 
 /** Con la clave de 4 dígitos: devuelve el correo y la contraseña para iniciar sesión. */
-export async function abrirConClave(pin: string): Promise<{ email: string; password: string }> {
+export async function abrirConClave(pin: string): Promise<{ email: string; password: string; llave: string }> {
 	const g = leerAccesoRapido();
 	if (!g) throw new AccesoRapidoError('Este equipo no tiene ingreso rápido.', true);
 	const { data, error } = await supabase.rpc('fn_acceso_rapido_abrir', { p_dispositivo: g.dispositivo, p_pin: pin });
 	if (error) throw new AccesoRapidoError('No se pudo conectar. Revisa tu conexión a internet e intenta de nuevo.');
 	const r = data as { ok: boolean; llave?: string; motivo?: string; restantes?: number };
-	if (r.ok && r.llave) return { email: g.email, password: await descifrar(g.cifrado, r.llave) };
+	if (r.ok && r.llave) return { email: g.email, password: await descifrar(g.cifrado, r.llave), llave: r.llave };
 	if (r.motivo === 'clave') {
 		const n = r.restantes ?? 0;
 		throw new AccesoRapidoError(`Clave incorrecta. Te ${n === 1 ? 'queda 1 intento' : `quedan ${n} intentos`}.`);
@@ -206,6 +206,17 @@ export async function abrirConClave(pin: string): Promise<{ email: string; passw
 			: 'El ingreso rápido de este equipo ya no está activo. Ingresa con tu contraseña.',
 		true
 	);
+}
+
+/** Activa la huella en un equipo que ya tiene la clave de 4 dígitos, con la llave que devolvió abrirConClave.
+ * No llama al servidor (antes se llamaba a fn_acceso_rapido_activar sin sesión iniciada, que exige sesión, y la
+ * huella nunca quedaba activada). Lanza el error si la huella falla o se cancela. */
+export async function activarHuellaConLlave(llave: string): Promise<void> {
+	const g = leerAccesoRapido();
+	if (!g) throw new AccesoRapidoError('Este equipo no tiene ingreso rápido.', true);
+	const huella = await cifradoHuella('Registra tu huella para ingresar', { dataToEncrypt: llave });
+	if (!huella) throw new Error('La huella no devolvió datos.');
+	guardar({ ...g, huella });
 }
 
 /** Con la huella: devuelve el correo y la contraseña para iniciar sesión. */

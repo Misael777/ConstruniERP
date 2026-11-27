@@ -1591,6 +1591,24 @@
 	};
 	/** Clases cuyo Centro de Costo Destino es el mismo que "Otro" (Obra, Consultoría, Corporativo, tipo Otro). */
 	const claseComoOtro = (c: string) => c === 'otro' || c === 'tributo' || c === 'obra_caridad' || c === 'accionistas';
+	/** Centros "propios" de cada Clase (los que antes eran la lista completa del Destino); ahora van primero y debajo
+	 * el resto de centros activos (pedido de la clienta, 27/11/2026). */
+	function opcionesPropiasDeClase(clase: ClaseDestino): FieldOption[] {
+		if (clase === 'proveedores') return centroCostoOptionsProveedores;
+		if (clase === 'subcontratista') return centroCostoOptionsSubcontratistas;
+		if (clase === 'cliente') return centroCostoOptionsClientes;
+		if (clase === 'empleados') return centroCostoOptionsEmpleados;
+		if (clase === 'prestamo' || clase === 'accionistas') return centroCostoOptionsTodos.filter((o) => centroCostoTipoMap[o.value] === 'prestamo');
+		const TIPOS_CLASE_OTRO = new Set(['otro', 'consultoria', 'obra', 'bolsa general']);
+		return centroCostoOptionsTodos.filter((o) => TIPOS_CLASE_OTRO.has(centroCostoTipoMap[o.value]));
+	}
+	/** Grupo de la lista (ver GRUPO_CENTRO_POR_TIPO) que va primero en el Destino según la Clase. */
+	function grupoPrimeroDeClase(clase: ClaseDestino): string | null {
+		const tipo: Partial<Record<ClaseDestino, string>> = { proveedores: 'proveedor', subcontratista: 'subcontratista', cliente: 'cliente', prestamo: 'prestamo', accionistas: 'prestamo', obra_caridad: 'otro' };
+		return tipo[clase] ? (GRUPO_CENTRO_POR_TIPO[tipo[clase]!] ?? null) : null;
+	}
+	/** Centros dados de baja: no se ofrecen en el Destino ampliado (salvo el ya guardado). */
+	let centrosDeBaja = $state<Set<string>>(new Set());
 	// "Otro", "Préstamo" y "Tributo" disparan el mismo comportamiento especial de Categoría/Detalle (ver
 	// optionsFor/catalogoDetalleActual más abajo): Categoría vuelve a ser un selector PLANO (sin la
 	// cascada Grupo→Subcategoría de Obra/Consultoría/Corporativo) — la diferencia entre las tres está en
@@ -2056,9 +2074,11 @@
 				getCentroCostoOptionsEmpleados(supabase),
 				getCentroCostoOptionsClientesYCorporativoUOtro(supabase),
 				getCentroCostoOptions(supabase),
-				getCentroCostoOptionsSoloCentros(supabase)
+				getCentroCostoOptionsSoloCentros(supabase),
+				supabase.from('centro_costo').select('id_centro_costo').eq('estado', 'baja')
 			])
-				.then(([opciones, mapa, proveedores, subcontratistas, empleados, personaEmpresa, todos, soloCentros]) => {
+				.then(([opciones, mapa, proveedores, subcontratistas, empleados, personaEmpresa, todos, soloCentros, baja]) => {
+					centrosDeBaja = new Set(((baja.data ?? []) as { id_centro_costo: number }[]).map((c) => String(c.id_centro_costo)));
 					centroCostoOptionsClientes = opciones;
 					centroCostoClienteIdMap = mapa;
 					centroCostoOptionsProveedores = proveedores;
@@ -2140,7 +2160,13 @@
 			Object.keys(centroCostoTipoMap).length > 0
 		) {
 			const destinoId = mode === 'edit' && transaccion ? String(transaccion.id_centro_costo_destino) : destinoPrecargado;
-			if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
+			// Pedido de la clienta (27/11/2026): el Destino ya no depende de la Clase (se puede elegir cualquier centro),
+			// así que primero manda la Categoría guardada cuando pertenece a una sola Clase (ej. Utilidad a Guillermo,
+			// que es un centro de Préstamo, se abre como Accionistas).
+			const categoriaGuardada = String((transaccion as any)?.categoria ?? formValues.categoria ?? '');
+			const clasesDeCategoria = (Object.keys(CATEGORIAS_POR_CLASE) as Exclude<ClaseDestino, ''>[]).filter((c) => CATEGORIAS_POR_CLASE[c].includes(categoriaGuardada));
+			if (categoriaGuardada && clasesDeCategoria.length === 1) claseDestino = clasesDeCategoria[0];
+			else if (centroCostoOptionsProveedores.some((o) => o.value === destinoId)) claseDestino = 'proveedores';
 			else if (centroCostoOptionsSubcontratistas.some((o) => o.value === destinoId)) claseDestino = 'subcontratista';
 			else if (centroCostoOptionsEmpleados.some((o) => o.value === destinoId)) claseDestino = 'empleados';
 			else if (centroCostoOptionsClientes.some((o) => o.value === destinoId)) claseDestino = 'cliente';
@@ -2669,38 +2695,16 @@
 			}
 			if (formValues.tipo === 'egreso' && formValues.tipo_alcance === 'externa') {
 				if (field.key === 'id_centro_costo_origen') return soloNombreCentro(dynamicOptions.id_centro_costo_destino_solo_centros || []);
-				if (claseDestino === 'proveedores') return soloNombreCentro(centroCostoOptionsProveedores);
-				if (claseDestino === 'subcontratista') return soloNombreCentro(centroCostoOptionsSubcontratistas);
-				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados);
-				if (claseDestino === 'cliente') return soloNombreCentro(centroCostoOptionsClientes);
-				// "Otro"/"Tributo" (a pedido explícito del usuario) — cuentas externas de tipo 'otro',
-				// 'consultoria', 'obra' o 'bolsa general' (Corporativo): cubre el caso de un Egreso cuyo
-				// destino no es un proveedor/subcontratista/empleado/cliente registrado (ej. un préstamo
-				// que se le da a una persona sin vínculo formal en el sistema, o el pago de un tributo —
-				// ver categoria más abajo, esCorporativo). "Tributo" no tiene un tipo de Centro de Costo
-				// propio, reusa esta misma lista sin restringir más.
-				if (claseComoOtro(claseDestino)) {
-					const TIPOS_CLASE_OTRO = new Set(['otro', 'consultoria', 'obra', 'bolsa general']);
-					const opcionesOtro = centroCostoOptionsTodos.filter((o) => TIPOS_CLASE_OTRO.has(centroCostoTipoMap[o.value]));
-					// Si el Destino ya guardado (ver el fallback a 'otro' en el $effect de arriba, al editar)
-					// no calza con ninguno de esos 4 tipos, se agrega igual — sin esto, el campo quedaría con
-					// un valor elegido que no aparece en su propia lista de opciones.
-					if (formValues.id_centro_costo_destino && !opcionesOtro.some((o) => o.value === formValues.id_centro_costo_destino)) {
-						const actual = centroCostoOptionsTodos.find((o) => o.value === formValues.id_centro_costo_destino);
-						if (actual) opcionesOtro.push(actual);
-					}
-					return soloNombreCentro(opcionesOtro);
-				}
-				// "Préstamo" (a pedido explícito del usuario) — a diferencia de "Otro" de arriba, filtra
-				// específicamente a los centros de costo de tipo 'prestamo' (ej. "Persona Externa"), las
-				// cuentas creadas a mano justo para representar a quien recibe un préstamo otorgado.
-				if (claseDestino === 'prestamo') {
-					const opcionesPrestamo = centroCostoOptionsTodos.filter((o) => centroCostoTipoMap[o.value] === 'prestamo');
-					if (formValues.id_centro_costo_destino && !opcionesPrestamo.some((o) => o.value === formValues.id_centro_costo_destino)) {
-						const actual = centroCostoOptionsTodos.find((o) => o.value === formValues.id_centro_costo_destino);
-						if (actual) opcionesPrestamo.push(actual);
-					}
-					return soloNombreCentro(opcionesPrestamo);
+				// Pedido de la clienta (27/11/2026): "deberían aparecer todos los Centros de Costos y Proveedores, para que quien
+				// registre elija al acreedor; solo en Empleados serían los empleados". Con cualquier otra Clase el Destino
+				// ofrece TODOS los centros activos, con los de esa Clase primero (ver opcionesPropiasDeClase/opcionesConSaldo).
+				// Empleados: usuarios del ERP y trabajadores de Personal (27/11/2026); los dados de baja no se ofrecen (salvo el ya guardado).
+				if (claseDestino === 'empleados') return soloNombreCentro(centroCostoOptionsEmpleados.filter((o) => !centrosDeBaja.has(o.value) || o.value === formValues.id_centro_costo_destino));
+				if (claseDestino) {
+					const propias = opcionesPropiasDeClase(claseDestino);
+					const yaEstan = new Set(propias.map((o) => o.value));
+					const resto = centroCostoOptionsTodos.filter((o) => !yaEstan.has(o.value) && (!centrosDeBaja.has(o.value) || o.value === formValues.id_centro_costo_destino));
+					return soloNombreCentro([...propias, ...resto]);
 				}
 				return [];
 			}
@@ -2850,7 +2854,9 @@
 	function opcionesConSaldo(field: (typeof formFields)[number]) {
 		const opciones = optionsFor(field).map((opt) => ({ value: opt.value, label: opt.label, nombre: opt.nombre, detalle: opt.detalle, saldo: saldoParaOpcion(field, opt), grupo: grupoParaOpcion(field, opt), simbolo: simboloParaOpcion(field, opt) }));
 		if (!esCampoCentroCosto(field) || usaGrupoReceptorPrestamo(field)) return opciones;
+		const primero = field.key === 'id_centro_costo_destino' && formValues.tipo === 'egreso' ? grupoPrimeroDeClase(claseDestino) : null;
 		const rango = (g: string | undefined) => {
+			if (primero && g === primero) return -1;
 			const i = ORDEN_GRUPO_CENTRO.indexOf(g ?? '');
 			return i === -1 ? ORDEN_GRUPO_CENTRO.length : i;
 		};

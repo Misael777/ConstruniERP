@@ -286,11 +286,12 @@ function resolveEstadoTransaccion(estadoActual: string | null | undefined): stri
 async function esCentroCostoInterno(client: SupabaseClient, idCentroCosto: number): Promise<boolean> {
 	const { data } = await client
 		.from('centro_costo')
-		.select('id_cliente, id_proveedor, id_empleado')
+		.select('id_cliente, id_proveedor, id_empleado, id_personal')
 		.eq('id_centro_costo', idCentroCosto)
 		.maybeSingle();
 	if (!data) return false;
-	return data.id_cliente === null && data.id_proveedor === null && data.id_empleado === null;
+	// id_personal: centro de un trabajador de Personal (27/11/2026), cuenta de un tercero igual que la de un empleado.
+	return data.id_cliente === null && data.id_proveedor === null && data.id_empleado === null && data.id_personal === null;
 }
 
 /** Saldo disponible de un centro de costo, EN SOLES: su último punto de corte + lo que entró (Ingreso/Financiamiento/
@@ -901,14 +902,14 @@ export async function getCentroCostoOptionsSubcontratistas(client: SupabaseClien
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
 }
 
-/** Solo centros de costo vinculados DIRECTAMENTE a un empleado (`id_empleado` no nulo) — para "Centro
- * de Costo Destino" en Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=Empleados (ver
- * TransaccionModal.svelte). */
+/** Centros de costo de empleados: usuarios del ERP (`id_empleado`) y, desde el 27/11/2026 (pedido de la clienta), los
+ * trabajadores de Personal y Asistencia (`id_personal`, ver migración centro_costo_personal) — para "Centro de Costo
+ * Destino" en Nueva/Editar Transacción cuando Tipo=Egreso+Externa y "Clase"=Empleados (ver TransaccionModal.svelte). */
 export async function getCentroCostoOptionsEmpleados(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
 		.select(`id_centro_costo, codigo, nombre, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
-		.not('id_empleado', 'is', null)
+		.or('id_empleado.not.is.null,id_personal.not.is.null')
 		.order('nombre');
 	if (error) throw error;
 	return (data ?? []).map((c: any) => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) }));
@@ -1166,11 +1167,11 @@ export async function getCentroCostoTipoMap(client: SupabaseClient): Promise<Rec
  * sin abrir el modal. Cae a 'Centro de costo destino' si no matchea ninguna clase conocida. */
 export async function getClaseCentroCosto(client: SupabaseClient, idCentroCosto: number | null): Promise<string> {
 	if (!idCentroCosto) return 'Centro de costo destino';
-	const { data, error } = await client.from('centro_costo').select('tipo, id_empleado, id_cliente').eq('id_centro_costo', idCentroCosto).maybeSingle();
+	const { data, error } = await client.from('centro_costo').select('tipo, id_empleado, id_personal, id_cliente').eq('id_centro_costo', idCentroCosto).maybeSingle();
 	if (error || !data) return 'Centro de costo destino';
 	if (data.tipo === 'proveedor') return 'Proveedor';
 	if (data.tipo === 'subcontratista') return 'Subcontratista';
-	if (data.id_empleado !== null) return 'Empleado';
+	if (data.id_empleado !== null || data.id_personal !== null) return 'Empleado';
 	if (data.id_cliente !== null) return 'Cliente';
 	return 'Centro de costo destino';
 }
@@ -1212,7 +1213,7 @@ export async function getCentroCostoOptionsProyectos(client: SupabaseClient): Pr
 export async function getCentroCostoOptionsExternos(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
+		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_personal, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
 		.order('nombre');
 	if (error) throw error;
 
@@ -1220,11 +1221,11 @@ export async function getCentroCostoOptionsExternos(client: SupabaseClient): Pro
 	const toOption = (c: any): FieldOption => ({ value: String(c.id_centro_costo), label: centroCostoOptionLabel(c) });
 	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
 	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
-	const empleados = rows.filter((r) => r.id_empleado !== null).map(toOption);
+	const empleados = rows.filter((r) => r.id_empleado !== null || r.id_personal !== null).map(toOption);
 	const proyectos = rows.filter((r) => r.id_proyecto !== null).map(toOption);
 	// Centros de costo creados a mano, sin vincular a ninguna entidad — van al final, para no
 	// dejarlos fuera de "todos los centros de costo".
-	const sinVincular = rows.filter((r) => r.id_proveedor === null && r.id_cliente === null && r.id_empleado === null && r.id_proyecto === null).map(toOption);
+	const sinVincular = rows.filter((r) => r.id_proveedor === null && r.id_cliente === null && r.id_empleado === null && r.id_personal === null && r.id_proyecto === null).map(toOption);
 	return [...proveedores, ...clientes, ...empleados, ...proyectos, ...sinVincular];
 }
 
@@ -1235,8 +1236,8 @@ export async function getCentroCostoOptionsExternos(client: SupabaseClient): Pro
 export async function getCentroCostoOptionsExternosOrigen(client: SupabaseClient): Promise<FieldOption[]> {
 	const { data, error } = await client
 		.from('centro_costo')
-		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
-		.or('id_proveedor.not.is.null,id_cliente.not.is.null,id_empleado.not.is.null,id_proyecto.not.is.null')
+		.select(`id_centro_costo, codigo, nombre, id_proveedor, id_cliente, id_empleado, id_personal, id_proyecto, ${CENTRO_COSTO_PROYECTO_EMBED}, ${CENTRO_COSTO_CLIENTE_EMBED}, ${CENTRO_COSTO_PROVEEDOR_EMBED}, ${CENTRO_COSTO_EMPLEADO_EMBED}`)
+		.or('id_proveedor.not.is.null,id_cliente.not.is.null,id_empleado.not.is.null,id_personal.not.is.null,id_proyecto.not.is.null')
 		.order('nombre');
 	if (error) throw error;
 
@@ -1245,7 +1246,7 @@ export async function getCentroCostoOptionsExternosOrigen(client: SupabaseClient
 	const clientes = rows.filter((r) => r.id_cliente !== null).map(toOption);
 	const proyectos = rows.filter((r) => r.id_proyecto !== null).map(toOption);
 	const proveedores = rows.filter((r) => r.id_proveedor !== null).map(toOption);
-	const empleados = rows.filter((r) => r.id_empleado !== null).map(toOption);
+	const empleados = rows.filter((r) => r.id_empleado !== null || r.id_personal !== null).map(toOption);
 	return [...clientes, ...proyectos, ...proveedores, ...empleados];
 }
 

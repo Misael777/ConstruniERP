@@ -53,7 +53,7 @@
 	// centros-de-costos/+page.svelte) — acá solo se avisa; el tipo nunca cambia en edición (ver abajo).
 	const esCorporativo = $derived(mode === 'edit' && esCentroCostoUnico(centro));
 	const hasLink = $derived(
-		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado)
+		!!(centro?.id_proyecto || centro?.id_cliente || centro?.id_proveedor || centro?.id_empleado || centro?.id_personal)
 	);
 
 	async function loadLinkedEntity() {

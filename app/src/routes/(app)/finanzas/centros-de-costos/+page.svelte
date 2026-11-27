@@ -135,7 +135,7 @@
 	 * único tipo con acciones propias acá — los vinculados a un proyecto cerrado (que también aparecen
 	 * en esta pestaña) se dan de baja en cascada desde Ventas, nunca a mano. */
 	function esManualSinVincular(item: CentroCosto): boolean {
-		return !item.id_proyecto && !item.id_cliente && !item.id_proveedor && !item.id_empleado;
+		return !item.id_proyecto && !item.id_cliente && !item.id_proveedor && !item.id_empleado && !item.id_personal;
 	}
 
 	let detalleOpen = $state(false);

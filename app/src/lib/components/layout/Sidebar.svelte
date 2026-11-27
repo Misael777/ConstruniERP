@@ -41,8 +41,9 @@
 		return filtered;
 	});
 
-	// Estado para abrir/cerrar menús anidados
-	let openMenus = $state<Record<string, boolean>>({ '/finanzas': true });
+	// Estado para abrir/cerrar menús anidados. Ninguno empieza abierto (antes Finanzas siempre arrancaba abierto):
+	// a pedido de la clienta, al entrar no siempre es para temas financieros; solo se abre el módulo de la página actual.
+	let openMenus = $state<Record<string, boolean>>({});
 
 	$effect(() => {
 		const currentPath = page.url.pathname;

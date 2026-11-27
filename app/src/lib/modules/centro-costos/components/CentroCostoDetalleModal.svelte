@@ -89,7 +89,7 @@
 				.then(([r, total]) => {
 					// Centro manual sin vínculo: lo escrito a mano + sus movimientos (igual que el listado); con punto de corte,
 					// el saldo ya parte de lo declarado ahí y lo escrito a mano no se suma.
-					const manual = !centro.id_proyecto && !centro.id_cliente && !centro.id_proveedor && !centro.id_empleado;
+					const manual = !centro.id_proyecto && !centro.id_cliente && !centro.id_proveedor && !centro.id_empleado && !centro.id_personal;
 					montoActual = manual
 						? (r.corte ? 0 : Number(centro.monto_actual) || 0) + (r.monto ?? 0)
 						: (r.monto ?? centro.monto_actual ?? 0);

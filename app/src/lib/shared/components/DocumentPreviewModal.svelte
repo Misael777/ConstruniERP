@@ -76,6 +76,20 @@
 		return String.fromCharCode(...cabecera) === '%PDF-';
 	}
 
+	/** Observación de la clienta (27/11/2026): algunos comprobantes se veían inmensos. Drive (o el archivo local) a veces
+	 * no trae el tipo (application/octet-stream o vacío) y la imagen caía al iframe a su tamaño real. Se reconoce la
+	 * imagen por sus primeros bytes (JPG, PNG, GIF, WEBP, BMP) para mostrarla siempre ajustada a la ventana. */
+	async function tipoImagen(blob: Blob): Promise<string | null> {
+		if (blob.type.startsWith('image/')) return blob.type;
+		const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+		if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+		if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+		if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
+		if (String.fromCharCode(...b.slice(0, 4)) === 'RIFF' && String.fromCharCode(...b.slice(8, 12)) === 'WEBP') return 'image/webp';
+		if (b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp';
+		return null;
+	}
+
 	// Observación de la clienta (26/11/2026): el comprobante recién adjuntado en "Nueva transacción" aún no está en
 	// Drive (es un archivo local, blob: o data:). Se mostraba en el iframe a su tamaño real ("como zoom"): ahora usa
 	// el visor propio, que ajusta la imagen a la pantalla.
@@ -89,8 +103,10 @@
 		try {
 			const blob = fileId ? await downloadFromDriveClient(fileId) : await (await fetch(urlDoc)).blob();
 			if (id !== cargaId) return;
-			if (blob.type.startsWith('image/')) {
-				imagenUrl = URL.createObjectURL(blob);
+			const tipo = await tipoImagen(blob);
+			if (id !== cargaId) return;
+			if (tipo) {
+				imagenUrl = URL.createObjectURL(blob.type === tipo ? blob : new Blob([blob], { type: tipo }));
 				modoVisor = 'imagen';
 				return;
 			}

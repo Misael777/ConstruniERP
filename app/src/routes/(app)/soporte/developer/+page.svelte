@@ -21,7 +21,8 @@
 	let versiones = $state<VersionUsuario[]>([]);
 	let ultimaVersion = $state<string | null>(null);
 	let versionesError = $state('');
-	let versionesAbierto = $state(true);
+	// Colapsable, colapsada por defecto (a pedido de la clienta).
+	let versionesAbierto = $state(false);
 	const desactualizadas = $derived(ultimaVersion ? versiones.filter((v) => esVersionMasNueva(ultimaVersion!, v.version)).length : 0);
 
 	async function fetchVersiones() {
