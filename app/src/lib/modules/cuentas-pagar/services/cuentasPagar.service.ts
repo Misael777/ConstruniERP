@@ -88,6 +88,30 @@ export interface CuentaPagar {
 	 * confiar en `nombre` tal cual). Solo viene poblado en las consultas que lo piden explícitamente en
 	 * el embed. null si la cuenta no tiene centro de costo asignado. */
 	centro_costo?: { codigo: string; nombre: string; tipo: string; id_proyecto: number | null; proyecto: ProyectoCodigoFields | null } | null;
+	/** Planilla (tareo) a la que pertenece esta CxP, si es una — solo en el listado. Con `personal` si es la planilla de
+	 * un trabajador (Consultoría y Corporativo). */
+	planilla?: PlanillaDeCuenta[] | null;
+}
+
+export interface PlanillaDeCuenta {
+	grupo: string;
+	inicio: string;
+	fin: string;
+	personal?: { nombres?: string | null; apellidos?: string | null; nombre?: string | null; pin?: string | number | null } | null;
+}
+
+const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+/**
+ * 27/11/2026: subtítulo de una CxP de planilla en el listado — el trabajador (planilla de una persona) o la planilla
+ * del periodo (obra), en vez del genérico "Personal de obra (tareo)" del proveedor. null si no es planilla. Pura.
+ */
+export function subtituloPlanilla(planilla: PlanillaDeCuenta[] | PlanillaDeCuenta | null | undefined): string | null {
+	const pl = Array.isArray(planilla) ? planilla[0] : planilla;
+	if (!pl) return null;
+	const periodo = `Planilla ${pl.grupo} ${ddmm(pl.inicio)}–${ddmm(pl.fin)}`;
+	const p = pl.personal;
+	const nombre = p ? [p.apellidos, p.nombres].filter(Boolean).join(', ') || p.nombre || (p.pin != null ? `Código ${p.pin}` : '') : '';
+	return nombre ? `${nombre} · ${periodo}` : periodo;
 }
 
 export interface Pago {
@@ -231,7 +255,7 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 
 	let query = client
 		.from(TABLE_NAME)
-		.select(`*, proveedor(razon_social, vendedor), ${CENTRO_COSTO_EMBED}`, { count: 'exact' })
+		.select(`*, proveedor(razon_social, vendedor), ${CENTRO_COSTO_EMBED}, planilla(grupo, inicio, fin, personal(nombres, apellidos, nombre, pin))`, { count: 'exact' })
 		// Ticket #45: ordenar por el texto de `prioridad` da un orden alfabético incorrecto (alto, bajo,
 		// media) — igual que cuentas_cobrar (ticket #39), se ordena por la columna calculada prioridad_orden.
 		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })

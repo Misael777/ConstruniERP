@@ -32,7 +32,8 @@
 		getDetalleProyeccionPlanilla,
 		type DetalleProyeccion,
 		confirmarPagosGlobal,
-		transaccionSugeridaPagoGlobal
+		transaccionSugeridaPagoGlobal,
+		subtituloPlanilla
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
@@ -1181,7 +1182,7 @@
 							<div class="min-w-0">
 								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={nombreContraparte(item)}>{#each tramosNombre(nombreContraparte(item)) as tramo}{tramo}<wbr />{/each}</p>
 								<p class="text-[11px] text-slate-400 mt-0.5 [overflow-wrap:break-word]">
-									{#if esPrestamoCuenta(item)}Prestamista{:else}{item.proveedor?.vendedor ?? ''}{/if}
+									{#if esPrestamoCuenta(item)}Prestamista{:else}{subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor ?? ''}{/if}
 								</p>
 							</div>
 						</div>
@@ -1279,7 +1280,7 @@
 					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
 						<span class="truncate">
 							Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}
-							{#if item.proveedor?.vendedor}· {item.proveedor.vendedor}{/if}
+							{#if subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor}· {subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor}{/if}
 						</span>
 						{#if retraso !== null}
 							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>

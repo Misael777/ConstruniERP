@@ -385,6 +385,12 @@
 	let plan = $state<PlanTareo | null>(null);
 	let saldoObra = $state<number | null>(null);
 	let presupuestoTexto = $state('');
+	// Pie del tareo en grilla (pedido 27/11/2026, "encuadrarlo"): en pantalla grande cada franja es una fila de la misma
+	// grilla (lg:contents) y cada dato una celda con separador, en columnas del mismo ancho (alineadas y sin desbordar; si
+	// un texto no cabe, el monto baja bajo su etiqueta dentro de la misma casilla).
+	const FILA = 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 lg:contents';
+	const CELDA0 = 'flex items-center lg:pl-3 lg:pr-2';
+	const CELDA = 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-tight text-slate-600 [&>b]:whitespace-nowrap lg:h-full lg:px-3 lg:border-l lg:border-slate-200';
 	// Ticket #118 (27/11/2026): Control presupuestal y Control financiero (fecha de asignación, fecha de reserva, cuenta).
 	let presupuestoFecha = $state('');
 	let fondoFecha = $state('');
@@ -927,55 +933,49 @@
 				{/each}
 			</div>
 
-			<!-- Ticket #118 (maqueta 27/11/2026): Control presupuestal, Control financiero y Cuentas por pagar. -->
-			<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg divide-y divide-slate-100 text-sm">
-				{#if puedeEnviar && plan?.disponible}
-					<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
-						{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}
-						<span class="text-slate-600">Presupuesto asignado previamente <b class="text-slate-900">{presupuesto == null ? '—' : formatCurrency(presupuesto)}</b></span>
-						<span class="text-slate-600"><i class="far fa-calendar text-slate-400"></i> {presupuestoFecha ? `${ddmm(presupuestoFecha)}/${presupuestoFecha.slice(0, 4)}` : 'Sin fecha de asignación'}</span>
-						<span class="text-slate-600">Pago proyectado originalmente <b class="text-blue-700">{formatCurrency(pagoOriginal)}</b></span>
-						<span class="text-slate-600">Total real al corte <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
-						<span class="text-slate-600 lg:ml-auto">Saldo presupuestal al corte <b class={`text-lg ${saldoAlCorte != null && saldoAlCorte < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoAlCorte == null ? '—' : formatCurrency(saldoAlCorte)}</b></span>
-					</div>
-				{/if}
-				{#if puedeEnviar}
-					<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
-						{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}
-						{@render controlFondo()}
-						<button type="button" onclick={() => (verReservas = true)} class="lg:ml-auto px-3 py-1.5 rounded-xl border-2 border-blue-500 text-blue-700 text-sm font-bold hover:bg-blue-50">
-							Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
-						</button>
-					</div>
-				{/if}
-				<div class="flex flex-col lg:flex-row lg:items-center gap-3 px-3 py-2">
-					<div class="flex flex-wrap items-center gap-x-5 gap-y-1 flex-1">
-						{@render franjaTitulo('fa-file-invoice', 'Cuentas por pagar', 'bg-emerald-50 text-emerald-700')}
-						<span class="text-slate-600">Total del período <b class="text-orange-600">{formatCurrency(totalSemana)}</b></span>
-						{#if seleccionados.length}<span class="text-slate-600">Seleccionados ({seleccionados.length}) <b class="text-blue-700">{formatCurrency(totalSeleccionado)}</b></span>{/if}
-						{#if mostrarPago}
-							<span class="text-slate-600">Enviado a CxP <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b></span>
-							<span class="text-slate-600">Pendiente de enviar <b class={saldoPendiente ? 'text-rose-600' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b></span>
-						{/if}
-					</div>
-					<div class="flex flex-wrap items-end gap-2">
-						{#if esAdmin || filas.some(esJefeDe)}
-							<div class="flex flex-col items-center gap-0.5">
-								<span class="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded px-2">Jefe inmediato</span>
-								<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} class="px-3 py-2 rounded-xl border-2 border-orange-500 text-orange-600 text-sm font-bold hover:bg-orange-50 disabled:opacity-40">
-									<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
+			<!-- Ticket #118 (maqueta 27/11/2026): Control presupuestal, Control financiero y Cuentas por pagar, encuadrado en columnas. -->
+			<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-[13px]">
+				<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[13rem_repeat(5,minmax(0,1fr))] lg:items-center lg:gap-y-2 lg:py-2">
+					{#if puedeEnviar && plan?.disponible}
+						<div class={FILA}>
+							<div class={CELDA0}>{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}</div>
+							<div class={CELDA}>Presupuesto asignado previamente <b class="text-slate-900">{presupuesto == null ? '—' : formatCurrency(presupuesto)}</b></div>
+							<div class={CELDA}><i class="far fa-calendar text-slate-400"></i> {presupuestoFecha ? `${ddmm(presupuestoFecha)}/${presupuestoFecha.slice(0, 4)}` : 'Sin fecha'}</div>
+							<div class={CELDA}>Pago proyectado originalmente <b class="text-blue-700">{formatCurrency(pagoOriginal)}</b></div>
+							<div class={CELDA}>Total real al corte <b class="text-orange-600">{formatCurrency(totalSemana)}</b></div>
+							<div class={CELDA}>Saldo presupuestal al corte <b class={`text-base ${saldoAlCorte != null && saldoAlCorte < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoAlCorte == null ? '—' : formatCurrency(saldoAlCorte)}</b></div>
+						</div>
+					{/if}
+					{#if puedeEnviar}
+						<div class={FILA}>
+							<div class={CELDA0}>{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}</div>
+							{@render controlFondo()}
+							<div class={CELDA}></div>
+							<div class={CELDA}>
+								<button type="button" onclick={() => (verReservas = true)} class="px-3 py-1 rounded-xl border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
+									<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
 								</button>
 							</div>
-						{/if}
-						{#if puedeEnviar}
-							<div class="flex flex-col items-center gap-0.5">
-								<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
-								<span class="text-[10px] text-slate-400">Requiere aprobación del jefe inmediato</span>
-							</div>
-							<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} class="px-3 py-2 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50 disabled:opacity-40" title="Envía el saldo de todos los trabajadores ya aprobados">
-								Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
-							</button>
-						{/if}
+						</div>
+					{/if}
+					<div class={FILA}>
+						<div class={CELDA0}>{@render franjaTitulo('fa-file-invoice', 'Cuentas por pagar', 'bg-emerald-50 text-emerald-700')}</div>
+						<div class={CELDA}>Total del período <b class="text-orange-600">{formatCurrency(totalSemana)}</b>{#if seleccionados.length}<span class="text-slate-500">· selec. ({seleccionados.length}) <b class="text-blue-700">{formatCurrency(totalSeleccionado)}</b></span>{/if}</div>
+						<div class={CELDA}>{#if mostrarPago}Enviado a CxP <b class="text-emerald-700">{formatCurrency(totalEnviado)}</b>{/if}</div>
+						<div class={CELDA}>{#if mostrarPago}Pendiente de enviar <b class={saldoPendiente ? 'text-rose-600' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b>{/if}</div>
+						<div class={`${CELDA} lg:col-span-2 flex-wrap`}>
+							{#if esAdmin || filas.some(esJefeDe)}
+								<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} title="Jefe inmediato" class="px-3 py-1 rounded-xl border-2 border-orange-500 text-orange-600 font-bold hover:bg-orange-50 disabled:opacity-40">
+									<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
+								</button>
+							{/if}
+							{#if puedeEnviar}
+								<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} title="Requiere aprobación del jefe inmediato" class="px-3 py-1 rounded-xl bg-blue-600 text-white font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
+								<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} title="Envía el saldo de todos los trabajadores ya aprobados" class="px-3 py-1 rounded-xl border border-blue-200 text-blue-700 font-semibold hover:bg-blue-50 disabled:opacity-40">
+									Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
+								</button>
+							{/if}
+						</div>
 					</div>
 				</div>
 			</div>
@@ -1156,39 +1156,45 @@
 		</table>
 	</div>
 	<p class="px-1 text-xs italic text-slate-500">P = proyectado · Los días futuros no son asistencia registrada: se prevén según el horario de cada trabajador.</p>
-	<!-- Ticket #118 (maqueta 27/11/2026): pie en franjas. Lo que tiene lápiz se escribe. -->
-	<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg divide-y divide-slate-100 text-sm">
-		<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
-			{@render franjaTitulo('fa-chart-column', 'Totales de la proyección', 'bg-orange-50 text-orange-700')}
-			<span class="text-slate-600">Total acumulado <b class="text-blue-700">{formatCurrency(totProy.acumulado)}</b></span>
-			<span class="text-slate-600">Por completar <b class="text-blue-700">{formatCurrency(totProy.porCompletar)}</b></span>
-			<span class="text-slate-600">Bonos previstos <b class="text-blue-700">{formatCurrency(totProy.bonos)}</b></span>
-			<span class="text-slate-600 lg:ml-auto">Total proyectado <b class="text-lg text-orange-600">{formatCurrency(totProy.total)}</b></span>
-		</div>
-		{#if plan?.disponible}
-			<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
-				{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}
-				<span class="flex items-center gap-2 text-slate-600">Presupuesto asignado previamente {@render montoLapiz(presupuestoTexto, (v) => (presupuestoTexto = v), guardarPresupuestoSemana, 'Presupuesto asignado previamente', 'w-32 font-bold')}</span>
-				<label class="flex items-center gap-2 text-slate-600">Fecha de asignación <input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" /></label>
-				<span class="text-slate-600">Pago proyectado <b class="text-blue-700">{formatCurrency(totProy.total)}</b></span>
-				<span class="text-slate-600 lg:ml-auto">Saldo presupuestal <b class={`text-lg ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? '—' : formatCurrency(saldoDisponible)}</b></span>
+	<!-- Ticket #118 (maqueta 27/11/2026): pie en franjas, encuadrado en columnas. Lo que tiene lápiz se escribe. -->
+	<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-[13px]">
+		<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[13rem_repeat(4,minmax(0,1fr))] lg:items-center lg:gap-y-2 lg:py-2">
+			<div class={FILA}>
+				<div class={CELDA0}>{@render franjaTitulo('fa-chart-column', 'Totales de la proyección', 'bg-orange-50 text-orange-700')}</div>
+				<div class={CELDA}>Total acumulado <b class="text-blue-700">{formatCurrency(totProy.acumulado)}</b></div>
+				<div class={CELDA}>Por completar <b class="text-blue-700">{formatCurrency(totProy.porCompletar)}</b></div>
+				<div class={CELDA}>Bonos previstos <b class="text-blue-700">{formatCurrency(totProy.bonos)}</b></div>
+				<div class={CELDA}>Total proyectado <b class="text-base text-orange-600">{formatCurrency(totProy.total)}</b></div>
 			</div>
-		{/if}
-		<div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
-			{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}
-			{@render controlFondo()}
-			<span class="text-slate-600 lg:ml-auto">Pendiente de reservar <b class="text-lg text-rose-600">{formatCurrency(faltaSeparar)}</b></span>
-		</div>
-		<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
-			{@render franjaTitulo('fa-calendar-check', 'Reserva para pago', 'bg-emerald-50 text-emerald-700')}
-			<input type="date" bind:value={fechaReserva} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" aria-label="Fecha de la reserva para pago" />
-			<button type="button" onclick={programarReserva} disabled={reservando || !proySel.length} class="px-4 py-1.5 rounded-xl bg-orange-500 text-white text-sm font-bold hover:bg-orange-600 disabled:opacity-40">
-				<i class="fas fa-calendar-plus"></i> {reservando ? 'Programando…' : `Programar reserva de seleccionados${proySel.length ? ` (${proySel.length})` : ''}`}
-			</button>
-			<button type="button" onclick={() => (verReservas = true)} class="px-4 py-1.5 rounded-xl border-2 border-blue-500 text-blue-700 text-sm font-bold hover:bg-blue-50">
-				<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
-			</button>
-			<span class="text-xs italic text-slate-500">Al aprobar el tareo real, se ajusta esta reserva sin duplicar el compromiso.</span>
+			{#if plan?.disponible}
+				<div class={FILA}>
+					<div class={CELDA0}>{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}</div>
+					<div class={CELDA}>Presupuesto asignado previamente {@render montoLapiz(presupuestoTexto, (v) => (presupuestoTexto = v), guardarPresupuestoSemana, 'Presupuesto asignado previamente', 'w-28 font-bold')}</div>
+					<label class={CELDA}>Fecha de asignación <input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px]" /></label>
+					<div class={CELDA}>Pago proyectado <b class="text-blue-700">{formatCurrency(totProy.total)}</b></div>
+					<div class={CELDA}>Saldo presupuestal <b class={`text-base ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? '—' : formatCurrency(saldoDisponible)}</b></div>
+				</div>
+			{/if}
+			<div class={FILA}>
+				<div class={CELDA0}>{@render franjaTitulo('fa-building-columns', 'Control financiero', 'bg-blue-50 text-blue-700')}</div>
+				{@render controlFondo()}
+				<div class={CELDA}>Pendiente de reservar <b class="text-base text-rose-600">{formatCurrency(faltaSeparar)}</b></div>
+			</div>
+			<div class={FILA}>
+				<div class={CELDA0}>{@render franjaTitulo('fa-calendar-check', 'Reserva para pago', 'bg-emerald-50 text-emerald-700')}</div>
+				<div class={CELDA}><input type="date" bind:value={fechaReserva} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px]" aria-label="Fecha de la reserva para pago" /></div>
+				<div class={CELDA}>
+					<button type="button" onclick={programarReserva} disabled={reservando || !proySel.length} title="Selecciona trabajadores en la tabla" class="px-3 py-1 rounded-xl bg-orange-500 text-white font-bold hover:bg-orange-600 disabled:opacity-40">
+						<i class="fas fa-calendar-plus"></i> {reservando ? 'Programando…' : `Programar reserva de seleccionados${proySel.length ? ` (${proySel.length})` : ''}`}
+					</button>
+				</div>
+				<div class={CELDA}>
+					<button type="button" onclick={() => (verReservas = true)} class="px-3 py-1 rounded-xl border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
+						<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
+					</button>
+				</div>
+				<div class={`${CELDA} !whitespace-normal max-w-[16rem] text-[11px] italic text-slate-500 leading-tight`}>Al aprobar el tareo real, se ajusta esta reserva sin duplicar el compromiso.</div>
+			</div>
 		</div>
 	</div>
 {/snippet}
@@ -1200,17 +1206,17 @@
 {#snippet montoLapiz(valor: string, poner: (v: string) => void, guardar: () => void, etiqueta: string, clase: string)}
 	<span class="relative inline-flex items-center">
 		<span class="absolute left-2 text-xs font-bold text-slate-500">S/</span>
-		<input type="text" inputmode="decimal" value={valor} oninput={(e) => poner((e.currentTarget as HTMLInputElement).value)} onblur={guardar} disabled={!puedeEnviar} placeholder="0.00" class={`pl-7 pr-7 py-1 border border-slate-200 rounded-lg text-right disabled:bg-slate-50 ${clase}`} aria-label={etiqueta} />
+		<input type="text" inputmode="decimal" value={valor} oninput={(e) => poner((e.currentTarget as HTMLInputElement).value)} onblur={guardar} disabled={!puedeEnviar} placeholder="0.00" class={`pl-7 pr-7 py-0.5 border border-slate-200 rounded-lg text-right disabled:bg-slate-50 ${clase}`} aria-label={etiqueta} />
 		{#if puedeEnviar}<i class="fas fa-pen absolute right-2 text-[11px] text-slate-400 pointer-events-none"></i>{/if}
 	</span>
 {/snippet}
 
 <!-- Control financiero: igual en Real y Proyección. -->
 {#snippet controlFondo()}
-	<span class="flex items-center gap-2 text-slate-600">Fondo reservado actualmente {@render montoLapiz(fondoTexto, (v) => (fondoTexto = v), guardarFondoSemana, 'Fondo reservado actualmente', 'w-32 font-bold')}</span>
-	<label class="flex items-center gap-2 text-slate-600">Fecha de reserva <input type="date" bind:value={fondoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm" /></label>
-	<label class="flex items-center gap-2 text-slate-600">Cuenta
-		<select bind:value={idCuentaFondo} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-1 border border-slate-200 rounded-lg text-sm font-semibold text-slate-800 max-w-[14rem]" title={cuentaFondo?.detalle ?? ''}>
+	<div class={CELDA}>Fondo reservado actualmente {@render montoLapiz(fondoTexto, (v) => (fondoTexto = v), guardarFondoSemana, 'Fondo reservado actualmente', 'w-28 font-bold')}</div>
+	<label class={CELDA}>Fecha de reserva <input type="date" bind:value={fondoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px]" /></label>
+	<label class={CELDA}>Cuenta
+		<select bind:value={idCuentaFondo} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px] font-semibold text-slate-800 max-w-[11rem]" title={cuentaFondo?.detalle ?? ''}>
 			<option value="">Elige la cuenta…</option>
 			{#each cuentasFondo as c (c.id)}<option value={String(c.id)}>{c.nombre}</option>{/each}
 		</select>

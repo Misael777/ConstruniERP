@@ -14,6 +14,7 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { toast } from '$lib/stores/toast';
+	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { describeError } from '$lib/shared/describeError';
 	import ResponsiveDataView from '$lib/shared/components/ResponsiveDataView.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
@@ -39,7 +40,17 @@
 	type Tab = 'trabajador' | 'config' | 'tareo';
 	const tabInicial = page.url.searchParams.get('tab');
 	let tab = $state<Tab>(tabInicial === 'tareo' || tabInicial === 'config' ? tabInicial : 'trabajador');
+	// Pedido de la clienta (27/11/2026): el residente (jefe inmediato que solo aprueba) ve SOLO la pestaña Tareo, no
+	// "Por trabajador" ni "Configuración" (asistencia y configuración de todo el personal). Esas dos quedan para quien
+	// administra personal, horarios, huelleros o el tareo (administrador, socio).
+	const soloTareo = $derived(
+		permisosState.loaded && !['aprobar_tareo', 'ver_rrhh_personal', 'ver_rrhh_horarios', 'ver_rrhh_huelleros'].some((k) => hasPermiso(k))
+	);
+	$effect(() => {
+		if (soloTareo && tab !== 'tareo') elegirTab('tareo');
+	});
 	function elegirTab(t: Tab) {
+		if (soloTareo && t !== 'tareo') t = 'tareo';
 		tab = t;
 		const q = new URLSearchParams(page.url.searchParams);
 		if (t !== 'trabajador') q.set('tab', t);
@@ -274,8 +285,10 @@
 					: 'Elige un trabajador y el periodo: verás cada día con su entrada, salida, horas, tardanzas y horas extra según su horario.'}
 		</p>
 		<div class="mt-3 -mb-5 flex gap-1" role="tablist">
+			{#if !soloTareo}
 			<button role="tab" aria-selected={tab === 'trabajador'} onclick={() => elegirTab('trabajador')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'trabajador' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-user-clock mr-1"></i> Por trabajador</button>
 			<button role="tab" aria-selected={tab === 'config'} onclick={() => elegirTab('config')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'config' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-sliders mr-1"></i> Configuración</button>
+			{/if}
 			<button role="tab" aria-selected={tab === 'tareo'} onclick={() => elegirTab('tareo')} class={`px-4 py-2 text-sm font-semibold border-b-2 ${tab === 'tareo' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><i class="fas fa-helmet-safety mr-1"></i> Tareo</button>
 		</div>
 	</div>
