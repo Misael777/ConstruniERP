@@ -22,6 +22,7 @@
 		getEstadosTareas,
 		guardarEstadoTarea,
 		guardarPrioridadTarea,
+		delegarTarea,
 		getOrdenTareas,
 		guardarOrdenTareas,
 		pestanaTarea,
@@ -30,11 +31,13 @@
 		type AlertaTarea,
 		type EstadoTarea,
 		type ModuloAlerta,
-		type PrioridadAlerta
+		type PrioridadAlerta,
+		mismoNombre
 	} from '$lib/modules/alertas/services/alertas.service';
 	import { AREAS_TAREA as AREAS, PRIORIDAD_TAREA as PRIORIDAD, areaTarea as areaDe, fechaCorta, normalizarBusqueda } from '$lib/modules/alertas/tareasUi';
 	import { arrastrable } from '$lib/shared/arrastre';
 	import PrioridadTarea from '$lib/modules/alertas/components/PrioridadTarea.svelte';
+	import DelegarTarea from '$lib/modules/alertas/components/DelegarTarea.svelte';
 	import CalendarioTareas from '$lib/modules/alertas/components/CalendarioTareas.svelte';
 
 	const hoy = hoyLima();
@@ -71,8 +74,9 @@
 	let fechaAplazar = $state(sumar(hoy, 1));
 
 	const yo = $derived((permisosState.userName || '').trim().toLowerCase());
-	const esMia = (a: AlertaTarea) => !!yo && (a.responsable ?? '').trim().toLowerCase() === yo;
-	const delegada = (a: AlertaTarea) => !!yo && (a.registradoPor ?? '').trim().toLowerCase() === yo;
+	const esMia = (a: AlertaTarea) => !!yo && mismoNombre(a.responsable, yo);
+	// Ticket #128: también las que delegué con el botón "Delegar".
+	const delegada = (a: AlertaTarea) => !!yo && (mismoNombre(a.delegadoPor, yo) || mismoNombre(a.registradoPor, yo));
 
 	const coincide = (a: AlertaTarea, q: string) => !q || normalizarBusqueda([a.titulo, a.detalle, a.responsable, a.registradoPor].filter(Boolean).join(' ')).includes(q);
 	const base = $derived.by(() => {
@@ -145,6 +149,16 @@
 
 	/** Calendario: mover a otro día = aplazar hasta ese día (hoy incluido: queda para hoy). */
 	const moverADia = (a: AlertaTarea, dia: string) => cambiar(a, 'aplazada', dia, dia === hoy ? 'La tarea quedó para hoy.' : `Tarea movida al ${fechaCorta(dia)}.`);
+
+	async function delegar(a: AlertaTarea, persona: string | null) {
+		try {
+			await delegarTarea(supabase, a, persona, permisosState.userName || null);
+			toast.success(persona ? `Tarea delegada a ${persona}.` : 'Se quitó la delegación.');
+			await cargar(false);
+		} catch (err) {
+			toast.error(`No se pudo delegar la tarea. ${describeError(err)}`);
+		}
+	}
 
 	async function cambiarPrioridad(a: AlertaTarea, p: PrioridadAlerta | null) {
 		try {
@@ -283,10 +297,11 @@
 									<span class={`rounded-md border px-1.5 py-0.5 font-semibold ${areaDe(a.modulo).chip}`}>{areaDe(a.modulo).titulo}</span>
 									{#if a.detalle}<span class="min-w-0 text-slate-500 break-words">{a.detalle}</span>{/if}
 								</div>
-								<p class="mt-1 text-xs leading-snug text-slate-500"><i class="far fa-user mr-1"></i> {a.registradoPor ? (delegada(a) ? 'Registrada por ti' : `Registrada por ${a.registradoPor}`) : 'Alerta del ERP'}{a.responsable && !esMia(a) ? ` · a cargo de ${a.responsable}` : ''}</p>
+								<p class="mt-1 text-xs leading-snug text-slate-500"><i class="far fa-user mr-1"></i> {a.delegadoPor ? (mismoNombre(a.delegadoPor, yo) ? 'Delegada por ti' : `Delegada por ${a.delegadoPor}`) : a.registradoPor ? (mismoNombre(a.registradoPor, yo) ? 'Registrada por ti' : `Registrada por ${a.registradoPor}`) : 'Alerta del ERP'}{a.responsable && !esMia(a) ? ` · a cargo de ${a.responsable}` : ''}</p>
 							</button>
 							<div class="w-[6.75rem] flex flex-col items-end gap-1 shrink-0 text-right">
 								<PrioridadTarea prioridad={a.prioridad} manual={a.prioridadManual} onCambiar={(p) => cambiarPrioridad(a, p)} />
+								<DelegarTarea responsable={a.responsable} delegada={!!a.delegadoPor} onDelegar={(p) => delegar(a, p)} />
 								{#if pestana === 'aplazada' && e?.aplazada_hasta}
 									<span class="rounded-lg bg-orange-50 px-2 py-0.5 text-xs font-bold text-orange-600 uppercase">{new Date(`${e.aplazada_hasta}T12:00:00Z`).toLocaleDateString('es-PE', { day: 'numeric', month: 'short', timeZone: 'UTC' })}</span>
 								{:else}

@@ -294,6 +294,9 @@
 	const conAlertas = $derived(personal.filter((p) => alertasVencimiento(p, hoy).length > 0).length);
 
 	function puesto(p: Personal): string {
+		// Ticket #151 (27/11/2026): primero el cargo principal vigente (personal.cargo se sincroniza con el historial de
+		// cargos); antes, con régimen Contrata o Locación salía "Contrata (anterior)" o vacío.
+		if (p.cargo?.trim()) return p.cargo.trim();
 		if (usaCategoria(p.regimen)) return etiquetaCategoria(p.categoria) || etiqueta(REGIMENES, p.regimen);
 		if (p.regimen === 'general') return p.cargo || 'Régimen general';
 		return '';

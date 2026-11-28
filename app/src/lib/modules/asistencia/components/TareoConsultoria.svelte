@@ -16,6 +16,7 @@
 	import { nombreCompleto, hoyLima } from '$lib/modules/personal/services/personal.service';
 	import { sumarDias } from '../services/asistencia.service';
 	import EditarDiaTareo from './EditarDiaTareo.svelte';
+	import BotonEvaluarCargo from '$lib/modules/personal/components/BotonEvaluarCargo.svelte';
 	import { getSaldosVigentesCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import {
 		ESTADOS_CELDA,
@@ -70,9 +71,12 @@
 
 	const esJefeDe = (f: FilaTareo) => permisosState.empleadoId != null && f.personal.id_jefe_inmediato === permisosState.empleadoId;
 	const puedeAprobarFila = (c: FilaConsultoria) => !!c.idCentroCosto && (esAdmin || esJefeDe(c.fila));
-	const soloMios = $derived(!puedeEnviar && !esAdmin && lista.some((c) => esJefeDe(c.fila)));
+	// Ticket #148 (27/11/2026): sin permiso de aprobar tareo ni ser administrador (Residente) se ve SOLO a quienes
+	// tiene a cargo como jefe inmediato; antes, si no era jefe de nadie en ese ámbito, veía a todos (y sus sueldos).
+	const soloMios = $derived(!puedeEnviar && !esAdmin);
+	const listaVisible = $derived(soloMios ? lista.filter((c) => esJefeDe(c.fila)) : lista);
 	const mostrarPago = $derived(puedeEnviar || verPago);
-	const filas = $derived(lista.filter((c) => (!soloMios || esJefeDe(c.fila)) && (!modalidad || (c.fila.personal.modalidad ?? '') === (modalidad === 'sin' ? '' : modalidad))));
+	const filas = $derived(listaVisible.filter((c) => (!modalidad || (c.fila.personal.modalidad ?? '') === (modalidad === 'sin' ? '' : modalidad))));
 
 	let bonos = $state<Record<number, string>>({});
 	let fechaCxp = $state<Record<number, string>>({});
@@ -125,11 +129,11 @@
 	const numONull = (v: string) => (v.trim() === '' ? null : num(v));
 
 	async function cargarCentros() {
-		const ids = [...new Set(lista.map((c) => c.idCentroCosto).filter((x): x is number => x != null))];
+		const ids = [...new Set(listaVisible.map((c) => c.idCentroCosto).filter((x): x is number => x != null))];
 		const [planes, saldos] = await Promise.all([Promise.all(ids.map((id) => cargarPlanTareo(supabase, id, inicio, grupo))), getSaldosVigentesCentroCosto(supabase, ids)]);
 		centrosProy = ids.map((id, i) => ({
 			id,
-			nombre: lista.find((c) => c.idCentroCosto === id)?.centro || 'Obra o área',
+			nombre: listaVisible.find((c) => c.idCentroCosto === id)?.centro || 'Obra o área',
 			pago: 0,
 			presupuesto: montoTexto(planes[i].presupuesto),
 			fondo: montoTexto(planes[i].fondo),
@@ -385,7 +389,7 @@
 
 	{#if !filas.length && !cargando}
 		<div class="bg-white border border-slate-100 rounded-2xl shadow-sm py-12 text-center text-sm text-slate-400">
-			No hay personal de {nombreAmbito} que cobre {grupo === 'quincenal' ? 'por quincena' : 'por mes'}{modalidad ? ' con esa modalidad' : ''}.
+			{soloMios ? 'No tienes trabajadores a cargo' : 'No hay personal'} de {nombreAmbito} que cobre {grupo === 'quincenal' ? 'por quincena' : 'por mes'}{modalidad ? ' con esa modalidad' : ''}.
 		</div>
 	{:else if filas.length && vista === 'proyeccion'}
 	{@render vistaProyeccion()}
@@ -419,6 +423,8 @@
 								<div class="font-semibold text-slate-800">{nombreCompleto(c.fila.personal)}</div>
 								<div class="text-[11px] text-blue-600">{c.fila.personal.tipo_documento} {c.fila.personal.numero_documento ?? ''}</div>
 								<button type="button" onclick={() => (abiertos[id] = !abiertos[id])} class="text-[11px] text-blue-600 hover:underline"><i class="fas fa-cloud"></i> {abiertos[id] ? 'Ocultar' : 'Ver'} asistencia</button>
+								<!-- Ticket #152: el jefe inmediato (o el administrador) evalúa el cargo del trabajador. -->
+								{#if esAdmin || esJefeDe(c.fila)}<div><BotonEvaluarCargo idPersonal={id} nombre={nombreCompleto(c.fila.personal)} /></div>{/if}
 								{#if c.centro}<div class="text-[10px] text-slate-400 truncate max-w-[200px]">{c.centro}</div>{/if}
 								{#if c.fila.sinMonto}<div class="text-[11px] text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin monto de pago en Personal</div>{/if}
 							</td>

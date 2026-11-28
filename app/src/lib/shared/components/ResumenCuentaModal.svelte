@@ -100,7 +100,7 @@
 			enviado: number;
 			nEnviado: number;
 			proyeccion: number;
-			detalle: { trabajador: string; concepto: 'estimado' | 'saldo_tareo' | 'aprobado' | 'reserva'; dias: number | null; fecha: string; monto: number }[];
+			detalle: { trabajador: string; cargo?: string | null; concepto: 'estimado' | 'saldo_tareo' | 'aprobado' | 'reserva'; dias: number | null; fecha: string; monto: number }[];
 		} | null;
 	} = $props();
 	const CONCEPTO_PROY: Record<string, string> = {
@@ -316,14 +316,14 @@
 		{#if cuadrePlanilla.proyeccion > 0}
 			{#if cuadrePlanilla.detalle.length}
 				<div class="overflow-x-auto">
-					<table class="w-full text-xs min-w-[520px]">
-						<thead class="bg-slate-50 text-slate-500"><tr><th class="px-3 py-1.5 text-left">Trabajador</th><th class="px-3 py-1.5 text-left">Detalle de la proyección</th><th class="px-3 py-1.5 text-right">Días</th><th class="px-3 py-1.5 text-center">Fecha</th><th class="px-3 py-1.5 text-right">Monto</th></tr></thead>
+					<table class="w-full text-xs min-w-[600px]">
+						<thead class="bg-slate-50 text-slate-500"><tr><th class="px-3 py-1.5 text-left">Trabajador</th><th class="px-3 py-1.5 text-left">Cargo</th><th class="px-3 py-1.5 text-left">Detalle de la proyección</th><th class="px-3 py-1.5 text-right">Días</th><th class="px-3 py-1.5 text-center">Fecha</th><th class="px-3 py-1.5 text-right">Monto</th></tr></thead>
 						<tbody class="divide-y divide-slate-100">
 							{#each cuadrePlanilla.detalle as d, i (i)}
-								<tr><td class="px-3 py-1.5 text-slate-700">{d.trabajador}</td><td class="px-3 py-1.5 text-slate-500">{CONCEPTO_PROY[d.concepto] ?? d.concepto}</td><td class="px-3 py-1.5 text-right tabular-nums">{d.dias ?? '—'}</td><td class="px-3 py-1.5 text-center">{new Date(`${d.fecha}T12:00:00`).toLocaleDateString('es-PE')}</td><td class="px-3 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(d.monto)}</td></tr>
+								<tr><td class="px-3 py-1.5 text-slate-700">{d.trabajador}</td><td class="px-3 py-1.5 text-slate-600">{d.cargo || '—'}</td><td class="px-3 py-1.5 text-slate-500">{CONCEPTO_PROY[d.concepto] ?? d.concepto}</td><td class="px-3 py-1.5 text-right tabular-nums">{d.dias ?? '—'}</td><td class="px-3 py-1.5 text-center">{new Date(`${d.fecha}T12:00:00`).toLocaleDateString('es-PE')}</td><td class="px-3 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(d.monto)}</td></tr>
 							{/each}
 						</tbody>
-						<tfoot><tr class="bg-amber-50 font-semibold"><td class="px-3 py-1.5" colspan="4">Total proyección</td><td class="px-3 py-1.5 text-right tabular-nums">{formatCurrency(cuadrePlanilla.detalle.reduce((t, d) => t + d.monto, 0))}</td></tr></tfoot>
+						<tfoot><tr class="bg-amber-50 font-semibold"><td class="px-3 py-1.5" colspan="5">Total proyección</td><td class="px-3 py-1.5 text-right tabular-nums">{formatCurrency(cuadrePlanilla.detalle.reduce((t, d) => t + d.monto, 0))}</td></tr></tfoot>
 					</table>
 				</div>
 				<p class="px-3 py-2 text-[11px] text-slate-400">La proyección es una estimación para separar fondos: no se paga. Cuando el jefe aprueba y se envía el tareo de cada trabajador, su parte sale de la proyección y aparece arriba como cuota con su nombre.</p>

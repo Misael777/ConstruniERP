@@ -23,6 +23,7 @@
 			id: 'comercial', name: 'Comercial', icon: 'fas fa-shopping-cart', colorClass: 'text-emerald-600 bg-emerald-50 border-emerald-100',
 			submodules: [
 				{ key: 'ver_comercial', label: 'General Comercial' },
+				{ key: 'ver_comercial_preventa', label: 'Pre-Venta' },
 				{ key: 'ver_comercial_ventas', label: 'Ventas' },
 				{ key: 'ver_comercial_clientes', label: 'Clientes' }
 			]

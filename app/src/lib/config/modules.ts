@@ -37,6 +37,7 @@ export const MODULE_REGISTRY: ModuleItem[] = [
     permiso: 'ver_comercial',
     subItems: [
       { path: '/comercial/clientes', label: 'Clientes', permiso: 'ver_comercial_clientes' },
+      { path: '/comercial/preventa', label: 'Pre-Venta', permiso: 'ver_comercial_preventa' },
       { path: '/comercial/ventas', label: 'Ventas', permiso: 'ver_comercial_ventas' }
     ]
   },

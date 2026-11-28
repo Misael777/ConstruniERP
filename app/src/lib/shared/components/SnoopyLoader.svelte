@@ -39,7 +39,11 @@
 		{/each}
 		<!-- Cuerpo + cuerda, sin las piernas: va ENCIMA de ellas (relative + después en el DOM), así al encogerse
 		     se meten bajo el chaleco en vez de mostrar cortes. Es el que da el tamaño al contenedor. -->
-		<img src="/snoopy-salto.webp" alt="" width="463" height="577" class="snoopy-cuerpo relative h-full w-auto" draggable="false" />
+		<img src="/snoopy-sin-cuerda.webp" alt="" width="463" height="577" class="snoopy-cuerpo relative h-full w-auto" draggable="false" />
+		<!-- Ticket #85 (27/11/2026: "la cuerda también debe estar en movimiento"): la cuerda va en su propia capa
+		     (/snoopy-cuerda.webp, recortada de la misma imagen) y gira desde las manijas: pasa por delante y bajo los
+		     pies justo cuando Snoopy está en lo alto del salto. -->
+		<img src="/snoopy-cuerda.webp" alt="" width="463" height="577" class="snoopy-cuerda absolute inset-0 h-full w-auto" draggable="false" />
 	</div>
 
 	<div class={`relative shrink-0 ${size === 'lg' ? 'w-24 h-24 sm:w-28 sm:h-28' : 'w-[77px] h-[77px]'}`} aria-hidden="true">
@@ -212,6 +216,42 @@
 		}
 		85% {
 			transform: rotate(6deg);
+		}
+	}
+
+	/* La cuerda gira desde las manijas (fila 352 de 577 = 61%). Mismo ciclo que el salto (0.7 s): arriba de la cabeza
+	   al caer (0%) y bajo los pies en lo alto del salto (50%). scaleY negativo = la cuerda volteada hacia abajo; -0.66
+	   la deja justo bajo los pies. Pasos tipo coseno para que el giro se vea parejo. */
+	.snoopy-cuerda {
+		transform-origin: 50% 61%;
+		will-change: transform;
+		animation: cuerda-giro 0.7s linear infinite;
+	}
+	@keyframes cuerda-giro {
+		0%,
+		100% {
+			transform: scaleY(1);
+		}
+		12.5% {
+			transform: scaleY(0.7);
+		}
+		25% {
+			transform: scaleY(0.02);
+		}
+		37.5% {
+			transform: scaleY(-0.47);
+		}
+		50% {
+			transform: scaleY(-0.66);
+		}
+		62.5% {
+			transform: scaleY(-0.47);
+		}
+		75% {
+			transform: scaleY(0.02);
+		}
+		87.5% {
+			transform: scaleY(0.7);
 		}
 	}
 

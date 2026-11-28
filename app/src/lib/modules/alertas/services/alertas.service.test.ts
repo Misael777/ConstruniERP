@@ -35,3 +35,18 @@ describe('diaPlanTarea (calendario de tareas)', () => {
 		expect(diaPlanTarea(alerta('2026-12-05'), aplazada('2026-12-01', '2026-11-01'), HOY)).toBe('2026-12-05');
 	});
 });
+
+import { mismoNombre } from './alertas.service';
+
+describe('mismoNombre (responsable de una tarea)', () => {
+	it('coincide aunque falte el segundo nombre, sin tildes ni mayúsculas', () => {
+		expect(mismoNombre('Romina Casallo Echegaray', 'Romina Fiorella Casallo Echegaray')).toBe(true);
+		expect(mismoNombre('ROMINA FIORELLA CASALLO ECHEGARAY', 'romina fiorella casallo echegaray')).toBe(true);
+		expect(mismoNombre('José Pérez', 'Jose Perez')).toBe(true);
+	});
+	it('no coincide con otra persona ni con un solo nombre suelto', () => {
+		expect(mismoNombre('Francesca Barbieri Bossio', 'Romina Fiorella Casallo Echegaray')).toBe(false);
+		expect(mismoNombre('Romina', 'Romina Fiorella Casallo Echegaray')).toBe(false);
+		expect(mismoNombre(null, 'Romina')).toBe(false);
+	});
+});

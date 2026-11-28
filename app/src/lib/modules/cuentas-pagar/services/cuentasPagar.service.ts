@@ -1506,6 +1506,8 @@ export async function getProveedorOptions(client: SupabaseClient): Promise<Field
  * tareo aprobado sin enviar o reserva programada (tabla planilla_proyeccion, migración 20261125120000). */
 export interface DetalleProyeccion {
 	trabajador: string;
+	/** Ticket #134 (rechazo 27/11/2026): cargo del trabajador en el resumen de pago. */
+	cargo: string | null;
 	concepto: 'estimado' | 'saldo_tareo' | 'aprobado' | 'reserva';
 	dias: number | null;
 	fecha: string;
@@ -1514,7 +1516,7 @@ export interface DetalleProyeccion {
 export async function getDetalleProyeccionPlanilla(client: SupabaseClient, idCuentaPagar: number): Promise<DetalleProyeccion[]> {
 	const { data, error } = await client
 		.from('planilla_proyeccion')
-		.select('concepto, dias, fecha, monto, planilla!inner(id_cuenta_pagar), personal(nombres, apellidos, nombre, pin)')
+		.select('concepto, dias, fecha, monto, planilla!inner(id_cuenta_pagar), personal(nombres, apellidos, nombre, pin, cargo, categoria)')
 		.eq('planilla.id_cuenta_pagar', idCuentaPagar)
 		.order('fecha');
 	if (error) return [];
@@ -1523,6 +1525,7 @@ export async function getDetalleProyeccionPlanilla(client: SupabaseClient, idCue
 			const p = Array.isArray(r.personal) ? r.personal[0] : r.personal;
 			return {
 				trabajador: [p?.apellidos, p?.nombres].filter(Boolean).join(', ') || p?.nombre || `Código ${p?.pin ?? ''}`,
+				cargo: (p?.cargo || p?.categoria || null) as string | null,
 				concepto: r.concepto,
 				dias: r.dias != null ? Number(r.dias) : null,
 				fecha: r.fecha,

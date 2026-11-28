@@ -62,6 +62,7 @@
 	import { esTelefono } from '$lib/shared/accesoRapido';
 	import { EMPRESA_NOMBRE } from '$lib/shared/empresaConstantes';
 	import { permisosState } from '$lib/stores/permisos.svelte';
+	import EvaluarCargoModal from './EvaluarCargoModal.svelte';
 	import {
 		getDocumentosPersonal,
 		guardarDocumentosPersonal,
@@ -273,6 +274,8 @@
 
 	// ── Registrar / editar / ver un cargo (modal con sus aptitudes técnicas) ──
 	let cargoModal = $state<{ c: CargoHistorial; indice: number | null; soloLectura: boolean } | null>(null);
+	// Ticket #152: "Evaluar cargo" (solo cargos ya guardados: la evaluación queda ligada al tramo).
+	let evaluarTramo = $state<CargoHistorial | null>(null);
 	function agregarCargo() {
 		const hayPrincipal = cargos.some((c) => cargoAbierto(c, hoyIso()) && (c.clasificacion ?? 'principal') === 'principal');
 		cargoModal = {
@@ -1049,6 +1052,9 @@
 														<td class="px-3 py-2">
 															<div class="flex items-center justify-center gap-1">
 																<button type="button" onclick={() => (cargoModal = { c: { ...c, aptitudes: [...(c.aptitudes ?? [])] }, indice: i, soloLectura: true })} title="Ver" aria-label="Ver cargo" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-eye text-xs"></i></button>
+																{#if c.id_cargo_historial && personal?.id_personal}
+																	<button type="button" onclick={() => (evaluarTramo = c)} title="Evaluar cargo" aria-label="Evaluar cargo" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-clipboard-check text-xs"></i></button>
+																{/if}
 																<button type="button" onclick={() => (cargoModal = { c: { ...c, aptitudes: [...(c.aptitudes ?? [])] }, indice: i, soloLectura: false })} title="Editar" aria-label="Editar cargo" class="w-8 h-8 rounded-full text-blue-600 hover:bg-blue-50"><i class="fas fa-pen text-xs"></i></button>
 																{#if !c.id_cargo_historial}
 																	<button type="button" onclick={() => quitarCargo(i)} title="Quitar (aún no se guardó)" aria-label="Quitar cargo" class="w-8 h-8 rounded-full text-rose-500 hover:bg-rose-50"><i class="fas fa-trash-can text-xs"></i></button>
@@ -1268,3 +1274,13 @@
 	oncerrar={() => (cargoModal = null)}
 />
 <RemuneracionModal open={!!remuModal} inicial={remuModal?.r ?? null} soloLectura={remuModal?.soloLectura ?? false} onguardar={guardarRemuModal} oncerrar={() => (remuModal = null)} />
+
+{#if evaluarTramo && personal?.id_personal}
+	<EvaluarCargoModal
+		idPersonal={personal.id_personal}
+		nombre={nombreFicha}
+		tramo={evaluarTramo}
+		esObra={personal.centro_costo?.tipo === 'proyecto'}
+		onClose={() => (evaluarTramo = null)}
+	/>
+{/if}

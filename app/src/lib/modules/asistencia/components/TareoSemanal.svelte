@@ -29,6 +29,7 @@
 	import { sumarDias, duracion } from '../services/asistencia.service';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import EditarDiaTareo from './EditarDiaTareo.svelte';
+	import BotonEvaluarCargo from '$lib/modules/personal/components/BotonEvaluarCargo.svelte';
 	import RequerimientoModal from './RequerimientoModal.svelte';
 	import { getSaldosVigentesCentroCosto } from '$lib/modules/centro-costos/services/centroCostos.service';
 	import {
@@ -95,8 +96,9 @@
 	// ── Jefe inmediato (#119) ──
 	const esJefeDe = (f: FilaTareo) => permisosState.empleadoId != null && f.personal.id_jefe_inmediato === permisosState.empleadoId;
 	const puedeAprobarFila = (f: FilaTareo) => esAdmin || esJefeDe(f);
-	/** Sin permiso de envío y jefe de alguien: ve solo a sus trabajadores. */
-	const soloMios = $derived(!puedeEnviar && !esAdmin && (datos?.filas ?? []).some(esJefeDe));
+	/** Sin permiso de aprobar tareo ni ser administrador (Residente): ve solo a sus trabajadores a cargo. Ticket #148:
+	 * antes, si no era jefe de nadie en esa obra, veía a todos. */
+	const soloMios = $derived(!puedeEnviar && !esAdmin);
 	const todasFilas = $derived((datos?.filas ?? []).filter((f) => !soloMios || esJefeDe(f)));
 	/** El jefe (sin permiso de envío) no ve Fecha CxP ni lo enviado, salvo que lo muestre con el ojo. */
 	let verPago = $state(false);
@@ -388,9 +390,9 @@
 	// Pie del tareo en grilla (pedido 27/11/2026, "encuadrarlo"): en pantalla grande cada franja es una fila de la misma
 	// grilla (lg:contents) y cada dato una celda con separador, en columnas del mismo ancho (alineadas y sin desbordar; si
 	// un texto no cabe, el monto baja bajo su etiqueta dentro de la misma casilla).
-	const FILA = 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 lg:contents';
-	const CELDA0 = 'flex items-center lg:pl-3 lg:pr-2';
-	const CELDA = 'flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-tight text-slate-600 [&>b]:whitespace-nowrap lg:h-full lg:px-3 lg:border-l lg:border-slate-200';
+	const FILA = 'flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 lg:contents';
+	const CELDA0 = 'flex items-center lg:pl-2 lg:pr-1';
+	const CELDA = 'flex flex-wrap items-center gap-x-1.5 gap-y-0 leading-tight text-slate-600 [&>b]:whitespace-nowrap lg:h-full lg:px-2.5 lg:border-l lg:border-slate-200';
 	// Ticket #118 (27/11/2026): Control presupuestal y Control financiero (fecha de asignación, fecha de reserva, cuenta).
 	let presupuestoFecha = $state('');
 	let fondoFecha = $state('');
@@ -848,6 +850,8 @@
 								<td class="px-2 py-2">
 									<div class="font-medium text-slate-800">{nombreCompleto(f.personal)}</div>
 									{@render botonMarcas(f)}
+									<!-- Ticket #152: el jefe inmediato (o el administrador) evalúa el cargo del trabajador. -->
+									{#if esAdmin || esJefeDe(f)}<div><BotonEvaluarCargo idPersonal={f.personal.id_personal} nombre={nombreCompleto(f.personal)} esObra /></div>{/if}
 									<div class="text-[11px] text-slate-400">{f.personal.cargo ?? f.personal.categoria ?? ''}{f.personal.id_centro_costo !== obra.id_centro_costo ? ' · de otra obra' : ''}</div>
 									{#if f.sinMonto}
 										<div class="text-[11px] text-amber-700"><i class="fas fa-triangle-exclamation"></i> Sin monto de pago en Personal</div>
@@ -901,6 +905,7 @@
 							<div class="min-w-0 flex-1">
 								<div class="font-semibold text-slate-800">{nombreCompleto(f.personal)}</div>
 								{@render botonMarcas(f)}
+								{#if esAdmin || esJefeDe(f)}<div><BotonEvaluarCargo idPersonal={f.personal.id_personal} nombre={nombreCompleto(f.personal)} esObra /></div>{/if}
 								<div class="text-[11px] text-slate-500">{f.sinMonto ? 'Sin monto de pago en Personal' : `${formatCurrency(f.tarifaDia)}/día`}{nombreRef(f) ? ` · ${nombreRef(f)}` : ''}</div>
 							</div>
 							<div class="text-right">
@@ -934,8 +939,8 @@
 			</div>
 
 			<!-- Ticket #118 (maqueta 27/11/2026): Control presupuestal, Control financiero y Cuentas por pagar, encuadrado en columnas. -->
-			<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-[13px]">
-				<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[13rem_repeat(5,minmax(0,1fr))] lg:items-center lg:gap-y-2 lg:py-2">
+			<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-xs">
+				<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[11rem_repeat(5,minmax(0,1fr))] lg:items-center lg:gap-y-1 lg:py-1">
 					{#if puedeEnviar && plan?.disponible}
 						<div class={FILA}>
 							<div class={CELDA0}>{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}</div>
@@ -943,7 +948,7 @@
 							<div class={CELDA}><i class="far fa-calendar text-slate-400"></i> {presupuestoFecha ? `${ddmm(presupuestoFecha)}/${presupuestoFecha.slice(0, 4)}` : 'Sin fecha'}</div>
 							<div class={CELDA}>Pago proyectado originalmente <b class="text-blue-700">{formatCurrency(pagoOriginal)}</b></div>
 							<div class={CELDA}>Total real al corte <b class="text-orange-600">{formatCurrency(totalSemana)}</b></div>
-							<div class={CELDA}>Saldo presupuestal al corte <b class={`text-base ${saldoAlCorte != null && saldoAlCorte < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoAlCorte == null ? '—' : formatCurrency(saldoAlCorte)}</b></div>
+							<div class={CELDA}>Saldo presupuestal al corte <b class={`text-sm ${saldoAlCorte != null && saldoAlCorte < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoAlCorte == null ? '—' : formatCurrency(saldoAlCorte)}</b></div>
 						</div>
 					{/if}
 					{#if puedeEnviar}
@@ -952,7 +957,7 @@
 							{@render controlFondo()}
 							<div class={CELDA}></div>
 							<div class={CELDA}>
-								<button type="button" onclick={() => (verReservas = true)} class="px-3 py-1 rounded-xl border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
+								<button type="button" onclick={() => (verReservas = true)} class="px-2.5 py-0.5 rounded-lg border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
 									<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
 								</button>
 							</div>
@@ -965,13 +970,13 @@
 						<div class={CELDA}>{#if mostrarPago}Pendiente de enviar <b class={saldoPendiente ? 'text-rose-600' : 'text-slate-800'}>{formatCurrency(saldoPendiente)}</b>{/if}</div>
 						<div class={`${CELDA} lg:col-span-2 flex-wrap`}>
 							{#if esAdmin || filas.some(esJefeDe)}
-								<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} title="Jefe inmediato" class="px-3 py-1 rounded-xl border-2 border-orange-500 text-orange-600 font-bold hover:bg-orange-50 disabled:opacity-40">
+								<button type="button" onclick={() => aprobar(seleccionados)} disabled={aprobando || !porAprobarSel.length} title="Jefe inmediato" class="px-2.5 py-0.5 rounded-lg border-2 border-orange-500 text-orange-600 font-bold hover:bg-orange-50 disabled:opacity-40">
 									<i class="fas fa-check"></i> {aprobando ? 'Aprobando…' : `Aprobar seleccionados${porAprobarSel.length ? ` (${porAprobarSel.length})` : ''}`}
 								</button>
 							{/if}
 							{#if puedeEnviar}
-								<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} title="Requiere aprobación del jefe inmediato" class="px-3 py-1 rounded-xl bg-blue-600 text-white font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
-								<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} title="Envía el saldo de todos los trabajadores ya aprobados" class="px-3 py-1 rounded-xl border border-blue-200 text-blue-700 font-semibold hover:bg-blue-50 disabled:opacity-40">
+								<button type="button" onclick={() => enviar(seleccionados)} disabled={enviando || !porEnviarSel.length} title="Requiere aprobación del jefe inmediato" class="px-2.5 py-0.5 rounded-lg bg-blue-600 text-white font-semibold disabled:opacity-40">{enviando ? 'Enviando…' : `Enviar seleccionados a CxP${porEnviarSel.length ? ` (${porEnviarSel.length})` : ''}`}</button>
+								<button type="button" onclick={() => enviar(aprobadosConSaldo, true)} disabled={enviando || !aprobadosConSaldo.length} title="Envía el saldo de todos los trabajadores ya aprobados" class="px-2.5 py-0.5 rounded-lg border border-blue-200 text-blue-700 font-semibold hover:bg-blue-50 disabled:opacity-40">
 									Enviar todo lo aprobado{aprobadosConSaldo.length ? ` (${aprobadosConSaldo.length})` : ''}
 								</button>
 							{/if}
@@ -1157,8 +1162,8 @@
 	</div>
 	<p class="px-1 text-xs italic text-slate-500">P = proyectado · Los días futuros no son asistencia registrada: se prevén según el horario de cada trabajador.</p>
 	<!-- Ticket #118 (maqueta 27/11/2026): pie en franjas, encuadrado en columnas. Lo que tiene lápiz se escribe. -->
-	<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-[13px]">
-		<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[13rem_repeat(4,minmax(0,1fr))] lg:items-center lg:gap-y-2 lg:py-2">
+	<div class="lg:sticky bottom-0 z-10 bg-white border border-slate-200 rounded-2xl shadow-lg text-xs">
+		<div class="flex flex-col divide-y divide-slate-100 lg:divide-y-0 lg:grid lg:grid-cols-[11rem_repeat(4,minmax(0,1fr))] lg:items-center lg:gap-y-1 lg:py-1">
 			<div class={FILA}>
 				<div class={CELDA0}>{@render franjaTitulo('fa-chart-column', 'Totales de la proyección', 'bg-orange-50 text-orange-700')}</div>
 				<div class={CELDA}>Total acumulado <b class="text-blue-700">{formatCurrency(totProy.acumulado)}</b></div>
@@ -1170,7 +1175,7 @@
 				<div class={FILA}>
 					<div class={CELDA0}>{@render franjaTitulo('fa-file-invoice-dollar', 'Control presupuestal', 'bg-orange-50 text-orange-700')}</div>
 					<div class={CELDA}>Presupuesto asignado previamente {@render montoLapiz(presupuestoTexto, (v) => (presupuestoTexto = v), guardarPresupuestoSemana, 'Presupuesto asignado previamente', 'w-28 font-bold')}</div>
-					<label class={CELDA}>Fecha de asignación <input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px]" /></label>
+					<label class={CELDA}>Fecha de asignación <input type="date" bind:value={presupuestoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-1.5 py-0 border border-slate-200 rounded-lg text-xs" /></label>
 					<div class={CELDA}>Pago proyectado <b class="text-blue-700">{formatCurrency(totProy.total)}</b></div>
 					<div class={CELDA}>Saldo presupuestal <b class={`text-base ${saldoDisponible != null && saldoDisponible < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{saldoDisponible == null ? '—' : formatCurrency(saldoDisponible)}</b></div>
 				</div>
@@ -1189,7 +1194,7 @@
 					</button>
 				</div>
 				<div class={CELDA}>
-					<button type="button" onclick={() => (verReservas = true)} class="px-3 py-1 rounded-xl border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
+					<button type="button" onclick={() => (verReservas = true)} class="px-2.5 py-0.5 rounded-lg border-2 border-blue-500 text-blue-700 font-bold hover:bg-blue-50">
 						<i class="fas fa-list"></i> Ver reservas{conReserva.length ? ` (${conReserva.length})` : ''}
 					</button>
 				</div>
@@ -1200,13 +1205,13 @@
 {/snippet}
 
 {#snippet franjaTitulo(icono: string, titulo: string, clase: string)}
-	<span class={`inline-flex items-center gap-2 rounded-lg px-3 py-1 font-bold whitespace-nowrap ${clase}`}><i class={`fas ${icono}`}></i>{titulo}</span>
+	<span class={`inline-flex items-center gap-1.5 rounded-lg px-2 py-0.5 text-xs font-bold whitespace-nowrap ${clase}`}><i class={`fas ${icono}`}></i>{titulo}</span>
 {/snippet}
 
 {#snippet montoLapiz(valor: string, poner: (v: string) => void, guardar: () => void, etiqueta: string, clase: string)}
 	<span class="relative inline-flex items-center">
 		<span class="absolute left-2 text-xs font-bold text-slate-500">S/</span>
-		<input type="text" inputmode="decimal" value={valor} oninput={(e) => poner((e.currentTarget as HTMLInputElement).value)} onblur={guardar} disabled={!puedeEnviar} placeholder="0.00" class={`pl-7 pr-7 py-0.5 border border-slate-200 rounded-lg text-right disabled:bg-slate-50 ${clase}`} aria-label={etiqueta} />
+		<input type="text" inputmode="decimal" value={valor} oninput={(e) => poner((e.currentTarget as HTMLInputElement).value)} onblur={guardar} disabled={!puedeEnviar} placeholder="0.00" class={`pl-7 pr-7 py-0 border border-slate-200 rounded-lg text-right disabled:bg-slate-50 ${clase}`} aria-label={etiqueta} />
 		{#if puedeEnviar}<i class="fas fa-pen absolute right-2 text-[11px] text-slate-400 pointer-events-none"></i>{/if}
 	</span>
 {/snippet}
@@ -1214,9 +1219,9 @@
 <!-- Control financiero: igual en Real y Proyección. -->
 {#snippet controlFondo()}
 	<div class={CELDA}>Fondo reservado actualmente {@render montoLapiz(fondoTexto, (v) => (fondoTexto = v), guardarFondoSemana, 'Fondo reservado actualmente', 'w-28 font-bold')}</div>
-	<label class={CELDA}>Fecha de reserva <input type="date" bind:value={fondoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px]" /></label>
+	<label class={CELDA}>Fecha de reserva <input type="date" bind:value={fondoFecha} onchange={guardarControl} disabled={!puedeEnviar} class="px-1.5 py-0 border border-slate-200 rounded-lg text-xs" /></label>
 	<label class={CELDA}>Cuenta
-		<select bind:value={idCuentaFondo} onchange={guardarControl} disabled={!puedeEnviar} class="px-2 py-0.5 border border-slate-200 rounded-lg text-[13px] font-semibold text-slate-800 max-w-[11rem]" title={cuentaFondo?.detalle ?? ''}>
+		<select bind:value={idCuentaFondo} onchange={guardarControl} disabled={!puedeEnviar} class="px-1.5 py-0 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 max-w-[11rem]" title={cuentaFondo?.detalle ?? ''}>
 			<option value="">Elige la cuenta…</option>
 			{#each cuentasFondo as c (c.id)}<option value={String(c.id)}>{c.nombre}</option>{/each}
 		</select>

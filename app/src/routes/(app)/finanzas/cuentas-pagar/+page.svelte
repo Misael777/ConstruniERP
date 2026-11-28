@@ -741,6 +741,10 @@
 	let planillaResumen = $state<Map<number, { trabajador: string; cargo: string | null }> | null>(null);
 	// Tickets #133/#134: desglose de la "Proyección de planilla" por trabajador, para que el total cuadre.
 	let detalleProyeccion = $state<DetalleProyeccion[]>([]);
+	const cargoUnicoProyeccion = $derived.by(() => {
+		const personas = new Set(detalleProyeccion.map((d) => d.trabajador));
+		return personas.size === 1 ? (detalleProyeccion[0]?.cargo ?? null) : null;
+	});
 	const cuadrePlanilla = $derived.by(() => {
 		if (!planillaResumen) return null;
 		const vivas = cuotasAMostrar.filter((q) => q.estado_pago !== 'cancelado' && q.id_pago !== -1);
@@ -844,7 +848,8 @@
 				id: q.id_pago, monto: q.monto, fecha: q.fecha_pago, estado,
 				editable: q.estado_pago === 'programado' && !bloqueado && q.id_pago === cuotaMasProxima?.id_pago,
 				trabajador: planillaResumen ? (t?.trabajador ?? q.referencia ?? null) : undefined,
-				cargo: t?.cargo ?? null,
+				// Ticket #134: la "Proyección de planilla" de UNA persona (Consultoría, Corporativo) muestra su cargo.
+				cargo: t?.cargo ?? (q.referencia === 'Proyección de planilla' ? cargoUnicoProyeccion : null),
 				// La "Proyección de planilla" es una estimación: no se paga.
 				seleccionable: !!planillaResumen && q.estado_pago === 'programado' && q.id_pago !== -1 && q.referencia !== 'Proyección de planilla' && !bloqueado
 			};

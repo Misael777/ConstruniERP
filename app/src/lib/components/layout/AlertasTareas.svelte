@@ -8,10 +8,12 @@
 	import { TriangleAlert, Users, Layers, Database, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { crearDetectorDeNovedades } from '$lib/shared/sonido';
+	import DelegarTarea from '$lib/modules/alertas/components/DelegarTarea.svelte';
+	import { toast } from '$lib/stores/toast';
 	import { guardarConteoTareasHoy } from '$lib/shared/tareasHoyCache';
 	import { hasPermiso, permisosState } from '$lib/stores/permisos.svelte';
 	import { hoyLima } from '$lib/modules/personal/services/personal.service';
-	import { getAlertasTareas, getEstadosTareas, pestanaTarea, type EstadoTarea, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
+	import { getAlertasTareas, mismoNombre, delegarTarea, getEstadosTareas, pestanaTarea, type EstadoTarea, etiquetaVencimiento, type AlertaTarea, type ModuloAlerta, type PrioridadAlerta } from '$lib/modules/alertas/services/alertas.service';
 
 	let alertas = $state<AlertaTarea[]>([]);
 	let abierto = $state(false);
@@ -35,10 +37,11 @@
 	};
 
 	const yo = $derived((permisosState.userName || '').trim().toLowerCase());
-	const esMia = (a: AlertaTarea) => !!yo && (a.responsable ?? '').trim().toLowerCase() === yo;
+	const esMia = (a: AlertaTarea) => !!yo && mismoNombre(a.responsable, yo);
 	// Ticket #128: en "Delegadas" solo las que delegué a otra persona y vencen HOY.
 	const hoy = hoyLima();
-	const esDelegada = (a: AlertaTarea) => !!yo && !!a.responsable && !esMia(a) && (a.registradoPor ?? '').trim().toLowerCase() === yo && (a.fecha ?? '').slice(0, 10) === hoy;
+	// Ticket #128: también las que delegué con el botón "Delegar" (delegadoPor).
+	const esDelegada = (a: AlertaTarea) => !!yo && !!a.responsable && !esMia(a) && (mismoNombre(a.delegadoPor, yo) || mismoNombre(a.registradoPor, yo)) && (a.fecha ?? '').slice(0, 10) === hoy;
 
 	const visibles = $derived(pestana === 'mias' ? alertas.filter(esMia) : pestana === 'delegadas' ? alertas.filter(esDelegada) : alertas);
 	const conteo = $derived({ todas: alertas.length, mias: alertas.filter(esMia).length, delegadas: alertas.filter(esDelegada).length });
@@ -50,9 +53,10 @@
 
 	// Ticket #130: suena cuando aparece una alerta nueva a mi cargo (no en la primera carga).
 	let cargoUnaVez = $state(false);
-	const detectarNovedad = crearDetectorDeNovedades('alerta');
+	// Ticket #153: con su sonido de "tarea" (también cuando sube el número de Tareas de hoy, p. ej. al volver una aplazada).
+	const detectarNovedad = crearDetectorDeNovedades('tarea');
 	$effect(() => {
-		if (cargoUnaVez) detectarNovedad(mias.length);
+		if (cargoUnaVez) detectarNovedad(mias.length + tareasHoy);
 	});
 
 	async function cargar() {
@@ -86,6 +90,16 @@
 		}
 	}
 
+	async function delegar(a: AlertaTarea, persona: string | null) {
+		try {
+			await delegarTarea(supabase, a, persona, permisosState.userName || null);
+			toast.success(persona ? `Tarea delegada a ${persona}.` : 'Se quitó la delegación.');
+			await cargar();
+		} catch (err: any) {
+			toast.error(`No se pudo delegar la tarea. ${err?.message ?? ''}`);
+		}
+	}
+
 	function ir(a: AlertaTarea) {
 		abierto = false;
 		goto(a.href);
@@ -96,7 +110,8 @@
 		if (permisosState.loaded) cargar();
 	});
 	onMount(() => {
-		timer = setInterval(cargar, 10 * 60 * 1000);
+		// Ticket #153: cada 2 minutos (antes 10), para que una tarea nueva suene a tiempo.
+		timer = setInterval(cargar, 2 * 60 * 1000);
 	});
 	onDestroy(() => {
 		if (timer) clearInterval(timer);
@@ -171,7 +186,8 @@
 								<li>
 									<!-- Ticket #135: texto alineado — título y detalle hacen salto de línea (no se cortan) y a la derecha una columna
 										     fija con la prioridad arriba y el vencimiento abajo, igual en PC y en la app. -->
-										<button type="button" onclick={() => ir(a)} class="w-full flex items-start gap-3 px-4 py-2.5 text-left hover:bg-slate-50" title={a.detalle ? `${a.titulo} — ${a.detalle}` : a.titulo}>
+										<!-- Ticket #128: fila clicable con el botón "Delegar" dentro (un <button> no puede contener otro). -->
+										<div role="button" tabindex="0" onclick={() => ir(a)} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), ir(a))} class="w-full flex items-start gap-3 px-4 py-2.5 text-left hover:bg-slate-50 cursor-pointer" title={a.detalle ? `${a.titulo} — ${a.detalle}` : a.titulo}>
 											<div class="flex-1 min-w-0">
 												<p class="text-[13px] font-semibold leading-snug text-slate-800 break-words line-clamp-2">{a.titulo}</p>
 												{#if a.detalle || a.responsable}<p class="mt-0.5 text-[11px] leading-snug text-slate-500 break-words line-clamp-2">{a.detalle ?? ''}{a.detalle && a.responsable ? ' · ' : ''}{a.responsable ?? ''}</p>{/if}
@@ -179,9 +195,13 @@
 											<div class="shrink-0 w-[5.75rem] flex flex-col items-end gap-1 text-right">
 												<span class={`px-2 py-0.5 rounded-md border text-[10px] font-semibold leading-tight ${PRIORIDAD[a.prioridad].clase}`}>{PRIORIDAD[a.prioridad].texto}</span>
 												<span class={`text-[11px] leading-tight ${v.urgente ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>{v.texto}</span>
+												<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+												<span onclick={(e) => e.stopPropagation()}>
+													<DelegarTarea compacto responsable={a.responsable} delegada={!!a.delegadoPor} onDelegar={(p) => delegar(a, p)} />
+												</span>
 											</div>
 											<ChevronRight size={14} class="shrink-0 self-center text-slate-400" />
-										</button>
+										</div>
 								</li>
 							{/each}
 						</ul>

@@ -448,7 +448,8 @@
 
 	// Ticket #130: suena cuando llega algo nuevo a la campana (el número sube), no en la primera carga.
 	let cargaInicialHecha = $state(false);
-	const detectarNovedad = crearDetectorDeNovedades('notificacion');
+	// Ticket #153: las aprobaciones (por aprobar, o la respuesta a mi solicitud) suenan con su propio sonido.
+	const detectarNovedad = crearDetectorDeNovedades('aprobacion');
 	$effect(() => {
 		if (cargaInicialHecha) detectarNovedad(badgeCount);
 	});

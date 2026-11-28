@@ -7,7 +7,17 @@
  */
 let ctx: AudioContext | null = null;
 let ultimo = 0;
-let pendiente: 'notificacion' | 'alerta' | null = null;
+/** Ticket #153 (27/11/2026): sonido propio para una tarea nueva y para una aprobación pendiente o resuelta. */
+export type TipoSonido = 'notificacion' | 'alerta' | 'tarea' | 'aprobacion';
+let pendiente: TipoSonido | null = null;
+const NOTAS: Record<TipoSonido, number[]> = {
+	notificacion: [880, 1174.66],
+	alerta: [659.25, 523.25],
+	// Tarea: tres notas ascendentes cortas.
+	tarea: [523.25, 659.25, 783.99],
+	// Aprobación: dos notas iguales y una más alta (llamada de atención).
+	aprobacion: [987.77, 987.77, 1318.51]
+};
 
 function contexto(): AudioContext | null {
 	if (typeof window === 'undefined') return null;
@@ -39,8 +49,8 @@ if (typeof window !== 'undefined') {
 	window.addEventListener('keydown', desbloquear, { capture: true });
 }
 
-/** Tipo de sonido: 'notificacion' (campana) o 'alerta' (⚠, un tono más grave). */
-export function sonarAviso(tipo: 'notificacion' | 'alerta' = 'notificacion'): void {
+/** Tipo de sonido: 'notificacion' (campana), 'alerta' (⚠, más grave), 'tarea' (tarea nueva) o 'aprobacion'. */
+export function sonarAviso(tipo: TipoSonido = 'notificacion'): void {
 	try {
 		// Varias novedades juntas (campana y alertas a la vez): un solo sonido.
 		if (Date.now() - ultimo < 1500) return;
@@ -48,12 +58,12 @@ export function sonarAviso(tipo: 'notificacion' | 'alerta' = 'notificacion'): vo
 		if (!c) return;
 		if (c.state !== 'running') {
 			// Aún sin permiso de audio: suena en cuanto el usuario toque la pantalla.
-			pendiente = pendiente === 'notificacion' ? pendiente : tipo;
+			pendiente ??= tipo;
 			void c.resume().catch(() => {});
 			return;
 		}
 		ultimo = Date.now();
-		const notas = tipo === 'alerta' ? [659.25, 523.25] : [880, 1174.66];
+		const notas = NOTAS[tipo] ?? NOTAS.notificacion;
 		notas.forEach((frecuencia, i) => {
 			const t = c.currentTime + i * 0.16;
 			const osc = c.createOscillator();
@@ -73,7 +83,7 @@ export function sonarAviso(tipo: 'notificacion' | 'alerta' = 'notificacion'): vo
 }
 
 /** Suena al abrir la app si ya hay algo pendiente (primera lectura > 0) y después cada vez que el contador SUBE. */
-export function crearDetectorDeNovedades(tipo: 'notificacion' | 'alerta') {
+export function crearDetectorDeNovedades(tipo: TipoSonido) {
 	let anterior: number | null = null;
 	return (actual: number) => {
 		if (anterior === null ? actual > 0 : actual > anterior) sonarAviso(tipo);

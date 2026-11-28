@@ -30,6 +30,8 @@ export interface AlertaTarea {
 	prioridadManual?: boolean;
 	responsable: string | null;
 	registradoPor: string | null;
+	/** Ticket #128: quién la delegó (tabla tarea_delegacion); con delegación, `responsable` es la persona elegida. */
+	delegadoPor?: string | null;
 	href: string;
 }
 
@@ -65,16 +67,45 @@ export async function getAlertasTareas(client: SupabaseClient, modulos: Record<M
 	if (modulos.proyectos) tareas.push(alertasCronograma(client, hoy));
 	if (modulos.finanzas) tareas.push(alertasCobros(client, hoy), alertasPagos(client, hoy));
 	// Un módulo que falla no tumba a los demás (el panel muestra lo que sí cargó).
-	const [resultados, manuales] = await Promise.all([Promise.allSettled(tareas), getPrioridadesManuales(client)]);
+	const [resultados, manuales, delegaciones] = await Promise.all([Promise.allSettled(tareas), getPrioridadesManuales(client), getDelegaciones(client)]);
 	resultados.forEach((r) => r.status === 'rejected' && console.error('[alertas] No se pudo cargar un grupo de alertas:', r.reason));
 	return resultados
 		.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
 		.map((a) => {
 			// Finanzas guarda la prioridad en la cuenta (ya viene aplicada); el resto, en tarea_prioridad.
 			const m = a.modulo !== 'finanzas' ? manuales.get(a.id) : undefined;
-			return m ? { ...a, prioridad: m, prioridadManual: true } : a;
+			const d = delegaciones.get(a.id);
+			const conDelegacion = d ? { ...a, responsable: d.responsable, delegadoPor: d.delegado_por } : a;
+			return m ? { ...conDelegacion, prioridad: m, prioridadManual: true } : conDelegacion;
 		})
 		.sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+const palabrasNombre = (s: string | null | undefined) =>
+	(s ?? '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter(Boolean);
+/**
+ * Ticket #125 (rechazo 27/11/2026): ¿el responsable guardado (texto) es esta persona? Antes se comparaba el nombre
+ * exacto y una ficha con "Romina Casallo Echegaray" no le llegaba a "Romina Fiorella Casallo Echegaray". Ahora
+ * coincide si todas las palabras del nombre más corto están en el otro (sin tildes ni mayúsculas), con al menos 2. Pura.
+ */
+export function mismoNombre(a: string | null | undefined, b: string | null | undefined): boolean {
+	const pa = palabrasNombre(a);
+	const pb = palabrasNombre(b);
+	if (!pa.length || !pb.length) return false;
+	const [corto, largo] = pa.length <= pb.length ? [pa, pb] : [pb, pa];
+	if (corto.length < 2 && pa.length !== pb.length) return false;
+	const resto = [...largo];
+	return corto.every((w) => {
+		const i = resto.indexOf(w);
+		if (i < 0) return false;
+		resto.splice(i, 1);
+		return true;
+	});
 }
 
 async function alertasPersonal(client: SupabaseClient, hoy: string): Promise<AlertaTarea[]> {
@@ -292,6 +323,32 @@ export function pestanaTarea(a: AlertaTarea, e: EstadoTarea | undefined, hoy = h
 	if (!e || (e.fecha_alerta && e.fecha_alerta !== a.fecha)) return 'hoy';
 	if (e.estado === 'completada') return 'completada';
 	return e.aplazada_hasta && e.aplazada_hasta > hoy ? 'aplazada' : 'hoy';
+}
+
+// ─────────────── Ticket #128: delegar una tarea a otro usuario (compartido) ───────────────
+
+/** Delegaciones vigentes (tabla tarea_delegacion). Sin la migración 20261128090000: vacío. */
+async function getDelegaciones(client: SupabaseClient): Promise<Map<string, { responsable: string; delegado_por: string | null }>> {
+	const { data, error } = await client.from('tarea_delegacion').select('id_alerta, responsable, delegado_por');
+	if (error) return new Map();
+	return new Map(((data ?? []) as { id_alerta: string; responsable: string; delegado_por: string | null }[]).map((r) => [r.id_alerta, r]));
+}
+
+/** Delega la tarea a `responsable` (nombre del usuario del ERP), o quita la delegación con null. */
+export async function delegarTarea(client: SupabaseClient, alerta: AlertaTarea, responsable: string | null, usuario: string | null): Promise<void> {
+	const { error } = responsable
+		? await client
+				.from('tarea_delegacion')
+				.upsert({ id_alerta: alerta.id, responsable, delegado_por: usuario, updated_at: new Date().toISOString() }, { onConflict: 'id_alerta' })
+		: await client.from('tarea_delegacion').delete().eq('id_alerta', alerta.id);
+	if (error) throw error;
+}
+
+/** Usuarios activos del ERP a quienes se puede delegar (por nombre, el mismo que usa `responsable`). */
+export async function usuariosParaDelegar(client: SupabaseClient): Promise<string[]> {
+	const { data, error } = await client.from('empleados').select('nombre').eq('estado', 'activo').order('nombre');
+	if (error) return [];
+	return [...new Set(((data ?? []) as { nombre: string | null }[]).map((e) => (e.nombre ?? '').trim()).filter(Boolean))];
 }
 
 // ─────────────── Pedido 27/11/2026: prioridad a mano (compartida) y orden a mano (personal) ───────────────
