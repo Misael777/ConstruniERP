@@ -80,7 +80,7 @@ export interface CuentaPagar {
 	/** `vendedor` = "Producto y Servicio" del proveedor (mismo campo que ya usa getProveedorOptions más
 	 * abajo) — solo viene poblado en las consultas que lo piden explícitamente en el embed. `ruc` (8
 	 * dígitos ≈ DNI, 11 ≈ RUC — no hay columna DNI separada) solo viene poblado en getResumenPagosDashboard. */
-	proveedor?: { razon_social: string; ruc?: string | null; vendedor?: string | null } | null;
+	proveedor?: { razon_social: string; ruc?: string | null; vendedor?: string | null; logo_url?: string | null } | null;
 	/** Centro de costo vinculado (embed) — para la columna "Centro de Costo" del listado (ver
 	 * centroCostoLabel en +page.svelte, mismo criterio que resolveEntidadVinculada en
 	 * centroCostos.service.ts: si está vinculado a un proyecto, `nombre` guarda el id_proyecto crudo —
@@ -91,27 +91,46 @@ export interface CuentaPagar {
 	/** Planilla (tareo) a la que pertenece esta CxP, si es una — solo en el listado. Con `personal` si es la planilla de
 	 * un trabajador (Consultoría y Corporativo). */
 	planilla?: PlanillaDeCuenta[] | null;
+	/** Solo en el listado: imagen del proyecto del centro de costo (para el ícono de la planilla de obra). */
+	cc_imagen?: { tipo?: string | null; proyecto?: { imagen_url?: string | null } | null } | null;
 }
 
 export interface PlanillaDeCuenta {
 	grupo: string;
 	inicio: string;
 	fin: string;
-	personal?: { nombres?: string | null; apellidos?: string | null; nombre?: string | null; pin?: string | number | null } | null;
+	personal?: { nombres?: string | null; apellidos?: string | null; nombre?: string | null; pin?: string | number | null; foto_url?: string | null } | null;
 }
 
 const ddmm = (f: string) => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+const ddmmaaaa = (f: string) => `${ddmm(f)}/${f.slice(0, 4)}`;
+const primeraPlanilla = (planilla: PlanillaDeCuenta[] | PlanillaDeCuenta | null | undefined) =>
+	(Array.isArray(planilla) ? planilla[0] : planilla) ?? null;
 /**
- * 27/11/2026: subtítulo de una CxP de planilla en el listado — el trabajador (planilla de una persona) o la planilla
- * del periodo (obra), en vez del genérico "Personal de obra (tareo)" del proveedor. null si no es planilla. Pura.
+ * 27/11/2026: subtítulo de una CxP de planilla en el listado, en dos líneas: el trabajador (planilla de una persona)
+ * o "Personal de obra", y el periodo; en vez del genérico del proveedor. null si no es planilla. Pura.
  */
-export function subtituloPlanilla(planilla: PlanillaDeCuenta[] | PlanillaDeCuenta | null | undefined): string | null {
-	const pl = Array.isArray(planilla) ? planilla[0] : planilla;
+export function subtituloPlanilla(planilla: PlanillaDeCuenta[] | PlanillaDeCuenta | null | undefined): { quien: string; periodo: string } | null {
+	const pl = primeraPlanilla(planilla);
 	if (!pl) return null;
-	const periodo = `Planilla ${pl.grupo} ${ddmm(pl.inicio)}–${ddmm(pl.fin)}`;
 	const p = pl.personal;
 	const nombre = p ? [p.apellidos, p.nombres].filter(Boolean).join(', ') || p.nombre || (p.pin != null ? `Código ${p.pin}` : '') : '';
-	return nombre ? `${nombre} · ${periodo}` : periodo;
+	return { quien: nombre || 'Personal de obra', periodo: `${ddmm(pl.inicio)}–${ddmmaaaa(pl.fin)} (tareo)` };
+}
+
+/**
+ * 27/11/2026 (pedido de Romina): ícono de la fila en Cuentas por Pagar: planilla de una persona (su foto), planilla
+ * de obra o consultoría (imagen del proyecto), préstamo, o proveedor (su logo). Pura.
+ */
+export function iconoCuentaPagar(
+	item: Pick<CuentaPagar, 'planilla' | 'proveedor' | 'cc_imagen'>,
+	esPrestamo = false
+): { tipo: 'obra' | 'consultoria' | 'persona' | 'proveedor' | 'prestamo'; imagen: string | null } {
+	if (esPrestamo) return { tipo: 'prestamo', imagen: null };
+	const pl = primeraPlanilla(item.planilla);
+	if (pl?.personal) return { tipo: 'persona', imagen: pl.personal.foto_url || null };
+	if (pl) return { tipo: item.cc_imagen?.tipo === 'consultoria' ? 'consultoria' : 'obra', imagen: item.cc_imagen?.proyecto?.imagen_url || null };
+	return { tipo: 'proveedor', imagen: item.proveedor?.logo_url || null };
 }
 
 export interface Pago {
@@ -255,7 +274,11 @@ export async function getCuentasPagar(client: SupabaseClient, params: ListParams
 
 	let query = client
 		.from(TABLE_NAME)
-		.select(`*, proveedor(razon_social, vendedor), ${CENTRO_COSTO_EMBED}, planilla(grupo, inicio, fin, personal(nombres, apellidos, nombre, pin))`, { count: 'exact' })
+		// proveedor(*) y proyecto(*): el logo y la imagen (migración 20261127210000) sin romper el listado si aún no está.
+		.select(
+			`*, proveedor(*), ${CENTRO_COSTO_EMBED}, cc_imagen:id_centro_costo(tipo, proyecto:id_proyecto(*)), planilla(grupo, inicio, fin, personal:personal!planilla_id_personal_fkey(nombres, apellidos, nombre, pin, foto_url))`,
+			{ count: 'exact' }
+		)
 		// Ticket #45: ordenar por el texto de `prioridad` da un orden alfabético incorrecto (alto, bajo,
 		// media) — igual que cuentas_cobrar (ticket #39), se ordena por la columna calculada prioridad_orden.
 		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })
@@ -1211,11 +1234,40 @@ export interface CuentaPagarVinculable {
  * proveedor/N° de documento/id, porque el proveedor vive en una tabla unida y PostgREST no permite un
  * OR de texto libre entre columnas de dos tablas distintas sin un RPC aparte.
  */
+/** 27/11/2026: a qué tipo de contraparte corresponde una cuenta por pagar (para filtrar por la Clase del egreso). */
+export type TipoCuentaVinculable = 'planilla' | 'prestamo' | 'subcontratista' | 'proveedor';
+
+/**
+ * 27/11/2026 (Romina: "no sale la lista según la clase y/o categoría"): tipos de cuenta por pagar que se ofrecen para
+ * vincular según la Clase y la Categoría del egreso. null = todas (sin Clase, u "Otro"). Pura.
+ */
+export function tiposVinculablesPorClase(clase: string, categoria: string | null | undefined): TipoCuentaVinculable[] | null {
+	switch (clase) {
+		case 'proveedores':
+		case 'tributo':
+			return ['proveedor'];
+		case 'subcontratista':
+			return categoria === 'Planilla' ? ['planilla', 'subcontratista'] : ['subcontratista'];
+		case 'empleados':
+			return ['planilla'];
+		case 'prestamo':
+			return ['prestamo'];
+		case 'cliente':
+		case 'accionistas':
+		case 'obra_caridad':
+			return [];
+		default:
+			return null;
+	}
+}
+
 export async function buscarCuentasPagarVinculables(
 	client: SupabaseClient,
 	query: string,
-	idCentroCosto: number | null
+	idCentroCosto: number | null,
+	tipos: TipoCuentaVinculable[] | null = null
 ): Promise<CuentaPagarVinculable[]> {
+	if (tipos && tipos.length === 0) return [];
 	// Sin centro de costo (rediseño 11/11/2026: "Vincular" va junto a Tipo, antes que el centro de costo):
 	// se buscan las cuentas de TODOS los centros y, al elegir una, el formulario fija el centro de costo
 	// de esa cuenta — así se sigue sin poder vincular contra el presupuesto de otro proyecto.
@@ -1238,9 +1290,28 @@ export async function buscarCuentasPagarVinculables(
 		proveedorNombre: row.proveedor?.razon_social ?? `Proveedor #${row.id_cuenta_pagar}`
 	}));
 
+	let filtradas = items;
+	if (tipos) {
+		const idsProv = [...new Set(items.map((it) => it.id_proveedor).filter((x): x is number => x != null))];
+		const subcontratistas = new Set<number>();
+		if (idsProv.length && tipos.some((t) => t === 'subcontratista' || t === 'proveedor')) {
+			const { data: ccs } = await client.from('centro_costo').select('id_proveedor').eq('tipo', 'subcontratista').in('id_proveedor', idsProv);
+			for (const c of (ccs ?? []) as any[]) if (c.id_proveedor != null) subcontratistas.add(Number(c.id_proveedor));
+		}
+		const tipoDe = (it: CuentaPagarVinculable): TipoCuentaVinculable =>
+			it.proveedorNombre === 'PLANILLA DE PERSONAL'
+				? 'planilla'
+				: it.proveedorNombre === NOMBRE_PROVEEDOR_PRESTAMOS
+					? 'prestamo'
+					: it.id_proveedor != null && subcontratistas.has(it.id_proveedor)
+						? 'subcontratista'
+						: 'proveedor';
+		filtradas = items.filter((it) => tipos.includes(tipoDe(it)));
+	}
+
 	const q = query.trim().toLowerCase();
-	if (!q) return items.slice(0, 8);
-	return items
+	if (!q) return filtradas.slice(0, 8);
+	return filtradas
 		.filter(
 			(it) =>
 				it.proveedorNombre.toLowerCase().includes(q) ||

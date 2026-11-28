@@ -33,8 +33,10 @@
 		type DetalleProyeccion,
 		confirmarPagosGlobal,
 		transaccionSugeridaPagoGlobal,
-		subtituloPlanilla
+		subtituloPlanilla,
+		iconoCuentaPagar
 	} from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import IconoCuenta from '$lib/components/ui/IconoCuenta.svelte';
 	import type { ServiceResult } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import {
 		getCentroCostoOptions,
@@ -1176,13 +1178,11 @@
 						onclick={() => selectRow(item)}
 					>
 						<div class="flex items-center gap-3 min-w-0">
-							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-								<FileText size={18} />
-							</div>
+							<IconoCuenta {...iconoCuentaPagar(item, esPrestamoCuenta(item))} alt={nombreContraparte(item)} />
 							<div class="min-w-0">
 								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={nombreContraparte(item)}>{#each tramosNombre(nombreContraparte(item)) as tramo}{tramo}<wbr />{/each}</p>
 								<p class="text-[11px] text-slate-400 mt-0.5 [overflow-wrap:break-word]">
-									{#if esPrestamoCuenta(item)}Prestamista{:else}{subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor ?? ''}{/if}
+									{#if esPrestamoCuenta(item)}Prestamista{:else if subtituloPlanilla(item.planilla)}<span class="text-slate-500">{subtituloPlanilla(item.planilla)?.quien}</span><br />{subtituloPlanilla(item.planilla)?.periodo}{:else}{item.proveedor?.vendedor ?? ''}{/if}
 								</p>
 							</div>
 						</div>
@@ -1252,9 +1252,7 @@
 				>
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="flex items-center gap-3 min-w-0">
-							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-								<FileText size={18} />
-							</div>
+							<IconoCuenta {...iconoCuentaPagar(item, esPrestamoCuenta(item))} alt={nombreContraparte(item)} />
 							<div class="min-w-0">
 								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={nombreContraparte(item)}>{#each tramosNombre(nombreContraparte(item)) as tramo}{tramo}<wbr />{/each}</p>
 								<p class="text-[11px] text-slate-400 mt-0.5 truncate">{#if esPrestamoCuenta(item)}Prestamista · {/if}{centroCostoLabel(item)} · {item.num_documento || '—'}</p>
@@ -1280,7 +1278,7 @@
 					<div class="flex items-center justify-between text-xs text-slate-500 mb-3">
 						<span class="truncate">
 							Vencimiento: {formatDate(item.fecha_pago_programada || item.fecha_vencimiento)}
-							{#if subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor}· {subtituloPlanilla(item.planilla) ?? item.proveedor?.vendedor}{/if}
+							{#if subtituloPlanilla(item.planilla)}· {subtituloPlanilla(item.planilla)?.quien}{:else if item.proveedor?.vendedor}· {item.proveedor.vendedor}{/if}
 						</span>
 						{#if retraso !== null}
 							<span class="font-bold text-red-600">Vencido hace {retraso} día{retraso === 1 ? '' : 's'}</span>

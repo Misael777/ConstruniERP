@@ -7,6 +7,7 @@
 	import { page } from '$app/state';
 	import { supabase } from '$lib/supabaseClient';
 	import { isAdmin, permisosState, puedeVerEliminados, hasPermiso } from '$lib/stores/permisos.svelte';
+	import IconoCuenta from '$lib/components/ui/IconoCuenta.svelte';
 	import { Plus, Pencil, Trash2, Trash, RotateCcw, Search, ChevronUp, ChevronDown, ChevronLeft, X, Landmark, Receipt, FileText, Lock, ShieldCheck, LayoutGrid, CreditCard, Wallet, AlertTriangle, Filter, Briefcase, HardHat, Ellipsis, Eye } from '@lucide/svelte';
 	import ResumenCuentaModal, { type CampoResumen, type CuotaResumen } from '$lib/shared/components/ResumenCuentaModal.svelte';
 	import { getPrestatariosDeCuentasCobrar, getPrestatarioDeCuentaCobrar, prepararTransaccionDeCuota } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
@@ -1186,9 +1187,7 @@
 						onclick={() => selectRow(item)}
 					>
 						<div class="flex items-center gap-3 min-w-0">
-							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-								<FileText size={18} />
-							</div>
+							<IconoCuenta tipo={esPrestamoCuenta(item) ? 'prestamo' : item.proyecto?.tipo_venta === 'obra' ? 'obra' : item.proyecto?.tipo_venta === 'consultoria' ? 'consultoria' : 'otro'} imagen={esPrestamoCuenta(item) ? null : item.proyecto?.imagen_url} alt={item.proyecto?.nombre_proyecto ?? ''} />
 							<div class="min-w-0">
 								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')}>{#each tramosNombre(esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')) as tramo}{tramo}<wbr />{/each}</p>
 								<div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 flex-wrap">
@@ -1266,9 +1265,7 @@
 				>
 					<div class="flex items-start justify-between gap-3 mb-2">
 						<div class="flex items-center gap-3 min-w-0">
-							<div class={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${estadoIconClass[item.estado] ?? 'bg-slate-100 text-slate-500'}`}>
-								<FileText size={18} />
-							</div>
+							<IconoCuenta tipo={esPrestamoCuenta(item) ? 'prestamo' : item.proyecto?.tipo_venta === 'obra' ? 'obra' : item.proyecto?.tipo_venta === 'consultoria' ? 'consultoria' : 'otro'} imagen={esPrestamoCuenta(item) ? null : item.proyecto?.imagen_url} alt={item.proyecto?.nombre_proyecto ?? ''} />
 							<div class="min-w-0">
 								<p class="text-[13px] font-semibold text-slate-800 leading-snug [overflow-wrap:break-word]" title={esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')}>{#each tramosNombre(esPrestamoCuenta(item) ? nombreContraparte(item) : (item.proyecto?.nombre_proyecto ?? 'Sin proyecto')) as tramo}{tramo}<wbr />{/each}</p>
 								<p class="text-[11px] text-slate-500 truncate mt-0.5">{esPrestamoCuenta(item) ? 'Prestatario' : nombreContraparte(item)} · {item.num_documento || '—'}</p>

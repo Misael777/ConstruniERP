@@ -14,6 +14,7 @@
 	import GanttTab from '$lib/components/proyecto/GanttTab.svelte';
 	import PresupuestoTab from '$lib/components/proyecto/PresupuestoTab.svelte';
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
+	import SubirImagenCuenta from '$lib/components/ui/SubirImagenCuenta.svelte';
 	import CuentaCobrarObraFactura from '$lib/modules/cobranza-obra/components/CuentaCobrarObraFactura.svelte';
 
 	let projectId = $state<string | undefined>(undefined);
@@ -50,6 +51,8 @@
 		comision_asesor: number;
 		cliente?: { nombre: string } | null;
 		tipo_venta?: string | null;
+		/** Imagen del proyecto (migración 20261127210000): ícono en Cuentas por Cobrar y por Pagar. */
+		imagen_url?: string | null;
 	};
 
 	// Campos realmente editables desde este tab — deja fuera ids crudos
@@ -181,6 +184,18 @@
 
 	function goBack() {
 		goto('/proyectos/gestion');
+	}
+
+	// 27/11/2026: la imagen se guarda al subirla (no espera "Guardar cambios").
+	async function guardarImagenProyecto(url: string | null) {
+		if (!proyecto) return;
+		const { error } = await supabase.from('proyecto').update({ imagen_url: url }).eq('id_proyecto', proyecto.id_proyecto);
+		if (error) {
+			toast.error('No se pudo guardar la imagen del proyecto.');
+			return;
+		}
+		proyecto = { ...proyecto, imagen_url: url };
+		toast.success(url ? 'Imagen del proyecto guardada' : 'Imagen quitada');
 	}
 
 	async function guardarCambios() {
@@ -462,6 +477,17 @@
 		{#if activeTab === 'definicion' && form}
 			<div class="max-w-4xl animate-in fade-in duration-300">
 				<h3 class="text-lg font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">Información General</h3>
+				<div class="mb-6">
+					<span class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Imagen del proyecto</span>
+					<SubirImagenCuenta
+						imagen={proyecto.imagen_url ?? null}
+						tipo={proyecto.tipo_venta === 'obra' ? 'obra' : proyecto.tipo_venta === 'consultoria' ? 'consultoria' : 'otro'}
+						nombre={proyecto.nombre_proyecto}
+						etiqueta="imagen"
+						carpeta="Proyectos"
+						onchange={guardarImagenProyecto}
+					/>
+				</div>
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
 					<div>
 						<label class="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">Nombre del Proyecto</label>

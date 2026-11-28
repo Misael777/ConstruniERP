@@ -69,7 +69,7 @@ export interface CuentaCobrar {
 	 * ese flujo. Permite que TransaccionModal.svelte encuentre esta cuenta al editar esa transacción. */
 	id_transaccion: number | null;
 	cliente?: { nombre: string } | null;
-	proyecto?: { nombre_proyecto: string; tipo_venta?: string | null } | null;
+	proyecto?: { nombre_proyecto: string; tipo_venta?: string | null; imagen_url?: string | null } | null;
 	/** Fecha de la cuota pendiente más próxima (calculada al listar, no es columna) — ticket #92. */
 	proxima_cuota?: string | null;
 }
@@ -310,7 +310,8 @@ export async function getCuentasCobrar(client: SupabaseClient, params: ListParam
 
 	let query = client
 		.from(TABLE_NAME)
-		.select('*, cliente(nombre), proyecto(nombre_proyecto, tipo_venta)', { count: 'exact' })
+		// proyecto(*): trae la imagen del proyecto (migración 20261127210000) sin romper el listado si aún no está.
+		.select('*, cliente(nombre), proyecto(*)', { count: 'exact' })
 		// Prioridad se ordena por su equivalente numérico (alto=1, medio=2, bajo=3): por el texto saldría alfabético.
 		.order(sortField === 'prioridad' ? 'prioridad_orden' : sortField, { ascending: sortDir === 'asc' })
 		.order('id_cuenta_cobrar', { ascending: false })

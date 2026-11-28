@@ -65,7 +65,20 @@ export async function reducirFoto(file: File): Promise<Blob> {
 
 /** Sube la foto ya reducida y devuelve su enlace de Drive. */
 export async function subirFotoPersonal(foto: Blob, documento: string): Promise<string> {
-	const base = `personal-foto-${(documento || 'sin-doc').replace(/[^A-Za-z0-9]/g, '')}-${Date.now()}`;
+	return subirImagenReducida(foto, documento, { prefijo: 'personal-foto', tipo: 'foto_personal', carpeta: 'Personal' });
+}
+
+/**
+ * 27/11/2026: la misma subida para otras imágenes (logo del proveedor, imagen del proyecto). `nombre` identifica al
+ * dueño en el nombre del archivo; `tipo` y `carpeta` son el documentType y el projectName de /api/upload-document.
+ */
+export async function subirImagenReducida(
+	foto: Blob,
+	nombre: string,
+	{ prefijo, tipo, carpeta }: { prefijo: string; tipo: string; carpeta: string }
+): Promise<string> {
+	const documento = nombre;
+	const base = `${prefijo}-${(documento || 'sin-doc').replace(/[^A-Za-z0-9]/g, '').slice(0, 40)}-${Date.now()}`;
 	if (isRunningInTauri()) {
 		const { url } = await uploadToDriveClient(foto, `${base}.jpg`, 'documento');
 		return url;
@@ -73,9 +86,9 @@ export async function subirFotoPersonal(foto: Blob, documento: string): Promise<
 	const formData = new FormData();
 	formData.append('file', new File([foto], `${base}.jpg`, { type: 'image/jpeg' }));
 	formData.append('type', 'documento');
-	formData.append('documentType', 'foto_personal'); // obligatorio para type=documento en /api/upload-document
-	formData.append('documentName', (documento || 'sin-doc').replace(/[^A-Za-z0-9]/g, ''));
-	formData.append('projectName', 'Personal');
+	formData.append('documentType', tipo); // obligatorio para type=documento en /api/upload-document
+	formData.append('documentName', (documento || 'sin-doc').replace(/[^A-Za-z0-9]/g, '').slice(0, 40));
+	formData.append('projectName', carpeta);
 	const response = await fetch(resolveApiUrl('/api/upload-document'), { method: 'POST', body: formData });
 	const result = await parseJsonResponse(response);
 	if (!response.ok || !result.success) throw new Error(result.details || result.error || 'Error al subir la foto.');

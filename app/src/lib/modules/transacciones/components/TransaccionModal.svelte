@@ -61,7 +61,7 @@
 	import DocumentPreviewModal from '$lib/shared/components/DocumentPreviewModal.svelte';
 	import SelectConSaldo from '$lib/shared/components/SelectConSaldo.svelte';
 	import { toDriveThumbnailUrl } from '$lib/shared/drivePreview';
-	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables, getCuentaPagarPorTransaccion } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
+	import { registrarPagoDesdeTransaccion, buscarCuentasPagarVinculables, getCuentaPagarPorTransaccion, tiposVinculablesPorClase } from '$lib/modules/cuentas-pagar/services/cuentasPagar.service';
 	import { registrarCobroDesdeTransaccion, buscarCuentasCobrarVinculables, getCuentaCobrarPorTransaccion } from '$lib/modules/cuentas-cobrar/services/cuentasCobrar.service';
 	import { renderPdfFirstPageToDataUrl } from '$lib/shared/pdfPreview';
 	import { COMPROBANTE_POR_TIPO_DOCUMENTO } from '$lib/modules/facturacion/services/facturacion.service';
@@ -500,7 +500,8 @@
 		cuentaVinculadaBuscando = true;
 		try {
 			if (formValues.tipo === 'egreso') {
-				const items = await buscarCuentasPagarVinculables(supabase, query, idCentroCostoParaVinculo);
+				// 27/11/2026: solo las cuentas que corresponden a la Clase (y Categoría) elegidas.
+				const items = await buscarCuentasPagarVinculables(supabase, query, idCentroCostoParaVinculo, tiposVinculablesPorClase(claseDestino, formValues.categoria));
 				cuentaVinculadaResultados = items.map((it) => ({
 					id: it.id_cuenta_pagar,
 					label: `${it.proveedorNombre}${it.num_documento ? ' · ' + it.num_documento : ''}`,
@@ -537,6 +538,9 @@
 	// Precarga los resultados apenas hay un Centro de Costo válido, sin esperar el foco.
 	$effect(() => {
 		idCentroCostoParaVinculo;
+		// 27/11/2026: también al cambiar la Clase o la Categoría (filtran la lista en Egreso).
+		claseDestino;
+		formValues.categoria;
 		if (!muestraVinculo) return;
 		ejecutarBusquedaCuentaVinculada('');
 	});
@@ -3374,7 +3378,7 @@
 					{#if cuentaVinculadaBuscando}
 						<p class="px-3 py-2 text-xs text-slate-400 flex items-center gap-1.5"><Loader2 size={12} class="animate-spin" /> Buscando…</p>
 					{:else if cuentaVinculadaResultados.length === 0}
-						<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas por {lado.toLowerCase()} con saldo pendiente{idCentroCostoParaVinculo ? ' en ese centro de costo' : ''}.</p>
+						<p class="px-3 py-2 text-xs text-slate-400">Sin cuentas por {lado.toLowerCase()} con saldo pendiente{formValues.tipo === 'egreso' && claseDestino ? ' para esta clase' : ''}{idCentroCostoParaVinculo ? ' en ese centro de costo' : ''}.</p>
 					{:else}
 						{#each cuentaVinculadaResultados as opcion (opcion.id)}
 							<button type="button" onclick={() => seleccionarCuentaVinculada(opcion)} class="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 border-b border-slate-100 last:border-0">

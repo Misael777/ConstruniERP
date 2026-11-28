@@ -2,6 +2,7 @@
 	import { fade, scale } from 'svelte/transition';
 	import { supabase } from '$lib/supabaseClient';
 	import { getOrCrearCentroCostoParaEntidad, sincronizarTipoCentroCostoProveedor } from '$lib/modules/centro-costos/services/centroCostos.service';
+	import SubirImagenCuenta from '$lib/components/ui/SubirImagenCuenta.svelte';
 
 	let { isOpen = false, proveedorEdit = null, onClose = () => {}, onSave = () => {} } = $props<{
 		isOpen?: boolean;
@@ -20,6 +21,9 @@
 	let banco = $state('');
 	let cuentaBanco = $state('');
 	let cci = $state('');
+	// 27/11/2026: logo del proveedor (migración 20261127210000). Solo se envía si cambió.
+	let logoUrl = $state<string | null>(null);
+	let logoCambiado = $state(false);
 
 	let isSaving = $state(false);
 	let errorMsg = $state('');
@@ -37,6 +41,7 @@
 				banco = proveedorEdit.banco || '';
 				cuentaBanco = proveedorEdit.cuenta_banco || '';
 				cci = proveedorEdit.cci || '';
+				logoUrl = proveedorEdit.logo_url || null;
 			} else {
 				// Reset form
 				razonSocial = '';
@@ -48,7 +53,9 @@
 				banco = '';
 				cuentaBanco = '';
 				cci = '';
+				logoUrl = null;
 			}
+			logoCambiado = false;
 			errorMsg = '';
 		}
 	});
@@ -63,7 +70,7 @@
 		errorMsg = '';
 
 		try {
-			const payload = {
+			const payload: Record<string, unknown> = {
 				razon_social: razonSocial,
 				ruc,
 				contacto,
@@ -75,6 +82,7 @@
 				cci,
 				updated_at: new Date().toISOString()
 			};
+			if (logoCambiado) payload.logo_url = logoUrl;
 
 			if (proveedorEdit) {
 				// Update
@@ -161,6 +169,22 @@
 						<div class="flex flex-col gap-1 md:col-span-1">
 							<label class="text-xs font-semibold text-[#0f3b5e]">RUC / DNI *</label>
 							<input type="text" bind:value={ruc} disabled={isSaving} placeholder="Ej. 20123456789" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+						</div>
+
+						<div class="flex flex-col gap-1 md:col-span-2">
+							<span class="text-xs font-semibold text-[#0f3b5e]">Logo</span>
+							<SubirImagenCuenta
+								imagen={logoUrl}
+								tipo="proveedor"
+								nombre={razonSocial || ruc}
+								etiqueta="logo"
+								carpeta="Proveedores"
+								disabled={isSaving}
+								onchange={(url) => {
+									logoUrl = url;
+									logoCambiado = true;
+								}}
+							/>
 						</div>
 
 						<div class="flex flex-col gap-1 md:col-span-2">
